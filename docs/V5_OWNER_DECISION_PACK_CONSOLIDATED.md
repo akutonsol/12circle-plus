@@ -1058,3 +1058,71 @@ CI for the commit carrying this work is reported in the final summary, not infer
 earlier run.
 
 **`EC-02` not reconciled. No master register modified. Production was not contacted.**
+
+---
+
+# PART V · `D-1` implemented — P1's fourth rung
+
+**Authorization.** `Q7`/`D-1` **= Option 4** was ruled on 2026-10-07 and left unbuilt only
+because that message said not to implement yet. This turn's execution rule 7 — *"resume
+autonomous work across independently executable branches"* — makes it the next authorized,
+unblocked item, and it closes *"`QAX-SEC-08`'s fourth rung — and nothing else"*.
+
+## 30 · The lazy read, and why the other three options exercised nothing
+
+The guard read migration 132 in an **eager `setUpAll`**, and in `package:test` a failing
+`setUpAll` means **the group's tests are never run** — so deleting 132 produced exactly one
+failure, named `(setUpAll)`, with **zero of twelve assertions executed**. §365 recorded that as
+`0 of 15` for both delete-and-restore and the isolated-worktree option, and the third option —
+mutating 132's text in place — is **UNSETTLED** against §8 of the closure standard
+(*"never rewrite a migration in place unless the wave plan explicitly authorizes it"*).
+
+Reading on first touch makes each of the twelve fail on its own. **Measured: 13 individual
+failures** where there was one.
+
+**The caveat is preserved, not engineered away.** A missing file throws
+`PathNotFoundException` — the Dart 3 `FileSystemException` subtype — so the failures arrive as
+**I/O errors rather than the guard's curated `reason:` strings**. No wrapper was added to
+re-brand them. **What the control proves: the assertions execute and fail. What it does not
+prove: that each fails for the reason it states.** That is a weaker rung than the
+mutation-based controls elsewhere here, and it is the rung that was authorized.
+
+Addendum A's own `setUpAll` (migration 133) is untouched — `D-1` names the 132 read, and a
+control that deletes 132 does not reach 133.
+
+## 31 · What the harness found that I had assumed wrong
+
+My first version required *"Addendum B must not fail"*, on the reasoning that D-3 reads 134 and
+is therefore independent of 132. **The run disproved half of that**, and the correction is the
+more informative control:
+
+* **D-3's property tests DO survive** — the definition in force is in 134, and `authoritativeOf`,
+  the ACTIVE checks and the `search_path` check all passed with 132 deleted. That independence is
+  exactly what D-3 bought.
+* **D-3's coverage ratchet correctly FAILS** — the definer set really did change, from
+  `[102, 132, 134]` to `[102, 134]`. A ratchet that stayed green when a defining migration was
+  deleted would not be a ratchet.
+
+So the harness now requires **both**: the property tests to pass *and* the ratchet to have run.
+Conflating them would have hidden whichever one broke.
+
+**A second defect, in the harness's own check.** It asserted the failure text contained
+`FileSystemException` and reported *"no FileSystemException in the output"* against a tree
+failing exactly as designed — because Dart 3 throws the **`PathNotFoundException`** subclass and
+its `toString()` names the subclass. The check was wrong about the string while the caveat it
+guards was right about the substance. Both names are accepted now, and the specific one is named
+in the message so a future change of shape is legible rather than silent.
+
+## 32 · Evidence
+
+`secw1_negative_control.sh`, following the house convention of `ec23`/`wrk02`/`ec03`: baseline
+passes → migration deleted → **13 individual failures (≥ 12 required)**, the I/O shape asserted,
+the `(setUpAll)` trap asserted **absent**, D-3's property tests asserted to have **passed** and
+its ratchet to have **run** → restored **byte-identically** (`git diff --quiet`) → the whole
+guard passes again. **Wired into CI's existing negative-control job**; no new job, credential or
+network access.
+
+SEC-W1 **43/43** · Flutter **1972 / 5 skipped** · `dart analyze` **0 errors** · nine static
+guards **exit 0** · migration frontier **180**, untouched.
+
+**Production was not contacted.**

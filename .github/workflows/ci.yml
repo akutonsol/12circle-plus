@@ -421,6 +421,19 @@ jobs:
       - name: EC-03 — intake false-completion, pre-fix / post-fix evidence
         run: apps/mobile/tool/negative_control/ec03_negative_control.sh
 
+      # SEC-W1 / QAX-SEC-08's FOURTH RUNG, authorized by owner decision D-1 = Option 4
+      # (2026-10-11). The guard's 132 read is now lazy, so deleting the migration fails
+      # each 132-dependent assertion individually instead of producing one (setUpAll)
+      # failure with zero assertions executed — which is why the other three
+      # reconstruction options were rejected at §365. The harness also requires that D-3's
+      # property tests SURVIVE (they read 134) while D-3's coverage ratchet FIRES (the
+      # definer set really did change). Documented caveat, preserved by the
+      # authorization: the failures are I/O errors, so this proves the assertions execute
+      # and fail — not that each fails for the reason it states. Reuses the Flutter set-up
+      # above; adds no job, no credential and no network access.
+      - name: SEC-W1 — Wave 1 reversion, pre-fix / post-fix evidence (D-1)
+        run: apps/mobile/tool/negative_control/secw1_negative_control.sh
+
   live-qa:
     name: Live QA suites (security / AI / contract)
     runs-on: ubuntu-latest

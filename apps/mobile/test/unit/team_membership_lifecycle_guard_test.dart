@@ -177,18 +177,46 @@ bool notifyTeamArmRequiresActive(String body) {
 bool hasSearchPathPin(String body) =>
     RegExp(r'SET\s+search_path\s*=', caseSensitive: false).hasMatch(body);
 
-void main() {
-  late String m132;
-  late String code;
+// ── D-1 · LAZY READS, SO THE ASSERTIONS ACTUALLY RUN ───────────────────────
+//
+// OWNER DECISION 2026-10-11 · `D-1` = Option 4, "change SEC-W1's `setUpAll` to lazy reads".
+//
+// THE PROBLEM THIS SOLVES IS A PROPERTY OF `package:test`, not of the fix. This group used to
+// read migration 132 in an eager `setUpAll`, and **a failing `setUpAll` means the group's
+// tests are never run** — so deleting 132 produced exactly one failure, named `(setUpAll)`,
+// and **zero of the twelve assertions below executed.** A negative control built on that
+// reconstruction would have demonstrated nothing about the assertions it exists to exercise.
+//
+// Reading on first touch instead means each of the twelve fails on its own.
+//
+// ── THE CAVEAT, PRESERVED BY THE RULING RATHER THAN ENGINEERED AWAY ────────
+//
+// With a missing file, `readAsStringSync` throws a `PathNotFoundException` — the Dart 3
+// `FileSystemException` subtype for a missing path, and the name its `toString()` reports —
+// so the failures surface as **I/O errors rather than this guard's curated `reason:`
+// strings**. §365 recorded
+// that as Option 4's cost, and the authorization was granted "preserving the documented
+// I/O-error caveat" — so it is documented here and NOT papered over with a wrapper that
+// re-brands the exception. **What a control built on this proves: the assertions execute and
+// fail. What it does not prove: that they fail for the stated reason.** That is a weaker rung
+// than the mutation-based controls elsewhere in this repository, and it is the rung that was
+// authorized.
+//
+// Addendum A's own `setUpAll` (migration 133) is deliberately untouched: `D-1` names the 132
+// read, and a control that deletes 132 does not reach 133.
 
-  setUpAll(() {
-    final f = File('../../supabase/migrations/132_team_membership_lifecycle.sql');
-    expect(f.existsSync(), isTrue,
-        reason: 'migration 132 is missing — Wave 1 has been reverted or the '
-            'relative path from apps/mobile is wrong');
-    m132 = f.readAsStringSync();
-    code = stripComments(m132);
-  });
+String? _m132Cache;
+String? _m132CodeCache;
+
+/// Migration 132's raw text, read on first touch. Throws per test when absent — see above.
+String get m132 => _m132Cache ??=
+    File('../../supabase/migrations/132_team_membership_lifecycle.sql')
+        .readAsStringSync();
+
+/// Migration 132 with SQL line comments stripped.
+String get code => _m132CodeCache ??= stripComments(m132);
+
+void main() {
 
 
   test('SEC-W1 the guard is reading the right migration', () {
