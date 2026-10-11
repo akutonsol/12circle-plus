@@ -201,6 +201,26 @@ if the canonical Helix artefact is settled first, the icon question may be answe
 than here. Recommending in isolation would be the agent inference the standing constraints
 forbid.
 
+**REASSESSED after `Q16` landed on Option 1a — the stated blocker is cleared.** The condition this
+withholding named has been met: the canonical artefact is settled, and three of the five elements of
+the *one shared identity* (§11547) are now implemented and asserted in the registered Helix theme —
+violet `#7C3AED`, Schibsted Grotesk, 4.5:1. Phosphor is the one remaining **asset** element of an
+identity that is no longer in question.
+
+The reassessment also finds that this is **two dependency decisions under one heading**:
+
+* **Helix (TS/React)** — there is **no icon dimension in the core at all**: `src/components` is
+  `Button`, `Card`, `MetricReadout`, and `icon` occurs **once** in `src/`, in a doc comment.
+  Adopting Phosphor here adds a dimension to the core and, by §11547, *"binds whatever consumes
+  Helix next."* **`Q16` did not resolve this** — settling the canonical brand did not authorize a
+  dependency.
+* **12 Circle mobile (Flutter)** — `pubspec.yaml` carries **only** `cupertino_icons: ^1.0.8`. The
+  inventory at `931218b` names **Phosphor v2.1.1, 107 icons**, led by `ph-caret-down` (154 uses)
+  and `ph-arrow-right` (42). **One** icon is substituted today, and recorded.
+
+**Status: unblocked, still the owner's.** Options unchanged. A recommendation would no longer be
+inference about *which identity governs* — only about scope.
+
 ---
 
 ## 6 · Q7 · `D-1` — which reconstruction mechanism may the SEC-W1 CI negative control use?
@@ -812,6 +832,14 @@ that calls itself a first pass.
 
 ### Why `Q5` is held behind this
 
+> **SUPERSEDED — see `V5_PROGRAMME_DEFINITION.md` §204.** The owner later confirmed that
+> *"12Circle is not using the lime theme. Violet is the canonical 12Circle brand theme"*, replacing
+> Option 3 with **Option 1a**. The theme was retuned in `akutonsol/helix-design-system`
+> (`ce7087a` → `309f291`, PR #1), verified 67/67 with three negative controls. **`Q5` is therefore
+> no longer held behind `Q16`** — see §204.7. It remains an open owner decision, because resolving
+> the canonical brand did not authorize a dependency.
+
+
 `Q5` (the Phosphor dependency) is held by your ruling, and the reason is visible in the evidence:
 §11547 records Phosphor as part of *"one shared identity — violet `#7C3AED`, Schibsted,
 **Phosphor**, 4.5:1, 44px"*. The icon set is a property of the **same identity** this decision
@@ -928,6 +956,14 @@ question, which is precisely its merit.**
 
 **`Q5` (Phosphor) remains on hold behind this**, as ruled.
 
+> **SUPERSEDED — see `V5_PROGRAMME_DEFINITION.md` §204.** The owner later confirmed that
+> *"12Circle is not using the lime theme. Violet is the canonical 12Circle brand theme"*, replacing
+> Option 3 with **Option 1a**. The theme was retuned in `akutonsol/helix-design-system`
+> (`ce7087a` → `309f291`, PR #1), verified 67/67 with three negative controls. **`Q5` is therefore
+> no longer held behind `Q16`** — see §204.7. It remains an open owner decision, because resolving
+> the canonical brand did not authorize a dependency.
+
+
 ## 23 · `EC-01 Q5` · documentation authorization — **awaiting Approve / Deny**
 
 **Requested:** a narrowly scoped edit to `QA_CLOSURE_STANDARD.md` to record the
@@ -1036,6 +1072,14 @@ policy changed, the underlying decision is untouched, and the mutation boundary 
 broadened** — one file, one section.
 
 ## 28 · `Q16` · nothing implemented, by the ruling
+
+> **SUPERSEDED — see `V5_PROGRAMME_DEFINITION.md` §204.** The owner later confirmed that
+> *"12Circle is not using the lime theme. Violet is the canonical 12Circle brand theme"*, replacing
+> Option 3 with **Option 1a**. The theme was retuned in `akutonsol/helix-design-system`
+> (`ce7087a` → `309f291`, PR #1), verified 67/67 with three negative controls. **`Q5` is therefore
+> no longer held behind `Q16`** — see §204.7. It remains an open owner decision, because resolving
+> the canonical brand did not authorize a dependency.
+
 
 Option 3 preserves both artifacts and their current distinction. **No theme file, registry entry
 or build output was touched**, and the authority question stays open by design — Option 3 defers

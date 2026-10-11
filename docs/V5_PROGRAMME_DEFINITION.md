@@ -18654,3 +18654,138 @@ D15 **353/353** · live **1089/1089 across 21 suites** · no schema, migration o
 — three test baselines and one new library helper.
 
 **Production was not contacted.**
+
+## §204 · Q16 implemented in Helix — and the lime was never confined to source
+
+### §204.1 · The owner resolved the authority question Option 3 had deferred
+
+`Q16` closed as **Option 3 — preserve both**, which deferred the authority question rather than
+answering it. The owner then superseded that: ***"12Circle is not using the lime theme. Violet is
+the canonical 12Circle brand theme."*** The approved path became **Option 1a — retune the
+registered Helix theme; do not delete it.**
+
+Implemented in `akutonsol/helix-design-system`, branch `fix/12circle-violet-theme`, baseline
+`ce7087a` → `309f291`, [PR #1](https://github.com/akutonsol/helix-design-system/pull/1).
+
+The authorizing record is the owner's own commit `7de74d8`, which added **§29** to
+`V5_OWNER_DECISION_PACK_CONSOLIDATED.md` and set the boundary this section answers to:
+*"Implementation must occur in that source repository and be verified there; until then, `Q16` is
+**decision-resolved, implementation-pending**."* It is now implementation-complete and verified.
+That commit landed in parallel with this work and was **rebased onto, not over** — §29 and §204
+are complementary, and §29's independent conclusion that *"`Q5` may be evaluated against the
+authoritative violet design system"* corroborates §204.7 rather than resting on it.
+
+### §204.2 · The risk was concrete, not theoretical
+
+`dist/` is gitignored, which reads like containment. It is not: `package.json` runs
+`prepare: npm run build`, so every **git-install consumer builds the themes on install**. The
+baseline build at `ce7087a` emitted **13 lime bindings** into `dist/themes/12circle.css` —
+`--color-accent`, `--color-accent-hover`, `--color-accent-subtle`, `--color-ring` in each of the
+three blocks, plus the `--shadow-glow` halo. The superseded first pass was shipping.
+
+### §204.3 · The retune was structural, not chromatic — and the shipped theme said so first
+
+The decisive source was `apps/mobile/lib/core/theme/twelve_circle_theme.dart`, because it already
+expresses 12 Circle **in Helix's own vocabulary** (`HelixSemantics`). Where
+`admin.tokens.css @ 931218b` offers a five-step text ladder and this contract has three, the Dart
+fixes the mapping — `textPrimary=ink, textSecondary=grey, textTertiary=dim` — so the three-step
+answer is transcription, not my compression of a five-step one.
+
+It also carries explicit `was:` annotations recording that it had **already rejected four of the
+Helix theme's first-pass choices**:
+
+| dimension | authoritative position | first pass in Helix |
+|---|---|---|
+| radius | *"cards 16, controls flat 12. **Explicitly NOT pill**"* | `full` / `2xl` — pill controls |
+| motion | *"emphasised and brief. Nothing loops."* — `cubic-bezier(0.2,0,0,1)` / 200ms | `spring` overshoot / 220ms |
+| type | *"one family throughout"* — Schibsted Grotesk | serif display + Hanken sans |
+| shadow | *"no gradient, **no glow**"* | `0 0 24px rgba(158,240,26,.45)` neon halo |
+
+**Aligning only the accent colour would have left the theme wrong in four other dimensions.** The
+owner's instruction anticipated this — *"not just the accent color"* — and the evidence vindicated
+it rather than merely permitting it.
+
+One primitive did not fit: `HelixMotion.d200` is 200ms and this scale has no 200ms step
+(`fast` 150 / `base` 220). `durationBrand` is authored as a literal. Substituting 220ms would have
+been choosing the convenient value over the authoritative one.
+
+### §204.4 · Two values the authority does not define — recorded, not invented
+
+* **`accentHover` equals `accent`.** The system defines **exactly one** violet fill, `#7c3aed`,
+  and no darker variant; a repo-wide search of the design authority returns a single violet. Hover
+  is expressed as a **surface** change (`--adm-color-bg-hover: #1b1b20`), not a fill darkening.
+  `#a78bfa` is the accent-**text** colour — `a:hover` pairs it with `#c4b1fc` for links, and white
+  on it is **2.72:1**, which fails AA outright. So equality here *records the authority's actual
+  position*: the fill does not move. Inventing a darker violet would have been inventing a design
+  value.
+* **Light-mode `ring` takes the violet**, not `brand-focus`. `#a78bfa` is specified for a
+  near-black ground, where it is 7.27:1; on the ivory canvas it falls to **2.57:1** and fails the
+  3:1 minimum for a non-text indicator. The violet is 5.38:1 there.
+
+### §204.5 · Light mode is where I declined to invent
+
+The contract requires `light`. The authorities ship **no light palette** — the Dart builds
+`HelixThemeBuilder.dark` only, and `admin.tokens.css` is a dark token set. So light keeps its
+existing warm-ivory neutrals and its AA-darkened status colours exactly: none were lime-derived,
+and replacing them would have meant issuing a light palette the design system has not. Only the
+lime values moved, plus `textOnAccent` — `#0A0C0F` on violet is **3.70:1** and had to go.
+
+A prior commit, `ac75b42`, had raised `textMuted` for WCAG AA, so I checked the authoritative
+values against that commitment **before** writing rather than after: `#8B8595` is 5.55:1 on canvas
+and 5.24:1 on elevated. The authority and the accessibility commitment did not conflict. Had they,
+that would have been an owner boundary, not something to resolve quietly.
+
+### §204.6 · The check, and the three controls that prove it is not vacuous
+
+`scripts/check-12circle-theme.ts` — **67 assertions, 67 passing**. Deliberately **not** a
+snapshot: a snapshot would have frozen lime just as happily. It asserts the theme against the
+transcribed authority table; **re-derives all 33 base declarations and both dark blocks from the
+theme object through `CSS_VAR`**, so the *mapping* is proven rather than the emitter's agreement
+with itself; runs real WCAG math on eight contrast pairs; and sha256-pins the other three themes
+to the pre-change build.
+
+This run has twice produced detectors that passed for the wrong reason — SEC-G9's case-sensitive
+`can\w*`, and the reporter-dependent `Failing tests:` block of §202. So the check was made to
+fail on purpose, three ways:
+
+| control | result |
+|---|---|
+| reintroduce the lime accent | **FAIL 57/67** — named accent, both rings, and 1.41:1 contrast |
+| restore spring easing + pill button | **FAIL 64/67** — named radius and the `1.56` overshoot |
+| perturb an unrelated theme | **FAIL 66/67** — `tierstrum.css` sha256 moved |
+
+All three exit 1. The restored tree returns to 67/67.
+
+### §204.7 · `Q5` reassessed — the blocker is cleared, and the question was two questions
+
+The owner gated this: *"Reassess Q5 (Phosphor) only after violet theme alignment is verified."*
+It is verified, so the reassessment is due.
+
+The consolidated pack withheld a recommendation on `Q5` for a **stated** reason: *"It also
+interacts with `Q16` — if the canonical Helix artefact is settled first, the icon question may be
+answered there rather than here."* **That condition has now been met.** §11547 records the handoff
+declaring ***one*** shared identity — *"violet `#7C3AED`, Schibsted, **Phosphor**, 4.5:1, 44px"* —
+and three of that bundle's five elements are now implemented and asserted in the registered theme.
+Phosphor is the one remaining **asset** element of an identity that is no longer in question.
+
+What the reassessment adds is that `Q5` is **two dependency decisions, not one**, and the pack put
+them under a single heading:
+
+* **Helix (TS/React).** There is **no icon dimension in Helix at all** — `src/components` is
+  `Button`, `Card`, `MetricReadout`, and the string `icon` occurs **once** in `src/`, in a doc
+  comment about `textOnAccent`. Adopting Phosphor here means **adding a dimension to the core**,
+  and by §11547 it *"binds whatever consumes Helix next"*. This is the design-system decision the
+  pack correctly refused to take in passing — and `Q16` did **not** resolve it. Resolving the
+  canonical *brand* did not authorize a *dependency*.
+* **12 Circle mobile (Flutter).** `pubspec.yaml` carries **only** `cupertino_icons: ^1.0.8`.
+  The inventory at `931218b` names **Phosphor v2.1.1, 107 icons**, `regular` default / `fill` for
+  selected — led by `ph-caret-down` (154 uses) and `ph-arrow-right` (42). Today **one** icon is
+  substituted, and the substitution is recorded.
+
+**Status: `Q5` is unblocked but still the owner's.** Its options are unchanged — `1` adopt and
+match the specification · `2` keep substitutions and record each deviation · `3` vendor only the
+icons used. It blocks nothing; it is visual fidelity with every deviation recorded. What has
+changed is that a recommendation would no longer be agent inference about *which identity governs*
+— only about scope. The pack's three *"remains on hold behind `Q16`"* lines are now stale and are
+corrected there, for the same reason §196 corrected METRIC-17: a stale line in a decision document
+misleads exactly the reader it is written for.
