@@ -848,3 +848,100 @@ authorization to edit a file outside the mutation boundary (`EC-01·Q5`'s alias 
 `QA_CLOSURE_STANDARD.md`).
 
 **Production was not contacted.**
+
+---
+
+# PART III · 2026-10-11 — the authorization gate, as presented
+
+**The gate is recorded, not passed.** Four selection lines arrived unfilled —
+`Owner selection: A / B / C` (×2), `Owner selection: 1a / 1b / 3 / 2`, and
+`Owner authorization: Approve / Deny` — and execution rules 3 and 5 are conditional on them
+(*"Once authorized, implement D-3 first"*, *"Make the authorized documentation edit only if
+approved"*). **Nothing in §16–§18 was implemented.** The option sets below supersede my
+two-option framings, which were narrower.
+
+## 20 · `D-3` · SEC-W1 authoritative migration coverage — **awaiting selection**
+
+| option | as presented |
+|---|---|
+| **A — recommended** | Update SEC-W1 so it **verifies the authoritative helper definitions at the current migration frontier** and fails if those definitions change without corresponding guard coverage. **Add a regression test proving the guard detects a change to the migration 134 definitions.** |
+| **B** | Explicitly cover migrations **132 and 134**, with a test that demonstrates **why both references remain necessary**. |
+| **C** | Defer remediation and leave the finding visibly open. |
+
+**Sequencing as presented: prioritize this first.** My §17 evidence stands behind that, and it is
+re-verified: SEC-W1's `setUpAll` opens exactly one migration (132); `132:157/:184` define the two
+helpers; **`134:55/:71` `CREATE OR REPLACE` both**; `135`/`140`/`141` mention them **only in
+comments**; and the guard mentions 134 **zero times**.
+
+**A is the stronger of A and B on the evidence**, and the difference is worth stating because it
+is not stylistic: **B pins two migrations, which is the same defect one migration later** — a
+future `135_*` redefinition would be invisible to a guard that pins 132 and 134 exactly as it is
+invisible to one that pins 132. **A tracks the frontier**, so it does not need amending the next
+time a helper is redefined. A's regression test — *"proving the guard detects a change to the
+migration 134 definitions"* — is what makes the frontier claim falsifiable rather than asserted.
+
+## 21 · `D-2` · the policy detector's unqualified-reference blind spot — **awaiting selection**
+
+| option | as presented |
+|---|---|
+| **A — recommended** | Make the detector recognize **both qualified and unqualified** table references, add **regression fixtures for both forms**, and **verify that unrelated SQL does not satisfy the guard**. |
+| **B** | Keep the detector unchanged and document the known historical blind spot. |
+| **C** | Defer remediation while retaining the finding as open. |
+
+**Sequencing as presented: after `D-3`.**
+
+The third clause of A is the one that matters most and it was not in my framing: *"verify that
+unrelated SQL does not satisfy the guard."* Relaxing a regex to accept `ON <table>` as well as
+`ON public.<table>` **widens** it, and a widened detector can start matching policies on other
+tables — so the fixture set has to prove both that the historical form **is** caught and that
+nothing else newly is. That is the difference between loosening a guard and extending it.
+
+## 22 · `Q16` · Helix theme authority — **awaiting selection**
+
+| option | as presented |
+|---|---|
+| **1a** | Retune the lime theme values **while preserving the registered theme and its structural contract**. |
+| **1b** | Delete the lime theme, **acknowledging that this changes registered theme structure and may break the Helix build**. |
+| **3 — recommended, conservative** | **Preserve both existing artifacts and their current distinction; make no theme changes** until the authority question is resolved. |
+| **2 — not recommended** | Make lime the brand theme. Conflicts with the shipped violet product and the existing CI-conformance evidence. |
+
+**A caution I accept, and a correction to how I argued §18.** *"Do not infer brand authority from
+build success alone."* That is fair. My §18 leaned on `dist/themes/12circle.css` containing
+`#9EF01A`, and the most that observation supports is **what a consumer who imports the built
+artifact would receive** — it is evidence about a *binding risk*, not about which theme holds
+brand authority. Brand authority is not established by a file building successfully, and I should
+not have let the build output carry as much weight as it did. **Option 3's rationale — preserve
+the current state rather than invent a design decision — does not depend on resolving that
+question, which is precisely its merit.**
+
+**`Q5` (Phosphor) remains on hold behind this**, as ruled.
+
+## 23 · `EC-01 Q5` · documentation authorization — **awaiting Approve / Deny**
+
+**Requested:** a narrowly scoped edit to `QA_CLOSURE_STANDARD.md` to record the
+**already-decided** `EC-01 Q5` alias definition. **No unrelated policy change, no alteration to
+the underlying decision, no broadening of the mutation boundary.**
+
+Verified unchanged: the content is decided (§19.4 — *"YES. `QA_CLOSURE_STANDARD.md` should carry
+the REFERENCE-ONLY definition"*), the file **still carries no alias definition**, and the action
+was recorded *"NOT performed — that file is outside the mutation boundary."*
+
+## 24 · Verification at this gate — the actual commit
+
+Per execution rule 6, **prior green CI is not carried forward as proof of this commit**:
+
+| | |
+|---|---|
+| tested commit | **`d0ac619`** — local `HEAD` and `origin/reconcile/12circle-integrated` agree |
+| CI | **success** |
+| nine static guards | **exit 0**, re-run at this commit |
+| implementation changed | **none** — §16–§23 are records only |
+
+One observation while checking, recorded because it is not mine: `9dc7515` appears in recent CI
+runs and is **not on this branch** — it is on `main`, from the scheduled **Supabase Keep-Alive**
+workflow. A new remote branch `workstream/12c-plus-website` also appeared. Neither touches this
+work; neither was acted on.
+
+**`EC-02` was not reconciled and no master register was modified.**
+
+**Production was not contacted.**
