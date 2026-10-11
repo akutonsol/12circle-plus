@@ -18916,3 +18916,35 @@ call, not an autonomous one.
 
 **Production was not contacted.** The only database written was QA, confirmed by matching the
 linked project ref against `QA_URL` before pushing the migration.
+
+### §205.8 · And CI caught the half of the migration I had not declared
+
+`ca2bbb6` went red on **Static guards**, and the finding was mine:
+
+```
+[rule 7] [qa] authored migration 181 is above the frontier 180 and is declared
+nowhere — declare it pending (with a reason and a gate) or move the frontier
+```
+
+`supabase/expected_applied.json` still read `applied_through: "180"`. I had applied 181 to QA,
+re-run the whole live suite against it and asserted it 25 ways — and left the **declaration**
+behind. ENV-3's own rule is *"the frontier can only move when reality and intent move together"*,
+and I had moved only reality.
+
+The guard is a two-way comparison, so this is the direction that fails **loudly**: a version
+applied without being declared. The quiet direction — declared without being applied — is the
+one that would have passed CI while describing a database that does not exist. Both are the same
+defect, and it is worth naming which side I landed on, because only one of them tells you.
+
+Fixed by moving the frontier to **181**, which is the truthful declaration: it is applied, and
+D22 proves it is applied. The guard's instruction — *"never delete the declaration to make this
+green"* — was not needed, but it is the reason the manifest is a manifest and not a log.
+
+**The sequence is now four steps, not three.** §188.6 recorded *"apply a migration and commit its
+test together"*. That is still incomplete:
+
+> apply → **declare the frontier** → re-run the whole live suite → commit all of it together.
+
+The downstream jobs — Live QA among them — were **skipped**, not passed, so the earlier
+green from `8f2c0c0` said nothing about this commit. All thirteen static guards were run locally
+before the fix was pushed.
