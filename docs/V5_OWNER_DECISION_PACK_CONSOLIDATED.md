@@ -851,9 +851,21 @@ authorization to edit a file outside the mutation boundary (`EC-01·Q5`'s alias 
 
 ---
 
-# PART III · 2026-10-11 — the authorization gate, as presented
+# PART III · 2026-10-11 — the authorization gate
 
-**The gate is recorded, not passed.** Four selection lines arrived unfilled —
+> ## GATE PASSED 2026-10-11 — four selections recorded
+>
+> | | selection | consequence |
+> |---|---|---|
+> | **`D-3`** | **Option A** — track the frontier | **IMPLEMENT FIRST.** SEC-W1 verifies the authoritative helper definitions at the current migration frontier and fails if they change without corresponding guard coverage, plus a regression test proving it detects a change to 134's definitions. |
+> | **`D-2`** | **Option A** — accept both forms | **IMPLEMENT AFTER `D-3`.** Detector recognizes qualified and unqualified references, fixtures for both, and proof that unrelated SQL does not satisfy the guard. |
+> | **`Q16`** | **Option 3** — preserve both | **NO THEME CHANGES.** Both artifacts and their current distinction stand. The **authority question stays open by design** — Option 3 defers it rather than answering it — so **`Q5` (Phosphor) remains on hold behind it.** |
+> | **`EC-01 Q5`** | **APPROVED** | A narrowly scoped edit to `QA_CLOSURE_STANDARD.md` recording the already-decided REFERENCE-ONLY alias definition. No unrelated policy change, no alteration to the decision, no broadening of the mutation boundary. |
+>
+> **`EC-02` not reconciled. No master register modified.** The sections below record the gate as
+> it was presented, and remain the authority for each option's exact wording.
+
+**The gate as presented.** Four selection lines arrived unfilled —
 `Owner selection: A / B / C` (×2), `Owner selection: 1a / 1b / 3 / 2`, and
 `Owner authorization: Approve / Deny` — and execution rules 3 and 5 are conditional on them
 (*"Once authorized, implement D-3 first"*, *"Make the authorized documentation edit only if
@@ -945,3 +957,104 @@ work; neither was acted on.
 **`EC-02` was not reconciled and no master register was modified.**
 
 **Production was not contacted.**
+
+---
+
+# PART IV · 2026-10-11 — the authorized work, implemented
+
+`D-3` first, `D-2` second, the documentation edit third — the order the gate set.
+
+## 25 · `D-3` implemented · Option A
+
+**SEC-W1 now resolves the definition in force** instead of reading a pinned file. Three
+resolvers over the migration corpus in filename order — which is apply order: `definersOf`
+(every migration redefining a helper), `authoritativeOf` (the last one), and three property
+checks written as **pure functions over a body** so a mutation can be fed to them.
+
+**The resolvers found more than Finding B recorded.** The finding named 132 and 134.
+Measured: **`is_team_lead_of` is redefined by three migrations — `102`, `132`, `134` — and
+`may_notify` by four — `118`, `129`, `132`, `134`.** Both are authoritative at 134. A longer
+supersession chain than the finding described is itself the argument for resolving the frontier
+rather than listing files.
+
+**No live regression was found, and that is worth stating plainly.** 134 *preserves* both Wave 1
+properties — `is_team_lead_of` carries `AND t.status = 'active'` (`134:67`) and `may_notify`'s
+team arm carries `WHERE t.status = 'active'` (`134:88`), both with their D1(ii) comments. So
+`D-3` was a guard-coverage gap exactly as classified, not a hidden weakening.
+
+**The coverage ratchet** is the mechanism the ruling asked for: the definer set for each helper
+is recorded, so a new redefinition fails the guard until somebody records it — which is the
+moment to re-check the properties against the new definition in force.
+
+**The 132 assertions are kept**, and they prove a different thing: that Wave 1's own migration
+still says what it said. Reverting 132 and weakening 134 are two separate regressions, and the
+guard now has an assertion for each.
+
+**The regression test the ruling required** mutates the **real** text of 134 — not a toy string
+— and requires each check to fail: the ACTIVE predicate dropped from `is_team_lead_of`; dropped
+from `may_notify`'s team arm only, leaving the other arms intact; `search_path` unpinned on
+either helper; and a synthetic later migration that **moves the frontier, trips the ratchet, and
+fails the property checks it was hiding from**. A `setUpAll` control asserts the unmutated
+baseline passes first, because a mutation proves nothing against an already-broken baseline.
+
+## 26 · `D-2` implemented · Option A
+
+**Both qualification forms, at four sites**, through one word-bounded pattern builder
+(`policyOn`) and one policy-scoped target scan (`policyTargets`).
+
+**Why `\b` is not optional:** without a word boundary, `(?:public\.)?coach_team_members` also
+matches **`coach_team_members_archive`**, and the guard would start failing on a table it has no
+business judging. Widening a detector is not free, and two negative fixtures pin that case.
+
+**One site was deliberately NOT widened, and the measurement is why.** The scope check over 133
+extracts table names from `ON\s+public\.([a-z_]+)`. Widened to make `public.` optional, a bare
+`ON` scan over 133 returns **`{D, TABLE, public.coach_team_members}`** — `TABLE` from
+`COMMENT ON TABLE`, `D` from a decision reference. The qualified-only form was accidentally
+protected from that, so widening it would have traded a blind spot for a false alarm. The
+unqualified gap is closed instead by `policyTargets`, scoped to `CREATE`/`DROP POLICY` only,
+which cannot match a comment or a foreign key.
+
+**The third clause of Option A is the one this group is built around** — *"verify that unrelated
+SQL does not satisfy the guard."* Fourteen fixtures: four positive shapes (qualified,
+unqualified, newline-before-`FOR`, mixed case), **the real 002 defect read from disk** rather
+than retyped so the fixture cannot drift from the file it quotes, six negative shapes (different
+table, two longer prefix-sharing names, different command, a `DROP` rather than a `CREATE`, a
+`GRANT`), a commented-out policy, and a check that the `FOR ALL` and `FOR UPDATE` detectors stay
+**distinct** so the two findings cannot become indistinguishable.
+
+**SEC-W1: 14 tests → 43.**
+
+## 27 · `EC-01 Q5` implemented · the authorized documentation edit
+
+`QA_CLOSURE_STANDARD.md` now carries the REFERENCE-ONLY definition, in §4 — *"What does not
+close a finding"* — which is where a rule about what a closure does **not** discharge belongs.
+
+**Narrow, and measurably so: 23 insertions, 0 deletions.** Nothing existing was altered. One
+prohibition row, and a §4.1 carrying the decided text verbatim from §8.15 and its §19.4
+extension, labelled as recording an existing decision rather than making one. **No unrelated
+policy changed, the underlying decision is untouched, and the mutation boundary is not
+broadened** — one file, one section.
+
+## 28 · `Q16` · nothing implemented, by the ruling
+
+Option 3 preserves both artifacts and their current distinction. **No theme file, registry entry
+or build output was touched**, and the authority question stays open by design — Option 3 defers
+it. **`Q5` (Phosphor) therefore remains on hold.**
+
+## 29 · Verification — the actual tested commit
+
+Per execution rule 6, prior CI is not carried forward.
+
+| | |
+|---|---|
+| Flutter | **1972 passed / 5 skipped** (1944 → 1972) |
+| `dart analyze` | **0 errors** |
+| SEC-W1 | **43 / 43** |
+| nine static guards | **exit 0** |
+| migration frontier | **180**, unchanged — no schema touched |
+| implementation files changed | **one test file**; two documents |
+
+CI for the commit carrying this work is reported in the final summary, not inferred from an
+earlier run.
+
+**`EC-02` not reconciled. No master register modified. Production was not contacted.**

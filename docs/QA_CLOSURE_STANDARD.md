@@ -112,6 +112,29 @@ Stated as prohibitions because each has occurred in this programme.
 | **An allowlist entry.** | `known-violations.json` and `EC-G2`'s phantom-table allowlist are **shrinking** lists. An entry is a recorded defect, not a closure. Both are checked in **both directions**, so an entry removed without the fix — or a fix without the removal — fails |
 | **"It works on my machine."** | See CI, above |
 | **A source review of a safety input.** | `[]` from a failed read and `[]` from "this member has none" are the same value at review time and different values in production. Safety inputs close live, or not at all |
+| **Closing a canonical finding.** | An alias acquires no status from its canonical's closure — and loses none either. The alias map is **REFERENCE-ONLY**; see §4.1 |
+
+### 4.1 The alias map is REFERENCE-ONLY
+
+**Owner decision, recorded here by authorization of 2026-10-11.** The content is not new — it
+was ruled at `V5_PROGRAMME_DEFINITION` §8.15 (`EC-01·Q1`) and extended at §19.4 (`EC-01·Q2`),
+which recorded that this file should carry the definition. This entry records it; it decides
+nothing further.
+
+> **The alias map is REFERENCE-ONLY.** An alias is a **de-duplication pointer**. Closing a
+> canonical finding **neither discharges nor preserves** an alias's substantive condition:
+> **substantive status must be determined separately for each.**
+
+And the extension, from §19.4:
+
+> A canonical's closure class **does not bind** an alias of a different class. Each alias's
+> substantive status **and its evidence standard** follow its own subject matter.
+
+**What follows from it, and what does not.** A canonical may remain correctly closed on its own
+class while an alias of a different class remains open — that is not a contradiction in the
+registry, it is the rule working. Disposing of an alias is a **separate act** requiring its own
+evidence at its own class. An alias is therefore neither remediated nor re-opened by a
+canonical's closure; it stays as the registry records it until that separate act is performed.
 
 ---
 
