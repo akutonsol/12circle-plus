@@ -1144,3 +1144,26 @@ SEC-W1 **43/43** · Flutter **1972 / 5 skipped** · `dart analyze` **0 errors** 
 guards **exit 0** · migration frontier **180**, untouched.
 
 **Production was not contacted.**
+
+
+---
+
+## §29 · Q16 owner clarification — violet is canonical; lime is not used
+
+**Owner clarification, 2026-10-11:** “we are definitely not using the lime theme.”
+
+This explicit owner statement supersedes the earlier deferral under the 2026-10-11 gate's Q16 Option 3. The authority question is resolved: **the shipped in-repo violet theme is canonical for 12Circle; the standalone lime first-pass theme is not an approved 12Circle theme.**
+
+**Selected implementation path: Option 1a — retune, do not delete.**
+
+- Preserve the Helix theme's registered key, exports, and semantic/structural contract.
+- Align the registered 12Circle theme's values to the authoritative shipped violet design tokens, including typography and semantic roles; do not merely change the accent swatch.
+- Rebuild the Helix distribution and verify the generated 12Circle CSS no longer emits lime values.
+- Add or update regression checks proving the registered source theme and generated output remain aligned with the authoritative token contract.
+- Do not delete the theme or change unrelated themes, registry structure, or product surfaces.
+
+**Scope and evidence boundary:** The violet theme in this repository is already the CI-enforced shipped theme (apps/mobile/lib/core/theme/twelve_circle_theme.dart). The standalone Helix source referenced in the prior Q16 evidence is at /Users/dmac/Documents/projects/helix/src/themes/12circle.ts, outside this repository. No claim is made here that the external Helix source or its generated output has been changed. Implementation must occur in that source repository and be verified there; until then, Q16 is **decision-resolved, implementation-pending**.
+
+**Q5 / Phosphor:** The hold was specifically pending Q16 authority. That dependency is now resolved in favor of violet, so Q5 may be evaluated against the authoritative violet design system. This does **not** itself authorize adding the dependency; retain the existing Q5 scope and evidence requirements and record its own decision before implementation.
+
+No master register is changed by this clarification. EC-02 remains unreconciled. Production was not contacted.
