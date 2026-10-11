@@ -12,6 +12,7 @@ import 'package:circle_fitness/features/admin/domain/admin_metrics.dart';
 /// `isAvailable` helper written as `value != null && value != 0`, or a model that
 /// defaults nulls to zero, passes every naive test and fails this one.
 void main() {
+  mainRoleSplit();
   group('METRIC-02 · the two bases are independently available', () {
     // A `support` admin: holds Users/view, does NOT hold Security/view. This is
     // the row the live suite proves PostgREST actually returns for that role.
@@ -275,6 +276,103 @@ void main() {
       expect(m.grossCoachingCents, 13000);
       expect(m.platformCommissionCents, isNull);
       expect(m.platformCommissionCents, isNot(0));
+    });
+  });
+}
+
+/// Q2 / `METRIC-02` sub-answer — the active-user ROLE SPLIT (migration 181).
+///
+/// The live suite (D22) proves the SQL: that each map sums exactly to its total and
+/// that an unauthorized basis yields NULL rather than `{}`. It cannot see Dart, so
+/// these are the assertions that keep the Dart half from undoing either property —
+/// the same division of labour as the rest of this file.
+void mainRoleSplit() {
+  group('Q2 · the role split keeps null and empty apart', () {
+    test('an unauthorized basis parses to NULL, not to an empty map', () {
+      final m = AdminActivityOverview.fromRow(const {
+        'session_users_today': 4,
+        'session_users_today_by_role': {'client': 3, 'coach': 1},
+        'signin_users_today': null,
+        'signin_users_today_by_role': null,
+      });
+      expect(m.sessionUsersTodayByRole, isNotNull);
+      expect(m.signInUsersTodayByRole, isNull,
+          reason: 'a null jsonb must stay null: it means "not authorized for this '
+              'basis", and an empty map would say "nobody signed in"');
+    });
+
+    test('an authorized-but-empty window parses to an EMPTY MAP, not to null', () {
+      final m = AdminActivityOverview.fromRow(const {
+        'session_users_today': 0,
+        'session_users_today_by_role': <String, dynamic>{},
+      });
+      expect(m.sessionUsersTodayByRole, isNotNull,
+          reason: 'a measured zero is not an absent authorization');
+      expect(m.sessionUsersTodayByRole, isEmpty);
+    });
+
+    test('a row that omits the columns entirely yields null, not a crash', () {
+      final m = AdminActivityOverview.fromRow(const {'session_users_today': 1});
+      expect(m.sessionUsersTodayByRole, isNull);
+      expect(m.signInUsersMonthByRole, isNull);
+    });
+
+    test('jsonb handed back as an encoded string is still decoded', () {
+      final m = AdminActivityOverview.fromRow(const {
+        'session_users_today_by_role': '{"client":2,"coach":1}',
+      });
+      expect(m.sessionUsersTodayByRole, {'client': 2, 'coach': 1});
+    });
+
+    test('the parsed split sums to the total it was published beside', () {
+      final m = AdminActivityOverview.fromRow(const {
+        'session_users_month': 26,
+        'session_users_month_by_role': {'client': 20, 'coach': 5, 'vendor': 1},
+      });
+      final sum = m.sessionUsersMonthByRole!.values.reduce((a, b) => a + b);
+      expect(sum, m.sessionUsersMonth,
+          reason: 'the parts must account for the whole, or the split is the '
+              '"unexplained aggregate" the ruling forbids');
+    });
+  });
+
+  group('Q2 · the split is labelled without being regrouped', () {
+    test('nothing is rendered for an unauthorized basis or a measured zero', () {
+      expect(formatAdminRoleSplit(null), isNull);
+      expect(formatAdminRoleSplit(const {}), isNull);
+    });
+
+    test('roles are labelled and ordered deterministically', () {
+      expect(formatAdminRoleSplit(const {'coach': 1, 'client': 2}),
+          'Clients 2 · Coaches 1');
+    });
+
+    test('a role the label table does not know renders RAW rather than vanishing', () {
+      // If 142's CHECK gains a role before this table does, the count must still
+      // appear — otherwise a total would stop matching its own breakdown.
+      final out = formatAdminRoleSplit(const {'client': 2, 'future_role': 3});
+      expect(out, contains('future_role 3'));
+      expect(out, contains('Clients 2'));
+    });
+
+    test('no_profile and unrecorded are labelled DIFFERENTLY, never merged', () {
+      final a = adminRoleSplitLabels['no_profile'];
+      final b = adminRoleSplitLabels['unrecorded'];
+      expect(a, isNotNull);
+      expect(b, isNotNull);
+      expect(a, isNot(equals(b)),
+          reason: 'a missing profile and an unset role column are different '
+              'findings; migration 181 keeps them apart and so must the UI');
+    });
+
+    test('every role in the schema CHECK has a label', () {
+      for (final role in const [
+        'client', 'coach', 'vendor', 'admin', 'content_manager',
+        'trust_operator', 'erasure_executor',
+      ]) {
+        expect(adminRoleSplitLabels[role], isNotNull,
+            reason: '$role is in migration 142\'s CHECK and must be labelled');
+      }
     });
   });
 }

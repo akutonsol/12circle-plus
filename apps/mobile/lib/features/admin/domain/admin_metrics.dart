@@ -19,6 +19,8 @@
 /// empty state, rather than a confident zero.
 library;
 
+import 'dart:convert';
+
 /// Why a figure has no value. The UI needs the distinction: one of these is an
 /// authorization outcome and the other is an absence of data.
 enum MetricAbsence {
@@ -46,6 +48,12 @@ class AdminActivityOverview {
     required this.weekStart,
     required this.monthStart,
     required this.windowTimezone,
+    required this.sessionUsersTodayByRole,
+    required this.sessionUsersWeekByRole,
+    required this.sessionUsersMonthByRole,
+    required this.signInUsersTodayByRole,
+    required this.signInUsersWeekByRole,
+    required this.signInUsersMonthByRole,
   });
 
   final int? sessionUsersToday;
@@ -75,6 +83,28 @@ class AdminActivityOverview {
   final DateTime? weekStart;
   final DateTime? monthStart;
   final String? windowTimezone;
+
+  /// Q2 / `METRIC-02` sub-answer (migration 181) — the active-user ROLE SPLIT,
+  /// published beside each total.
+  ///
+  /// The owner ruled the population is ALL users *"with the role split PUBLISHED
+  /// beside the total … so a reader can apply either definition."* These are
+  /// role→count maps rather than named `clients` / `coaches` / `partners` fields
+  /// for the reason the migration gives: collapsing the schema's seven roles into
+  /// buckets would be a metric definition nobody issued, and it would foreclose
+  /// exactly the choice the ruling says the reader must keep.
+  ///
+  /// The same three states as every other field here, and for the same reason: a
+  /// **null map** is "not authorized for this basis" (Session on `Users·view`,
+  /// sign-in on `Security·view` per `B-1`), while an **empty map** is a measured
+  /// emptiness — nobody was active. Rendering the first as the second would tell a
+  /// reader "no coaches were active" when the truth is that they may not know.
+  final Map<String, int>? sessionUsersTodayByRole;
+  final Map<String, int>? sessionUsersWeekByRole;
+  final Map<String, int>? sessionUsersMonthByRole;
+  final Map<String, int>? signInUsersTodayByRole;
+  final Map<String, int>? signInUsersWeekByRole;
+  final Map<String, int>? signInUsersMonthByRole;
 
   /// The Session basis is gated on `Users·view`.
   bool get hasSessionBasis => sessionUsersToday != null;
@@ -113,6 +143,12 @@ class AdminActivityOverview {
         weekStart: _date(r['week_start']),
         monthStart: _date(r['month_start']),
         windowTimezone: r['window_timezone'] as String?,
+        sessionUsersTodayByRole: _roleMap(r['session_users_today_by_role']),
+        sessionUsersWeekByRole: _roleMap(r['session_users_week_by_role']),
+        sessionUsersMonthByRole: _roleMap(r['session_users_month_by_role']),
+        signInUsersTodayByRole: _roleMap(r['signin_users_today_by_role']),
+        signInUsersWeekByRole: _roleMap(r['signin_users_week_by_role']),
+        signInUsersMonthByRole: _roleMap(r['signin_users_month_by_role']),
       );
 }
 
@@ -752,6 +788,64 @@ class AdminContentReport {
 // PostgREST returns bigint and numeric as JSON numbers or strings depending on
 // magnitude and type. Each of these returns null for a null or unparseable
 // input; none of them defaults to zero.
+/// Q2 · the role split's presentation vocabulary.
+///
+/// Labels only — this map never merges two role keys into one bucket, because that
+/// would be the grouping migration 181 deliberately refuses to invent. A key that is
+/// NOT listed here falls through to its raw value rather than being dropped, so a role
+/// added to the schema's CHECK later still renders instead of silently vanishing from
+/// a total's own breakdown.
+const Map<String, String> adminRoleSplitLabels = {
+  'client': 'Clients',
+  'coach': 'Coaches',
+  'vendor': 'Vendors',
+  'admin': 'Admins',
+  'content_manager': 'Content managers',
+  'trust_operator': 'Trust operators',
+  'erasure_executor': 'Erasure executors',
+  // The two non-roles 181 keeps distinct. A missing profile and an unset column are
+  // different findings and are labelled differently.
+  'no_profile': 'No profile',
+  'unrecorded': 'Role unrecorded',
+};
+
+/// Formats a role split for display, or returns null when there is nothing to show.
+///
+/// Null for BOTH a null map and an empty one, but for different reasons: a null map is
+/// an absent authorization and must render nothing at all, and an empty map is a
+/// measured zero whose own total already says `0` — appending "by role:" with nothing
+/// after it would read as a defect rather than as a fact.
+String? formatAdminRoleSplit(Map<String, int>? m) {
+  if (m == null || m.isEmpty) return null;
+  final keys = m.keys.toList()..sort();
+  return keys
+      .map((k) => '${adminRoleSplitLabels[k] ?? k} ${m[k]}')
+      .join(' · ');
+}
+
+/// jsonb → `Map<String, int>?`, preserving the null/empty distinction above.
+Map<String, int>? _roleMap(Object? v) {
+  if (v == null) return null;
+  if (v is Map) {
+    final out = <String, int>{};
+    v.forEach((k, value) {
+      final parsed = _int(value);
+      if (parsed != null) out[k.toString()] = parsed;
+    });
+    return out;
+  }
+  if (v is String) {
+    // Some client paths hand jsonb back as an encoded string rather than a Map.
+    try {
+      final decoded = jsonDecode(v);
+      if (decoded is Map) return _roleMap(decoded);
+    } catch (_) {
+      return null;
+    }
+  }
+  return null;
+}
+
 int? _int(Object? v) {
   if (v == null) return null;
   if (v is int) return v;

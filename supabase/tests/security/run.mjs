@@ -132,6 +132,7 @@ const SUITES = [
   ['D19   Guardian emergency disablement (169)', './d19-guardian-disablement.mjs'],
   ['D20   subscription churn Q11 + Q12 (180)',  './d20-subscription-churn.mjs'],
   ['D21   admin search filters (§199)',         './d21-admin-search.mjs'],
+  ['D22   activity role split Q2 (181)',        './d22-activity-role-split-lab.mjs'],
 ];
 
 let totalFailures = 0;
@@ -151,8 +152,15 @@ for (const [label, path] of SUITES) {
     aborted = true;
   }
   const ran = results.length - before;
+  // V5 §205. A suite that registered ZERO assertions has not passed -- whatever it
+  // returned. This must be scored HERE, before `totalFailures` is summed: an earlier
+  // version of this guard set the flag in the printing loop below, which fixed the
+  // word on the screen and left `process.exit` reading the stale total, so the run
+  // still went green. A guard that reports without failing is not a guard.
+  const empty = !aborted && ran === 0;
+  if (empty) failures = Math.max(failures, 1);
   totalFailures += failures;
-  summary.push({ label, ran, failures, aborted });
+  summary.push({ label, ran, failures, aborted, empty });
 }
 
 console.log(`\n${'█'.repeat(74)}\n██  PHASE 1 SECURITY REGRESSION SUMMARY\n${'█'.repeat(74)}`);
@@ -163,17 +171,39 @@ console.log(`\n${'█'.repeat(74)}\n██  PHASE 1 SECURITY REGRESSION SUMMARY\
 // connectivity degradation of §31 that misreading happened repeatedly, and in CI
 // it would present a dropped connection as a security regression. The state is
 // now named rather than inferred.
+// V5 §205. A suite that registered ZERO assertions used to print `PASS   0/0`, and
+// that is how D22 first reported: it ended with a bare `run();` instead of the
+// `export default await run();` every other suite uses, so the runner read
+// `results.length` BEFORE the suite's async body had added anything, and scored the
+// missing default export as `failures = 0`. Two independent silences agreeing on a
+// green. EMPTY is now a named state, like ABORT at §28.9, and it fails the run.
 for (const s of summary) {
-  const verdict = s.aborted ? 'ABORT' : s.failures === 0 ? 'PASS' : 'FAIL';
+  const verdict = s.aborted ? 'ABORT' : s.empty ? 'EMPTY' : s.failures === 0 ? 'PASS' : 'FAIL';
   const score = s.aborted
     ? `${String(s.ran).padStart(3)} ran, DID NOT FINISH`
-    : `${String(s.ran - s.failures).padStart(3)}/${String(s.ran).padEnd(3)}`;
+    : s.empty
+      ? '  0 assertions — REGISTERED NOTHING'
+      : `${String(s.ran - s.failures).padStart(3)}/${String(s.ran).padEnd(3)}`;
   console.log(`  ${verdict.padEnd(5)} ${s.label.padEnd(36)} ${score}`);
 }
 const total = summary.reduce((a, s) => a + s.ran, 0);
 const abortedSuites = summary.filter(s => s.aborted);
-const assertionFailures = totalFailures - abortedSuites.length;
+const emptySuites = summary.filter(s => s.empty);
+// Neither an abort nor an empty suite is an ASSERTION failure; both are incomplete
+// runs. They are subtracted here for the same reason §28.9 subtracts aborts -- so the
+// headline count stays an honest count of assertions -- and reported on their own
+// lines below so neither disappears from the record.
+const assertionFailures = totalFailures - abortedSuites.length - emptySuites.length;
 console.log(`\n  ${total - assertionFailures}/${total} assertions passed across ${SUITES.length} suites`);
+if (emptySuites.length) {
+  console.log(
+    `\n  ⚠  ${emptySuites.length} suite(s) REGISTERED NO ASSERTIONS: ` +
+    `${emptySuites.map(s => s.label.trim().split(/\s{2,}/)[0]).join(', ')}.` +
+    `\n     This is NOT a pass. The usual cause is a suite that ends with a bare` +
+    `\n     \`run();\` instead of \`export default await run();\`, so the runner measures` +
+    `\n     its assertions before the async body has added any -- see V5 §205.`
+  );
+}
 if (abortedSuites.length) {
   console.log(
     `\n  ⚠  ${abortedSuites.length} suite(s) ABORTED and did not finish: ` +

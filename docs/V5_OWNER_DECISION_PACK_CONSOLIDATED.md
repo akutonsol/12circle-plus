@@ -5,7 +5,7 @@
 > | decision | ruling | recorded where | implemented? |
 > |---|---|---|---|
 > | **Q1** | **Ratify UTC + Monday.** The applied convention at §162.3 is now an authorization. | `METRIC-02` sub-answer, decision sheet | **already ships** (176 publishes the boundaries) |
-> | **Q2** | **Publish the role split** for active-user reporting. All users, with the split shown beside the total. | `METRIC-02` sub-answer, decision sheet | **NOT YET** — authorized, not built |
+> | **Q2** | **Publish the role split** for active-user reporting. All users, with the split shown beside the total. | `METRIC-02` sub-answer, decision sheet | **BUILT 2026-10-11** — migration 181, D22 25/25 (§205) |
 > | **Q3 / `METRIC-11`** | **Option 3** — both authorities, labelled, no combined verdict. | `METRIC-11`, decision sheet | **already ships** (173/174); ingestion stays unauthorized |
 > | **Q4** | **Keep design citations commit-pinned.** | here | **already ships** (65 citations resolve, guard enforces) |
 > | **Q5** | **HOLD pending `Q16`.** Not to be selected independently. | here | — |
@@ -863,7 +863,8 @@ what I will state:
 
 ## 19 · State at this frontier
 
-**No implementation changed.** `Q2` and `Q7`/`D-1` are **authorized and deliberately not built**,
+**No implementation changed** *(at the time this pack was written; `Q7`/`D-1` was built under the
+2026-10-11 gate and `Q2` at §205)*. `Q2` and `Q7`/`D-1` are **authorized and deliberately not built**,
 per your instruction. No CHECK was added for `Q13`. `Q15` is **not resolved**. The 73-decision
 `MASTER_PRODUCT_DECISIONS.md` and `MASTER_REMEDIATION_REGISTRY.md` are **untouched**.
 

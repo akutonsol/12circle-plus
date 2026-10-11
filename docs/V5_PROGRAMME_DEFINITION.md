@@ -18789,3 +18789,130 @@ changed is that a recommendation would no longer be agent inference about *which
 — only about scope. The pack's three *"remains on hold behind `Q16`"* lines are now stale and are
 corrected there, for the same reason §196 corrected METRIC-17: a stale line in a decision document
 misleads exactly the reader it is written for.
+
+## §205 · Q2 built — and the suite that proved it reported `PASS 0/0`
+
+### §205.1 · The last authorized-but-unbuilt decision
+
+Reassessing the frontier after Q16, the open item was not a new question: the consolidated pack
+carried `Q2` as ***"NOT YET — authorized, not built"***, deferred only because the turn that
+recorded it was instructed not to modify implementation. The ruling itself has stood since
+2026-10-08:
+
+> *"the active-user population is ALL users, with the role split PUBLISHED beside the total. Not
+> clients-only and not an unexplained aggregate: the split is to be shown, so a reader can apply
+> either definition."*
+
+Built as **migration 181** on `admin_activity_overview`, closing the last of the three
+sub-questions the data contract (:98) put to the owner.
+
+### §205.2 · The obvious shape would have invented a metric
+
+The natural columns are `active_clients` / `active_coaches` / `active_partners`. Every one of
+those is a definition nobody issued. The schema's vocabulary (142) is **client · coach · vendor ·
+admin · content_manager · trust_operator · erasure_executor**, and `NULL` is permitted. Deciding
+that `vendor` is what the contract calls a *"partner"*, or that four staff roles collapse into
+one bucket, would be exactly the agent inference the standing constraints forbid — and it would
+**foreclose the choice the ruling exists to preserve**, since a reader handed pre-collapsed
+buckets can no longer apply the other definition.
+
+So the split is published as a **role → count map**. It invents no grouping, it survives a role
+being added to 142's CHECK without a migration here, and the Dart label table falls through to
+the raw key rather than dropping an unknown role — because a dropped bucket would make a total
+stop matching its own breakdown.
+
+Two non-roles are kept apart rather than merged into one `unknown`: **`no_profile`** (no
+`user_profiles` row at all — legitimate for the sign-in basis, since 142:113-115 says the ledger
+*"must accept actors that were never users"*) and **`unrecorded`** (a row exists and `role` is
+NULL — reachable, because 115 added the CHECK but no NOT NULL). A missing profile and an unset
+column are different findings.
+
+### §205.3 · §19.3 was checked, not assumed
+
+The sign-in basis joins `audit_events.actor_id` to `user_profiles`, and §19.3 forbids any standing
+resolver of pseudonyms. The join is nonetheless clean, and the reason is a column boundary that is
+easy to misread: **142:113 states the actor identifiers *"are therefore stored raw"***, and the
+pseudonym is the **next** column, `subject_pseudonym`. §19.3's prohibition — which 142:313-317
+applies to the active-coach arm — concerns resolving *that*, and it is not read here. Only counts
+leave the view. Had `actor_id` been the pseudonym, this basis could not have been split at all,
+and the honest outcome would have been a boundary rather than a workaround.
+
+### §205.4 · The equality is the whole point
+
+A split that merely sits beside a total is the *"unexplained aggregate"* the ruling forbids — two
+numbers that look related and are not. So the load-bearing assertion is
+
+```
+sum(the map's values) === the total column
+```
+
+for all three windows on both bases. Each map carries the **same** `admin_can` gate as the total
+it splits, so a `Users`-only role sees the Session split and **NULL — not `{}`** — for the
+sign-in split: an empty map is a measured emptiness, and a card that rendered the first as the
+second would tell a reader *"nobody signed in"* when the truth is that they may not know.
+
+D22 asserts it, and then **moves the population** so the equality cannot pass on two zeroes
+agreeing with each other: a real session takes `session_users_today` 0 → 1 while the `client`
+bucket goes 0 → 1, the sum still matches, and the asserted teardown returns both to baseline.
+**25/25.**
+
+### §205.5 · And the suite's first full-run result was `PASS 0/0`
+
+Standalone, D22 was 25/25. Inside `run.mjs` it printed:
+
+```
+  PASS  D22   activity role split Q2 (181)     0/0
+```
+
+It ended with a bare `run();` where every other suite ends `export default await run();`. The
+runner does `(await import(path)).default ?? 0`, so **two independent silences agreed on a
+green**: the missing default export scored `failures = 0`, and `results.length` was read before
+the un-awaited async body had registered anything. The run total stayed at its previous value and
+nothing anywhere said a suite had contributed nothing.
+
+This is the §203 lesson in a new place — *"green and meaningless"* — and the same family as
+SEC-G9's vacuous `can\w*` and §202's reporter-dependent control. Three times now the defect has
+been a check that could not fail, so the runner was changed as well as the suite: a suite that
+registers **zero** assertions is now named **`EMPTY`**, reported on its own line with the exact
+cause, and **fails the run**.
+
+### §205.6 · The first version of that fix was itself cosmetic
+
+Marking the suite `EMPTY` in the **printing** loop changed the word on the screen and left
+`process.exit(totalFailures ? 1 : 0)` reading a total that had already been summed. The control
+caught it:
+
+```
+  EMPTY D22   activity role split Q2 (181)     0 assertions — REGISTERED NOTHING
+  EXIT CODE = 0
+```
+
+**A guard that reports without failing is not a guard** — and it would have gone to CI looking
+fixed. The flag is now set in the collection loop before any total is computed; `EMPTY` is
+subtracted from the assertion arithmetic like `ABORT` at §28.9, because neither is an assertion
+failure and both are incomplete runs. Re-controlled: **exit code 1**.
+
+### §205.7 · Results, and one count that moved on its own
+
+| | |
+|---|---|
+| Live suite | **1114/1114 across 22 suites** (D22 **25/25**), Node 20, one runner at a time |
+| Flutter | **1982 passed / 5 skipped** — the previous 1972 plus D22's ten Dart assertions |
+| `dart analyze` | **0 errors, 0 warnings** (296 pre-existing `info`) |
+| QA frontier | **181** |
+
+`D-02` moved **39 → 40 → 39** across runs, and it is not drift: `d02:137` skips its public-signup
+assertion when Supabase returns **429** on the project email rate limit. On the run that was not
+limited, *"public signup cannot mint an admin"* **ran and passed** — one extra real security
+assertion, not one fewer. Chasing it was still right; an unexplained count change is how §203
+started.
+
+A note on the method, recorded because it cost real time: the Flutter suite would not have run at
+all. The volume was at **99% with 347 MiB free**, which on this machine makes `flutter test` hang
+with no output rather than fail. Reclaiming this project's own `build` and `flutter_build` caches
+bought 839 MiB and the suite ran. The 10 GB in other applications' caches was **left alone** — a
+determination already recorded in memory: deleting another application's cache is the owner's
+call, not an autonomous one.
+
+**Production was not contacted.** The only database written was QA, confirmed by matching the
+linked project ref against `QA_URL` before pushing the migration.

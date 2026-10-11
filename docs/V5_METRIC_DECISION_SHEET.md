@@ -54,7 +54,14 @@ only the first. The other two:
   authorization.**
 - **RESOLVED 2026-10-08 · the active-user population is ALL users, with the role split PUBLISHED beside
   the total.** Not clients-only and not an unexplained aggregate: the split is to be shown, so a reader
-  can apply either definition. **Not yet implemented** — authorized here, built later.
+  can apply either definition. **IMPLEMENTED 2026-10-11 · migration 181** — six `*_by_role` columns on
+  `admin_activity_overview`, three per basis, each carrying the SAME `admin_can` gate as the total it
+  splits. Published as role→count **maps**, not as named `clients`/`coaches`/`partners` buckets:
+  collapsing 142's seven roles would be a metric definition no decision issued, and it would foreclose
+  the very choice this ruling preserves. `no_profile` (no `user_profiles` row — legitimate for sign-ins
+  per 142:113) and `unrecorded` (row exists, `role` NULL) are kept distinct. Each map sums EXACTLY to its
+  total, which is the assertion that makes it a split rather than a number sitting nearby — proved live
+  by **D22 (25/25)**, including a moved population so the equality is not two zeroes agreeing.
 
 ---
 

@@ -92,6 +92,29 @@ class AdminMetricsPanel extends ConsumerWidget {
     ];
   }
 
+  /// Q2 · the active-user role split, rendered beside the total it belongs to.
+  ///
+  /// Emits NOTHING in two different situations, and deliberately treats them the
+  /// same way here: the caller is not authorized for this basis (a null map), or the
+  /// window measured zero (an empty map). In both cases the total's own tile already
+  /// carries the finding — `notAuthorized` in the first, `0` in the second — and a
+  /// dangling "by role ·" with nothing after it would read as a defect. The
+  /// distinction is preserved where it matters, in the model and the view.
+  static List<Widget> _splitNote(String label, Map<String, int>? m) {
+    final text = formatAdminRoleSplit(m);
+    if (text == null) return const [];
+    return [
+      Padding(
+        padding: const EdgeInsets.only(top: AdminDims.space2),
+        child: Text('$label by role · $text',
+            style: const TextStyle(
+              color: AdminColors.colorTextSubtle,
+              fontSize: AdminDims.typeCaptionSize,
+            )),
+      ),
+    ];
+  }
+
   Widget _activity(WidgetRef ref) => AdminCard(
         title: 'Activity',
         child: _async<AdminActivityOverview>(
@@ -109,6 +132,11 @@ class AdminMetricsPanel extends ConsumerWidget {
             AdminMetricTile.of('This month · Sessions', m.sessionUsersMonth,
                 whenNull: MetricAbsence.notAuthorized,
                 delta: m.sessionMonthDelta),
+            // Q2 · ALL users are counted, and the split is PUBLISHED so a reader can
+            // apply either definition — clients-only, clients+coaches, or any other —
+            // instead of being handed an aggregate they cannot decompose.
+            ..._splitNote('Active today', m.sessionUsersTodayByRole),
+            ..._splitNote('This month', m.sessionUsersMonthByRole),
             // SESSION COUNTS, labelled as such. The design shows "947 Daily sessions"
             // beside the DAU figure and the data contract calls them distinct required
             // measures, so they are never substituted for one another here.
@@ -123,6 +151,8 @@ class AdminMetricsPanel extends ConsumerWidget {
             AdminMetricTile.of('This month · Sign-ins', m.signInUsersMonth,
                 whenNull: MetricAbsence.notAuthorized,
                 delta: m.signInMonthDelta),
+            ..._splitNote('Signed in today', m.signInUsersTodayByRole),
+            ..._splitNote('Signed in this month', m.signInUsersMonthByRole),
             ..._windowNote(m),
           ],
         ),
