@@ -22,7 +22,7 @@
 // cuts against writing one. They are asserted for NON-REGRESSION only, and the
 // pre-existing broad posture is recorded as a finding rather than dressed up as a
 // result of this migration.
-import { URL_, SERVICE, IDENT, signIn, rest, mutate, svc, rpc,
+import { URL_, SERVICE, IDENT, signIn, rest, mutate, svc, rpc, countExact, countExactAs,
          check, checkDenied, checkGranted, section, summary, beginSuite, n } from './lib.mjs';
 import { readFileSync, readdirSync } from 'node:fs';
 
@@ -553,11 +553,26 @@ async function run() {
 
     // ── 6d · USERS projection — owner decision B-2 (160) ───────────────────
     section('Users area projection · identity and account state only');
-    const usersSvc = await svc('user_profiles?select=id&limit=1000');
+    // ── THE BLIND COMPARISON, now sighted ────────────────────────────────
+    // This read `n(usersVia.body) === n(usersSvc.body)` with both sides capped at
+    // `limit=1000`, so once the population passed the cap it was comparing 1000 to 1000 —
+    // GREEN AND MEANINGLESS. §187 named exactly this shape after P2's audit delta went blind
+    // the same way. It is the more dangerous sibling of the failure above: that one broke
+    // loudly, this one kept passing.
+    //
+    // `countExactAs` for the view, because `admin_user_directory` is gated on
+    // `admin_can('Users','view')` and a service_role count of it is 0 — comparing against
+    // THAT would have replaced a blind assertion with a vacuous one.
+    //
+    // The equality is the right claim: 160:37 projects `FROM public.user_profiles` with no
+    // row predicate — the `WHERE admin_can(...)` is a gate, not a filter — so a Viewer must
+    // see every profile. Measured 1005 = 1005 at the time of this change.
+    const usersSvc = await countExact('user_profiles');
+    const usersViaCount = await countExactAs(victim, 'admin_user_directory');
     const usersVia = await rest(victim, 'admin_user_directory?select=*&limit=1000');
-    check(`a Viewer reads the Users directory — ${n(usersVia.body)} of ${n(usersSvc.body)}`,
-      n(usersVia.body) > 0 && n(usersVia.body) === n(usersSvc.body),
-      `view=${n(usersVia.body)} service=${n(usersSvc.body)} status=${usersVia.status}`);
+    check(`a Viewer reads the Users directory — ${usersViaCount} of ${usersSvc}`,
+      usersViaCount > 0 && usersViaCount === usersSvc,
+      `view=${usersViaCount} service=${usersSvc} status=${usersVia.status}`);
     check('the projection carries EXACTLY the nine decided columns',
       n(usersVia.body) > 0 &&
         Object.keys(usersVia.body[0]).length === USERS_ALLOWED.length &&
@@ -1188,18 +1203,27 @@ async function run() {
       // The counts must be TRUE, not merely present — a view returning zeros would
       // satisfy every structural assertion above.
       if (view === 'admin_user_overview' && n(got.body) === 1) {
-        const real = await svc('user_profiles?select=id&limit=1000');
+        // `countExact`, NOT a body length. This assertion FAILED IN CI the moment QA's user
+        // population crossed 1000 — `view=1005 actual=1000` — because the baseline was
+        // `limit=1000` and saturated while the view was right. The view was never wrong; the
+        // measurement was. An equality against a page-capped count is only correct until the
+        // population reaches the cap, which is the §187 lesson that produced `countExact`.
+        const real = await countExact('user_profiles');
         check('admin_user_overview.users_total matches the real population',
-          got.body[0].users_total === n(real.body), `view=${got.body[0].users_total} actual=${n(real.body)}`);
+          got.body[0].users_total === real, `view=${got.body[0].users_total} actual=${real}`);
         check('…and all SEVEN schema roles are represented — the data contract row 1 gap',
           ['clients_total','coaches_total','vendors_total','admins_total','content_managers_total',
            'trust_operators_total','erasure_executors_total'].every((k) => typeof got.body[0][k] === 'number'),
           `roles=${Object.keys(got.body[0]).filter((k) => k !== 'users_total').length}`);
       }
       if (view === 'admin_events_overview' && n(got.body) === 1) {
-        const real = await svc('events?select=id&limit=1000');
+        // Same fix before the same failure: events are under the cap today, so this one was
+        // latent rather than broken. Fixing only the assertion that happened to fail would
+        // have left the identical defect armed on the next surface to grow.
+        const realEvents = await countExact('events');
         check('admin_events_overview.events_total matches the real population',
-          got.body[0].events_total === n(real.body), `view=${got.body[0].events_total} actual=${n(real.body)}`);
+          got.body[0].events_total === realEvents,
+          `view=${got.body[0].events_total} actual=${realEvents}`);
       }
 
       // UNASSIGNED must see no row at all — the view is self-gating.

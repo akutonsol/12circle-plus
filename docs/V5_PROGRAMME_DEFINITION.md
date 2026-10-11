@@ -18600,3 +18600,57 @@ owner pack now carries **Q13 · Q15 · Q16** open, with `Q14`'s premise withdraw
 `Q11`/`Q12` answered and implemented.
 
 **Production was not contacted.**
+
+---
+
+## §203 · A page cap that broke one assertion loudly and another silently
+
+### §203.1 · CI caught it, and it was not a regression from the change under test
+
+The negative-control job's own fix went green, and the **Live QA** job failed on the same run
+with a single assertion:
+
+```
+x admin_user_overview.users_total matches the real population — view=1005 actual=1000
+```
+
+**Nothing in that commit touched the database.** D15's baseline was
+`svc('user_profiles?select=id&limit=1000')` and counted the **body length**, so the moment QA's
+user population crossed **1000** the baseline saturated while the view stayed right. **The view
+was never wrong; the measurement was.** This is the §187 lesson that produced `countExact` —
+an equality against a page-capped count is correct only until the population reaches the cap.
+
+### §203.2 · The silent one was worse
+
+Fixing only the assertion that failed would have left the identical defect armed twice over.
+Two more sites carried it:
+
+* **`admin_events_overview.events_total`** — the same shape, **latent** rather than broken only
+  because `events` is still under the cap.
+* **The Users-directory equality** — `n(usersVia.body) === n(usersSvc.body)` with **both sides**
+  capped at `limit=1000`. Once the population passed the cap it was comparing **1000 to 1000**:
+  **green and meaningless.** It is the more dangerous sibling of the one that failed, because it
+  would never have reported anything.
+
+All three now use exact, header-derived counts.
+
+### §203.3 · `countExactAs` — and why `countExact` could not be reused
+
+`admin_user_directory` is gated on `admin_can('Users','view')`, which is **false for
+`service_role`**, so a service-role count of it is **0** — replacing a blind assertion with a
+vacuous one. `countExactAs(who, path)` counts the population the **caller** can see, and
+refuses a missing content-range exactly as `countExact` does. D20 §6 and D21 §3 each made the
+service-role mistake once; this is the instrument that removes the opportunity.
+
+**The equality itself was verified before being asserted.** `160:37` projects
+`FROM public.user_profiles` with **no row predicate** — the `WHERE admin_can(...)` is a gate,
+not a filter — so a Viewer must see every profile. Measured at the time of the change:
+**1005 = 1005**. An earlier reading of 945 in D21 was a different moment in QA's growth, not a
+discrepancy.
+
+### §203.4 · Evidence
+
+D15 **353/353** · live **1089/1089 across 21 suites** · no schema, migration or policy touched
+— three test baselines and one new library helper.
+
+**Production was not contacted.**

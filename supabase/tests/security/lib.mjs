@@ -372,6 +372,31 @@ export async function countExact(path) {
   return total;
 }
 
+/**
+ * `countExact`, but AS A SIGNED-IN CALLER rather than as service_role.
+ *
+ * WHY BOTH EXIST. `countExact` goes through `service_role`, which bypasses RLS — and for any
+ * surface gated on `admin_can(...)` that gate is FALSE for service_role, so a service count of
+ * `admin_user_directory` is 0 and a comparison against it is vacuous. D20 §6 and D21 §3 each
+ * made that mistake once. This counts the population the CALLER can actually see.
+ *
+ * Same refusal as `countExact`: a missing content-range throws rather than returning a number
+ * nobody measured.
+ */
+export async function countExactAs(who, path) {
+  const sep = path.includes('?') ? '&' : '?';
+  const r = await fetch(`${URL_}/rest/v1/${path}${sep}select=id&limit=1`, {
+    headers: { apikey: ANON, Authorization: `Bearer ${who}`, Prefer: 'count=exact' },
+  });
+  const range = r.headers.get('content-range') || '';
+  const total = Number(range.split('/')[1]);
+  if (!Number.isFinite(total)) {
+    throw new Error(`countExactAs: no usable content-range for ${path} (got "${range}") ` +
+      '— refusing to return a count that was not measured');
+  }
+  return total;
+}
+
 export async function loadIds() {
   const { readFileSync } = await import('node:fs');
   const p = new URL('./ids.json', import.meta.url);
