@@ -51,11 +51,13 @@ git diff --quiet -- "$M132" || die "migration 132 already modified"
 git diff --cached --quiet -- "$M132" || die "migration 132 already staged"
 
 TMP="$(mktemp)"
+JSON="$(mktemp)"
 cleanup() {
   if [[ -f "$TMP" ]]; then
     cp "$TMP" "$M132" 2>/dev/null || true
     rm -f "$TMP"
   fi
+  rm -f "$JSON"
 }
 trap cleanup EXIT
 
@@ -70,74 +72,104 @@ rm "$M132"
 [[ ! -f "$M132" ]] || die "migration 132 was not removed"
 
 echo
-echo "mutated: the 132-dependent assertions must each fail, and Addendum B must NOT"
+echo "mutated: the 132-dependent assertions must each fail, with D-3 splitting"
 
+# ── THE JSON REPORTER, AND WHY THIS HARNESS USES IT ────────────────────────
+#
+# The first CI run of this control FAILED while the tree under test behaved exactly as
+# designed. Locally `flutter test` prints the compact reporter (`00:00 +30 -13:`); in GitHub
+# Actions it prints the GitHub reporter (`✅ <name>` lines and `30 tests passed, 13 failed.`).
+# The parser read the compact form, found no count, and died — and worse, the "Failing tests:"
+# block it used for the D-3 checks DOES NOT EXIST in the GitHub reporter, so those checks
+# would have passed VACUOUSLY there.
+#
+# `--reporter json` is the same in every environment and carries each test's NAME and RESULT,
+# so every assertion below names the test it judges instead of pattern-matching a summary
+# line. A control whose verdict depends on which reporter is attached is not a control.
 set +e
-OUTPUT="$(flutter test "$TEST" 2>&1)"
+flutter test "$TEST" --reporter json > "$JSON" 2>/dev/null
 RC=$?
 set -e
 
-printf '%s\n' "$OUTPUT"
-
 [[ "$RC" -ne 0 ]] || die "the guard passed with migration 132 deleted"
 
-# ── 1 · the assertions RAN. This is the whole point of Option 4: under the eager setUpAll
-#        this count was 1, named "(setUpAll)", with zero assertions executed.
-FAILED="$(printf '%s\n' "$OUTPUT" | grep -cE '^[0-9]{2}:[0-9]{2} \+[0-9]+ -[0-9]+:' || true)"
-LAST_MINUS="$(printf '%s\n' "$OUTPUT" | grep -oE '\-[0-9]+:' | tail -1 | sed 's/[^0-9]//g')"
-[[ -n "$LAST_MINUS" ]] || die "could not read a failure count from the report"
-[[ "$LAST_MINUS" -ge "$MIN_FAILURES" ]] \
-  || die "only $LAST_MINUS assertions failed; at least $MIN_FAILURES must, or the lazy-read \
-change did not take effect and this control is back to proving nothing"
-echo "    $LAST_MINUS assertions failed individually (>= $MIN_FAILURES required)"
+python3 - "$JSON" "$MIN_FAILURES" <<'PY'
+import json, sys
 
-# ── 2 · and they failed as I/O errors, which is the documented caveat. Asserted so the
-#        caveat cannot quietly stop being true without this harness noticing.
-# `PathNotFoundException`, not `FileSystemException`: on Dart 3 a missing path throws the
-# subclass, and its `toString()` names the subclass. The first run of this harness matched
-# the parent name and reported "no FileSystemException in the output" on a tree that was
-# failing exactly as designed — a check that was wrong about the string while the caveat it
-# guards was right about the substance. Both names are accepted and the specific one is named
-# in the message, so a future change of shape is legible rather than silent.
-printf '%s\n' "$OUTPUT" | grep -qE "PathNotFoundException|FileSystemException" \
-  || die "no PathNotFoundException/FileSystemException in the output — Option 4's documented \
-failure shape has changed, and the evidence class recorded for this rung no longer describes it"
-echo "    failures arrive as PathNotFoundException (a FileSystemException subtype) —"
-echo "    Option 4's documented I/O-error caveat, intact"
+path, min_failures = sys.argv[1], int(sys.argv[2])
+names, results, errors = {}, {}, []
+for line in open(path):
+    line = line.strip()
+    if not line.startswith('{'):
+        continue
+    try:
+        e = json.loads(line)
+    except Exception:
+        continue
+    t = e.get('type')
+    if t == 'testStart':
+        names[e['test']['id']] = (e['test']['name'], bool(e['test'].get('metadata', {}).get('skip')))
+    elif t == 'testDone':
+        results[e['testID']] = (names.get(e['testID'], ('?', False))[0], e.get('result'), e.get('hidden'))
+    elif t == 'error':
+        errors.append(str(e.get('error', '')))
 
-# ── 3 · the setUpAll trap is gone. If the report names (setUpAll) as a failure, the eager
-#        read is back and the other two checks could be satisfied by accident.
-if printf '%s\n' "$OUTPUT" | grep -E '^\s+\(setUpAll\)' | grep -q 'team_membership'; then
-  die "a (setUpAll) failure is present — the eager read has returned, which is the exact \
-condition D-1 Option 4 removed"
-fi
+visible = {i: r for i, r in results.items() if not r[2]}
+failed = {n for (n, res, _) in visible.values() if res != 'success'}
+hidden_failed = [n for (n, res, h) in results.values() if h and res != 'success']
 
-# ── 4 · Addendum B splits, and the FIRST RUN of this harness is what showed that the
-#        coarse version of this check was wrong. Deleting 132 does two different things to
-#        D-3's group, and conflating them would have hidden both:
-#
-#          · the PROPERTY tests read the definition in force, which is in 134, so they must
-#            still PASS — that independence is the whole point of D-3;
-#          · the COVERAGE RATCHET must FAIL, because the set of migrations defining each
-#            helper really did change (102,132,134 -> 102,134). A ratchet that stayed green
-#            when a defining migration was deleted would not be a ratchet.
-FAILING="$(printf '%s\n' "$OUTPUT" | sed -n '/^Failing tests:/,$p')"
+def die(msg):
+    print('ERROR: ' + msg, file=sys.stderr)
+    sys.exit(1)
 
-printf '%s\n' "$OUTPUT" | grep -Fq "$ADDENDUM_B" || die "Addendum B did not run at all"
-if printf '%s\n' "$FAILING" | grep -Fq "$ADDENDUM_B"; then
-  die "D-3's property test failed when 132 was deleted. It resolves the AUTHORITATIVE \
-definition in 134 and must be independent of 132 — that would be a blast radius, not a \
-reversion."
-fi
-echo "    D-3's property tests still passed — they read 134, not 132"
+# 1 · the assertions RAN. Under the eager setUpAll this was 1, named "(setUpAll)", with
+#     zero assertions executed. That is the whole point of D-1 Option 4.
+if len(failed) < min_failures:
+    die(f'only {len(failed)} assertions failed; at least {min_failures} must, or the '
+        f'lazy-read change did not take effect and this control proves nothing')
+print(f'    {len(failed)} assertions failed individually (>= {min_failures} required)')
 
-# The ratchet's sensitivity is part of the evidence, so it is required rather than tolerated.
-# `grep -c` is not used: the report truncates with "... and N more", so absence from the
-# truncated list is not absence from the failures. The count check above carries that weight;
-# this asserts the ratchet is REACHABLE and ran.
-printf '%s\n' "$OUTPUT" | grep -Fq 'the set of migrations redefining it is exactly as recorded' \
-  || die "the D-3 coverage ratchet did not run, so its sensitivity is unproven"
-echo "    the D-3 coverage ratchet ran — a deleted defining migration is visible to it"
+# 2 · and they failed as I/O errors — Option 4's documented caveat. PathNotFoundException is
+#     the Dart 3 FileSystemException subtype for a missing path, and its toString names the
+#     subclass; the first version of this check matched only the parent name.
+if not any('PathNotFoundException' in e or 'FileSystemException' in e for e in errors):
+    die("no PathNotFoundException/FileSystemException among the errors — Option 4's "
+        'documented failure shape has changed, and the evidence class recorded for this '
+        'rung no longer describes it')
+print('    failures arrive as PathNotFoundException (a FileSystemException subtype) —')
+print("    Option 4's documented I/O-error caveat, intact")
+
+# 3 · the setUpAll trap is gone. A hidden failure named (setUpAll) means the eager read is
+#     back, and checks 1 and 2 could then be satisfied while the assertions never ran.
+if any('setUpAll' in n for n in hidden_failed):
+    die('a (setUpAll) failure is present — the eager read has returned, which is the exact '
+        'condition D-1 Option 4 removed')
+print('    no (setUpAll) failure — the eager-read trap stays removed')
+
+# 4 · D-3 SPLITS, and the first run of this harness is what showed the coarse check was
+#     wrong. The property tests read the definition in force, which is in 134, so they must
+#     still PASS. The coverage ratchet must FAIL, because the definer set really did change
+#     (102,132,134 -> 102,134) — a ratchet that stayed green when a defining migration was
+#     deleted would not be a ratchet.
+property_tests = [n for (n, _, _) in visible.values() if 'the definition IN FORCE is 134' in n]
+ratchet_tests = [n for (n, _, _) in visible.values()
+                 if 'the set of migrations redefining it is exactly as recorded' in n]
+if len(property_tests) < 2:
+    die(f'found {len(property_tests)} D-3 property tests; both helpers must be judged')
+if len(ratchet_tests) < 2:
+    die(f'found {len(ratchet_tests)} D-3 ratchet tests; both helpers must be judged')
+leaked = [n for n in property_tests if n in failed]
+if leaked:
+    die("D-3's property tests failed when 132 was deleted. They resolve the AUTHORITATIVE "
+        'definition in 134 and must be independent of 132 — that is a blast radius, not a '
+        'reversion: ' + '; '.join(leaked))
+print("    D-3's property tests passed — they read 134, not 132")
+silent = [n for n in ratchet_tests if n not in failed]
+if silent:
+    die("D-3's coverage ratchet stayed GREEN with a defining migration deleted, so it is "
+        'not ratcheting: ' + '; '.join(silent))
+print('    the D-3 coverage ratchet fired — a deleted defining migration is visible to it')
+PY
 
 echo
 echo "restore: committed migration"

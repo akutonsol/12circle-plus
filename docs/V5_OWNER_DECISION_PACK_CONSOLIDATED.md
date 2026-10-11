@@ -1122,6 +1122,24 @@ its ratchet to have **run** → restored **byte-identically** (`git diff --quiet
 guard passes again. **Wired into CI's existing negative-control job**; no new job, credential or
 network access.
 
+### §32.1 · The harness failed its first CI run, and the reason is worth more than the fix
+
+It passed locally and **failed in CI while the tree under test behaved exactly as designed.**
+`flutter test` prints the **compact** reporter locally (`00:00 +30 -13:`) and the **GitHub**
+reporter in Actions (`✅ <name>` lines, then `30 tests passed, 13 failed.`). The parser read the
+compact form, found no count, and died.
+
+**The worse half is what would have happened if it had not died.** The D-3 checks keyed off a
+`Failing tests:` block, and **that block does not exist in the GitHub reporter** — so those two
+assertions would have passed **vacuously** in the only environment that matters for a CI rung.
+
+Rewritten on **`--reporter json`**, which is identical in every environment and carries each
+test's **name and result**. Every check now names the test it judges instead of pattern-matching
+a summary line: the failure count, the I/O shape from the `error` events, the absence of a hidden
+`(setUpAll)` failure, and — by name, both helpers each — that D-3's property tests **passed**
+while its ratchet **fired**. *A control whose verdict depends on which reporter is attached is
+not a control.*
+
 SEC-W1 **43/43** · Flutter **1972 / 5 skipped** · `dart analyze` **0 errors** · nine static
 guards **exit 0** · migration frontier **180**, untouched.
 
