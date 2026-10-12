@@ -19725,3 +19725,68 @@ documented 429 branch (40/40 on the run that was not rate-limited).
 **Nothing here touches authorization semantics, and `FG-3` is no closer to closed.** It is the one
 piece of `FG-3`-adjacent work that required no owner decision, and it makes the existing negative
 leg mean what it already claimed.
+
+## §213 · Helix is only billing — and a shell bug had falsified the DESIGN-02 evidence
+
+### §213.1 · The Helix question worth answering before asking anyone to pay
+
+Is a workflow defect hiding behind the billing refusal, so that clearing billing just reveals a
+second problem? **No**, and the evidence is in what GitHub did *before* it declined:
+
+| observation | what it rules out |
+|---|---|
+| a job exists, named **"Theme contract (12circle)"** — that string is the workflow's own `name:` | the YAML parsed and the job resolved |
+| `steps: 0` | it never started; it did not start and fail |
+| `event=pull_request` | the trigger matched |
+| the only `failure` annotation is the billing message, with **no `Invalid workflow file`** | a malformed workflow emits that instead, and produces no job at all |
+| every step already ran green in a clean clone on Node 20 | the step content is not the problem |
+
+Parsed → trigger matched → job resolved → **runner refused.** Clearing billing should produce a
+real run.
+
+The owner action is now exact rather than generic: `akutonsol` is a **User** account
+(`gh api users/akutonsol` → `"type": "User"`) owning the repository directly, so this is
+**personal** billing at <https://github.com/settings/billing>, not repository or organisation
+settings. **I did not read the billing to narrow "failed payment" vs "spending limit"** — that
+API needs the `user` OAuth scope, and expanding my token's scope to read an account's billing is
+not something to do unauthorized.
+
+### §213.2 · And the DESIGN-02 measurement was wrong, twice reported
+
+I stated — here and in two checkpoints — that **all nine** undepicted components return **zero**
+occurrences across the six screens. **That was produced by a broken command.** The screen
+filenames contain spaces, and the probe iterated them as `for f in $SCREENS`, so word-splitting
+handed `git show` one malformed path and it failed on **every** iteration. Every zero was a failed
+command.
+
+It is the same shape as §208's reporter block and §210.1's analyzer grep: **output that cannot
+distinguish "nothing found" from "nothing ran"** — and the third time in this programme I have
+made it. The fix that should have been obvious from the first two is the one applied now: a
+**positive control**. Re-measured with a line-based loop, `card` returns 16, `Settings` 35 and
+`div` 2159, so the probe demonstrably works before any zero is believed.
+
+The corrected picture:
+
+| component | count | context | verdict |
+|---|---|---|---|
+| `timeline` | 6 | *"Event timeline"*, *"Incident timeline — today"*, each heading an `<ol>` | **depicted** |
+| `skeleton` | 3 | *"Skeleton rows at real size. No layout jump."* | **depicted** |
+| permission-denied | 34 | includes the state copy *"Permission restricted"* | **depicted** |
+| read-only | 5 | *"Read-only"* state values, *"Decisions are read-only"* | **depicted** |
+| audit row + diff | 1 | *"Event, actor, resource, before/after, correlation"* — the **field list**, no diff UI | **partial** |
+| `type="radio"` · date range · `toast` · inline error | 0 | — | **genuinely absent** |
+
+**The undepicted set is four, possibly five — not nine.** `SCREEN-INVENTORY.md:25` corroborates
+three independently: *"Permission (denied) … Offline and **Skeleton** (Ecosystem, People),
+**Read-only** (Operations, Settings, Trust)"*, with "State system" panels on four pages.
+
+So `D2-2` shrinks from *"who governs nine orphans"* to *"ratify four the screens already depict,
+specify four they do not, and rule on one ambiguous audit row"*. The decision got materially
+smaller, and only because the measurement was re-done.
+
+`DESIGN-01` is unchanged and re-verified: `critical-incident` is still specified **and shipped**
+(`admin_attention_queue.dart` carries the `DESIGN-01 §1 … implemented` header and the literal
+`zeroCopy = 'none raised'`), `Guardian-approval-required` is still gated on `P7`, and `D1-1`
+/ `D1-2` / `D1-3` remain exactly as recorded.
+
+**Production was not contacted.**

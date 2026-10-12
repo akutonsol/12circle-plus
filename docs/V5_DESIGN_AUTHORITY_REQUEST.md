@@ -179,7 +179,37 @@ absent from the package (0 files). The Flutter admin surfaces already ship again
 **What engineering cannot supply:** whether a faithful derivation is the *intended* design. The
 derivation can be accurate and still be the wrong composition.
 
-#### `D2-2` · What authority governs the nine the screens do NOT depict?
+> ## ⚠ CORRECTION, 2026-10-12 — the "all nine measure zero" claim was wrong
+>
+> An earlier revision of this document, and two checkpoint reports, stated that **all nine**
+> undepicted components return **zero** occurrences across the six screens. **That measurement was
+> produced by a broken command.** The screen filenames contain spaces; the probe iterated them with
+> an unquoted `for f in $SCREENS`, so `git show` received one malformed path and failed on every
+> iteration. **Every zero was a failed command, not an absent term** — and it is the same shape as
+> the other defects this programme has recorded: output that cannot distinguish "nothing found"
+> from "nothing ran".
+>
+> Re-measured with a line-based loop and **positive controls** that prove the probe works
+> (`card` 16, `Settings` 35, `div` 2159):
+>
+> | component | occurrences | context | verdict |
+> |---|---|---|---|
+> | `timeline` | **6** | *"Event timeline"*, *"Timeline and audit history"*, *"Incident timeline — today"*, each heading an `<ol>` | **depicted** |
+> | `skeleton` | **3** | *"Skeleton rows at real size. No layout jump."* | **depicted** — the state pattern |
+> | permission-denied | **34** | includes the state copy *"Permission restricted"*; the rest are a metric and a table caption | **depicted** — the state pattern |
+> | read-only | **5** | *"Read-only"* as state values; *"Decisions are read-only; no override from this page"* | **depicted** — the state pattern |
+> | audit row w/ before-after diff | **1** | *"Event, actor, resource, before/after, correlation"* — the row's **field list**, not a rendered diff | **partial** |
+> | `type="radio"` · date range · toast · inline error | **0** | — | **genuinely absent** |
+>
+> **So the undepicted set is four, possibly five — not nine.** `SCREEN-INVENTORY.md:25` independently
+> corroborates three of them: *"Permission (denied)… Offline and **Skeleton** (Ecosystem, People),
+> **Read-only** (Operations, Settings, Trust)"*, with "State system" panels on four pages showing the
+> patterns side by side.
+>
+> The decision below is reframed accordingly. **The error was mine, it was reported twice, and the
+> corrected set makes `D2-2` materially smaller.**
+
+#### `D2-2` · What authority governs the components the screens do NOT depict?
 
 **This is the decision `D2-1` cannot reach.** A component absent from the screens cannot be derived
 from them, so *"the screens suffice"* leaves these nine with **no authority at all** — not with
@@ -190,10 +220,10 @@ the pattern already is the specification.
 
 | option | consequence |
 |---|---|
-| `D2-2a` **supply specifications** for the nine | closes `DESIGN-02` completely |
-| `D2-2b` **rule that for the three `A11` state surfaces, `SCREEN-INVENTORY.md`'s pattern IS the specification**, and supply or defer the remaining six (`timeline`, `audit row with before/after diff`, `radio`, `date range`, `toast`, `inline error`) | closes the overlap without inventing anything, and narrows the open set from nine to six |
-| `D2-2c` **record all nine as out of scope for V1** | `DESIGN-02` closes as scoped-out rather than specified. Any later need for them reopens it |
-| `D2-2d` **defer** | the nine stay unspecified and unowned |
+| `D2-2a` **ratify the depicted four as specified by their screens** — `timeline`, `skeleton`, permission-denied, read-only — and supply specifications for the **four genuinely absent** (`radio`, date range, `toast`, inline error) | closes `DESIGN-02` completely, and the ratification half is nearly free because the screens and `SCREEN-INVENTORY.md` agree |
+| `D2-2b` as `D2-2a`, **plus a ruling on the audit row**: the screens name its fields (*"Event, actor, resource, before/after, correlation"*) but depict no diff UI, so say whether the field list is the specification or the diff needs one | the only genuinely ambiguous member, decided explicitly rather than by omission |
+| `D2-2c` **record the four absent as out of scope for V1** | `DESIGN-02` closes as scoped-out. Any later need reopens it |
+| `D2-2d` **defer** | they stay unspecified and unowned |
 
 **Engineering has built none of the nine against an invented spec**, and will not. Where one is
 needed, the absence is the finding.

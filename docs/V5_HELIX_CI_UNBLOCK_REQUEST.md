@@ -24,10 +24,57 @@ real failure has step conclusions; this has **none**. `gh run view --log` return
 found"*. The annotation is reachable only via
 `gh api repos/<owner>/<repo>/check-runs/<job_id>/annotations`.
 
+## Is billing the ONLY failure? — investigated, and yes
+
+The question worth answering before asking you to pay for anything: is a workflow defect hiding
+behind the billing refusal, so that fixing billing just reveals a second problem?
+
+**No, and the evidence is in what GitHub did before it declined.**
+
+| observation | what it rules out |
+|---|---|
+| a job exists, named **"Theme contract (12circle)"** — that string comes from the workflow's own `name:` | the YAML parsed and the job definition resolved |
+| `steps: 0` | the job was created and then **never allocated a runner** — it did not start and fail, it never started |
+| `event=pull_request` on the run | the trigger matched; `on:` is correct |
+| the only `failure` annotation is the billing message | **no `Invalid workflow file`** — a malformed workflow produces that instead, and produces no job at all |
+| every step's content already ran green in a clean clone on Node 20 | the steps themselves are not the problem |
+
+So the sequence is: parsed → trigger matched → job resolved → **runner refused**. The workflow is
+sound; only the allocation is blocked. Fixing billing should produce a real run, not a new error.
+
+The committed configuration is also minimal and was re-read for this check:
+
+```yaml
+on:
+  push:
+    branches: [main]      # main only — a branch is built once, via its PR
+  pull_request:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read          # read-only; no token escalation
+```
+
 ## The minimum owner action
 
-**Resolve the Actions billing in GitHub → Settings → Billing & plans** — either update the failed
-payment method or raise the spending limit. That is the whole fix. It requires **no change to this
+**Resolve the Actions billing** — either update the failed payment method or raise the Actions
+spending limit.
+
+**Exact location.** `akutonsol` is a **User** account, not an organisation (`gh api users/akutonsol`
+→ `"type": "User"`), and it owns this repository directly. So this is **personal account billing**,
+not repository or organisation settings:
+
+> **<https://github.com/settings/billing>** → *Plans and usage* / *Payment information* → clear the
+> failed payment, and check the **Actions** spending limit is above zero.
+
+*(Repository → Settings has no billing page; looking there is the usual wrong turn.)*
+
+**I did not read your billing to confirm which of the two it is.** The API returns `404` without the
+`user` OAuth scope, and `gh` offers to request it — **expanding my token's scope to read your
+account billing is not something I will do unauthorized.** The annotation names both causes
+("payments have failed **or** your spending limit needs to be increased"), and that page shows
+which. That is the whole fix. It requires **no change to this
 repository**, no change to the workflow, and no disclosure decision.
 
 Nothing else is needed: the workflow is already correct and already verified to work (below), and
