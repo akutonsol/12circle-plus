@@ -19961,3 +19961,81 @@ was also **suppressing coverage**, not merely failing one check.
 
 **Production was not contacted.** The orphan row was QA probe data this session created, and it
 was removed.
+
+## §216 · The checkout lifecycle — the last analyzer finding was a real defect
+
+### §216.1 · What the owner directed, and what the code actually did
+
+**Owner direction, 2026-10-12:** *do not create a new checkout session after the client navigates
+away from the upgrade flow* — and *do not abandon or duplicate a successfully created one.* The
+two halves pull in opposite directions, which is why this needed the payment contract read rather
+than a `mounted` check pasted in.
+
+The flow in `_onCta`:
+
+```dart
+if (onMembership) {
+  final result = await paymentSvc.changeMembership(p.kind!);   // ← the async gap
+  if (result == 'changed') { … return; }
+}
+final ok = await launchCheckout(context, ref, kind: p.kind!);  // ← flagged
+if (!mounted) return;
+```
+
+**What the contract says.** `changeMembership` invokes `update-subscription` and returns one of
+`'changed'`, `'needs_checkout'` or `'error'`. It creates **no session** — `needsCheckout: true` is
+a *signal that one is required*. `startCheckout`, by contrast, invokes `create-checkout` and
+returns a session URL, so it **does** mint a real session server-side.
+
+So the guard belongs **before** `launchCheckout`, and placing it there cannot abandon anything,
+because at that point nothing has been created. What it prevents is minting a session for someone
+who has already left.
+
+**And what is deliberately NOT guarded:** the client leaving *during* `startCheckout`. That
+session already exists and must not be abandoned, so the call is allowed to finish and only the UI
+is skipped, by the pre-existing `!mounted` check. Cancelling mid-flight is precisely what would
+orphan a paid session.
+
+`coach_plan_screen.dart:90` calls the same helper and was **not** flagged — correctly: `setState`
+is synchronous, so there is no gap there at all.
+
+### §216.2 · Four regression cases, and the one that matters is negative-controlled
+
+`test/widget/checkout_lifecycle_test.dart` — **4/4**:
+
+| case | asserts |
+|---|---|
+| navigation before completion | the client leaves while `changeMembership` is in flight → **`startCheckout` is never called** |
+| completion after disposal | the client leaves *during* `startCheckout` → **exactly one** call, not abandoned, not retried, no setState error |
+| request failure | `ok == false` while present → the failure surfaces |
+| success | exactly one session, no error shown |
+
+**Negative-controlled.** With the guard removed, *navigation before completion* **fails** and the
+other three still pass — so the test detects this defect specifically, and the other three do not
+depend on the guard at all.
+
+Three things the fixture had to get right, each learned from an error rather than guessed:
+
+* **The async gap exists on one path only.** `changeMembership` runs only when the client is
+  *already* on `selfGuided`/`aiGuided`. A Free → paid tap reaches checkout with no gap, so a test
+  starting from Free would pass whether the guard existed or not. Hence `selfGuided → aiGuided`.
+* **The card was below the fold.** At the default 800 px the AI-Guided CTA is never built and
+  `find.text` returns nothing — four failures for a reason unrelated to checkout. The test sets a
+  1200 × 3600 surface.
+* **`pumpAndSettle` cannot be used while a gate is open.** A hanging `startCheckout` leaves the
+  loading indicator animating, so settling never returns. `pump` while open, settle after.
+
+Also: replacing the `ProviderScope` to simulate leaving throws *"overrides cannot be
+removed/added"*. The scope is kept with a fixed override list and only the child changes — which is
+the truer simulation anyway, since navigating away disposes a screen, not the app's providers.
+
+### §216.3 · All eight findings are now closed
+
+`lib/` `use_build_context_synchronously`: **8 → 0**. `dart analyze` **0 errors · 0 warnings · 288
+info**. Flutter suite **2006 passed / 5 skipped**.
+
+The original deferral of all eight was wrong about seven of them and right about one — and even
+that one turned out to be a genuine lifecycle defect once the contract was read, not the
+unanswerable billing question it looked like.
+
+**Production was not contacted.**

@@ -169,6 +169,23 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
       }
       // 'needs_checkout' or 'error' → fall through to checkout.
     }
+    // OWNER DIRECTION, 2026-10-12: do not create a new checkout session after
+    // the client has navigated away from the upgrade flow.
+    //
+    // The gap this closes is the `await changeMembership` above. That call hits
+    // the `update-subscription` function and returns one of 'changed',
+    // 'needs_checkout' or 'error' — it creates NO session; 'needs_checkout' is a
+    // signal that one is required. So returning here cannot abandon a session,
+    // because at this point none exists. What it prevents is `startCheckout`
+    // invoking `create-checkout` — which DOES mint a real session server-side —
+    // on behalf of someone who already left.
+    //
+    // Deliberately NOT guarded: the case where the client leaves *during*
+    // `startCheckout`. That session is already created and must not be
+    // abandoned, so the call is allowed to finish and only the UI is skipped,
+    // by the `!mounted` check immediately below. Cancelling mid-flight is what
+    // would orphan a paid session.
+    if (!mounted) return;
     final ok = await launchCheckout(context, ref, kind: p.kind!);
     if (!mounted) return; // embedded checkout navigated away; success screen refreshes
     setState(() => _loading = false);
