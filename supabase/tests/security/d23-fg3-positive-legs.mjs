@@ -47,6 +47,7 @@ import { IDENT, signIn, rpc, svc, rest, check, section, summary, beginSuite, n }
   from './lib.mjs';
 
 const TAG = 'QA-D23-FG3';
+const TAG2 = 'QA-D23-FG3-APPLIED';
 const ONE = (b) => (Array.isArray(b) ? b[0] : b) || {};
 
 async function uidOf(key) {
@@ -67,23 +68,35 @@ async function run() {
   const victimId = await uidOf('victim');
 
   const purge = async () => {
-    const progs = await svc(`workout_programs?name=eq.${TAG}&select=id`);
-    for (const p of (Array.isArray(progs.body) ? progs.body : [])) {
-      await svc(`program_workouts?program_id=eq.${p.id}`, { method: 'DELETE' });
-      await svc(`workout_programs?id=eq.${p.id}`, { method: 'DELETE' });
+    for (const tag of [TAG, TAG2]) {
+      const progs = await svc(`workout_programs?name=eq.${tag}&select=id`);
+      for (const p of (Array.isArray(progs.body) ? progs.body : [])) {
+        await svc(`program_workouts?program_id=eq.${p.id}`, { method: 'DELETE' });
+        await svc(`program_versions?program_id=eq.${p.id}`, { method: 'DELETE' });
+        // weekly_feedback is NOT deleted explicitly: 094 declares
+        // `program_id ... references workout_programs(id) ON DELETE CASCADE`.
+        // §5 asserts the cascade actually fired rather than trusting the DDL.
+        await svc(`workout_programs?id=eq.${p.id}`, { method: 'DELETE' });
+      }
     }
     await svc(`decision_traces?engine_version=eq.${TAG}`, { method: 'DELETE' });
   };
 
   // materialize_program_week's engine calls generate_workout, which INSERTs into
-  // decision_traces. Those are this run's side effects and must be removed, but
-  // decision_traces is a provenance table other suites count — so the teardown
-  // deletes EXACTLY the ids that did not exist beforehand, never a blanket wipe.
-  const traceIdsBefore = new Set(
-    ((await svc(`decision_traces?subject_id=eq.${victimId}&select=id`)).body || [])
-      .map((r) => r.id));
-
+  // decision_traces, and regenerate_program's applied branch inserts one more.
+  // decision_traces is a provenance table other suites read, so teardown removes
+  // only ids this run created — never a blanket wipe, and never a predicate sweep.
   let progId;
+  let prog2;
+  let appliedTraceId;          // regenerate_program's applied branch returns this
+  let materializeTraceIds = []; // materialize_program_week returns one per session
+
+  // Every trace this run causes, identified by an id the ENGINE REPORTED.
+  // Neither engine is asked to be trusted about whether it wrote — §5 looks each
+  // id up afterwards — but both are trusted to say WHICH row they wrote, which is
+  // the only handle that survives decision_traces being larger than PostgREST's
+  // 1000-row page.
+  const createdTraceIds = () => [appliedTraceId, ...materializeTraceIds].filter(Boolean);
   try {
     await purge();
 
@@ -111,15 +124,28 @@ async function run() {
     const ev = await rpc(coach, 'evaluate_week', { p_program_id: progId, p_week: 1 });
     check('evaluate_week() ADMITS the owning coach (200)', ev.status === 200,
       `status=${ev.status} ${JSON.stringify(ev.body || '').slice(0, 70)}`);
-    check('evaluate_week() returns an engine payload — its engine is READ-ONLY, '
-        + 'so the payload is the expected effect, not a row',
-      ev.body !== null && typeof ev.body === 'object',
-      `body=${JSON.stringify(ev.body || '').slice(0, 70)}`);
+    // The CONTRACT, not merely "an object". 094's own returns are either
+    // `{action:'NO_FEEDBACK'}` or the full
+    // `{week, action, volume_delta, rules_triggered, escalate, needs_approval,
+    //   coaching_mode, affected_weeks}`. Asserting `typeof === 'object'` would
+    // pass for `{}` or for an error body, which is the same vacuity this
+    // programme keeps finding.
+    const EV_ACTIONS = ['NO_FEEDBACK', 'CONTINUE', 'REPLACE_EXERCISES',
+      'INSERT_DELOAD', 'REDUCE_VOLUME', 'REDUCE_COMPLEXITY', 'INCREASE_VOLUME'];
+    check('evaluate_week() returns its declared contract — a known `action`, and '
+        + 'the full shape whenever feedback exists',
+      EV_ACTIONS.includes(ev.body?.action)
+        && (ev.body.action === 'NO_FEEDBACK'
+            || ['week', 'volume_delta', 'rules_triggered', 'needs_approval']
+                 .every((k) => k in ev.body)),
+      `action=${ev.body?.action} keys=${Object.keys(ev.body || {}).join(',')}`);
 
     // materialize: this engine DOES write program_workouts. Scoped delta.
     const beforeRows = await countOf(`program_workouts?program_id=eq.${progId}`);
     const mz = await rpc(coach, 'materialize_program_week',
       { p_program_id: progId, p_week: 1, p_context: {} });
+    materializeTraceIds = (mz.body?.sessions ?? [])
+      .map((x) => x?.trace_id).filter(Boolean);
     const afterRows = await countOf(`program_workouts?program_id=eq.${progId}`);
     check('materialize_program_week() ADMITS the owning coach (200)',
       mz.status === 200, `status=${mz.status} ${JSON.stringify(mz.body || '').slice(0, 70)}`);
@@ -153,6 +179,131 @@ async function run() {
         `status=${r.status} code=${r.body?.code ?? '-'}`);
     }
 
+    // ── §2b · regenerate_program's THREE branches, including `applied` ──────
+    //
+    // The branch under test above is `p_approved=false`. 094 has three, and only
+    // one of them writes, so testing one branch and calling the wrapper covered
+    // would be the same mistake as asserting `typeof === 'object'`:
+    //
+    //   action in ('CONTINUE','NO_FEEDBACK')          → 'no_change',       no write
+    //   needs_approval AND NOT p_approved             → 'pending_approval', no write
+    //   otherwise                                     → 'applied',   THREE writes
+    //
+    // The write branch is reached deterministically from evaluate_week's own
+    // rule table: `recovery > 85 AND completion_pct > 90` → INCREASE_VOLUME with
+    // volume_delta +0.05. `p_approved=true` bypasses the approval arm regardless
+    // of the subject's coaching_mode, so the fixture does not depend on it.
+    //
+    // The plan needs a week AFTER p_week or nothing changes: 094 locks
+    // `wknum <= p_week` and only rewrites later weeks. Hence weeks 1 and 2.
+    section('§2b · regenerate_program — all three branches, and the writes');
+
+    const plan2 = { duration_weeks: 2, weeks: [
+      { week: 1, split: ['push'], volume_multiplier: 1.0, is_deload: false },
+      { week: 2, split: ['pull'], volume_multiplier: 1.0, is_deload: false },
+    ] };
+    const made2 = await svc('workout_programs', { method: 'POST',
+      body: { coach_id: coachId, name: TAG2, goal: 'strength', plan: plan2 } });
+    prog2 = ONE(made2.body).id;
+    check('applied-branch fixture program created', made2.status < 300 && !!prog2,
+      `status=${made2.status}`);
+
+    // weekly_feedback's columns were read from 094's DDL, not assumed:
+    // (program_id NOT NULL → workout_programs ON DELETE CASCADE, subject_id,
+    //  week NOT NULL, completion_pct, recovery, sleep, stress, energy,
+    //  pain jsonb default '[]', unique(program_id, week)).
+    const fb = await svc('weekly_feedback', { method: 'POST', body: {
+      program_id: prog2, subject_id: victimId, week: 1,
+      recovery: 90, completion_pct: 95, energy: 90, pain: [] } });
+    check('weekly_feedback fixture created — the input evaluate_week reads',
+      fb.status < 300, `status=${fb.status} ${JSON.stringify(fb.body || '').slice(0, 90)}`);
+
+    const evForApplied = await rpc(coach, 'evaluate_week',
+      { p_program_id: prog2, p_week: 1 });
+    check('evaluate_week() on that fixture yields INCREASE_VOLUME — the branch is '
+        + 'reached by the engine\'s own rule, not forced',
+      evForApplied.body?.action === 'INCREASE_VOLUME',
+      `action=${evForApplied.body?.action} delta=${evForApplied.body?.volume_delta}`);
+
+    // BEFORE. Scoped to this fixture so concurrent activity cannot satisfy it.
+    const versionsBefore = await countOf(`program_versions?program_id=eq.${prog2}`);
+    const planBefore = ONE((await svc(
+      `workout_programs?id=eq.${prog2}&select=plan`)).body).plan;
+    check('BEFORE: week 2 sits at volume_multiplier 1.0',
+      planBefore?.weeks?.[1]?.volume_multiplier === 1.0,
+      `week2=${JSON.stringify(planBefore?.weeks?.[1] ?? null)}`);
+
+    const applied = await rpc(coach, 'regenerate_program',
+      { p_program_id: prog2, p_week: 1, p_approved: true });
+    check('regenerate_program() ADMITS the owning coach on the write branch (200)',
+      applied.status === 200, `status=${applied.status}`);
+    check('…and returns `applied` with its declared contract '
+        + '{status, evaluation, diff, version, trace_id}',
+      applied.body?.status === 'applied'
+        && ['evaluation', 'diff', 'version', 'trace_id'].every((k) => k in (applied.body || {})),
+      `status=${applied.body?.status} keys=${Object.keys(applied.body || {}).join(',')}`);
+
+    appliedTraceId = applied.body?.trace_id;
+
+    // EFFECT 1 · the scoped plan update, asserted by VALUE not by "something changed".
+    const planAfter = ONE((await svc(
+      `workout_programs?id=eq.${prog2}&select=plan`)).body).plan;
+    check('EFFECT 1 — workout_programs.plan week 2 rewritten 1.0 → 1.05 and marked '
+        + 'regenerated; week 1 LOCKED because 094 locks `wknum <= p_week`',
+      planAfter?.weeks?.[1]?.volume_multiplier === 1.05
+        && planAfter?.weeks?.[1]?.regenerated === true
+        && planAfter?.weeks?.[0]?.volume_multiplier === 1.0
+        && !('regenerated' in (planAfter?.weeks?.[0] ?? {})),
+      `week1=${JSON.stringify(planAfter?.weeks?.[0] ?? null)} `
+      + `week2=${JSON.stringify(planAfter?.weeks?.[1] ?? null)}`);
+
+    check('…and the returned diff names exactly that change',
+      Array.isArray(applied.body?.diff) && applied.body.diff.length === 1
+        && applied.body.diff[0].week === 2
+        && applied.body.diff[0].before?.volume_multiplier === 1.0
+        && applied.body.diff[0].after?.volume_multiplier === 1.05,
+      `diff=${JSON.stringify(applied.body?.diff ?? null).slice(0, 110)}`);
+
+    // EFFECT 2 · decision_traces, identified by the id the engine returned.
+    // NOT a count delta over `subject_id`. That query is SATURATED: PostgREST
+    // caps a plain select at 1000 rows, this subject already has ≥1000 traces,
+    // and both sides of the subtraction read exactly 1000 — so the assertion
+    // could never fail no matter what the engine did. Observed, then fixed.
+    //
+    // The id the engine RETURNED is the precise handle, and it carries more
+    // information than a delta ever could: that this exact row exists, and that
+    // its context names this program.
+    const traceRow = await svc(`decision_traces?id=eq.${appliedTraceId}&select=id,context`);
+    check('EFFECT 2 — the decision_traces row the engine reported exists, and its '
+        + 'context names THIS program (asserted by id, not by a capped count)',
+      !!appliedTraceId && n(traceRow.body) === 1
+        && ONE(traceRow.body).context?.program_id === prog2
+        && ONE(traceRow.body).context?.type === 'regeneration',
+      `trace_id=${appliedTraceId} context=`
+      + `${JSON.stringify(ONE(traceRow.body).context ?? null).slice(0, 90)}`);
+
+    // EFFECT 3 · program_versions, via snapshot_program_version. Source-confirmed:
+    // the applied branch calls it, and 116 shows it INSERTs program_versions.
+    const versionsAfter = await countOf(`program_versions?program_id=eq.${prog2}`);
+    check('EFFECT 3 — snapshot_program_version wrote a program_versions row for '
+        + 'THIS program (scoped, so a concurrent insert cannot satisfy it)',
+      versionsAfter === versionsBefore + 1,
+      `program_versions ${versionsBefore} → ${versionsAfter}`);
+
+    // The pair, on the write branch too.
+    const strangerApplied = await rpc(attacker, 'regenerate_program',
+      { p_program_id: prog2, p_week: 1, p_approved: true });
+    check('regenerate_program() REFUSES a stranger on the SAME program even on the '
+        + 'write branch — and the plan is unchanged by the attempt',
+      strangerApplied.status === 403 && strangerApplied.body?.code === '42501',
+      `status=${strangerApplied.status} code=${strangerApplied.body?.code ?? '-'}`);
+    const planAfterStranger = ONE((await svc(
+      `workout_programs?id=eq.${prog2}&select=plan`)).body).plan;
+    check('…the refused call wrote NOTHING — denial with no side effect',
+      planAfterStranger?.weeks?.[1]?.volume_multiplier === 1.05
+        && await countOf(`program_versions?program_id=eq.${prog2}`) === versionsAfter,
+      'plan and program_versions identical to the authorized call\'s result');
+
     // ── §3 · SUBJECT-SCOPED · the subject themselves ─────────────────────────
     section('§3 · subject-scoped: the subject is admitted, a stranger is not');
     for (const [fn, args] of [
@@ -162,10 +313,19 @@ async function run() {
       const ok = await rpc(victim, fn, args);
       check(`${fn}() ADMITS the subject themselves (200)`, ok.status === 200,
         `status=${ok.status} ${JSON.stringify(ok.body || '').slice(0, 70)}`);
-      check(`${fn}() returns an engine payload — this engine is READ-ONLY, so the `
-          + `payload is the expected effect`,
-        ok.body !== null && typeof ok.body === 'object',
-        `body=${JSON.stringify(ok.body || '').slice(0, 60)}`);
+      // Declared contracts, read from 095 and 096:
+      //   predict_client         {status:'no_data', program_id} | {status:'ok', program_id,
+      //                           engine_version, weeks_completed, duration_weeks, goal, …}
+      //   assemble_weekly_review {status:'no_feedback', week}    | {status:'ok', type:'weekly_review',
+      //                           client_name, week, week_summary, completion, recovery, …}
+      const expected = fn === 'predict_client'
+        ? { states: ['no_data', 'ok'], always: ['status', 'program_id'] }
+        : { states: ['no_feedback', 'ok'], always: ['status', 'week'] };
+      check(`${fn}() returns its declared contract — a known status and its `
+          + `invariant keys, not merely "an object"`,
+        expected.states.includes(ok.body?.status)
+          && expected.always.every((k) => k in (ok.body || {})),
+        `status=${ok.body?.status} keys=${Object.keys(ok.body || {}).join(',')}`);
       const no = await rpc(attacker, fn, args);
       check(`${fn}() REFUSES a stranger for the SAME subject — caller is the only `
           + `variable`,
@@ -186,9 +346,11 @@ async function run() {
   } finally {
     // ── §5 · teardown, verified by READING ─────────────────────────────────
     await purge();
-    const after = ((await svc(`decision_traces?subject_id=eq.${victimId}&select=id`)).body || []);
-    for (const t of after) {
-      if (!traceIdsBefore.has(t.id)) await svc(`decision_traces?id=eq.${t.id}`, { method: 'DELETE' });
+    // The applied branch's trace is removed by the id the ENGINE returned —
+    // the most precise handle available, and better than a predicate sweep over
+    // a provenance table other suites count.
+    for (const id of createdTraceIds()) {
+      await svc(`decision_traces?id=eq.${id}`, { method: 'DELETE' });
     }
   }
 
@@ -200,11 +362,35 @@ async function run() {
     check('no program_workouts row survives for the fixture program',
       leftRows === 0, `rows=${leftRows}`);
   }
-  const tracesNow = ((await svc(`decision_traces?subject_id=eq.${victimId}&select=id`)).body || []);
-  const strays = tracesNow.filter((t) => !traceIdsBefore.has(t.id));
-  check('no decision_traces row created by this run survives — the engine\'s own '
-      + 'side effect, removed by id and confirmed by a read',
-    strays.length === 0, `${strays.length} stray trace(s); baseline ${traceIdsBefore.size}`);
+  if (prog2) {
+    const leftVersions = await countOf(`program_versions?program_id=eq.${prog2}`);
+    check('no program_versions row survives for the applied-branch fixture',
+      leftVersions === 0, `rows=${leftVersions}`);
+    // The DDL says ON DELETE CASCADE. That is a claim about the schema; this is
+    // the observation. If the cascade were ever dropped, teardown would silently
+    // start leaving feedback rows behind and nothing else would notice.
+    const leftFeedback = await countOf(`weekly_feedback?program_id=eq.${prog2}`);
+    check('weekly_feedback was removed by the FK CASCADE — observed, not inferred '
+        + 'from 094 declaring `ON DELETE CASCADE`',
+      leftFeedback === 0, `rows=${leftFeedback}`);
+  }
+  const leftProgs2 = await svc(`workout_programs?name=eq.${TAG2}&select=id`);
+  check('no applied-branch program survives', n(leftProgs2.body) === 0,
+    `rows=${n(leftProgs2.body)}`);
+
+  // Also NOT an id-set diff over the subject: `traceIdsBefore` was built from the
+  // same 1000-row-capped window, so a trace created outside it would be invisible
+  // and this check would pass while leaving the row behind. Each trace this run
+  // created is looked up by its OWN id instead.
+  const created = createdTraceIds();
+  let strays = 0;
+  for (const id of created) {
+    const r = await svc(`decision_traces?id=eq.${id}&select=id`);
+    if (n(r.body) !== 0) strays++;
+  }
+  check('no decision_traces row created by this run survives — each looked up by '
+      + 'its own id, because a capped id-set diff could not see one',
+    strays === 0, `${strays} stray of ${created.length} engine-reported trace(s)`);
 
   return summary('D23 · FG-3 positive authorization legs');
 }

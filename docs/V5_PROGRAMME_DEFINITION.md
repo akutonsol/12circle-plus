@@ -20155,3 +20155,84 @@ because the cheap way out of this guard is to delete the section — which would
 question `D2-3` exists to pose.
 
 **Production was not contacted.**
+
+## §219 · `FG-3`'s write branch, and a count that could never have failed
+
+### §219.1 · `regenerate_program` has three branches; §215 tested one
+
+§215's suite called `regenerate_program` with `p_approved=false` and asserted the *expected effect
+for that branch* — `pending_approval` and no write. True, but it left the only **writing** branch
+unexercised, which is close to the vacuity this programme keeps finding: a wrapper reported as
+covered whose persisting path nothing touched.
+
+094's branch structure, read rather than assumed:
+
+| condition | result | writes |
+|---|---|---|
+| `action in ('CONTINUE','NO_FEEDBACK')` | `no_change` | none |
+| `needs_approval AND NOT p_approved` | `pending_approval` | none |
+| otherwise | **`applied`** | **three** |
+
+Reaching `applied` deterministically meant reading `evaluate_week`'s own rule table:
+`recovery > 85 AND completion_pct > 90` → `INCREASE_VOLUME`, `volume_delta +0.05`. `p_approved=true`
+bypasses the approval arm, so the fixture does not depend on the subject's `coaching_mode`. And the
+plan needs a week **after** `p_week`, because 094 locks `wknum <= p_week` and rewrites only later
+weeks — hence a two-week plan.
+
+`weekly_feedback`'s columns were taken from 094's DDL, not guessed, including that
+`program_id references workout_programs(id) **ON DELETE CASCADE**`.
+
+**Three effects, and the third was not in my earlier account.** The `applied` branch updates
+`workout_programs.plan`, inserts `decision_traces` — and calls `snapshot_program_version`, which
+**inserts `program_versions`**. §215 named two. All three are now asserted, each scoped to the
+fixture, and the plan update is asserted **by value**: week 2 goes `1.0 → 1.05` and gains
+`regenerated: true`, while **week 1 stays 1.0 with no `regenerated` key** — proving the lock, not
+merely that something changed.
+
+The read-only wrappers' assertions were also strengthened from `typeof === 'object'`, which would
+pass for `{}` or an error body, to their **declared contracts** read from 095/096/094 —
+`predict_client` returned `status=ok` with eleven keys, `assemble_weekly_review` `no_feedback`,
+`evaluate_week` a known `action` plus its full shape.
+
+### §219.2 · The count that could not fail
+
+`EFFECT 2` was first written as a delta: `decision_traces` for the subject, before and after. It
+failed — *"traces 1000 → 1000"* — and the reason matters more than the fix.
+
+**PostgREST caps a plain select at 1000 rows.** That subject already has ≥1000 traces, so both
+sides of the subtraction read exactly 1000. **The assertion could never have failed, whatever the
+engine did.** Confirmed directly: a plain select returns 1000, the same query with `limit=1`
+returns 1.
+
+Worse, the **teardown** had the same defect. It diffed an id-set built from that capped window, so a
+trace created outside the first 1000 rows would have been invisible — the cleanup check would have
+passed while leaving the row behind.
+
+Both are now keyed on ids the **engines report**: `regenerate_program` returns `trace_id`, and
+`materialize_program_week` returns one per session in `sessions[].trace_id`. The engines are not
+trusted about *whether* they wrote — §5 looks each id up afterwards — only about **which** row,
+which is the one handle that survives a table larger than a page.
+
+This is the fourth appearance of one shape in this programme: `PASS 0/0`, the reporter-block grep,
+the space-split screen probe, and now a saturated count. **Every one was a measurement that could
+not distinguish success from nothing happening.**
+
+### §219.3 · Controls, including teardown on failure
+
+| control | result |
+|---|---|
+| expect `1.10` where the rule yields `1.05` | **FAIL**, printing the observed `volume_multiplier: 1.05` |
+| claim the trace context names the other program | **FAIL**, printing the real `program_id` |
+| **throw after the applied-branch writes** | the error propagates, and **0 programs of either tag survive** — the `finally` ran |
+
+The third is the one §215 lacked: teardown proven after *failure*, not only after success. It is
+also the exact scenario that left a `qa-d15-probe` row behind earlier in this programme.
+
+`D23` **21 → 36**; live suite **1146 → 1160 across 23 suites** (the arithmetic differs by one from
+`D23`'s +15 because of `D-02`'s documented 429 branch).
+
+**`FG-3` remains OPEN.** The technical evidence is now complete for all five wrappers and both
+engine-writing branches; what is missing is the §2.1 governance authorization, which is not
+evidence and not mine.
+
+**Production was not contacted.**
