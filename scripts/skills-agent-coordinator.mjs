@@ -42,8 +42,10 @@ function withLock(fn) {
   try { fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() })); return fn(); }
   finally { fs.closeSync(fd); fs.unlinkSync(LOCK_PATH); }
 }
+let policy = {};
 function loadTasks() {
   const data = readJson(TASKS_PATH, { version: 1, tasks: [] });
+  policy = data.policy ?? {};
   if (data.version !== 1 || !Array.isArray(data.tasks)) throw new Error('tasks.json must be { version: 1, tasks: [] }');
   const ids = new Set();
   for (const t of data.tasks) {
@@ -104,6 +106,48 @@ function workerId() {
     + 'implementer would be recorded under its pid, never match a named verifier, '
     + 'and defeat implementer/verifier separation by omission.');
 }
+// ── IDENTITY ATTESTATION ───────────────────────────────────────────────────
+// The hole this addresses, demonstrated rather than assumed: an implementer
+// that renames itself obtains the verification lease. Token replay, an
+// undeclared role, and a third party reusing somebody else's lease are all
+// already refused — renaming is the one attack that works, because identity is
+// whatever the worker says it is.
+//
+// That cannot be closed by the coordinator alone: both roles run in the same
+// shell, so any secret the coordinator checks is a secret the worker can read.
+// What IS in scope is making the PROVENANCE of an identity claim part of the
+// record, and providing the enforcement switch a real runner will need.
+//
+//   SKILLS_AGENT_ATTESTATION_KEY   held by the RUNNER, never by the worker
+//   SKILLS_AGENT_IDENTITY_TOKEN    HMAC-SHA256(`${taskId}:${role}:${identity}`)
+//                                  minted by the runner, passed to the worker
+//
+// With no key configured, identity is recorded `self-asserted` and nothing is
+// refused — today's behaviour, now visible in the evidence instead of only in
+// prose. With a key, the token must verify, and the trust level is `attested`.
+// `policy.requireAttestedIdentity` makes an unattested verification a refusal.
+//
+// NOTE, and it is the whole point: while the runner and the worker are the same
+// process tree, this is a CONTRACT, not an enforced boundary. It becomes a real
+// boundary only when the key lives somewhere the worker cannot read. That is
+// stated here so no later reader mistakes the field for proof.
+function identityTrust(taskId, role, identity) {
+  const key = process.env.SKILLS_AGENT_ATTESTATION_KEY;
+  const token = process.env.SKILLS_AGENT_IDENTITY_TOKEN;
+  if (!key) return { level: 'self-asserted', attested: false };
+  if (!token) throw new Error(
+    'SKILLS_AGENT_ATTESTATION_KEY is configured, so an identity token is required. '
+    + 'The runner mints it; a worker cannot.');
+  const expected = crypto.createHmac('sha256', key)
+    .update(`${taskId}:${role}:${identity}`).digest('hex');
+  const a = Buffer.from(expected, 'utf8');
+  const b = Buffer.from(String(token), 'utf8');
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    throw new Error(`identity attestation failed for "${identity}" as ${role} on ${taskId}`);
+  }
+  return { level: 'attested', attested: true };
+}
+
 function assertIndependentVerifier(taskState, verifierId) {
   const author = taskState.implementedBy ?? taskState.claimedBy;
   if (author && author === verifierId) {
@@ -172,6 +216,13 @@ function main() {
       if (isVerifier) {
         const vid = workerId();
         assertIndependentVerifier(s, vid);
+        const trust = identityTrust(task.id, 'verifier', vid);
+        if (policy.requireAttestedIdentity && !trust.attested) {
+          throw new Error(
+            'policy.requireAttestedIdentity is set: verification needs a runner-minted '
+            + 'identity token, not a self-asserted SKILLS_AGENT_ID.');
+        }
+        s.verifierIdentityTrust = trust.level;
         s.status = 'VERIFYING'; s.verificationLeaseToken = token;
         s.leaseToken = null; s.leaseExpiresAt = null;
         s.verifier = vid;
@@ -181,6 +232,7 @@ function main() {
         // Recorded at CLAIM, so it survives the implementer's exit and is the
         // value the independence check compares against later.
         s.implementedBy = workerId();
+        s.implementerIdentityTrust = identityTrust(task.id, role, s.implementedBy).level;
       }
       s.leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
       if (!isVerifier) s.claimedBy = workerId();
@@ -226,7 +278,12 @@ function main() {
         s.status = map[event]; s.lastFailure = event === 'retry' ? (note || 'RETRY_REQUESTED') : null;
       }
       if (blocked.has(s.status)) s.blocker = { classification: s.status, note: note || 'No details supplied', at: now };
-      else if (event === 'verified') s.evidence = { reference: note, recordedAt: now, verifiedBy: process.env.SKILLS_AGENT_ID ?? `pid:${process.pid}`, verifiedByRole: process.env.SKILLS_AGENT_ROLE };
+      else if (event === 'verified') s.evidence = { reference: note, recordedAt: now,
+        verifiedBy: workerId(), verifiedByRole: process.env.SKILLS_AGENT_ROLE,
+        // Carried INTO the evidence so a reader of the record can tell whether
+        // the independence was attested by a runner or merely claimed.
+        identityTrust: s.verifierIdentityTrust ?? 'self-asserted',
+        implementedBy: s.implementedBy ?? null };
       else if (event !== 'retry') s.blocker = null;
       if (['verified', 'retry', 'failed', 'blocked-owner', 'blocked-external', 'blocked-governance'].includes(event) || s.status === 'FAILED_TERMINAL') {
         s.leaseToken = null; s.leaseExpiresAt = null;

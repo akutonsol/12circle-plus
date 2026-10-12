@@ -12,6 +12,7 @@
  * `.skills-agent/state.json`.
  */
 import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -192,6 +193,100 @@ section('5b · an anonymous worker cannot sidestep the independence check');
     stateOf(dir).tasks.A.implementedBy === 'w1'
       && !/^pid:/.test(stateOf(dir).tasks.A.implementedBy),
     `implementedBy=${stateOf(dir).tasks.A.implementedBy}`);
+}
+
+// ═══ 5c · adversarial identity — what the boundary actually withstands ═════
+// Four attacks were run against the coordinator by hand before these were
+// written. Three were already refused; ONE worked — an implementer that renames
+// itself obtains the verification lease. These tests pin the three that hold
+// and record the one that does not, so neither set can regress unnoticed.
+section('5c · adversarial identity probes');
+{
+  const dir = sandbox([T('A')]);
+  const c = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'impl' }));
+  run(dir, ['event', 'A', c.token, 'implemented', 'done'], { SKILLS_AGENT_ID: 'impl' });
+
+  const replay = run(dir, ['event', 'A', c.token, 'verified', 'commit:aaa'],
+    { SKILLS_AGENT_ID: 'impl', SKILLS_AGENT_ROLE: 'verifier' });
+  check('ATTACK · replaying the implementation token as a verify is refused',
+    !replay.ok && /lease token mismatch/.test(replay.err));
+
+  const v = json(run(dir, ['claim', 'verifier'], { SKILLS_AGENT_ID: 'alice', SKILLS_AGENT_ROLE: 'verifier' }));
+  const noRole = run(dir, ['event', 'A', v.token, 'verified', 'commit:bbb'], { SKILLS_AGENT_ID: 'alice' });
+  check('ATTACK · verifying without declaring the verifier role is refused',
+    !noRole.ok && /only the independently claimed verifier/.test(noRole.err));
+
+  const thirdParty = run(dir, ['event', 'A', v.token, 'verified', 'commit:ccc'],
+    { SKILLS_AGENT_ID: 'eve', SKILLS_AGENT_ROLE: 'verifier' });
+  check('ATTACK · a third party cannot spend somebody else\'s verification lease',
+    !thirdParty.ok && /lease belongs to "alice"/.test(thirdParty.err),
+    thirdParty.err.trim().slice(0, 70));
+
+  // The one that WORKS, asserted as a known limitation rather than hidden.
+  const dir2 = sandbox([T('A')]);
+  const c2 = json(run(dir2, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'impl' }));
+  run(dir2, ['event', 'A', c2.token, 'implemented', 'done'], { SKILLS_AGENT_ID: 'impl' });
+  const renamed = run(dir2, ['claim', 'verifier'], { SKILLS_AGENT_ID: 'impl-alias', SKILLS_AGENT_ROLE: 'verifier' });
+  check('KNOWN LIMIT · renaming DOES obtain the lease when identity is '
+      + 'self-asserted — this documents the gap, it does not bless it',
+    renamed.ok, 'closing it requires a runner-held attestation key (see 5d)');
+}
+
+// ═══ 5d · the attestation contract, for when a runner exists ═══════════════
+section('5d · runner-minted identity attestation');
+{
+  const KEY = 'runner-held-secret';
+  const mint = (taskId, role, id) =>
+    crypto.createHmac('sha256', KEY).update(`${taskId}:${role}:${id}`).digest('hex');
+  const withPolicy = (tasks) => {
+    const dir = sandbox(tasks);
+    const f = path.join(dir, '.skills-agent', 'tasks.json');
+    const d = JSON.parse(fs.readFileSync(f, 'utf8'));
+    d.policy = { requireAttestedIdentity: true };
+    fs.writeFileSync(f, JSON.stringify(d, null, 2));
+    return dir;
+  };
+
+  // Backward compatibility first: no key configured changes nothing.
+  const plain = sandbox([T('A')]);
+  const pc = json(run(plain, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'impl' }));
+  check('with NO attestation key, behaviour is unchanged and trust is recorded '
+      + 'as self-asserted',
+    !!pc?.token && stateOf(plain).tasks.A.implementerIdentityTrust === 'self-asserted',
+    `trust=${stateOf(plain).tasks.A.implementerIdentityTrust}`);
+
+  const dir = withPolicy([T('A')]);
+  const env = (id, role, tok) => ({
+    SKILLS_AGENT_ID: id, SKILLS_AGENT_ROLE: role,
+    SKILLS_AGENT_ATTESTATION_KEY: KEY, SKILLS_AGENT_IDENTITY_TOKEN: tok,
+  });
+  const ic = json(run(dir, ['claim', 'implementer'], env('impl', 'implementer', mint('A', 'implementer', 'impl'))));
+  check('an attested implementer claim succeeds and is recorded attested',
+    !!ic?.token && stateOf(dir).tasks.A.implementerIdentityTrust === 'attested');
+  run(dir, ['event', 'A', ic.token, 'implemented', 'done'], { SKILLS_AGENT_ID: 'impl' });
+
+  const bare = run(dir, ['claim', 'verifier'], { SKILLS_AGENT_ID: 'alice', SKILLS_AGENT_ROLE: 'verifier' });
+  check('under the policy, an UNATTESTED verifier is refused',
+    !bare.ok && /requireAttestedIdentity/.test(bare.err), bare.err.trim().slice(0, 70));
+
+  const forged = run(dir, ['claim', 'verifier'], env('alice', 'verifier', 'deadbeef'));
+  check('a forged attestation token is refused',
+    !forged.ok && /attestation failed/.test(forged.err));
+
+  const wrongId = run(dir, ['claim', 'verifier'], env('alice', 'verifier', mint('A', 'verifier', 'someone-else')));
+  check('a token minted for a DIFFERENT identity is refused — the token is '
+      + 'bound to who it names, not merely to the key',
+    !wrongId.ok && /attestation failed/.test(wrongId.err));
+
+  const good = json(run(dir, ['claim', 'verifier'], env('alice', 'verifier', mint('A', 'verifier', 'alice'))));
+  check('a correctly attested verifier may claim', !!good?.token);
+  run(dir, ['event', 'A', good.token, 'verified', 'commit:abc'],
+    { SKILLS_AGENT_ID: 'alice', SKILLS_AGENT_ROLE: 'verifier' });
+  const ev = stateOf(dir).tasks.A.evidence;
+  check('the evidence records the trust level and the implementer it is '
+      + 'independent OF',
+    ev?.identityTrust === 'attested' && ev?.implementedBy === 'impl',
+    `identityTrust=${ev?.identityTrust} implementedBy=${ev?.implementedBy}`);
 }
 
 // ═══ 6 · rejected verification returns work to the implementer ═════════════

@@ -118,3 +118,71 @@ of who acted.** Identity is still self-asserted through `SKILLS_AGENT_ID`; a sin
 running both roles under two names will satisfy the check. Genuine independence requires the
 runner to inject identity the worker cannot set — which is part of what the missing integration
 must supply, and is stated here rather than implied away.
+
+---
+
+## Milestone 2 — infrastructure facts (2026-10-12, commit `d421fcd`)
+
+**Headline: capability A does not exist in this environment, so no runner was built.** Capability
+C does exist, which means the blocker is *agent invocation*, not hosting. Everything buildable
+without A was built.
+
+| # | capability | state | evidence |
+|---|---|---|---|
+| **A** | agent invocation / provider integration | **ABSENT** | no `claude` binary on `PATH`, in `/usr/local/bin`, `/opt/homebrew/bin`, `~/.claude/local`, `~/.local/bin`, `/Applications`, or any nvm bin. `ANTHROPIC_API_KEY`, `CLAUDE_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` all unset; `~/.claude/.credentials.json` absent |
+| **B** | trusted worker identity | **CONTRACT ONLY** | identity is self-asserted. Attestation hook implemented and tested; it becomes a boundary only when the key lives where the worker cannot read it |
+| **C** | durable execution / supervision | **AVAILABLE, UNUSED** | `launchd` user agents are in use on this host (e.g. `com.cytolab.pathos-3100.plist`). **0** self-hosted GitHub runners; GitHub-hosted runners are ephemeral per job; `docker` installed but the daemon is not running |
+| **D** | persistent queue + crash recovery | **WORKING** | atomic write (`tmp` + `rename`) under an exclusive `wx` lock; restart recovery covered by tests 3 and 8 |
+| **E** | independent verifier invocation + enforcement | **PARTIAL** | three of four attacks refused; renaming still works without attestation — see below |
+| **F** | structured result / evidence capture | **WORKING** | `verified` requires an evidence reference matching URL / `artifact:` / `ci:` / `commit:`; evidence now also records `identityTrust` and `implementedBy` |
+| **G** | retry / timeout / cancellation | **WORKING** | bounded leases, expiry recovery to the correct state, retry budget terminating with a recorded reason |
+| **H** | automatic dispatch of the next eligible task | **WORKING** | verifying a dependency makes dependents eligible; demonstrated on the real queue in Milestone 1 |
+| **I** | monitoring / safe shutdown | **PARTIAL** | `status` and `recover` report honestly; there is no supervisor to shut down, because there is no long-running process |
+
+### What the identity boundary actually withstands
+
+Probed adversarially, not assumed:
+
+| attack | result |
+|---|---|
+| implementer replays its own lease token as a `verified` event | **refused** — token mismatch |
+| verify without declaring `SKILLS_AGENT_ROLE=verifier` | **refused** |
+| a third party spends somebody else's verification lease | **refused** — the lease is bound to the claiming identity |
+| **implementer renames itself and claims verification** | **SUCCEEDS** |
+
+The last one is the real limit and is **not** described as cryptographic independence. It cannot
+be closed by the coordinator alone: both roles run in the same shell, so any secret the
+coordinator checks is a secret the worker can read.
+
+### The smallest safe integration boundary
+
+Rather than build a framework around a provider that is not present, the coordinator now accepts
+identity **provenance**:
+
+```
+SKILLS_AGENT_ATTESTATION_KEY   held by the RUNNER, never by the worker
+SKILLS_AGENT_IDENTITY_TOKEN    HMAC-SHA256(`${taskId}:${role}:${identity}`), minted by the runner
+policy.requireAttestedIdentity makes an unattested verification a refusal
+```
+
+With no key configured nothing changes and identity records as `self-asserted` — the current
+behaviour, now **visible in the evidence instead of only in prose**. With a key, a forged token, a
+token minted for a different identity, and a missing token are each refused, and the trust level
+is carried into the evidence record.
+
+**This is a contract, not yet a boundary.** While the runner and the worker share a process tree,
+a worker can read the key. It becomes real when a runner holds it out of reach — which is exactly
+the missing prerequisite below.
+
+### The precise missing prerequisite
+
+To run genuine autonomous execution, three things are needed. **One of the three now exists.**
+
+1. **An agent invocation mechanism** — a supported, authorized way to start a bounded agent with a
+   task envelope and collect a structured result. **Missing.**
+2. **A credential for it**, which must not be guessed or fabricated. **Missing.**
+3. **A durable execution host** that outlives a worker. **Available** (`launchd` on this host), but
+   there is nothing to supervise until 1 and 2 exist.
+
+Until 1 and 2 are supplied, **continuous autonomous execution is not operational and is not
+claimed.** `V5-AUTO-002` stays `BLOCKED_EXTERNAL`.
