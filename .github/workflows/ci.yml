@@ -434,6 +434,18 @@ jobs:
       - name: SEC-W1 — Wave 1 reversion, pre-fix / post-fix evidence (D-1)
         run: apps/mobile/tool/negative_control/secw1_negative_control.sh
 
+      # SEC-G11 · F-J-12 / PD-A05 option (a) has no standing guard against a later
+      # migration replacing its RLS policy — migration 128 records that limitation in
+      # its own header, naming it "the exact mechanism that produced F-J-01". SEC-G11
+      # is the notice; this proves the notice fires. The probe is a THROWAWAY
+      # higher-numbered migration, never an edit to 128 or 125: §8 forbids rewriting an
+      # applied migration, and arriving as a later migration is how a real regression
+      # would arrive anyway — which also exercises the definer ratchet an in-place edit
+      # would bypass. Verdicts are read from `--reporter json` (§202), so the control
+      # cannot pass vacuously under CI's reporter.
+      - name: SEC-G11 — decision_traces read scope, widening detected (F-J-12)
+        run: apps/mobile/tool/negative_control/secg11_negative_control.sh
+
   live-qa:
     name: Live QA suites (security / AI / contract)
     runs-on: ubuntu-latest

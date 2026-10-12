@@ -18948,3 +18948,228 @@ test together"*. That is still incomplete:
 The downstream jobs — Live QA among them — were **skipped**, not passed, so the earlier
 green from `8f2c0c0` said nothing about this commit. All thirteen static guards were run locally
 before the fix was pushed.
+
+## §206 · Q5 adopted, Helix got CI it cannot run, and a closure that had no guard
+
+### §206.1 · The version in the specification belonged to a different package
+
+`Q5` closed as **Option 1 — adopt Phosphor to match the approved specification**, subject to
+compatibility, licensing, package-impact and architecture checks. The handoff names *"Phosphor
+Icons **v2.1.1**"*, so the first pin was `@phosphor-icons/react@2.1.1` — and **106 of the 107**
+approved icons resolved.
+
+The missing one was **`ph-calendar-dots`**, used **7** times. It is not a react-vs-web gap:
+`@phosphor-icons/web@2.1.1` **has** it. The two packages version **independently**, and
+`react@2.1.1` ships **1260** glyphs against the icon set's full complement. ***"v2.1.1" names the
+icon set, not the React package.*** Pinned **2.1.10** (3045 glyphs): **107/107**.
+
+**Matching the specified GLYPHS is what matching the specification means.** A spec-literal pin of
+a version string belonging to a different package would have satisfied the sentence and lost an
+icon — and lost it *silently*, because 106/107 looks like success. The guard now asserts
+`CalendarDots` **by name**, so a future bump cannot reintroduce the gap quietly.
+
+### §206.2 · The other three checks, and the one that nearly got papered over
+
+| check | finding |
+|---|---|
+| **Licensing** | MIT, both distributions. No conflict. |
+| **Compatibility** | `ERESOLVE` on first install: Phosphor peers **`react-dom`**, which Helix did not have, so npm resolved `react-dom@19` against the existing `react@18.3.1`. |
+| **Maintenance** | actively published (2.1.10, 2025-05-22). |
+| **Bundle impact** | measured, not asserted: **1 icon + `<Icon>` = 2,621 B raw / 1,124 B gzip**; all **102** unique approved glyphs = **320,776 B / 72,856 B gzip**. The 57 MB on disk never reaches a consumer's bundle. |
+
+The compatibility failure handed me two buttons marked `--force` and `--legacy-peer-deps`, and
+npm's own error says they *"accept an incorrect (and potentially broken) dependency resolution"*.
+The real finding was a **missing peer**: Helix declared `react` and not `react-dom`. Declaring it
+(dev `^18.3.1`, peer `>=18`) fixes the cause. Overriding peer resolution would have hidden it and
+left every consumer to rediscover it.
+
+### §206.3 · The boundary question the owner asked me to verify
+
+`@phosphor-icons/react`, not `@phosphor-icons/web` — **against** the surface evidence, which
+points the other way: the inventory writes **web class names** (`ph ph-arrow-right`) and `2.1.1`
+matches the web package exactly. The glyphs are identical in either distribution, so the
+specification is satisfied by both, and the decision turns on which boundary this package can
+actually hold. Helix ships React components against a React peer, so the icon belongs in the
+component tier — and the React package buys three things a webfont cannot: **per-icon
+tree-shaking** instead of all-or-nothing (the 72 KB above is the whole approved set), a
+**compile-time error** on a wrong glyph instead of a silently-misspelled class string, and an
+**accessibility contract enforceable in code** rather than requested in a document.
+
+Phosphor was **not** added to Flutter. The owner scoped that separately and it stays separate.
+
+### §206.4 · The core stayed neutral, and that is asserted rather than claimed
+
+`SemanticIconSizeTokens` is **optional**, so the three other themes received no icon tier and
+their generated CSS is **byte-identical** — which the existing sha256 pins proved on the first
+run, before I wrote an assertion for it. `<Icon>` knows the icon *set* and no product's icon
+*choices*: the caller passes the glyph, the size comes from whichever theme is on the DOM.
+
+12 Circle's **15 / 17 / 18px** are transcribed from the published tokens and are deliberately
+**not** the 44px control size. A glyph box and a touch target are different specs — `[A]` declares
+both — and conflating them is how an icon button fails a target-size audit while looking correct.
+The guard asserts none of the three equals `44px`.
+
+Checks **67 → 88**, negative-controlled three ways: the glyph box set to 44px, the pin loosened to
+a range, and the icon tier handed to `tierstrum`. Each fails by name with exit 1, and the last
+trips the **neutrality assertion and the sha256 pin independently** — two unrelated detections of
+one violation.
+
+One self-inflicted defect, recorded because it is the third of its kind: the *"hard-codes no
+product glyph"* assertion first failed by matching **its own JSDoc example**. SEC-G9 flagged its
+own documentation; §203's sweep fired on the sentence explaining an absence; this did both. It now
+strips comments first **and asserts that the strip worked**.
+
+### §206.5 · Helix now has CI, and it cannot run
+
+A workflow was added: `npm ci` → `typecheck` → `build` → `check:12circle`, Node 20, no secrets, no
+matrix, no publish. It also runs `scripts/selftest-12circle-guard.sh`, which reinstates the lime
+accent **in the workspace copy only**, asserts the check rejects it, restores, and re-asserts
+green. Nothing broken is committed.
+
+The self-test asserts **why** the check failed, not merely that it did, and a meta-control proved
+that distinction earns its keep: with the guard deliberately **blinded** to lime and to its accent
+table, the check **still exited non-zero** for incidental reasons — the contrast assertions. *A
+self-test reading only the exit code would have passed a guard that had stopped guarding.*
+
+**The workflow cannot execute.** Both runs failed before any step, and the annotation is an
+account matter, not a defect:
+
+> *"The job was not started because recent account payments have failed or your spending limit
+> needs to be increased."*
+
+`akutonsol/12circlefitness` is **public** — free Actions minutes, which is why its CI runs.
+`helix-design-system` is **private**, and consumes paid minutes. Substituted evidence, per the
+owner's `LOCALLY_VERIFIED` instruction: a **fresh clone of `e1c0891`** on **Node 20**, running the
+workflow's exact step sequence. All steps pass, **88/88**, zero lime in the generated CSS. Marked
+**`LOCALLY_VERIFIED`**, not green. Resolving the billing block, or changing the repository's
+visibility, is the owner's.
+
+### §206.6 · A `VERIFIED_CLOSED` P1 with no standing guard
+
+Reassessing the frontier turned up a line in `MASTER_PRODUCT_DECISIONS.md` row `PD-A05`: ***"Not
+yet implemented: applied migration 125 implements option (b)."*** It reads like unbuilt authorized
+work. **It is stale.** 125 implemented option (b); migration **128** superseded it with the ruled
+option (a), and `F-J-12` is `VERIFIED_CLOSED` with all four SECURITY/AUTHORIZATION states present.
+**Nothing needed building, and the investigation is what established that** — acting on the line
+would have meant re-implementing a closed finding.
+
+That register is under a standing do-not-modify constraint, so the stale line is **reported, not
+corrected**. It needs the owner.
+
+The same row carries a **retained limitation** that is *not* stale:
+
+> *"RLS policies are outside the I-MIG-03 durability guard, which tracks function properties
+> only — this closure has **no standing guard** against silent replacement."*
+
+Migration 128 says it of itself, naming the mechanism: *"the exact mechanism that produced
+F-J-01."* `SEC-G1` already pins the `F-21` policy family, so a test-level policy guard is
+established practice — and 128 and registry §7.11 both record whether **Gate 0.14** should cover
+policies as an open **governance** question, so the gate was left alone. Pinning a shape the owner
+already ruled does not decide it.
+
+**`SEC-G11`** (`decision_trace_read_scope_guard_test.dart`, 14 assertions) pins option (a) arm by
+arm: the four authorized arms present, `is_active_coach_of(subject_id)` **scoped to the subject**,
+the admin arm on the pinned `public.is_admin()` rather than 125's inline `EXISTS`,
+`content_manager` not granted, no bare role-class arm, `TO authenticated`, **no write policy on
+`decision_traces` in any migration in the tree**, and no table-level `GRANT` to a role class. It
+also carries the **D-3 definer ratchet**: the set of migrations defining these policies is
+recorded, and a new one fails the guard until its shape is reviewed.
+
+### §206.7 · The guard caught two of my own errors before I committed it
+
+**The definer list was wrong.** I derived `[089, 128]` from a shell `grep`; the Dart detector found
+**`[089, 125, 128]`**. 125 defines the policy too, and my grep's pattern missed it. The weaker tool
+produced the input and the stronger one rejected it.
+
+**And the `content_manager` assertion was the digit-sweep trap again.** It failed on stripped SQL —
+because the word survives in `COMMENT ON POLICY … IS '…content_manager is deliberately NOT
+granted…'`, which is a **string literal, not a comment**. The fix was *not* to strip literals:
+`role IN ('coach')` is a literal that matters, and removing literals would have blinded the arm
+that detects F-J-12 itself. The grant assertions are scoped to the `CREATE POLICY` statement, and
+the meta-test now states the real property — stripping removes the header occurrences, exactly one
+survives in the COMMENT, and the **grant** mentions it nowhere.
+
+Negative-controlled by adding a **throwaway later migration** that widens the policy — never by
+editing an applied one, which §8 forbids. **10 of 14 assertions fail**, exit 1, naming
+`content_manager`, the unscoped coach arm, the inline `EXISTS`, the bare role class, the write
+policy and the ratchet. The file was deleted and the frontier confirmed back at 181.
+
+### §206.8 · Where the frontier actually stands
+
+`DESIGN-01` and `DESIGN-02` are **`STATUS — DESIGN AUTHORITY REQUIRED`** in their own governing
+document: the missing artifacts are *state frames* and *per-component specification sheets*, and
+the alternative on offer is a **ruling** that the six screens suffice. Both are design-authority
+decisions. Adding the `Icon` component moved Helix from 3 of ≈30 components to 4 — but
+`DESIGN-02`'s gap is the **specification**, not the implementation, and counting a component I
+derived without a spec as progress against it would be the inference the constraints forbid.
+
+Every `METRIC-*` decision is now resolved **and** built; `Q2` at §205 was the last. The sweep for
+*"authorized but not built"* returns nothing, which is why this section's executable work came
+from a **retained limitation** rather than from the decision queue.
+
+Three stale status lines were corrected in the decision pack — `Q7`/`D-1` still read *"NOT YET —
+authorized, not built"*, `EC-01 Q5` still read *"awaiting Approve / Deny"*, and the Q16 boundary
+paragraph still read *"implementation-pending"*. All three describe work that is done. Same reason
+as §196 and §204.7: a stale line in a decision document misleads exactly the reader it is for.
+
+**Production was not contacted.**
+
+### §206.9 · The four assertions that did NOT fire, and what two of them revealed
+
+The control fired 10 of SEC-G11's 14 assertions. Asking which four stayed silent — rather than
+being satisfied with "it failed" — found two real weaknesses. The per-test verdicts came from
+`--reporter json`, so each is named rather than inferred from a count.
+
+| assertion | why it passed | verdict |
+|---|---|---|
+| the migration corpus is found and non-trivial | the tree was readable, which is the point | **expected negative** |
+| comment stripping removes the prose but not the policy COMMENT | pins **128's own text**, which the probe never touched | **expected negative** |
+| no migration `GRANT`s `decision_traces` to a role class | the probe used a **POLICY**; a `GRANT` is a different vector | **gap — untested** |
+| "declares exactly one policy" | read `definers.last`, which under a widening **is the widening migration** — and it declared one policy of its own | **gap — weak** |
+
+The first two must pass. The corpus check is the vacuity guard: if it ever fails alongside the
+others, the ten failures mean *"the tree could not be read"*, not *"a widening was detected"* —
+so the control asserts it **passed**, which is the difference between evidence and noise.
+
+The other two were defects.
+
+**The `GRANT` arm had never been seen to fail.** By this programme's own standard that made it
+decoration. A second probe — `GRANT SELECT ON TABLE public.decision_traces TO content_manager` —
+fires it, and fires **exactly one** assertion, which is the result worth having: a table-level
+grant does not change the policy's shape, so anything else failing would have been a false
+positive. The control now asserts that narrowness, so it tests both the detection and the
+absence of over-detection.
+
+**And "exactly one policy" was asserting about the wrong file.** Written against
+`definers.last`, it followed the frontier — so under attack it inspected the attacker's own
+migration and passed. The ratchet still caught the widening, so nothing was unguarded; but the
+assertion was not asserting what it claimed. It now pins migration **128 by number**. An
+assertion about 128 should name 128.
+
+Both probes are throwaway **later** migrations, never edits to an applied one, and both are
+removed with the frontier re-confirmed at 181.
+
+### §206.10 · The full Flutter suite did not run here — and why that is recorded, not waived
+
+The local full-suite run **hung for 2 h 43 m and was killed**. It was not a test failure: free
+space had fallen to **127 MiB**, which on this machine makes `flutter test` stop producing output
+and never return — the behaviour already recorded in memory, now observed a second time at a
+larger scale because clearing `.dart_tool/flutter_build` forced a cold recompile.
+
+What the volume actually holds was measured rather than assumed: `/private/var/folders` carries
+**2.5 GB**, of which **1.4 GB is Chrome's `code_sign_clone`** and **475 MB is Docker Desktop's
+update payload** — other applications' data, and not an autonomous deletion. `~/.dartServer`
+(439 MB) and the node/tsx caches were toolchain caches and were reclaimed; the Flutter SDK's own
+3.3 GB cache was left alone because deleting it breaks `flutter` until a full re-download.
+
+So the honest split:
+
+* **VERIFIED locally** — SEC-G11 **14/14**, the Q2 model group **30/30** (44 tests in the two
+  touched files), the two-vector negative control **exit 0**, `dart analyze lib test` **0 errors**.
+* **NOT RUN locally** — the remaining ~1950 tests of the full suite. **`LOCALLY_VERIFIED`, not
+  green**, and not claimed otherwise.
+
+The full suite is not skipped: CI's `flutter` job runs it on a clean runner with no disk
+constraint, and `12circlefitness` is public so its Actions minutes are free. That is the
+authoritative full-suite result, and it is reported against the actual commit rather than
+inferred from a previous one.

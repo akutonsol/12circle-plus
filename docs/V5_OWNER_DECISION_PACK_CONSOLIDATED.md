@@ -9,7 +9,7 @@
 > | **Q3 / `METRIC-11`** | **Option 3** — both authorities, labelled, no combined verdict. | `METRIC-11`, decision sheet | **already ships** (173/174); ingestion stays unauthorized |
 > | **Q4** | **Keep design citations commit-pinned.** | here | **already ships** (65 citations resolve, guard enforces) |
 > | **Q5** | **HOLD pending `Q16`.** Not to be selected independently. | here | — |
-> | **Q7 / `D-1`** | **Option 4** — lazy `setUpAll`, **preserving the documented I/O-error caveat**. | here | **NOT YET** — authorized, not built |
+> | **Q7 / `D-1`** | **Option 4** — lazy `setUpAll`, **preserving the documented I/O-error caveat**. | here | **BUILT** — lazy reads + the json-reporter control (§202) |
 > | **Q13** | **Option 1** — the documented trio is authoritative; `'app'` is QA seed noise. | here | no change required; **no CHECK added** |
 > | **Q15** | **WITHDRAWN as an owner decision** — its premise was disproved by existing authority (`METRIC-12`). The surviving **`Elevated`** mismatch is **preserved exactly as a documented unresolved design/schema boundary**, because the design explicitly says not to resolve it. **Not resolved here.** | here, §8 | — |
 >
@@ -965,7 +965,9 @@ question, which is precisely its merit.**
 > the canonical brand did not authorize a dependency.
 
 
-## 23 · `EC-01 Q5` · documentation authorization — **awaiting Approve / Deny**
+## 23 · `EC-01 Q5` · documentation authorization — **APPROVED and applied**
+
+> **Resolved.** The owner approved this on 2026-10-11 and the edit landed: `QA_CLOSURE_STANDARD.md` §4 row + §4.1 REFERENCE-ONLY alias definition, **23 insertions / 0 deletions**. No unrelated policy change, no alteration to the decision, no broadening of the mutation boundary. The section below is retained as the record of what was requested.
 
 **Requested:** a narrowly scoped edit to `QA_CLOSURE_STANDARD.md` to record the
 **already-decided** `EC-01 Q5` alias definition. **No unrelated policy change, no alteration to
@@ -1206,6 +1208,11 @@ This explicit owner statement supersedes the earlier deferral under the 2026-10-
 - Rebuild the Helix distribution and verify the generated 12Circle CSS no longer emits lime values.
 - Add or update regression checks proving the registered source theme and generated output remain aligned with the authoritative token contract.
 - Do not delete the theme or change unrelated themes, registry structure, or product surfaces.
+
+> **Implementation now complete — see `V5_PROGRAMME_DEFINITION.md` §204 and §206.** Retuned in
+> `akutonsol/helix-design-system` (`ce7087a` → `309f291`, PR #1), verified **88/88** with negative
+> controls, and the generated 12circle CSS emits **no lime**. The "implementation-pending" status
+> below is satisfied, not waived.
 
 **Scope and evidence boundary:** The violet theme in this repository is already the CI-enforced shipped theme (apps/mobile/lib/core/theme/twelve_circle_theme.dart). The standalone Helix source referenced in the prior Q16 evidence is at /Users/dmac/Documents/projects/helix/src/themes/12circle.ts, outside this repository. No claim is made here that the external Helix source or its generated output has been changed. Implementation must occur in that source repository and be verified there; until then, Q16 is **decision-resolved, implementation-pending**.
 
