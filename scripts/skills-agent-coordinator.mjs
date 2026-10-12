@@ -132,6 +132,7 @@ function main() {
       const s = state.tasks[task.id]; const token = crypto.randomUUID();
       if (isVerifier) {
         s.status = 'VERIFYING'; s.verificationLeaseToken = token;
+        s.leaseToken = null; s.leaseExpiresAt = null;
         s.verifier = process.env.SKILLS_AGENT_ID ?? `pid:${process.pid}`;
         s.verificationLeaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
       } else {
@@ -156,6 +157,7 @@ function main() {
       const isVerifierEvent = event === 'verified' || event === 'retry' && process.env.SKILLS_AGENT_ROLE === 'verifier';
       const validToken = isVerifierEvent ? s.verificationLeaseToken === token : s.leaseToken === token;
       if (!validToken) throw new Error('lease token mismatch; stale worker cannot change task state');
+      if (event === 'implemented' && (s.status !== 'CLAIMED' || process.env.SKILLS_AGENT_ROLE === 'verifier')) throw new Error('only the assigned implementer may mark a CLAIMED task IMPLEMENTED');
       if (event === 'verified' && (s.status !== 'VERIFYING' || process.env.SKILLS_AGENT_ROLE !== 'verifier')) throw new Error('only the independently claimed verifier may verify an IMPLEMENTED task');
       const now = new Date().toISOString();
       const map = { implemented: 'IMPLEMENTED', verified: 'VERIFIED', retry: 'RETRY_WAIT',
