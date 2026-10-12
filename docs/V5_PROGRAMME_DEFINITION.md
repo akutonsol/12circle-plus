@@ -19469,3 +19469,86 @@ the printing loop and left `process.exit` reading a stale total. Both share a sh
 verified against the behaviour it was built to fix, and not against the behaviour it changed.
 
 **Production was not contacted.**
+
+## §210 · A dead null check that silently dropped the case it was written for
+
+### §210.1 · First, a correction to my own reporting
+
+I have twice reported `dart analyze` as **"0 errors, 0 warnings (296 pre-existing info)"**. The
+errors figure was right; **the warnings figure was wrong.** Measured properly:
+
+| scope | error | warning | info |
+|---|---|---|---|
+| whole project | 0 | **19** | 296 |
+| `lib/` only | 0 | **3** | 66 |
+
+The grep I used was `^\s+(error|warning) -` and it matched nothing, which I read as "none" rather
+than as "the pattern is wrong". A pattern that returns zero is indistinguishable from a clean
+tree unless you check it against something it should match — the same mistake as a guard that
+cannot fail, applied to my own measurement.
+
+### §210.2 · The defect the warnings were pointing at
+
+Two of the three `lib/` warnings sat on one line of
+`active_workout_screen.dart:1364`, inside `_swapExercise`:
+
+```dart
+// The cursor pointed into the exercise that is gone. Re-point it at the
+// replacement's first set so a refresh lands somewhere that exists.
+if (replacement.sets.isNotEmpty &&
+    (_currentSetId == null || we.setById(_currentSetId!) != null)) {
+```
+
+> *The operand can't be 'null', so the condition is always 'false'.*
+
+And it cannot, because line **170** declares `String _currentSetId = '';` — **non-nullable, with
+the empty string as its "no cursor yet" sentinel.**
+
+So the `== null` arm was dead, and the case it was written for fell through to
+`we.setById('')`, which compares `''` against every set id, matches nothing, and returns null.
+**The condition was false exactly when it needed to be true.** A client who swapped an exercise
+*before touching any set* kept a cursor pointing into the exercise that had just been removed —
+the precise failure the comment above it says it prevents.
+
+Not caught by tests, and the reason is worth recording: `workout_domain_contract_test.dart` has
+five `replacedBy` tests, so the swap *looks* covered. They test the **model's** swap. The screen's
+cursor logic had no coverage at all.
+
+### §210.3 · Fixed as a predicate, because a condition cannot be tested
+
+The decision is now `shouldRepointCursor(currentSetId:, replaced:, replacement:)` — three lines,
+no widget, ordered so the `sets.isEmpty` arm stays first because the caller reads `sets.first`
+immediately. The call site shrank to one call.
+
+`workout_cursor_repoint_test.dart` asserts six things: no-cursor re-points (**the case that was
+broken**), a cursor inside the replaced exercise re-points, a cursor elsewhere is left alone, an
+empty replacement never re-points under either cursor state, and two **premise ratchets** — that
+the field is still a non-nullable `String` with an empty-string sentinel, and that the call site
+no longer compares the cursor to null. If someone makes the field nullable, the first test stops
+testing the real path, so the ratchet fails instead.
+
+Each negative test asserts its own premise first (`setById(elsewhere)` **is** null; the
+replacement's sets **are** empty), so none of them can pass because the fixture was wrong.
+
+The third `lib/` warning was a `duplicate_import` in `daily_checkin_screen.dart` — one line, and
+`lib/` is now at **0 warnings**.
+
+### §210.4 · `NOT RUN` locally, and why that is not `PASS`
+
+`dart analyze` is clean on both changed files and on the new test. **The test was not executed
+locally**: Flutter failed outright —
+
+```
+Flutter failed to copy … workout_hero.png … The target device is full.
+FileSystemException: writeFrom failed … (OS Error: No space left on device, errno = 28)
+```
+
+— with free space at **132 MiB**. Worth distinguishing from §205.10: that was a silent *hang*;
+this is a loud *failure* at the asset-copy stage. Same cause, different symptom, and the loud one
+is the better behaviour.
+
+So the honest status is **`NOT RUN (BLOCKED)`**, not `PASS` and not `FAIL`. Verification is CI's
+`flutter` job, on a clean runner. The reclaimable caches were already empty; the volume's bulk is
+Chrome's 1.4 GB code-sign clone and Docker's 475 MB update payload, which are not mine to delete.
+
+**Production was not contacted.**

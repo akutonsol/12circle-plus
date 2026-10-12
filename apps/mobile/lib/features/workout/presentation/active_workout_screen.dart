@@ -1360,8 +1360,8 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     // The cursor pointed into the exercise that is gone. Re-point it at the
     // replacement's first set so a refresh lands somewhere that exists.
     final replacement = updated.exercises[index];
-    if (replacement.sets.isNotEmpty &&
-        (_currentSetId == null || we.setById(_currentSetId!) != null)) {
+    if (shouldRepointCursor(
+        currentSetId: _currentSetId, replaced: we, replacement: replacement)) {
       _currentSetId = replacement.sets.first.id;
       _saveCursor(replacement.instanceId, replacement.sets.first.id);
     }
@@ -2329,4 +2329,36 @@ class _ActiveCoachBanner extends StatelessWidget {
       ]),
     );
   }
+}
+
+/// Whether the set cursor must be re-pointed after `replaced` is swapped out for
+/// `replacement`.
+///
+/// Extracted and CORRECTED. It was written inline as
+///
+///     replacement.sets.isNotEmpty &&
+///         (_currentSetId == null || we.setById(_currentSetId!) != null)
+///
+/// and `_currentSetId` is declared `String _currentSetId = ''` — **non-nullable,
+/// with the EMPTY STRING as its "no cursor yet" sentinel**. So `== null` was
+/// always false (the analyzer said so, twice, at warning level) and the case it
+/// was meant to cover fell through to `replaced.setById('')`, which finds
+/// nothing and returns null. The condition was therefore false exactly when it
+/// needed to be true: **a client who swapped an exercise before touching any set
+/// kept a cursor pointing into the exercise that no longer exists** — the precise
+/// failure the comment at the call site says this prevents.
+///
+/// It is a function rather than a condition so the three cases can be asserted
+/// without pumping a widget.
+bool shouldRepointCursor({
+  required String currentSetId,
+  required WorkoutExercise replaced,
+  required WorkoutExercise replacement,
+}) {
+  // Nowhere to point. The caller reads `sets.first`, so this must stay first.
+  if (replacement.sets.isEmpty) return false;
+  // No cursor yet — the case the null check silently lost.
+  if (currentSetId.isEmpty) return true;
+  // The cursor was inside the exercise being replaced, so it is now dangling.
+  return replaced.setById(currentSetId) != null;
 }
