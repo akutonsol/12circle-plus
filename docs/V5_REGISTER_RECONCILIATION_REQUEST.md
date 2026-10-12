@@ -270,3 +270,90 @@ does **not** promote anything — `SEC-11` is closed, `SEC-09` is gated on `I-MI
 closed. That is now an argument **for** the edit being narrow and safe, not for deferring it.
 
 **Status: evidence complete, authorization missing.** The register remains **untouched**.
+
+---
+
+# DECISION-READY · the `FG` headers — **three edits, none taken**
+
+There are **two** headers carrying *"recorded, NOT implemented"*, not one, and they need different
+treatment. Both are in `docs/MASTER_REMEDIATION_REGISTRY.md`, a **protected register**, and
+**neither has been edited.**
+
+### Edit 1 — `:1603`, the `FG-1`/`FG-2` header
+
+> *"**Follow-up evidence gaps — recorded, NOT implemented (owner assignment required, no silent
+> scope expansion):**"*
+
+Both rows are **wiring** tasks, and the wiring exists: CI step `Live SQL evidence — FG-1, FG-2,
+ENV-3 ledger`, gated `if: steps.creds.outputs.present == 'true'`, conclusion **`success`** in run
+**`38281191465`**.
+
+```diff
+-**Follow-up evidence gaps — recorded, NOT implemented (owner assignment required, no
+-silent scope expansion):**
++**Follow-up evidence gaps — WIRED AND RUNNING IN CI (step `Live SQL evidence — FG-1,
++FG-2, ENV-3 ledger`). The findings they cover are unaffected by this and remain as
++their own rows state; no silent scope expansion:**
+```
+
+**Promotes nothing** — every row it bears on is already settled elsewhere: `SEC-11`
+`VERIFIED_CLOSED` (2026-08-25), `ENV-3` `VERIFIED_CLOSED` (2026-08-25), `SEC-09` `ALREADY_FIXED`
+and gated on `I-MIG-03`.
+
+### Edit 2 — `:1836`, the `FG-3` header
+
+> *"#### Follow-up evidence gap — recorded, NOT implemented"*
+
+`FG-3` **is** implemented (`d23-fg3-positive-legs.mjs`, **37/37**, inside a **1161/1161** live
+suite). Its **closure** is a separate matter and is **not** being requested.
+
+```diff
+-#### Follow-up evidence gap — recorded, NOT implemented
++#### Follow-up evidence gap — EVIDENCE IMPLEMENTED; CLOSURE BLOCKED ON §2.1
++
++Implemented 2026-10-12 as `supabase/tests/security/d23-fg3-positive-legs.mjs` (37/37).
++**This does NOT close FG-3.** `QA_CLOSURE_STANDARD.md` §2.1 requires VERIFIED LIVE for
++the Security / authorization class, and its clause *"the same probe demonstrably failed
++before the fix"* cannot be satisfied by a positive leg where the fix ADDED a guard. The
++amendment is proposed in `V5_FG3_DECISION_REQUEST.md` and is **unauthorized**. FG-3
++stays OPEN.
+```
+
+This is the edit the instruction guards against most directly, so it is written to make closure
+*harder* to assert, not easier: it names the blocker inside the register itself.
+
+### Edit 3 — `:1840`, `FG-3`'s row text, which your own later decisions superseded
+
+The row reads:
+
+> *"Assert the **positive** legs … the owning coach → 200 **and `service_role` → 200** for each of
+> the five wrappers"*
+
+Two parts of that are now contradicted by decisions **you made afterwards**:
+
+| row says | your 2026-10-12 decision |
+|---|---|
+| `service_role` → 200 as a **positive leg** | *"`service_role` is a **separate liveness test, never authorization evidence**"* |
+| **the owning coach** for *each of the five* | program-scoped → owning coach; **subject-scoped → the subject themselves**. `predict_client` and `assemble_weekly_review` have no owning coach |
+
+```diff
+-| **FG-3** | Assert the **positive** legs of the 116 wrapper class: the owning coach → 200
+-and `service_role` → 200 for each of the five wrappers, so over-refusal is
+-distinguishable from correct refusal |
++| **FG-3** | Assert the **positive** legs of the 116 wrapper class: for the three
++program-scoped wrappers the **owning coach** → 200, for the two subject-scoped the
++**subject themselves** → 200, each paired with a same-scope refusal, so over-refusal is
++distinguishable from correct refusal. `service_role` is tested **separately as liveness,
++not as authorization evidence** (owner decision, 2026-10-12) |
+```
+
+**Leaving this unedited is also a defensible choice** — the row is a historical statement of what
+was registered in August. I am not arguing for it; I am recording that the register currently asks
+for evidence the owner has since ruled is not evidence, and letting you decide which document
+moves.
+
+### Authorization required
+
+Explicit approval to edit `docs/MASTER_REMEDIATION_REGISTRY.md` for **edits 1, 2, 3 — individually
+or in any subset**. All three are **evidence complete, authorization missing**. The register is
+**untouched**.

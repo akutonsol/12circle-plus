@@ -1,5 +1,44 @@
 # V5 · DESIGN AUTHORITY REQUEST — `DESIGN-01` and `DESIGN-02`
 
+> # ⬛ DECIDE THESE TWO — everything else in this file is background
+>
+> ## `D2-3` · four components the approved screens never show
+>
+> `COMPONENTS.md` **names** them; no approved artifact **shows** them. Its own authority clause
+> splits what that means: *"Specs (sizes, colours, radii) are the values in
+> `../brand/tokens/admin.tokens.*`; **interactive behaviour is in the page files**."* The tokens
+> exist; the page files do not depict these four. **Documented colour and radius do not authorize
+> undocumented behaviour.**
+>
+> | component | known (authorized) | missing (NOT authorized) | which authority could govern it |
+> |---|---|---|---|
+> | `radio` | colour · radius · size · spacing, from `admin.tokens.*` | whether it is used **at all** — `segmented control` is depicted and covers single choice; group orientation; keyboard model | a ruling that it is redundant would close this without any design work |
+> | date range | as above | two fields, a range picker, or presets? The screens show *"Permission changes · 7 d"*, which **suggests** presets — a suggestion is not a specification | the six screens' filter bars, if you rule their pattern governs |
+> | `toast` | as above | placement; dismissal (auto / manual / both); **whether it carries errors at all**, given `inline error` exists separately | no depicted surface; needs a decision |
+> | inline error | as above | what it attaches to (field / row / panel); whether it replaces or accompanies content | the depicted form controls, if you rule their states extend to it |
+>
+> **Decide per component:** `a` supply the missing behaviour · `b` rule it redundant / out of V1
+> scope · `c` rule that a named existing pattern governs it · `d` defer.
+>
+> *Consequence of deferring:* each stays unspecified and unbuildable.
+> `check-component-spec-authority.mjs` **fails CI** if a specification appears for any of the four
+> while this is unanswered — so deferral is safe, not silently lossy.
+>
+> ## `D2-4` · the audit row's before/after
+>
+> **Evidence, in full:** `COMPONENTS.md` names *"audit row with **before/after diff**"*. The six
+> screens contain the string **once** — *"Event, actor, resource, before/after, correlation"* — as
+> a **list of the row's fields**, inside a table cell. **No diff is drawn anywhere.**
+>
+> | | consequence |
+> |---|---|
+> | **`D2-4a`** the field list **is** the specification | the diff is rendered at implementer's discretion from the tokens. Cheap, and accepts that two implementers will produce different diffs |
+> | **`D2-4b`** a designed diff treatment **is required** | needs layout of a before/after pair, truncation behaviour, and how added / removed / changed are marked. Nothing in `931218b` supplies this today |
+>
+> **I have not ruled.** A list of field names is not a designed diff treatment, so treating `D2-4a`
+> as the default by silence would be the error the instruction names.
+
+
 > ## ✅ DECIDED BY THE OWNER, 2026-10-12
 >
 > | id | decision | state |
