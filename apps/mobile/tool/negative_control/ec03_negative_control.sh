@@ -39,11 +39,18 @@ git diff --quiet -- "$FLOW" || die "intake_flow_screen.dart already modified"
 git diff --cached --quiet -- "$FLOW" || die "intake_flow_screen.dart already staged"
 
 TMP_FLOW="$(mktemp)"
+# Declared here, used much later for the reporter output. It lives in THIS cleanup
+# rather than in a second `trap ... EXIT`, because bash keeps exactly ONE EXIT trap:
+# a later one REPLACES this handler, and the replacement would silently drop the
+# restore while the tree is mutated. That regression was introduced and caught here.
+JSON=""
 cleanup() {
   if [[ -f "$TMP_FLOW" ]]; then
     cp "$TMP_FLOW" "$FLOW" 2>/dev/null || true
     rm -f "$TMP_FLOW"
   fi
+  [[ -n "$JSON" ]] && rm -f "$JSON"
+  return 0
 }
 trap cleanup EXIT
 
@@ -123,8 +130,11 @@ echo "mutated: the session-lost arm must fail, and the failed-save arm must NOT"
 # The positive direction was weak too: grepping the whole output for an arm's NAME
 # matches when the test merely RUNS, because every reporter prints the name either
 # way. So both directions are now read from per-test RESULTS.
+# NO second `trap ... EXIT` here. One would replace the restore handler installed
+# above, and every `die` below happens while intake_flow_screen.dart is MUTATED --
+# so the file would be left modified on any failure path. `cleanup` removes this
+# file too.
 JSON="$(mktemp)"
-trap 'rm -f "$JSON"' EXIT
 set +e
 flutter test "$TEST" --reporter json > "$JSON" 2>/dev/null
 RC=$?

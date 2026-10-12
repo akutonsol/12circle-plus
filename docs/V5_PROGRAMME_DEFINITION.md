@@ -19415,3 +19415,57 @@ defect lived in** — the old code worked locally and was silent there. Local ev
 `bash -n` clean plus the fixture table above; `ci.yml:422` exercises the whole harness.
 
 **Production was not contacted.**
+
+## §209 · The `ec03` fix left the tree mutated on every failure path
+
+### §209.1 · I replaced the restore trap and did not notice
+
+§208's conversion of `ec03_negative_control.sh` to the json reporter added this, at line 127:
+
+```bash
+JSON="$(mktemp)"
+trap 'rm -f "$JSON"' EXIT
+```
+
+**Bash keeps exactly one `EXIT` trap.** A second one *replaces* the first — so that line silently
+removed the `trap cleanup EXIT` installed at line 48, the handler whose entire job is restoring
+`intake_flow_screen.dart`.
+
+The window is the worst possible one. The mutation is applied **before** line 127 and the explicit
+restore is at line 187, so for sixty lines the tree was modified with **no restoring trap**. And
+those sixty lines are where the analyzer lives, which can `die` five different ways. Any of them —
+the session arm passing, the failed-save arm failing, an arm not running, an unparseable report,
+an ambiguous name — would have exited with `intake_flow_screen.dart` **left mutated in the
+working tree**.
+
+CI never showed it, and could not: CI exercises the happy path, where line 187 restores explicitly
+and the run goes green. The defect is only reachable on a failure, which is precisely when a
+negative control matters.
+
+### §209.2 · Proved by reproduction, not by reading
+
+A nine-line pair, no Flutter, no disk:
+
+| shape | exit | the file afterwards |
+|---|---|---|
+| second `trap … EXIT` after the mutation | 1 | **`MUTATED`** — left modified |
+| one trap carrying both responsibilities | 1 | `original` — **restored** |
+
+### §209.3 · Fixed, and the class swept
+
+`cleanup()` now removes the reporter file too, and the second `trap` is gone — with a comment at
+both sites saying why, because the mistake is invisible unless you know bash replaces rather than
+appends.
+
+All **fifteen** control and evidence scripts were then swept for the same shape. Thirteen carry
+exactly one `EXIT` trap. One carries two — `i3a11`, at `77:trap restore EXIT` and
+`112:trap - EXIT` — and it is **correct**: it calls `restore` explicitly at 111 and *then* disarms,
+so the three `die` paths below it run against an already-restored tree. Disarming after an explicit
+restore is the opposite of replacing a trap before one.
+
+**So `ec03` was the only instance, and I wrote it.** That is the second defect this programme has
+found inside a fix for a defect — §205.6 was the first, where the `EMPTY`-suite guard was marked in
+the printing loop and left `process.exit` reading a stale total. Both share a shape: the repair was
+verified against the behaviour it was built to fix, and not against the behaviour it changed.
+
+**Production was not contacted.**
