@@ -143,6 +143,7 @@ function main() {
         'blocked-owner': 'BLOCKED_OWNER', 'blocked-external': 'BLOCKED_EXTERNAL',
         'blocked-governance': 'BLOCKED_GOVERNANCE', failed: 'FAILED_TERMINAL' };
       if (!map[event]) throw new Error(`unsupported event ${event}`);
+      if (event === 'verified' && process.env.SKILLS_AGENT_ROLE !== 'verifier') throw new Error('only an independently assigned verifier may mark a task VERIFIED');
       if (event === 'verified' && (!note || !/https?:\/\/|^artifact:|^ci:|^commit:/i.test(note))) throw new Error('verified requires an evidence reference (URL, artifact:, ci:, or commit:)');
       if (event === 'retry' && s.attempts >= (task.maxRetries ?? MAX_RETRIES_DEFAULT) + 1) {
         s.status = 'FAILED_TERMINAL'; s.lastFailure = note || 'RETRY_BUDGET_EXHAUSTED';
@@ -150,7 +151,7 @@ function main() {
         s.status = map[event]; s.lastFailure = event === 'retry' ? (note || 'RETRY_REQUESTED') : null;
       }
       if (blocked.has(s.status)) s.blocker = { classification: s.status, note: note || 'No details supplied', at: now };
-      else if (event === 'verified') s.evidence = { reference: note, recordedAt: now, verifiedBy: process.env.SKILLS_AGENT_ID ?? `pid:${process.pid}` };
+      else if (event === 'verified') s.evidence = { reference: note, recordedAt: now, verifiedBy: process.env.SKILLS_AGENT_ID ?? `pid:${process.pid}`, verifiedByRole: process.env.SKILLS_AGENT_ROLE };
       else if (event !== 'retry') s.blocker = null;
       if (['verified', 'retry', 'failed', 'blocked-owner', 'blocked-external', 'blocked-governance'].includes(event) || s.status === 'FAILED_TERMINAL') {
         s.leaseToken = null; s.leaseExpiresAt = null;
