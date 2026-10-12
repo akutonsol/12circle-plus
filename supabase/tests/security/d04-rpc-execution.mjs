@@ -240,6 +240,15 @@ section('8. Every 116 engine wrapper refuses an unauthorized caller (class)');
   // A stand-in uuid: not a program, so `can_act_on_program()` is false and a
   // guarded function refuses before the engine is reached. The same convention
   // section 2 already uses for the *_engine probes.
+  // Which predicate each member guards on, verified against 116's source:
+  // `can_act_for(p_subject)` for the two subject-scoped members,
+  // `can_act_on_program(p_program_id)` for the other three. FG-3's own wording
+  // ("the owning coach → 200 … for each of the five wrappers") does not hold for
+  // the subject-scoped pair, which have no program and no owning coach — that
+  // split is one of the six questions in V5_FG3_DECISION_REQUEST.md and is NOT
+  // decided here. What IS asserted below is only which refusal each one emits.
+  const SUBJECT_SCOPED = new Set(['predict_client', 'assemble_weekly_review']);
+
   const NOT_A_PROGRAM = ids.victim;
   const ARGS = {
     predict_client:           { p_subject: ids.victim, p_program: null },
@@ -275,8 +284,34 @@ section('8. Every 116 engine wrapper refuses an unauthorized caller (class)');
       continue;
     }
     const r = await rpc(attacker, fn, ARGS[fn]);
-    check(`${fn}() refuses an unauthorized caller`, r.status >= 400,
-          `status=${r.status} ${JSON.stringify(r.body || '').slice(0, 80)}`);
+    // NOT `status >= 400`. That was the previous assertion, and it accepted ANY
+    // error as a refusal: a malformed argument, a wrong signature, a type error
+    // or a 500 would all have read as "the guard held". This is the mirror of
+    // the gap FG-3 records — FG-3 says an OVER-refusing wrapper is
+    // indistinguishable from a correct one; a bare `>= 400` makes a BROKEN
+    // wrapper indistinguishable from a guarding one.
+    //
+    // The expected refusal is defined in 116's own source:
+    //   RAISE EXCEPTION 'not authorized for this …' USING ERRCODE = '42501'
+    // and PostgREST surfaces it as 403 + code 42501. Observed as exactly that
+    // for all five members before this assertion was written.
+    //
+    // The MESSAGE is asserted too, because it names which predicate refused:
+    // `can_act_for` says "subject", `can_act_on_program` says "program". A
+    // member that silently swapped predicates would still 403 — and would still
+    // be wrong, because the two guard different things. This is the only part
+    // of the probe that can tell them apart.
+    const wantsSubject = SUBJECT_SCOPED.has(fn);
+    const scope = wantsSubject ? 'subject' : 'program';
+    const msg = String(r.body?.message ?? '');
+    check(`${fn}() refuses an unauthorized caller with the AUTHORIZATION error, `
+          + `not merely an error`,
+          r.status === 403 && r.body?.code === '42501',
+          `status=${r.status} code=${r.body?.code ?? '-'} ${JSON.stringify(r.body || '').slice(0, 60)}`);
+    check(`${fn}() refuses via its own predicate — "${scope}"`,
+          msg.includes(`not authorized for this ${scope}`),
+          `message=${JSON.stringify(msg).slice(0, 80)} (expected the ${scope} arm, `
+          + `because ${fn} guards on ${wantsSubject ? 'can_act_for' : 'can_act_on_program'})`);
   }
 
   // The engine implementations behind the class stay unreachable to a client

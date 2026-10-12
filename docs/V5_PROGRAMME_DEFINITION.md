@@ -19661,3 +19661,67 @@ evidence that nothing in this campaign silently closed a defect the record still
 
 **Nothing in this campaign now rests on CI alone, and nothing rests on local alone** — the two
 agree on every figure above.
+
+## §212 · `FG-3`'s mirror image, which needed no decision at all
+
+### §212.1 · The five facts, re-verified in source
+
+`V5_FG3_DECISION_REQUEST.md`'s six questions were re-checked against the tree rather than carried
+forward on trust. All five supporting facts hold:
+
+| fact | evidence |
+|---|---|
+| the class splits by predicate | `predict_client` · `assemble_weekly_review` → **`can_act_for(p_subject)`**; `evaluate_week` · `materialize_program_week` · `regenerate_program` → **`can_act_on_program(p_program_id)`** |
+| both predicates admit a NULL scope | `program IS NULL` and `subject IS NULL -- unscoped call, subject defaulted` |
+| `service_role` passes as the engine | `(SELECT auth.uid()) IS NULL -- service_role / engine`, first arm of both |
+| a 200 is insufficient | each wrapper delegates to an engine writing `decision_traces` · `communications` · `predictions` · `program_versions` |
+| §2.1 conflicts with a positive leg | *"…**and the same probe demonstrably failed before the fix**"* — unsatisfiable where the pre-fix wrapper had no guard |
+
+One addition worth recording: **I-MIG-03 already tracks all five**, reporting `intact` for each
+with its defining migration named (116 for four, **124** for `materialize_program_week`). So the
+wrappers' *source-level* durability is guarded. What `FG-3` asks for is the *behavioural* positive
+leg, and that remains owner-assigned. **No question was answered and nothing in `FG-3` was
+implemented.**
+
+### §212.2 · But the negative leg had the same defect, pointing the other way
+
+`FG-3` says an **over-refusing** wrapper is indistinguishable from a correct one. Reading `d04`
+§8's existing probe showed the mirror:
+
+```js
+check(`${fn}() refuses an unauthorized caller`, r.status >= 400, …);
+```
+
+**Any error counted as a refusal.** A malformed argument, a wrong signature, a type error or a 500
+would all have read as *"the guard held"* — a **broken** wrapper indistinguishable from a
+**guarding** one. That is decision-independent: the expected refusal is written in 116's own
+source, `RAISE EXCEPTION … USING ERRCODE = '42501'`, and needs nobody's ruling.
+
+Observed first, then asserted. All five return **403 · `42501`**, and the message names the
+predicate that refused — *"not authorized for this **subject**"* for the `can_act_for` pair,
+*"…this **program**"* for the other three.
+
+So the probe now asserts two things per member: that the refusal is the **authorization** error
+rather than merely an error, and that it came from **that member's own predicate**. The second is
+the only part that can catch a wrapper which silently swapped predicates — it would still 403, and
+would still be wrong, because the two guard different things.
+
+### §212.3 · And the old assertion was vacuous in a reachable way
+
+Two controls, both firing:
+
+| control | result |
+|---|---|
+| `evaluate_week` mislabelled subject-scoped | **FAIL** — *"message=not authorized for this program (expected the subject arm)"* |
+| a malformed call — one bogus argument | **FAIL** — **`404 / PGRST202` "Could not find the function"** |
+
+The second is the point. **404 ≥ 400**, so under the previous assertion a signature that does not
+exist would have passed as *"refuses an unauthorized caller"*. This was not a theoretical
+weakness; it was reachable by a typo in the argument map the probe itself maintains.
+
+`d04` **66 → 71**; live suite **1114 → 1120 across 22 suites**, the remaining +1 being `D-02`'s
+documented 429 branch (40/40 on the run that was not rate-limited).
+
+**Nothing here touches authorization semantics, and `FG-3` is no closer to closed.** It is the one
+piece of `FG-3`-adjacent work that required no owner decision, and it makes the existing negative
+leg mean what it already claimed.
