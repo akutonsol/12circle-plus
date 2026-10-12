@@ -20299,3 +20299,70 @@ occurrences and lime **0** in the built theme; Q5 pin **`@phosphor-icons/react: 
 validation is claimed.
 
 **Production was not contacted.**
+
+## §221 · The same saturation defect, still live, two sections away
+
+### §221.1 · Fixed once, missed twice
+
+§219.2 found that `EFFECT 2` compared two `decision_traces` counts that both read **1000** —
+PostgREST's page cap — so the assertion could not fail. It was fixed there and reported as fixed.
+
+Auditing every count in the suite, as this brief required rather than as I volunteered, found
+**the same defect still live** forty lines earlier:
+
+```js
+const tracesBefore = await countOf(`decision_traces?subject_id=eq.${victimId}`);   // 1000
+…regenerate_program(p_approved: false)…
+const tracesAfter  = await countOf(`decision_traces?subject_id=eq.${victimId}`);   // 1000
+```
+
+That is the `pending_approval` branch's *"the expected effect is NO write"* check. **It was
+vacuous.** I fixed the instance I was looking at and did not sweep for siblings — the same
+narrowness that let `D15`'s teardown bug survive, and the reason the fix here is structural rather
+than local.
+
+### §221.2 · Counting now refuses to return a number it cannot stand behind
+
+`countOf` throws when a result reaches the page cap, naming the query:
+
+```
+countOf("decision_traces?subject_id=eq.1c89c873-…") returned 1000, at or above PostgREST's
+1000-row page cap. This count is SATURATED and any delta built from it is meaningless.
+Scope the query (e.g. by the fixture's program_id) rather than widening the page.
+```
+
+Verified by making a count saturate deliberately. The two call sites are now scoped by the trace's
+own `context->>program_id`, which is tiny and cannot saturate.
+
+### §221.3 · A control that proved nothing, and what replaced it
+
+I first tried to prove the rescoped check could detect a write by flipping `p_approved` to `true`
+— and the suite still passed **36/36**. The control was **invalid**: that fixture has no
+`weekly_feedback`, so `evaluate_week` returns `NO_FEEDBACK` and the branch is `no_change`
+regardless of `p_approved`. It could never have produced a write.
+
+Replaced with a **positive control that is now a permanent assertion**: the identical scoped query,
+run against the `applied` fixture where a write definitely occurred, must return **1**. If
+`context->>program_id` scoping could not see traces, it would read 0 there — and the "no write"
+assertion elsewhere would be passing for the wrong reason, invisibly. It returns 1.
+
+`d23` **36 → 37**; live suite **1161/1161 across 23 suites**; five static guards green.
+
+### §221.4 · A stale blocker in the owner input package
+
+`V5_OWNER_INPUT_PACKAGE.md` §E asserted *"`QA_DB_URL` — a CI secret, **absent here**. Blocks
+`FG-1`, `FG-2` and **ENV-3's live half**"*. Both halves are false now: the CI step
+`Live SQL evidence — FG-1, FG-2, ENV-3 ledger` is gated on the credential's presence and its
+conclusion in run `38281191465` is **`success`**, and `ENV-3` has been `VERIFIED_CLOSED` since
+2026-08-25.
+
+Corrected in place — struck through rather than deleted, because a working document that silently
+stops being true is the failure worth showing. Its migration figure (*"all 171 migrations declared,
+000–170"*) was refreshed to the guard's own current output, **182 authored, 000–181, frontier 181**.
+
+Lines 57–58 of the same document were checked and **left alone**: they name *"Permission-denied …
+Skeleton · Read-only"* among ten designed patterns, which **corroborates** §213.2's corrected
+inventory rather than contradicting it.
+
+**No protected register was touched. `QA_CLOSURE_STANDARD.md` has no commit against it in this
+campaign. Production was not contacted.**

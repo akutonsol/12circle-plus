@@ -175,12 +175,30 @@ write path is gated on it, the resource is unmoved. **No approval queue was inve
 
 ## E · INFRASTRUCTURE BLOCKER
 
-**`QA_DB_URL`** — a CI secret, absent here. Blocks `FG-1`, `FG-2` and **ENV-3's live half**. All three are
-SQL rather than REST, and `live-evidence.sh` is written to skip without it.
+> **CORRECTED 2026-10-12 — this section described a blocker that has lifted.** It is kept, struck
+> through, because the correction is the point: a working document asserting a *current* blocker
+> decays silently, and this one did for weeks.
+>
+> ~~`QA_DB_URL` — a CI secret, absent here. Blocks `FG-1`, `FG-2` and ENV-3's live half.~~
+>
+> **`QA_DB_URL` is provisioned.** CI's step **`Live SQL evidence — FG-1, FG-2, ENV-3 ledger`** is
+> gated `if: steps.creds.outputs.present == 'true'`, so without the secret it is skipped at the
+> workflow level. In run **`38281191465`** its conclusion is **`success`**, not `skipped` — so the
+> secret exists and all three suites execute in CI.
+>
+> **And `ENV-3` is not waiting on anything:** `MASTER_REMEDIATION_REGISTRY.md` records it
+> **`VERIFIED_CLOSED` on 2026-08-25** (§7.9, CI run at `2a8d0b6`), restated at §2045 as *"already
+> `VERIFIED_CLOSED` … there is nothing to advance."*
+>
+> What remains true: `FG-1` and `FG-2` are **wiring** gaps whose wiring now exists, and the `FG`
+> table header still describes them as *"NOT implemented"*. Correcting that header is an edit to a
+> **protected register** and is requested in `V5_REGISTER_RECONCILIATION_REQUEST.md`, not taken here.
 
-**The static half is verified and passes every run**: `check-migration-manifest.mjs` confirms all 171
-migrations declared, 000–170, manifest and ledger agreeing. **Nothing was fabricated to stand in for the live
-comparison.**
+**The static half is verified and passes every run**: `check-migration-manifest.mjs` reports
+**182 authored migration(s): 000–181**, frontier **181**, manifest and ledger agreeing. *(This
+previously read "all 171 migrations declared, 000–170" — a true statement at the time that the
+migration tree outgrew; the figure above is the guard's own current output.)* **Nothing was
+fabricated to stand in for the live comparison.**
 
 ---
 

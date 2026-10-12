@@ -285,3 +285,89 @@ write down the bar that the evidence already clears. If governance adopts it, `F
 legs are evidenced against a stated contract. If governance rejects it, the suite stays and the
 `FG-3` row keeps its retained limitation — **no evidence is lost either way**, and nothing has been
 closed on the strength of a proposal.
+
+---
+
+# DECISION RECORD · §2.1 / the `VERIFIED LIVE` row — **AWAITING AUTHORIZATION**
+
+**Nothing below has been applied.** `docs/QA_CLOSURE_STANDARD.md` has **no commit touching it** in
+this entire campaign (`git log e8d72bf..HEAD -- docs/QA_CLOSURE_STANDARD.md` → empty).
+
+### 1 · Exact location
+
+`docs/QA_CLOSURE_STANDARD.md`, **line 43** — the `VERIFIED LIVE` row of the state table in §2,
+which §2.1 then requires for the **Security / authorization** finding class (line 50).
+
+### 2 · Minimal before/after
+
+Only the row's **"Means"** cell changes. The "Proves" and "Does not prove" cells, every other row,
+and §2.1's class table are untouched.
+
+```diff
+-| **VERIFIED LIVE** | A real request against QA reproduces the *secure/correct* behaviour,
+-**and the same probe demonstrably failed before the fix** | Policies, grants, triggers and
+-PostgREST **compose** as intended | That the user-facing path reaches it, or that no collateral
+-regression occurred |
++| **VERIFIED LIVE** | A real request against QA reproduces the *secure/correct* behaviour.
++**For DENIAL evidence, the same probe must demonstrably have failed before the fix.** For
++**POSITIVE authorization evidence** — where the fix ADDED a guard and the authorized caller's
++outcome is unchanged by it — the requirement is instead all five of: a real **non-NULL** scope;
++the **caller as the only variable** (same scope and arguments, an unrelated caller refused with
++the authorization error); the **expected effect asserted scoped** to the fixture, or the
++documented response contract where the engine performs no writes; **privileged callers tested
++separately and labelled liveness**; and **teardown verified by reading**, including after an
++induced failure. | Policies, grants, triggers and PostgREST **compose** as intended | That the
++user-facing path reaches it, or that no collateral regression occurred |
+```
+
+### 3 · Rationale
+
+The existing clause is correct for a **denial**: show the hole, close it, show it gone. It is
+**incoherent for a positive path**. Where migration 116 added a guard to a wrapper that had none,
+the authorized caller was admitted *before* the fix too — so "the same probe demonstrably failed
+before the fix" demands that the correct behaviour was previously broken. The only ways to satisfy
+it as written are to **fabricate a pre-fix failure** or to leave the leg **permanently
+unverifiable**.
+
+### 4 · Security impact
+
+**It does not lower the bar; it states one where none was statable.** The five conditions are
+strictly more than the clause they replace *for this shape*, and the denial requirement is
+unchanged — it is scoped, not weakened. Specifically:
+
+* "caller as the only variable" is what rules out a permissive **NULL arm**, a **`service_role`
+  bypass**, an **admin shortcut**, and a **malformed signature** — none of which the original
+  clause addressed at all, because it never contemplated a positive leg.
+* "privileged callers labelled liveness" writes down that a `service_role` 200 is **not**
+  authorization evidence. That is a tightening.
+* The read-only carve-out is **factual, not permissive**: three of the five engines contain **zero
+  mutating statements**, so a row requirement would be unmeetable by construction and would push
+  evidence toward something invented.
+
+### 5 · Required evidence, and its actual status
+
+| condition | status |
+|---|---|
+| real non-NULL scope | **MET** — `d23` §1 asserts the fixture's `coach_id` *is* the calling coach |
+| caller as the only variable | **MET** — every leg paired, same ids, stranger → `403`/`42501` |
+| scoped expected effect / contract | **MET** — `program_workouts` 0→1; plan `1.0→1.05` by value with week 1 locked; `decision_traces` by engine-returned id; `program_versions` scoped; read-only engines asserted against their declared contracts |
+| privileged callers separate | **MET** — §4, labelled liveness in the assertion text |
+| teardown verified by reading, incl. after failure | **MET** — §5 reads back; an injected throw leaves **0** fixtures |
+
+Verified **2026-10-12**: `d23` **37/37**, live suite **1161/1161 across 23 suites**, five static
+guards green.
+
+### 6 · Decision requested
+
+**Approve, reject, or amend** the diff in §2.
+
+* **Approve** → `FG-3`'s positive legs are evidenced against a written contract, and `FG-3` can be
+  assessed for closure on its merits. *It does not close automatically; the row still needs the
+  `VERIFIED IN CI` and `FIXED ON QA` states §2.1 requires.*
+* **Reject** → the standard stands unchanged, `d23` **stays** (it loses no evidence), and the
+  `FG-3` row keeps its retained limitation permanently, because no positive leg can ever satisfy
+  the clause as written.
+* **Amend** → say which of the five conditions to change; the suite asserts each one separately,
+  so they can be altered individually.
+
+**Until one of these, `FG-3` is OPEN and `VERIFIED LIVE` is not claimed for the positive legs.**

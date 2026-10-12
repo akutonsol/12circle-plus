@@ -54,9 +54,26 @@ async function uidOf(key) {
   const r = await svc(`user_profiles?email=eq.${encodeURIComponent(IDENT[key].email)}&select=id`);
   return ONE(r.body).id;
 }
+// PostgREST caps a plain select at 1000 rows. A count taken over a table larger
+// than that page SATURATES, and a before/after delta built from two saturated
+// reads is identical no matter what happened in between — an assertion that
+// cannot fail. That defect shipped here once (§219.2) and was then found a
+// second time, still live, in the pending_approval check.
+//
+// So counting refuses to return a number it cannot stand behind. Every count in
+// this suite must be scoped tightly enough that saturation is impossible; if one
+// ever is not, this throws by name instead of quietly returning 1000.
+const PAGE_CAP = 1000;
 const countOf = async (path) => {
   const r = await svc(`${path}&select=id`);
-  return n(r.body);
+  const c = n(r.body);
+  if (c >= PAGE_CAP) {
+    throw new Error(
+      `countOf("${path}") returned ${c}, at or above PostgREST's ${PAGE_CAP}-row page cap. `
+      + `This count is SATURATED and any delta built from it is meaningless. Scope the query `
+      + `(e.g. by the fixture's program_id) rather than widening the page.`);
+  }
+  return c;
 };
 
 async function run() {
@@ -155,10 +172,14 @@ async function run() {
       `scoped to program_id=${progId}, so an unrelated concurrent insert cannot satisfy it`);
 
     // regenerate with p_approved=false: the expected effect is NO write.
-    const tracesBefore = await countOf(`decision_traces?subject_id=eq.${victimId}`);
+    // Scoped to THIS program via the trace's own context, not to the subject.
+    // `subject_id=eq.<victim>` matches >1000 rows and saturates, which is how the
+    // first version of this check could not have detected a write at all.
+    const tracesQ = `decision_traces?context->>program_id=eq.${progId}`;
+    const tracesBefore = await countOf(tracesQ);
     const rg = await rpc(coach, 'regenerate_program',
       { p_program_id: progId, p_week: 1, p_approved: false });
-    const tracesAfter = await countOf(`decision_traces?subject_id=eq.${victimId}`);
+    const tracesAfter = await countOf(tracesQ);
     check('regenerate_program() ADMITS the owning coach (200)', rg.status === 200,
       `status=${rg.status} ${JSON.stringify(rg.body || '').slice(0, 70)}`);
     check('regenerate_program() returned a documented status, and with '
@@ -281,6 +302,17 @@ async function run() {
         && ONE(traceRow.body).context?.type === 'regeneration',
       `trace_id=${appliedTraceId} context=`
       + `${JSON.stringify(ONE(traceRow.body).context ?? null).slice(0, 90)}`);
+
+    // The same SCOPED query the pending_approval check uses, now run where a write
+    // definitely happened. This is what proves that check is capable of failing:
+    // if `context->>program_id` scoping did not actually find traces, it would
+    // read 0 here, and the "no write" assertion elsewhere would be passing for
+    // the wrong reason — vacuous in a way no amount of green would reveal.
+    const scopedTraces = await countOf(`decision_traces?context->>program_id=eq.${prog2}`);
+    check('the SCOPED trace query finds the applied branch\'s write — so the same '
+        + 'query returning 0 on the pending_approval branch means "no write", '
+        + 'not "the query cannot see writes"',
+      scopedTraces === 1, `scoped traces for this program=${scopedTraces}`);
 
     // EFFECT 3 · program_versions, via snapshot_program_version. Source-confirmed:
     // the applied branch calls it, and 116 shows it INSERTs program_versions.
