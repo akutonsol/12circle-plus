@@ -1389,7 +1389,22 @@ async function run() {
       await svc('admin_role_capabilities', { method: 'POST',
         body: { admin_role: 'viewer', area: 'Integrations', verb: 'view' } });
     }
-    if (seededIntegration) await svc("user_integrations?provider=eq.qa-d15-probe", { method: 'DELETE' });
+    // UNCONDITIONAL, and it has to be. This delete used to be guarded by
+    // `if (seededIntegration)`, which made the teardown self-defeating: the
+    // probe's `provider` is unique, so a row left behind by an interrupted run
+    // makes the next run's INSERT return 409 → `seededIntegration = false` →
+    // the cleanup is SKIPPED → the row survives again. One interruption turned
+    // into a permanent failure that no later run could clear, because the only
+    // code that removes the row was gated on the thing the row prevents.
+    //
+    // Observed exactly that way: a run interrupted between the INSERT and this
+    // line left `provider=qa-d15-probe` behind, and D15 then failed "seeded a
+    // probe integration row carrying a token — status=409" on every subsequent
+    // run, standalone and in the suite, until the row was deleted by hand.
+    //
+    // Deleting by `provider` is idempotent and costs nothing when there is
+    // nothing to delete, so there is no reason to guard it.
+    await svc("user_integrations?provider=eq.qa-d15-probe", { method: 'DELETE' });
     await unassign(vUid);
     await unassign(aUid);
   }

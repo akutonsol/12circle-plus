@@ -133,6 +133,7 @@ const SUITES = [
   ['D20   subscription churn Q11 + Q12 (180)',  './d20-subscription-churn.mjs'],
   ['D21   admin search filters (§199)',         './d21-admin-search.mjs'],
   ['D22   activity role split Q2 (181)',        './d22-activity-role-split-lab.mjs'],
+  ['D23   FG-3 positive legs (owner-assigned)', './d23-fg3-positive-legs.mjs'],
 ];
 
 let totalFailures = 0;

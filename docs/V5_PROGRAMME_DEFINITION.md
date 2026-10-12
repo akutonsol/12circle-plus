@@ -19883,3 +19883,81 @@ Negative-controlled: asserting the *predicate* message for an `anon` caller fail
 
 Three of seven rows were fillable without a ruling, and all three are now filled. The remaining
 four are the substance of `FG-3` and are **not** implemented.
+
+## §215 · `FG-3` assigned and implemented — and a teardown that could never recover
+
+### §215.1 · The positive legs exist now
+
+`FG-3` was the oldest open evidence gap in the programme: five wrappers whose **denial** was
+asserted and whose **admission** was not, so *"an over-refusing wrapper would look identical to a
+correct one"*. The owner assigned it with six decisions, and `d23-fg3-positive-legs.mjs` now
+implements them — **21/21**, live suite **1146/1146 across 23 suites**.
+
+The design point is that a 200 proves nothing about *why*. Each leg is therefore a **pair against
+the identical scope, varying only the caller**: the owning coach (or the subject) → **200**, an
+unrelated authenticated user → **403 · `42501`**. Same ids, same arguments. That isolates the
+relationship arm from the NULL arm, from a `service_role` bypass, from an admin shortcut, and from
+a malformed signature.
+
+`service_role` is asserted **separately and labelled in the assertion text** as liveness — it
+passes through `auth.uid() IS NULL`, so it would succeed with every relationship arm deleted.
+
+### §215.2 · Option C does not mean the same thing for all five, and I had the facts wrong
+
+Reading the engine bodies to find out what *"the expected engine-owned row"* is produced a
+correction to my own earlier claim. I had written that each wrapper *"delegates to an engine that
+writes to four tables"*. **Wrong** — the four INSERTs I had seen in 116 belong to
+`generate_workout`, `create_weekly_review`, `record_prediction` and `snapshot_program_version`.
+
+What the five engines actually do: **three write nothing** (`predict_client`,
+`assemble_weekly_review`, `evaluate_week` — zero mutating keywords in their bodies);
+`materialize_program_week` inserts `program_workouts`; `regenerate_program` updates
+`workout_programs.plan` and inserts `decision_traces`, but **only on its `applied` branch** — with
+`p_approved=false` it returns `pending_approval` and writes nothing.
+
+So for three wrappers the asserted effect is the returned payload, because a row assertion would
+demand something the engine never promised. **A factual limit on option C, flagged to the owner,
+not a quiet substitution.**
+
+Two things the fixture taught, both from reading errors rather than guessing: the engine iterates
+`week->'split'` and raises **22004** (*"upper bound of FOR loop cannot be null"*) on a week without
+one — which is why the fixture carries a `split`; and `materialize_program_week` transitively calls
+`generate_workout`, which **inserts `decision_traces`**, so teardown removes exactly the ids that
+did not exist beforehand rather than issuing a blanket delete on a provenance table other suites
+count.
+
+### §215.3 · A teardown gated on the thing it was meant to clean up
+
+A tool call was interrupted mid-run, between `D15`'s probe INSERT and its teardown. The row
+survived — and `D15` then failed **on every subsequent run**, standalone and in the suite:
+
+```
+x seeded a probe integration row carrying a token — status=409
+```
+
+The cause is worse than residue. The cleanup line read:
+
+```js
+if (seededIntegration) await svc("user_integrations?provider=eq.qa-d15-probe", {method:'DELETE'});
+```
+
+`provider` is unique, so the leftover row makes the next INSERT return **409** →
+`seededIntegration = false` → **the cleanup is skipped** → the row survives again. **The only code
+that removes the row was gated on the thing the row prevents.** One interruption became a
+permanent failure no later run could clear.
+
+Made unconditional — deleting by `provider` is idempotent and costs nothing when there is nothing
+to delete. Characterised honestly with a planted orphan:
+
+| | |
+|---|---|
+| orphan present, old shape | fails **forever** |
+| orphan present, new shape | **still fails that run** (342/343 — the INSERT genuinely conflicts) **but clears the row** |
+| the next run | **353/353** |
+
+The fix does not rescue the failing run. It breaks the loop. And `D15` reports **353** rather than
+343 now, because a successful seed unlocks ten assertions the 409 had been skipping — so the 409
+was also **suppressing coverage**, not merely failing one check.
+
+**Production was not contacted.** The orphan row was QA probe data this session created, and it
+was removed.

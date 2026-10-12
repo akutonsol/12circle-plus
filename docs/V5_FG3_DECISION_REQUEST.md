@@ -1,5 +1,57 @@
 # V5 · OWNER DECISION REQUEST — `FG-3`, the positive legs of the 116 wrapper class
 
+> ## ✅ DECIDED BY THE OWNER, 2026-10-12 — assigned and implemented
+>
+> All six questions were answered. This document is kept as the record of what was asked and
+> why; the answers and what was built from them are below. **One item remains open and it is
+> not mine to close** — see `Q6`.
+>
+> | # | owner's decision | state |
+> |---|---|---|
+> | `Q1` | **Assign and proceed.** | **done** — `d23-fg3-positive-legs.mjs`, 21/21 |
+> | `Q2` | positive callers: program-scoped → **the owning coach**, real non-NULL program; subject-scoped → **the subject themselves**, real non-NULL subject | **done** — §2 and §3 of D23 |
+> | `Q3` | success evidence: **option C** — HTTP 200 **plus the expected engine-owned row(s)**, teardown verified by reading the database | **done, with one factual narrowing — see below** |
+> | `Q4` | `service_role` is a **separate liveness test**, not authorization evidence | **done** — D23 §4, labelled in the assertion text itself |
+> | `Q5` | isolated QA engine execution permitted, with side-effect assertions and verified teardown | **done** — D23 §5, teardown by exact id |
+> | `Q6` | propose **option 3** for §2.1; do **not** amend the standard | **proposed, PENDING GOVERNANCE** — the standard is untouched |
+>
+> ### The narrowing in `Q3`, which the code forced and I did not choose
+>
+> Option C says *"200 plus the expected engine-owned row or rows"*. Establishing what that means
+> per wrapper required reading the five engine bodies, and the answer is **not uniform** — three
+> of the five **write nothing at all**:
+>
+> | engine | mutating statements | so the "expected effect" is |
+> |---|---|---|
+> | `predict_client_engine` (095) | **none** | the returned payload |
+> | `assemble_weekly_review_engine` (096) | **none** | the returned payload |
+> | `evaluate_week_engine` (094) | **none** | the returned payload |
+> | `regenerate_program_engine` (094) | `UPDATE workout_programs.plan` + `INSERT decision_traces`, **only on the `applied` branch** | with `p_approved=false`: status `pending_approval` and **no write** |
+> | `materialize_program_week_engine` (119) | `INSERT program_workouts` | the new rows, counted scoped to the fixture program |
+>
+> For the three read-only engines, asserting *"a row appeared"* would assert something the engine
+> never promised. The payload is asserted instead. **This is a factual limit on how option C can
+> apply, not a substitution of a different option**, and it is flagged here rather than quietly
+> implemented. If you want the three read-only wrappers held to a different standard, say so.
+>
+> It also corrects something I wrote earlier: I had said each wrapper *"delegates to an engine
+> that writes to four tables"*. **That was wrong.** The four INSERTs I had seen in migration 116
+> belong to `generate_workout`, `create_weekly_review`, `record_prediction` and
+> `snapshot_program_version` — **not** to these five engines.
+>
+> ### How the positive legs prove the *predicate*, not merely a 200
+>
+> Each is run as a **pair against the identical scope, varying only the caller**:
+>
+> * the owning coach / the subject → **200**
+> * an unrelated authenticated user → **403 · `42501`**
+>
+> Same program id, same subject id, same arguments. The caller is the only variable, so the
+> difference can only come from the relationship arm — which rules out the NULL arm (the scope is
+> real and non-NULL in both), a `service_role` bypass (both are user JWTs), an admin shortcut
+> (neither holds admin) and a malformed signature (a 403 and a 200 both prove it resolved).
+
+
 **Status: owner assignment required. Nothing is implemented, and `FG-3` is not closed.**
 
 `FG-3` is registered in `MASTER_REMEDIATION_REGISTRY.md`'s follow-up table, under a header that
