@@ -19346,3 +19346,72 @@ Q16 and Q5 were re-verified in place rather than assumed from the checkpoint: bu
 
 **Production was not contacted.** No probe was run against QA for any of this beyond read-only
 inspection of committed source.
+
+## §208 · `ec03`'s control had §202's defect too, and CI is where it was silent
+
+### §208.1 · Found by sweeping, not by accident
+
+§202 fixed `secw1`'s reporter dependence: it keyed a verdict off Flutter's `Failing tests:` block,
+which the **GitHub reporter CI attaches does not print**, so two assertions would have passed
+**vacuously** in CI. That was fixed and the lesson recorded — but the lesson was never applied to
+the other controls.
+
+Sweeping all fourteen negative-control scripts for the same shape found exactly one more:
+**`ec03_negative_control.sh`**, wired into CI at `ci.yml:422`.
+
+```bash
+FAILING="$(printf '%s\n' "$OUTPUT" | sed -n '/^Failing tests:/,$p')"
+if printf '%s\n' "$FAILING" | grep -Fq "$ARM_FAILED_SAVE"; then
+  die "the mutation also broke the failed-save arm …"
+fi
+echo "only the session-lost arm failed, exactly as declared"
+```
+
+Under the GitHub reporter there is no such section, so `FAILING` is **empty**, the `grep` matches
+nothing, the `if` is false, and the script prints *"only the session-lost arm failed, exactly as
+declared"* **having checked nothing at all.** The one direction that could not work is the one that
+matters: the proof that the mutation did not reach further than declared.
+
+**The positive direction was weak too**, and that was not previously noticed:
+
+```bash
+printf '%s\n' "$OUTPUT" | grep -Fq "$ARM_SESSION" || die "expected EC-03 failure not observed"
+```
+
+Grepping the output for an arm's **name** matches when the test merely **runs** — every reporter
+prints the name on pass and on fail alike. So the "expected failure observed" assertion was
+satisfied by the test existing.
+
+### §208.2 · Both directions now read per-test results
+
+Converted to `--reporter json`, the same instrument `secw1` and `SEC-G11` use, and the verdicts are
+per-test `result` values rather than summary prose. It is strictly stronger than the original
+intent in two ways: the failed-save arm must be **present and `success`**, not merely absent from a
+block; and an arm that did not run at all is a **failure** — *absence is not evidence, because a
+renamed or deleted test would otherwise read as success.*
+
+### §208.3 · Verified by fixture, because the machine could not run it — and CI is the right place anyway
+
+The volume fell to **133 MiB** during the baseline leg and the run stalled in the §205.10 hang
+mode; it was killed. `intake_flow_screen.dart` was confirmed **clean** — the kill landed before the
+mutation leg, and the script's `EXIT` trap held.
+
+So the verdict logic was tested directly, by driving the extracted analyzer with synthetic
+reporter output:
+
+| fixture | required | observed |
+|---|---|---|
+| session arm failed · failed-save passed | accept | **exit 0** |
+| **both** arms failed | reject — reached further | **exit 1** |
+| session arm **passed** | reject — under-reached | **exit 1** |
+| the arm **never ran** | reject — absence is not evidence | **exit 1** |
+| **empty** reporter output | reject | **exit 1** |
+
+The last row is the whole point: **an empty parse was the old CI condition**, and it used to print
+a pass. It is now a hard failure.
+
+End-to-end verification belongs to CI regardless of the disk, because **CI is the environment the
+defect lived in** — the old code worked locally and was silent there. Local evidence is
+`bash -n` clean plus the fixture table above; `ci.yml:422` exercises the whole harness.
+
+**Production was not contacted.**

@@ -111,27 +111,75 @@ echo "mutated tree carries the pre-fix 'if (uid != null)' wrapper"
 echo
 echo "mutated: the session-lost arm must fail, and the failed-save arm must NOT"
 
+# VERDICTS COME FROM `--reporter json`, NOT FROM THE SUMMARY TEXT (V5 §202, §208).
+# The previous form of this block asserted set equality by extracting Flutter's
+# "Failing tests:" section and checking the failed-save arm was absent from it. That
+# section is printed by the EXPANDED/COMPACT reporters and NOT by the GitHub reporter
+# CI attaches — so in CI the extraction yielded an empty string, the grep matched
+# nothing, the `if` was false, and the harness printed "only the session-lost arm
+# failed, exactly as declared" WITHOUT HAVING CHECKED ANYTHING. The same defect was
+# found and fixed in secw1 at §202; this is its sibling.
+#
+# The positive direction was weak too: grepping the whole output for an arm's NAME
+# matches when the test merely RUNS, because every reporter prints the name either
+# way. So both directions are now read from per-test RESULTS.
+JSON="$(mktemp)"
+trap 'rm -f "$JSON"' EXIT
 set +e
-OUTPUT="$(flutter test "$TEST" 2>&1)"
+flutter test "$TEST" --reporter json > "$JSON" 2>/dev/null
 RC=$?
 set -e
 
-printf '%s\n' "$OUTPUT"
-
-# The exit code is the authoritative failure signal — Flutter's summary format differs
-# between local and CI runners.
 [[ "$RC" -ne 0 ]] || die "the EC-03 guard unexpectedly passed against the mutated tree"
 
-printf '%s\n' "$OUTPUT" | grep -Fq "$ARM_SESSION" \
-  || die "expected EC-03 failure not observed: $ARM_SESSION"
+python3 - "$JSON" "$ARM_SESSION" "$ARM_FAILED_SAVE" <<'PY'
+import json, sys
 
-# SET EQUALITY, BOTH DIRECTIONS. Flutter prints a "Failing tests:" block listing each failed
-# test's file and name; the failed-save arm must not be in it.
-FAILING="$(printf '%s\n' "$OUTPUT" | sed -n '/^Failing tests:/,$p')"
-if printf '%s\n' "$FAILING" | grep -Fq "$ARM_FAILED_SAVE"; then
-  die "the mutation also broke the failed-save arm, which the original fix already closed — \
-it reached further than declared, so this run proves nothing about the arm under test"
-fi
+path, arm_session, arm_failed_save = sys.argv[1], sys.argv[2], sys.argv[3]
+names, results = {}, {}
+for line in open(path):
+    line = line.strip()
+    if not line.startswith('{'):
+        continue
+    try:
+        e = json.loads(line)
+    except Exception:
+        continue
+    if e.get('type') == 'testStart':
+        t = e['test']
+        names[t['id']] = t.get('name', '')
+    elif e.get('type') == 'testDone' and not e.get('hidden'):
+        results[e['testID']] = e.get('result')
+
+rows = [(names[i], r) for i, r in results.items() if i in names]
+if not rows:
+    sys.exit('no per-test results were parsed -- the control cannot judge anything')
+
+def find(fragment):
+    hits = [(n, r) for n, r in rows if fragment in n]
+    if not hits:
+        sys.exit(f'the arm {fragment!r} did not RUN at all. Absence is not evidence: '
+                 f'a renamed or removed test would otherwise read as success. '
+                 f'Observed: ' + '; '.join(n for n, _ in rows))
+    if len(hits) > 1:
+        sys.exit(f'{fragment!r} matched {len(hits)} tests; the arm must be unambiguous')
+    return hits[0]
+
+sname, sresult = find(arm_session)
+fname, fresult = find(arm_failed_save)
+
+if sresult == 'success':
+    sys.exit(f'the session-lost arm PASSED against the mutated tree: {sname!r}. '
+             f'The mutation under-reached, or the arm does not test what it claims.')
+if fresult != 'success':
+    sys.exit(f'the failed-save arm did not pass: {fname!r} -> {fresult}. The mutation '
+             f'reached further than declared -- the original fix already closed that arm -- '
+             f'so this run proves nothing about the arm under test.')
+
+print(f'   session-lost arm FAILED as declared    : {sname}')
+print(f'   failed-save arm still PASSED           : {fname}')
+print(f'   {len(rows)} test(s) judged by per-test result, not by summary text')
+PY
 echo "only the session-lost arm failed, exactly as declared"
 
 echo
