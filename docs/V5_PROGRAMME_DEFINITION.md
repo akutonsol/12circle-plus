@@ -19173,3 +19173,71 @@ The full suite is not skipped: CI's `flutter` job runs it on a clean runner with
 constraint, and `12circlefitness` is public so its Actions minutes are free. That is the
 authoritative full-suite result, and it is reported against the actual commit rather than
 inferred from a previous one.
+
+### §206.11 · The other retained limitation, and a blocker that had already lifted
+
+`F-J-12` carried **two** retained limitations. §206.6 took (i). This is (ii):
+
+> *"J-04A's `created_by=neq` filter is NULL-rejecting, so a readable `created_by IS NULL` trace
+> would be invisible to that negative control (none is readable under option (a) today)."*
+
+**The filter did not mean what its name said.** J-04A asserts that an unrelated coach cannot read
+traces they did not create, and the `neq` narrowing was deliberate and correct in intent — `d05`
+§9 probe D creates one trace per run that this coach *did* create, so the unfiltered form had
+stopped testing its own proposition. But `neq` is NULL-rejecting in PostgREST, and **a trace with
+no creator is also one the coach did not create.** The filter is now
+`or=(created_by.is.null,created_by.neq.<coach>)`.
+
+This is a reachable shape, not a hypothetical: 089 declares `created_by uuid references
+user_profiles(id)` with **no NOT NULL**, and no later migration alters it. **Adding NOT NULL would
+be a data-contract decision and was not taken.**
+
+**And the parenthetical is now an assertion.** *"(none is readable under option (a) today)"* was a
+measurement nobody re-ran. It runs every time now, and through the **authorized** read path rather
+than a service key: `admin` holds the admin arm, so a NULL-creator trace readable at all would be
+visible to it. Both query shapes were validated against QA by read-only request before commit —
+the `or=` form returns 200 with rows, `created_by=is.null` returns `[]` — so the widened filter
+changes no result today and the new assertion holds. Verification is CI's, whose Live QA job runs
+`npm run test:ai`; running it locally would have contended for the same QA project.
+
+### §206.12 · `FG-3` looked executable, and checking why it was not found three stale records
+
+The retained-limitation sweep turned up a fourth candidate on the `SEC-R1` row:
+
+> *"the row's Live QA field also names the positive legs (owning coach → 200, `service_role` →
+> 200); **no suite asserts them, so an over-refusing wrapper would look identical to a correct
+> one**."*
+
+That is a serious gap — **with only the negative legs asserted, a wrapper that refused everyone
+would pass** — and it is registered as `FG-3`. It is also **not mine to take**: the table it sits
+in is headed *"recorded, NOT implemented (owner assignment required, no silent scope expansion)"*,
+and implementing it anyway is the expansion that sentence forbids. So it is requested, not built.
+
+**Reading that header is what found the real finding.** It governs `FG-1` and `FG-2` too — and
+both have been implemented for some time. The blocker all three were waiting on, a QA **database**
+credential in CI (`QA_DB_URL`, distinct from the REST keys), **has lifted**:
+
+| marker, CI run `38194730786` step *Live SQL evidence* (**`success`**) | |
+|---|---|
+| `QA_DB_URL: ***` in the job env | the credential is provisioned |
+| `FG-1 · function search_path posture (SEC-09 live half)` | `FG-1` ran |
+| `FG-2a · Phase 2 workout contract` · `FG-2b · generated plan day titles` | `FG-2` ran |
+| `ENV-3 · declared vs observed vs authored` | `ENV-3`'s live half ran |
+
+**A `success` conclusion alone would not have proved this**, and that is the methodological point:
+`live-evidence.sh` **also exits 0 on its skip path**, printing
+`::notice title=Live SQL evidence skipped::…`. The distinction is that the notice is **absent** and
+each suite's own header is **present**. Reading the conclusion and stopping would have been the
+same error as trusting a `PASS 0/0` at §205.5.
+
+Three records still described the blocker as live. One of them —
+`supabase/expected_applied.json`'s own header, which claimed *"The live half of this contract … is
+**NOT implemented**"* — is the **manifest**, not a master register, so it was corrected here with
+the run as evidence, and the ENV-3 static guard re-run green afterwards. The other two are rows in
+`MASTER_REMEDIATION_REGISTRY.md`: the `FG` table header, which is accurate for `FG-3` and stale
+for `FG-1`/`FG-2`, and `ENV-3`'s *"stays REMEDIATED until its live half executes here"*, whose
+stated condition is now observed to pass. **Both are reported for authorization, not edited** —
+`V5_REGISTER_RECONCILIATION_REQUEST.md`, second item. Whether `ENV-3`'s closure ladder is otherwise
+satisfied is a §2.1 judgement and is not claimed here.
+
+**Production was not contacted.**

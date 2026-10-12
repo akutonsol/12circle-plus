@@ -1,6 +1,6 @@
 {
   "_": [
-    "ENV-3 \u00b7 the declared migration state of each environment.",
+    "ENV-3 · the declared migration state of each environment.",
     "",
     "This file is NOT a ledger. supabase_migrations.schema_migrations is the ledger",
     "and the only authority on what IS applied. This file declares what SHOULD be",
@@ -28,7 +28,7 @@
     "work exists would be inventing state this repository cannot yet stand behind.",
     "",
     "The live half of this contract -- comparing these declarations against the real",
-    "schema_migrations -- is NOT implemented. It needs a QA database credential in",
+    "The live half of this contract -- comparing these declarations against the real schema_migrations -- IS implemented and runs in CI. Corrected 2026-10-12: the QA_DB_URL blocker this note recorded has LIFTED. The `Live SQL evidence` step of the live-qa job runs supabase/scripts/live-evidence.sh, which executes FG-1 (function search_path posture), FG-2a/FG-2b (the Phase 2 workout contract and generated plan day titles) and `ENV-3 . declared vs observed vs authored` against the real ledger. Observed green at CI run 38194730786 (c3f4ff1), with the frontier declared here (181) matching. Whether ENV-3's STATUS may now be promoted beyond REMEDIATED is a closure decision on MASTER_REMEDIATION_REGISTRY and is NOT taken here -- see docs/V5_REGISTER_RECONCILIATION_REQUEST.md.",
     "CI, the same blocker as FG-1/FG-2. Until it runs, ENV-3 stays REMEDIATED."
   ],
   "environments": {

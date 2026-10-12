@@ -80,3 +80,72 @@ untouched and remains open.
 
 Whether the registry's limitation (i) should now be annotated to reference `SEC-G11` is a
 separate authorization, on a separate register, and is **not** requested here.
+
+---
+
+# Second item — the `FG-1`/`FG-2` blocker has lifted, and three records still say it has not
+
+**Found while reassessing the frontier**, not by looking for it: `FG-3` looked like executable
+work, and checking why it was not led to the table it sits in.
+
+## The three stale claims
+
+`MASTER_REMEDIATION_REGISTRY.md`, above the `FG` table:
+
+> **Follow-up evidence gaps — recorded, NOT implemented (owner assignment required, no silent
+> scope expansion):**
+
+That header is **correct for `FG-3`** and **stale for `FG-1` and `FG-2`**. Both are implemented and
+running. The table's *Suggested home* column still reads "Wave 2 (2B)" / "Wave 2 retest scope" for
+work that has already landed.
+
+`supabase/expected_applied.json` carried the matching claim, which **has been corrected** in this
+commit because that file is the manifest rather than a master register:
+
+> ~~"The live half of this contract … is **NOT implemented**. It needs a QA database credential in
+> CI, the same blocker as FG-1/FG-2. Until it runs, ENV-3 stays REMEDIATED."~~
+
+## The evidence
+
+CI run **`38194730786`** (`c3f4ff1`), job *Live QA suites*, step **"Live SQL evidence — FG-1, FG-2,
+ENV-3 ledger"** — conclusion **`success`**. `QA_DB_URL` is provisioned (it appears in the job env as
+`QA_DB_URL: ***`), so `live-evidence.sh` took its live path rather than its skip path. The step's
+own output names each suite it ran:
+
+| marker in the log | what it is |
+|---|---|
+| `FG-1 · function search_path posture (SEC-09 live half)` | `FG-1` |
+| `FG-2a · Phase 2 workout contract (SEC-11 / Phase 2 live half)` | `FG-2` |
+| `FG-2b · generated plan day titles (OBS-4 / migration 121)` | `FG-2` |
+| `ENV-3 · live ledger comparison` | `ENV-3`'s live half |
+| `ENV-3 · declared vs observed vs authored` | the declared-vs-real comparison |
+
+`live-evidence.sh` is explicit about the alternative: without `QA_DB_URL` it emits
+`::notice title=Live SQL evidence skipped::… FG-1, FG-2 and the ENV-3 live ledger check did NOT
+run.` **That notice is absent and the suites' own headers are present**, which is what
+distinguishes "ran" from "skipped" here — a `success` conclusion alone would not, because the skip
+path also succeeds.
+
+## What this changes, and what it does not
+
+**`FG-3` remains genuinely unimplemented**, and its header still governs it. It asks for the
+**positive** legs of the 116-wrapper class — owning coach → 200, `service_role` → 200 — *"so
+over-refusal is distinguishable from correct refusal"*. That gap is real: with only the negative
+legs asserted, **a wrapper that refused everyone would pass**. I did **not** implement it, because
+the table requires owner assignment and doing so anyway is the "silent scope expansion" the same
+sentence forbids.
+
+## What is requested
+
+Three things, all on `MASTER_REMEDIATION_REGISTRY.md`, none taken here:
+
+1. **Scope the `FG` table header to `FG-3`**, or annotate `FG-1`/`FG-2` as implemented with the
+   run above as evidence.
+2. **Decide whether `ENV-3` may be promoted beyond `REMEDIATED`.** Its stated condition —
+   *"stays REMEDIATED until its live half executes here"* — is now met. Whether the closure ladder
+   is otherwise satisfied is a §2.1 judgement, and it is the owner's.
+3. **Assign `FG-3`**, or record it as deferred for V1.
+
+**Not requested:** any change to `FG-1`/`FG-2`'s implementations, to `live-evidence.sh`, or to the
+`QA_DB_URL` secret. And no claim that `ENV-3` *is* closed — only that the condition it named has
+been observed to pass.
