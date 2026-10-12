@@ -141,11 +141,22 @@ Three things, all on `MASTER_REMEDIATION_REGISTRY.md`, none taken here:
 
 1. **Scope the `FG` table header to `FG-3`**, or annotate `FG-1`/`FG-2` as implemented with the
    run above as evidence.
-2. **Decide whether `ENV-3` may be promoted beyond `REMEDIATED`.** Its stated condition —
-   *"stays REMEDIATED until its live half executes here"* — is now met. Whether the closure ladder
-   is otherwise satisfied is a §2.1 judgement, and it is the owner's.
+2. ~~**Decide whether `ENV-3` may be promoted beyond `REMEDIATED`.**~~ **WITHDRAWN,
+   2026-10-12 — the request was based on my own error.** `ENV-3` is **not** pending promotion:
+   `MASTER_REMEDIATION_REGISTRY.md` records it **`VERIFIED_CLOSED` on 2026-08-25** (§7.9, CI run at
+   `2a8d0b6`), when the live evidence phase first executed against QA — *"ENV-3 and SEC-11 —
+   already `VERIFIED_CLOSED` … there is nothing to advance"* (§2045). I took the word `REMEDIATED`
+   from `expected_applied.json`'s own stale note and did not check the register's status field
+   against it. **Nothing is requested here.**
 3. **Assign `FG-3`**, or record it as deferred for V1.
 
 **Not requested:** any change to `FG-1`/`FG-2`'s implementations, to `live-evidence.sh`, or to the
-`QA_DB_URL` secret. And no claim that `ENV-3` *is* closed — only that the condition it named has
-been observed to pass.
+`QA_DB_URL` secret.
+
+**And a correction to this document's own framing.** It previously said *"no claim that `ENV-3`
+**is** closed — only that the condition it named has been observed to pass."* That was too
+cautious in the wrong direction: `ENV-3` **is** closed, and has been since 2026-08-25. The
+"blocker has lifted" finding in §206.12 was true but **not news** — `FG-1`, `FG-2` and `ENV-3`'s
+live half all first executed six weeks before I observed them running. What remains accurate from
+that section is narrower: **the `FG` table header still describes `FG-1` and `FG-2` as "NOT
+implemented"**, and that is the one part of item 1 that stands.

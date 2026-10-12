@@ -295,10 +295,21 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
       if (!mounted) return;
       setState(() => _saving = false);
       widget.onLogged();
-      final parentContext = context;
-      Navigator.pop(parentContext);
+      // The context is captured as the NAVIGATOR's, not this sheet's. Popping
+      // deactivates the sheet's element, and `showDialog` against a deactivated
+      // context can raise "Looking up a deactivated widget's ancestor" — it
+      // usually appears to work only because the ancestor lookup resolves before
+      // the pop animation finishes, which is what makes it latent rather than
+      // visible. The NavigatorState's own context outlives the route it popped.
+      //
+      // Safe here specifically because `FoodAddedDialog.show` uses the context
+      // for nothing but `showDialog`'s Navigator/Overlay lookup: its builder is
+      // `(_) =>`, and the dialog takes plain values, so no inherited widget is
+      // read through it and the ancestor change cannot alter what renders.
+      final navigator = Navigator.of(context);
+      navigator.pop();
       FoodAddedDialog.show(
-        parentContext,
+        navigator.context,
         foodName: food.name,
         protein: (food.protein * servings).toInt(),
         carbs: (food.carbs * servings).toInt(),

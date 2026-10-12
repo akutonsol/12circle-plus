@@ -828,9 +828,13 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
       if (!mounted) return;
       widget.onLogged();
       setState(() => _saving = false);
-      final ctx = context;
-      Navigator.pop(ctx);
-      FoodAddedDialog.show(ctx,
+      // Navigator's context, not this route's — see nutrition_screen.dart for
+      // the reasoning. Popping deactivates this element; the NavigatorState's
+      // context outlives the route it popped, and FoodAddedDialog reads no
+      // inherited widget through the context it is handed.
+      final navigator = Navigator.of(context);
+      navigator.pop();
+      FoodAddedDialog.show(navigator.context,
         foodName: r.name,
         protein:  r.protein.toInt(),
         carbs:    r.carbs.toInt(),
@@ -865,9 +869,13 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
       if (!mounted) return;
       widget.onLogged();
       setState(() => _saving = false);
-      final ctx = context;
-      Navigator.pop(ctx);
-      FoodAddedDialog.show(ctx,
+      // Navigator's context, not this route's — see nutrition_screen.dart for
+      // the reasoning. Popping deactivates this element; the NavigatorState's
+      // context outlives the route it popped, and FoodAddedDialog reads no
+      // inherited widget through the context it is handed.
+      final navigator = Navigator.of(context);
+      navigator.pop();
+      FoodAddedDialog.show(navigator.context,
         foodName: name,
         protein:  protein.toInt(),
         carbs:    carbs.toInt(),

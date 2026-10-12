@@ -1,4 +1,38 @@
-# V5 · STATIC-ANALYSIS FINDINGS — `use_build_context_synchronously`, recorded not fixed
+# V5 · STATIC-ANALYSIS FINDINGS — `use_build_context_synchronously`
+
+**Status, 2026-10-12: SEVEN of eight fixed and verified. One remains, and it is a billing
+decision.**
+
+> ## UPDATE — the original deferral was right for one finding and wrong for seven
+>
+> This document first deferred **all eight**, on the grounds that the fixes change behaviour, that
+> one is a payment flow, and that `flutter test` could not run at 132 MiB. The third reason
+> expired when disk freed, and re-examining each finding **individually** — rather than as a
+> uniform list — showed the first two applied to only one of them.
+>
+> | # | finding | disposition |
+> |---|---|---|
+> | 1 | `upgrade_screen.dart:172` | **UNRESOLVED — billing decision.** See below. |
+> | 2 | `coach_dashboard_screen.dart:864` | **FIXED** — `context.mounted` → `mounted`. The closure captures the **State's** context, and for a State the lint wants the State's own liveness. Equivalent (`State.mounted` *is* `State.context.mounted`), so the idiomatic spelling, not a suppression. |
+> | 3–8 | `nutrition_screen.dart:299,301` · `meals_dashboard_screen.dart:832,833,869,870` | **FIXED** — capture the Navigator's context before popping. |
+>
+> **Why 3–8 turned out to be safe**, which the first pass did not establish: the earlier concern
+> was that the dialog would mount under a different ancestor and resolve inherited widgets
+> differently. Reading `FoodAddedDialog.show` settles it — it does nothing with the context but
+> hand it to `showDialog`, its builder is `(_) =>` which **ignores** the dialog's own context, and
+> `FoodAddedDialog` takes **plain values** (`foodName`, `protein`, `carbs`, `fat`). No inherited
+> widget is read through the context at all, so the ancestor change cannot alter what renders.
+>
+> The hazard being removed is real: `Navigator.pop(ctx)` deactivates that element, and
+> `showDialog` against a deactivated context can raise *"Looking up a deactivated widget's
+> ancestor"*. It usually appears to work because the lookup resolves before the pop animation
+> finishes — which is what makes it latent rather than visible.
+>
+> **Verified:** `dart analyze` **0 errors · 0 warnings**, `lib/` `use_build_context` findings
+> **8 → 1**; widget suite **518 passed**; full suite **2002 passed / 5 skipped**.
+
+<details>
+<summary>The original assessment, retained as the record of what was deferred and why</summary>
 
 **Status: recorded for authorization. Eight findings, none implemented.**
 
@@ -93,15 +127,16 @@ dialog mounts under a different subtree. Inherited widgets — theme, media quer
 `Provider`/`Consumer` scope between them — resolve differently. Whether that is acceptable is a
 UI question, and there is no widget test on either screen to detect a change.
 
+</details>
+
 ## What is requested
 
-1. **Finding 1** — a billing decision: option `1`, `2` or `3`.
-2. **Findings 2–8** — authorization to apply the navigator-capture rewrite, **together with**
-   widget coverage for the two nutrition log paths, so the change is verifiable rather than
-   plausible.
-3. Or a ruling that `use_build_context_synchronously` is accepted at `info` for these flows, in
-   which case they should be suppressed **at the line** with a reason, so the sweep does not
-   rediscover them.
+**Finding 1 only** — a billing decision: option `1`, `2` or `3` from the section above.
+
+Findings 2–8 needed no ruling once each was examined on its own terms, and are done. The one that
+does need you is the one where the code's own comment states the consequence — *"embedded checkout
+navigated away"* — so a guard inserted before `launchCheckout` would silently decide whether a
+client who left mid-change still gets a checkout session. That is not a lint.
 
 **Nothing in this document was implemented.** The two unambiguous findings from the same sweep
 were fixed and are recorded at §210; `lib/` carries **0 warnings** and **66 `info`**, of which

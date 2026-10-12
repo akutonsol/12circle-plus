@@ -851,7 +851,12 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                       final clientLn  = client['last_name'] as String? ?? '';
                       final convId = await MessagingService()
                           .getOrCreateCoachClientConversation(clientId);
-                      if (!context.mounted) return;
+                      // `mounted`, not `context.mounted`: this closure captures
+                      // the STATE's context, and for a State the lint wants the
+                      // State's own liveness. The two are equivalent here —
+                      // State.mounted is State.context.mounted — so this is the
+                      // idiomatic spelling, not a suppression.
+                      if (!mounted) return;
                       ref.read(selectedConversationProvider.notifier).state = {
                         'id': convId,
                         'participant': {

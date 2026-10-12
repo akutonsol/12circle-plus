@@ -19790,3 +19790,57 @@ smaller, and only because the measurement was re-done.
 / `D1-2` / `D1-3` remain exactly as recorded.
 
 **Production was not contacted.**
+
+## §214 · `ENV-3` was closed six weeks ago, and seven of the eight findings were safe
+
+### §214.1 · Workstream 4 — I asked for a decision that had already been made
+
+`V5_REGISTER_RECONCILIATION_REQUEST.md` asked the owner to *"decide whether `ENV-3` may be
+promoted beyond `REMEDIATED`"*. **`ENV-3` is not at `REMEDIATED`.** The registry records it
+**`VERIFIED_CLOSED` on 2026-08-25** — §7.9, CI run at `2a8d0b6`, the first execution of the SQL
+evidence phase against QA — and restates it at §2045: *"**`ENV-3`** and **`SEC-11`** — **already
+`VERIFIED_CLOSED`** … there is nothing to advance."*
+
+I took the word `REMEDIATED` from **`expected_applied.json`'s own stale note** and never checked
+it against the register's status field. The sentence immediately *after* the one I read —
+*"**Closure, 2026-08-25** — … The QA database credential **was provisioned**, the live evidence
+phase executed"* — says so plainly.
+
+This also deflates §206.12. *"The `FG-1`/`FG-2` blocker has lifted"* was **true but not news**:
+all three first ran six weeks before I observed them running. What survives from that section is
+narrower and still stands — **the `FG` table header still describes `FG-1` and `FG-2` as "NOT
+implemented"**, and that is the only part still worth reconciling.
+
+Request item 2 is **withdrawn**, and the manifest note corrected. **No protected register was
+touched**, and no passing observation was promoted: the sweep for a silent promotion found none,
+because the promotion had been made properly, by the owner, in August.
+
+### §214.2 — Workstream 5 · deferring all eight was right once and wrong seven times
+
+The findings document deferred **all eight** `use_build_context_synchronously` sites on three
+grounds: the fixes change behaviour, one is a payment flow, and `flutter test` could not run at
+132 MiB. The third expired with the disk. Examining each finding **on its own terms** rather than
+as a list showed the first two applied to exactly one of them.
+
+**`coach_dashboard_screen.dart:864`** — the guard was `context.mounted` where the closure captures
+the **State's** context, and for a `State` the lint wants the State's own liveness. `State.mounted`
+*is* `State.context.mounted`, so the change is the idiomatic spelling, not a suppression.
+
+**The six `Navigator.pop` sites** — the first pass worried the dialog would mount under a
+different ancestor and resolve inherited widgets differently. **Reading `FoodAddedDialog.show`
+settles it**: it hands the context to `showDialog` and does nothing else with it, its builder is
+`(_) =>` which ignores the dialog's own context, and `FoodAddedDialog` takes plain values. **No
+inherited widget is read through that context at all**, so the ancestor change cannot alter what
+renders — and the hazard removed is real, because `showDialog` against a context whose route has
+just been popped can raise *"Looking up a deactivated widget's ancestor"*, and only appears to
+work because the lookup resolves before the pop animation finishes.
+
+**`upgrade_screen.dart:172` stays open**, and it is the one where the code's own comment states
+the consequence: *"embedded checkout navigated away"*. A guard before `launchCheckout` would
+silently answer whether a client who left mid-change still gets a checkout session. That is a
+billing decision, not a lint, and it is not mine.
+
+`lib/` `use_build_context` findings **8 → 1**; `dart analyze` **0 errors · 0 warnings**; widget
+suite **518**; full suite **2002 / 5 skipped**.
+
+**Production was not contacted.**
