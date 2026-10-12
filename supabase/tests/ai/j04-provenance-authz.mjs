@@ -79,14 +79,38 @@ section('J-04A  who can read a decision trace');
   // assertion itself intact: an unrelated coach, reading traces they did not
   // create, must still see nothing.
   const coachId = subjectOf(coach);
+  //
+  // THE FILTER INCLUDES NULLs, AND THAT IS THE POINT. `created_by=neq.X` alone
+  // is NULL-REJECTING in PostgREST, so a trace with `created_by IS NULL` that
+  // this coach could read through some other arm would be invisible to this
+  // probe — the blind spot the registry records as retained limitation (ii) on
+  // `F-J-12`. The proposition is "traces this coach did NOT create", and a trace
+  // with no creator is one of those, so the filter now says so:
+  //     or=(created_by.is.null, created_by.neq.<coach>)
+  // `created_by` is nullable — 089 declares `created_by uuid references
+  // user_profiles(id)` with no NOT NULL, and no later migration alters it — so
+  // this is a reachable shape, not a hypothetical. Adding NOT NULL would be a
+  // data-contract decision and is NOT taken here.
   const asCoach = await rest(coach,
-    `decision_traces?select=id,subject_id&created_by=neq.${coachId}`);
+    `decision_traces?select=id,subject_id&or=(created_by.is.null,created_by.neq.${coachId})`);
   const subjects = Array.isArray(asCoach.body)
     ? [...new Set(asCoach.body.map(r => r.subject_id))] : [];
   invariant('an unrelated coach cannot read another member\'s decision traces',
     Array.isArray(asCoach.body) && asCoach.body.length === 0,
     `${Array.isArray(asCoach.body) ? asCoach.body.length : asCoach.status} trace(s) across ` +
     `${subjects.length} subject(s) — decision-trace reads are scoped to authorized relationships`);
+
+  // And the other half of limitation (ii), asserted rather than assumed. The
+  // registry's parenthetical reads "(none is readable under option (a) today)".
+  // That was a measurement nobody re-ran. This re-runs it every time, through
+  // the AUTHORIZED read path rather than a service key: `admin` holds the admin
+  // arm, so if any NULL-creator trace were readable at all, admin would see it.
+  const nullCreator = await rest(admin, 'decision_traces?select=id&created_by=is.null');
+  invariant('no decision trace with a NULL creator is readable — the arm the ' +
+            'created_by filter above now covers is empty, and that is measured',
+    Array.isArray(nullCreator.body) && nullCreator.body.length === 0,
+    `${Array.isArray(nullCreator.body) ? nullCreator.body.length : nullCreator.status} ` +
+    `NULL-creator trace(s) visible to admin`);
 
   const asClient = await rest(attacker, 'decision_traces?select=id,subject_id');
   invariant('an unrelated CLIENT still reads nothing',
