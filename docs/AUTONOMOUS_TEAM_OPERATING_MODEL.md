@@ -64,3 +64,57 @@ Before a task can be marked verified:
 5. Enable bounded execution for non-gated tasks. Preserve human approval for owner decisions and explicit release gates.
 
 **Current limitation:** this repository change can establish the operating contract and scheduler mechanics, but it cannot itself keep a Claude Code process alive or launch provider agents unless the actual runner/credentials and a durable execution host are connected. That integration must be demonstrated by a real run before claiming continuous autonomous operation.
+
+---
+
+## `V5-AUTO-001` — runner inspection finding (2026-10-12, commit `3216bfe`)
+
+**Conclusion: there is no Skills-Agent runner in this repository or in the operator's Claude
+configuration. Step 4 of Milestone 1 is externally blocked, and no adapter was written.**
+
+### What was inspected, and what was found
+
+| location | result |
+|---|---|
+| `.claude/settings.json` | a **permissions allowlist only** — `permissions.allow` entries and `additionalDirectories`. No hook, agent, runner or provider configuration of any kind |
+| `.claude/` | contains exactly `settings.json` and `settings.local.json`. **No `hooks/`, `agents/`, or `skills/`** |
+| `.github/workflows/` | **no** workflow references an agent launch, `claude` invocation, or `SKILLS_AGENT_*` variable |
+| `scripts/` | the coordinator is the only Skills-Agent script; nothing else launches anything |
+| `package.json` | no script entrypoint for the agent or coordinator |
+| `~/.claude/skills` | `frontend-design` and `synced` — ordinary operator skills, **not** a task runner |
+| `~/.claude/plugins` | marketplace and cache data only |
+
+The coordinator states the same thing in its own header: *"This process schedules bounded tasks;
+**it does not launch Claude Code by itself.** A runner adapter must consume `claim` output and
+submit structured completion or blocker events."* So the absence is by design, not an oversight.
+
+### Execution host and persistence boundary
+
+* **Coordinator state persists.** `.skills-agent/state.json` is written atomically (temp file +
+  `rename`) under an exclusive `wx` lock. Every command is a separate OS process, so the test suite's
+  restart scenario is a genuine process boundary, not a simulated one. State survives worker exit
+  **and** coordinator exit.
+* **Execution does not persist, because there is no execution.** Nothing keeps a worker alive
+  between commands. The coordinator is a scheduler reading and writing a file; the "workers" are
+  whatever invokes it.
+
+### The exact external blocker
+
+To connect a real runner, three things are needed and **none is present**:
+
+1. **A runner entrypoint** — a documented command or API that starts a bounded agent with a task
+   envelope and returns structured completion.
+2. **Credentials** for that runner, which must not be invented or guessed.
+3. **A durable execution host** that outlives a single worker, since this machine's shell does not.
+
+Until those exist, `V5-AUTO-002` (the adapter) cannot begin. That is recorded on the queue as
+`BLOCKED_EXTERNAL` rather than attempted.
+
+### One honest limit on the independence guarantee
+
+The coordinator now refuses to record the same identity as both implementer and verifier, and
+refuses the `pid:` fallback for verification. **That is enforcement of what is recorded, not proof
+of who acted.** Identity is still self-asserted through `SKILLS_AGENT_ID`; a single operator
+running both roles under two names will satisfy the check. Genuine independence requires the
+runner to inject identity the worker cannot set — which is part of what the missing integration
+must supply, and is stated here rather than implied away.

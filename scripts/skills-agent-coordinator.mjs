@@ -75,6 +75,45 @@ function loadState(tasks) {
   for (const t of tasks) state.tasks[t.id] ??= { status: 'READY', attempts: 0, history: [] };
   return state;
 }
+// ── IDENTITY ───────────────────────────────────────────────────────────────
+// Identity is self-asserted: a worker sets SKILLS_AGENT_ID. That is a real
+// limit of a local coordinator and is NOT pretended away — see
+// `docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md`. What the coordinator CAN do, and
+// now does, is refuse to record the same identity as both author and reviewer.
+//
+// The `pid:` fallback is deliberately NOT allowed for verification. It made
+// identity free: the same worker got a different "identity" simply by running
+// the verify step from a new process, so separation could be defeated without
+// even setting a variable.
+function workerId() {
+  const id = process.env.SKILLS_AGENT_ID;
+  if (id && id.trim()) return id.trim();
+  // NO pid fallback, for EITHER role.
+  //
+  // An earlier version required an explicit id only for verification, and that
+  // was not enough — found by running a real cycle, not by the tests, which
+  // always supplied one. If the IMPLEMENTER may stay anonymous it is recorded
+  // as `pid:1234`, which never equals a named verifier, so the independence
+  // check passes trivially. Separation was defeatable by omission: the
+  // implementer simply does not set a variable.
+  //
+  // Identity is the whole basis of the author/reviewer split, so a claim
+  // without one is refused outright rather than invented.
+  throw new Error(
+    'SKILLS_AGENT_ID must be set to claim work. It is not defaulted: an anonymous '
+    + 'implementer would be recorded under its pid, never match a named verifier, '
+    + 'and defeat implementer/verifier separation by omission.');
+}
+function assertIndependentVerifier(taskState, verifierId) {
+  const author = taskState.implementedBy ?? taskState.claimedBy;
+  if (author && author === verifierId) {
+    throw new Error(
+      `independent verification required: "${verifierId}" implemented this task and `
+      + `cannot also verify it. Setting SKILLS_AGENT_ROLE=verifier does not make a `
+      + `worker independent of its own work.`);
+  }
+}
+
 const terminal = new Set(['VERIFIED', 'FAILED_TERMINAL']);
 const blocked = new Set(['BLOCKED_OWNER', 'BLOCKED_EXTERNAL', 'BLOCKED_GOVERNANCE']);
 function depsVerified(task, state) { return task.dependsOn.every(id => state.tasks[id]?.status === 'VERIFIED'); }
@@ -131,15 +170,20 @@ function main() {
       if (!task) { writeAtomic(STATE_PATH, state); return null; }
       const s = state.tasks[task.id]; const token = crypto.randomUUID();
       if (isVerifier) {
+        const vid = workerId();
+        assertIndependentVerifier(s, vid);
         s.status = 'VERIFYING'; s.verificationLeaseToken = token;
         s.leaseToken = null; s.leaseExpiresAt = null;
-        s.verifier = process.env.SKILLS_AGENT_ID ?? `pid:${process.pid}`;
+        s.verifier = vid;
         s.verificationLeaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
       } else {
         s.status = 'CLAIMED'; s.attempts += 1; s.leaseToken = token;
+        // Recorded at CLAIM, so it survives the implementer's exit and is the
+        // value the independence check compares against later.
+        s.implementedBy = workerId();
       }
       s.leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
-      s.claimedBy = process.env.SKILLS_AGENT_ID ?? `pid:${process.pid}`;
+      if (!isVerifier) s.claimedBy = workerId();
       s.history.push({ at: new Date().toISOString(), event: isVerifier ? 'VERIFICATION_CLAIMED' : 'CLAIMED', worker: isVerifier ? s.verifier : s.claimedBy, attempt: s.attempts });
       state.updatedAt = new Date().toISOString(); writeAtomic(STATE_PATH, state);
       return { task, token, leaseExpiresAt: isVerifier ? s.verificationLeaseExpiresAt : s.leaseExpiresAt, assignment: isVerifier ? 'independent-verification' : 'implementation' };
@@ -165,6 +209,16 @@ function main() {
         'blocked-governance': 'BLOCKED_GOVERNANCE', failed: 'FAILED_TERMINAL' };
       if (!map[event]) throw new Error(`unsupported event ${event}`);
       if (event === 'verified' && process.env.SKILLS_AGENT_ROLE !== 'verifier') throw new Error('only an independently assigned verifier may mark a task VERIFIED');
+      if (event === 'verified') {
+        // Re-checked HERE as well as at claim: the lease could have been taken
+        // before this guard existed, or the environment could differ between
+        // the two calls. The event is where the status actually changes.
+        const vid = workerId();
+        assertIndependentVerifier(s, vid);
+        if (s.verifier && s.verifier !== vid) {
+          throw new Error(`verification lease belongs to "${s.verifier}", not "${vid}"`);
+        }
+      }
       if (event === 'verified' && (!note || !/https?:\/\/|^artifact:|^ci:|^commit:/i.test(note))) throw new Error('verified requires an evidence reference (URL, artifact:, ci:, or commit:)');
       if (event === 'retry' && s.attempts >= (task.maxRetries ?? MAX_RETRIES_DEFAULT) + 1) {
         s.status = 'FAILED_TERMINAL'; s.lastFailure = note || 'RETRY_BUDGET_EXHAUSTED';
@@ -176,6 +230,12 @@ function main() {
       else if (event !== 'retry') s.blocker = null;
       if (['verified', 'retry', 'failed', 'blocked-owner', 'blocked-external', 'blocked-governance'].includes(event) || s.status === 'FAILED_TERMINAL') {
         s.leaseToken = null; s.leaseExpiresAt = null;
+        // The VERIFICATION lease was previously left dangling on these events.
+        // A rejected task returning to the implementer kept a stale
+        // verificationLeaseToken, and `claim verifier` skips any task that has
+        // one — so once rejected, a task could never be re-verified.
+        s.verificationLeaseToken = null; s.verificationLeaseExpiresAt = null;
+        if (event !== 'verified') s.verifier = null;
       } else {
         s.leaseExpiresAt = new Date(Date.now() + DEFAULT_LEASE_MS).toISOString();
       }
