@@ -218,3 +218,70 @@ The definition is authored for **denial** evidence. A positive leg is the opposi
 §8, to the closure standard, or to `FG-3`'s registry row. No probe was run against QA for this
 analysis beyond read-only inspection of committed migration source. **`FG-3` is not closed and is
 not claimed to be.**
+
+---
+
+## `Q6` · Proposal for §2.1 — **PENDING GOVERNANCE AUTHORIZATION**
+
+> **The governing standard has NOT been amended.** `docs/QA_CLOSURE_STANDARD.md` is byte-identical
+> to its state before this work. What follows is a *proposal*, as authorized — option 3 — and it
+> takes effect only if the required governance authority adopts it. **Until then `FG-3` stays open
+> and `VERIFIED LIVE` is not claimed for the positive legs.**
+
+### The defect in the current wording
+
+§2.1 defines one state as:
+
+> **VERIFIED LIVE** — *"A real request against QA reproduces the secure/correct behaviour, **and
+> the same probe demonstrably failed before the fix**."*
+
+That second clause is written for a **denial**: you show the hole, you close it, you show the hole
+is gone. It is exactly right there.
+
+It cannot be satisfied by a **positive** authorization path, and not because the evidence is weak —
+because the requirement is incoherent for that shape. If the pre-fix wrapper had **no guard**, then
+before the fix the authorized caller was *admitted*, and a probe asserting "the owning coach is
+admitted" **passed**. Demanding it *"demonstrably failed before the fix"* demands that the correct
+behaviour was previously broken. For these five wrappers it was not: 116 added a guard where there
+was none, so the positive path's observable outcome is **unchanged by the fix**. The only honest
+ways to satisfy the clause as written are to fabricate a pre-fix failure or to leave the leg
+permanently unverifiable.
+
+### Proposed clarification — option 3
+
+**(a) Scope the existing clause to denial evidence.** The *"same probe demonstrably failed before
+the fix"* requirement applies where the evidence asserts that an unauthorized action is
+**refused**. Unchanged in substance; it simply says what it already means.
+
+**(b) Define a parallel contract for positive authorization paths.** A positive leg reaches
+`VERIFIED LIVE` when all five hold:
+
+1. **A real, non-NULL scope.** The caller holds the relationship the predicate names, against a
+   fixture that exists.
+2. **The caller is the only variable.** The same scope, the same arguments, a different caller →
+   **refused with the authorization error**. This is what makes the admission attributable to the
+   relationship arm instead of a permissive NULL branch, a privileged bypass, an admin shortcut or
+   a signature that merely resolved.
+3. **The expected effect is observed, scoped.** The engine-owned row or rows, counted against the
+   fixture so unrelated concurrent activity cannot satisfy the assertion — or, **where the engine
+   performs no writes**, the returned payload. Three of these five engines write nothing, so a
+   contract demanding a row for every wrapper would be unmeetable by construction.
+4. **Privileged callers are separate and labelled.** A `service_role` or internal-engine result is
+   **liveness**, never authorization, because it passes the `auth.uid() IS NULL` arm and would
+   survive the deletion of every relationship arm.
+5. **Teardown is verified by reading.** Fixtures and engine side effects are removed and their
+   absence confirmed by a read, not inferred from a delete status.
+
+**(c) Say explicitly that (b) does not weaken (a).** A finding whose remediation *changed* a
+positive outcome — where the authorized caller was wrongly refused before the fix — still owes the
+before/after pair under (a). (b) applies only where the fix **added** a guard without altering the
+authorized path's outcome.
+
+### Why this is proposed now rather than argued abstractly
+
+`d23-fg3-positive-legs.mjs` **already implements (b)**, at **21/21**, within the live suite's
+**1146/1146 across 23 suites**. So the proposal is not a request to lower a bar; it is a request to
+write down the bar that the evidence already clears. If governance adopts it, `FG-3`'s positive
+legs are evidenced against a stated contract. If governance rejects it, the suite stays and the
+`FG-3` row keeps its retained limitation — **no evidence is lost either way**, and nothing has been
+closed on the strength of a proposal.

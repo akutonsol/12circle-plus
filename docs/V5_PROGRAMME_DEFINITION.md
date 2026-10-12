@@ -20039,3 +20039,87 @@ that one turned out to be a genuine lifecycle defect once the contract was read,
 unanswerable billing question it looked like.
 
 **Production was not contacted.**
+
+## §217 · The design decisions recorded, and the one line I would not cross
+
+### §217.1 · `D2-1a` ratifies a derivation, and the register should say so
+
+`COMPONENT-SPECS.md` holds **24** component sections — and it is **not in `931218b`**. `931218b` is
+the approved *source* (screens, `COMPONENTS.md`, `SCREEN-INVENTORY.md`,
+`brand/tokens/admin.tokens.{css,json}`); `COMPONENT-SPECS.md` is this programme's **derivation from**
+it. `D2-1a` ratifies the derivation for the 24 depicted and nothing else, and that distinction is
+recorded rather than glossed.
+
+One naming correction made in the record: the decision calls the depicted four *"state-pattern
+components"*. Three are (`skeleton`, permission-denied panel, read-only banner); **`timeline` is a
+Data-class component**. It is ratified on identical grounds — its screens depict it — but the
+register now names it correctly instead of filing it as a state pattern.
+
+### §217.2 · Specifying the four absent components from approved authority — and where that runs out
+
+`COMPONENTS.md` carries its own authority clause:
+
+> *"Specs (sizes, colours, radii) are the values in `../brand/tokens/admin.tokens.*`;
+> **interactive behaviour is in the page files**."*
+
+Applied to the four genuinely absent components that splits cleanly, and the split **is** the answer:
+
+* **visual values** — colour, radius, size, spacing — are authorized. The tokens exist at `931218b`
+  and carry `control`, `danger`, `warning`, `radius`, `size`, `space`.
+* **anatomy and behaviour** are **not**. The clause routes them to *"the page files"*, and the page
+  files do not depict these four. `COMPONENTS.md` **enumerates** them — each appears once, in a
+  comma-separated list of names — which is why they are in the 32, and routes their behaviour to a
+  place that does not contain them, which is why they cannot be specified from it.
+
+So the decision authorizes **the need** for specification, not the details. Per the owner's own
+instruction, the minimum remaining input is **requested** (`D2-3`) rather than invented: whether
+`radio` is used at all or `segmented control` already covers single choice; whether `date range` is
+two fields, a picker or presets — the screens' *"Permission changes · 7 d"* **suggests** presets,
+and a suggestion is not a specification; `toast` placement and dismissal, and whether it carries
+errors at all given `inline error` exists separately; and what `inline error` attaches to.
+
+**Nothing was drawn.** Inventing four components' behaviour and filing it as ratified design would
+have closed `DESIGN-02` on my own authority.
+
+### §217.3 · The audit row, posed rather than resolved
+
+The enumeration names *"audit row with **before/after diff**"*. The screens depict the row's
+**field list** — *"Event, actor, resource, before/after, correlation"* — and **no diff UI**.
+
+A list of field names is not a designed diff treatment, and the owner's instruction was explicit
+about not silently treating it as one. So `D2-4` is recorded as an open two-way question: either
+the field list **is** the specification and the diff is rendered from the tokens at the
+implementer's discretion, or the diff **needs** a design (layout of a before/after pair,
+truncation, and how added/removed/changed are marked) that does not yet exist.
+
+### §217.4 · `DESIGN-01`, and a change that was not needed
+
+`D1-1` (option 2) ratified. `D1-3` (option 2) deferred — **no approval queue was invented and no
+`P7`-gated behaviour was built**.
+
+`D1-2` (option 1) ratified **and already true**: `admin_attention_queue.dart` carries item-level
+severity only, and a search for page-level escalation — a page banner, an escalated `appBar`, a
+page-wide severity colour — finds none. **No code change was made, because none was required.**
+Recording "ratified, already satisfied" is the honest outcome; editing something to look like
+compliance would not have been.
+
+### §217.5 · `FG-3`'s `Q6` — proposed, and the standard untouched
+
+`docs/QA_CLOSURE_STANDARD.md` is **byte-identical** (`git diff` on it: empty). The option-3
+proposal lives in the decision request and takes effect only if governance adopts it.
+
+Its substance: §2.1's *"the same probe demonstrably failed before the fix"* is written for a
+**denial** and is right there — but it is **incoherent for a positive path**. Where 116 added a
+guard to a wrapper that had none, the authorized caller was admitted before the fix too, so the
+clause demands that the correct behaviour was previously broken. The only ways to satisfy it as
+written are to fabricate a pre-fix failure or to leave the leg permanently unverifiable.
+
+The proposal scopes the existing clause to denial evidence and defines a parallel five-part
+contract for positive paths — real non-NULL scope; the caller as the only variable; the scoped
+engine-owned effect, or the payload where the engine writes nothing; privileged callers separate
+and labelled liveness; teardown verified by reading. **`d23` already implements all five**, so this
+asks governance to write down a bar the evidence already clears rather than to lower one.
+
+**`FG-3` remains OPEN. `VERIFIED LIVE` is not claimed for the positive legs.**
+
+**Production was not contacted.**

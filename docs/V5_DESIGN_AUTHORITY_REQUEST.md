@@ -1,5 +1,102 @@
 # V5 · DESIGN AUTHORITY REQUEST — `DESIGN-01` and `DESIGN-02`
 
+> ## ✅ DECIDED BY THE OWNER, 2026-10-12
+>
+> | id | decision | state |
+> |---|---|---|
+> | `D2-1` | **`D2-1a`** — ratify the derived specifications as authoritative for the **24 components the approved screens actually depict** | **ratified** |
+> | `D2-2` | **`D2-2b`** — ratify the depicted state patterns, specify the four genuinely absent, rule explicitly on the audit row | **partly closed — see the two halves below** |
+> | `D1-1` | **option 2** — ratify the derived specifications as the frames for `critical-incident` and `Guardian-approval-required` | **ratified** |
+> | `D1-2` | **option 1** — retain item-level `Critical` styling, no page-level escalation | **ratified, and already true in the code** |
+> | `D1-3` | **option 2** — defer Guardian-approval behaviour until `P7` is ungated | **deferred, `P7` still gated** |
+>
+> ### `D2-1a` — what exactly was ratified
+>
+> `COMPONENT-SPECS.md` holds **24** `###` sections, one per depicted component. Worth stating
+> plainly: that file is **not** in `931218b`. `931218b` is the approved *source* (screens,
+> `COMPONENTS.md`, `SCREEN-INVENTORY.md`, `brand/tokens/admin.tokens.{css,json}`);
+> `COMPONENT-SPECS.md` is this programme's **derivation from** it. `D2-1a` ratifies the derivation
+> for the 24 depicted, and for nothing else.
+>
+> ### `D2-2b`, first half — the depicted components, ratified
+>
+> From the corrected measurement (§213.2), four of the nine are depicted and are ratified on the
+> same basis as `D2-1a` — their screens show them:
+>
+> | component | class | evidence in `931218b` |
+> |---|---|---|
+> | `skeleton` | Feedback / state | *"Skeleton rows at real size. No layout jump."* |
+> | permission-denied panel | Feedback / state | the state copy *"Permission restricted"* |
+> | read-only banner | Feedback / state | *"Read-only"* state values, *"Decisions are read-only"* |
+> | `timeline` | **Data, not a state pattern** | *"Event timeline"*, *"Incident timeline — today"*, each heading an `<ol>` |
+>
+> The decision calls these *"the four depicted state-pattern components"*. Three are exactly that;
+> **`timeline` is a Data-class component**, ratified on the identical ground (its screens depict it)
+> but named correctly here so the register does not record it as a state pattern.
+>
+> ### `D2-2b`, second half — the four absent, and the line I will not cross
+>
+> `COMPONENTS.md` ends with its own authority clause:
+>
+> > *"Specs (sizes, colours, radii) are the values in `../brand/tokens/admin.tokens.*`;
+> > **interactive behaviour is in the page files**."*
+>
+> That splits the four cleanly, and the split is the answer to *"specify them from approved
+> authority"*:
+>
+> | | authorized source | status |
+> |---|---|---|
+> | **visual values** — colour, radius, size, spacing | `admin.tokens.{css,json}` at `931218b`, which exist and carry `control` · `danger` · `warning` · `radius` · `size` · `space` | **derivable — approved authority covers it** |
+> | **anatomy and behaviour** — what parts a `toast` has, where it appears, how long it persists; whether `date range` is two fields or a calendar; what `inline error` attaches to; `radio` grouping and keyboard model | *"the page files"* — **and the page files do not depict these four** | **NOT derivable. Nothing approved says it.** |
+>
+> So `COMPONENTS.md` **enumerates** the four — they appear once each, in a comma-separated list of
+> names (*"…checkbox, radio, search, date range"*, *"toast, inline error, empty state…"*) — and
+> routes their behaviour to a place that does not contain them. The enumeration is why they are in
+> the 32; the routing is why they cannot be specified from it.
+>
+> **The decision authorizes the need for specification, not the visual details.** Per your own
+> instruction, I am therefore requesting the minimum remaining design input rather than inventing
+> it:
+>
+> #### `D2-3` · minimum remaining design input (NEW, open)
+>
+> For each of `radio`, `date range`, `toast`, `inline error` — **anatomy and behaviour only**;
+> colours, radii and sizes are already settled by the tokens:
+>
+> 1. **`radio`** — is it used at all, or does `segmented control` (already depicted) cover every
+>    single-choice case? If used: group orientation and whether a group has a visible label.
+> 2. **`date range`** — two text inputs, a single range picker, or presets ("7 d / 30 d / custom")?
+>    The screens show *"Permission changes · 7 d"*, which **suggests** presets, and a suggestion is
+>    not a specification.
+> 3. **`toast`** — placement, dismissal (auto after *n* seconds, manual, both), and whether it is
+>    used for errors at all or only confirmations, given `inline error` exists separately.
+> 4. **`inline error`** — what it attaches to (field, row, panel) and whether it replaces or
+>    accompanies the content it reports on.
+>
+> #### `D2-4` · the audit row — posed explicitly, NOT resolved by me
+>
+> The enumeration names *"audit row with **before/after diff**"*. The screens depict the row's
+> **field list** — *"Event, actor, resource, before/after, correlation"* — and **no diff UI**.
+>
+> **I am not treating a list of field names as a designed diff treatment.** Per your instruction,
+> the question is left explicit:
+>
+> * `D2-4a` — the field list **is** the specification; the diff is rendered at implementer's
+>   discretion from the tokens.
+> * `D2-4b` — the diff **requires a designed treatment** (how a before/after pair is laid out,
+>   truncated, and marked for added/removed/changed), and that design does not yet exist.
+>
+> ### `DESIGN-01` — all three
+>
+> * **`D1-1` (option 2) ratified.** The derived specifications are the frames for both states.
+> * **`D1-2` (option 1) ratified — and already true.** `admin_attention_queue.dart` carries
+>   item-level severity only; a search for page-level escalation (a page banner, an escalated
+>   `appBar`, a page-wide severity colour) finds **none**. No code change was needed, and none was
+>   made.
+> * **`D1-3` (option 2) deferred.** Guardian-approval behaviour stays unimplemented while `P7` is
+>   gated. **No approval queue was invented and no gated behaviour was built.**
+
+
 **Status: awaiting design authority. Nothing here is a specification, and nothing assumes the six
 screens are sufficient.** Both items are recorded in `V5_OWNER_INPUT_PACKAGE.md` as
 **`STATUS — DESIGN AUTHORITY REQUIRED`**. This document states exactly which artifacts are
