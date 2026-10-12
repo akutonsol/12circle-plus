@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:circle_fitness/features/workout/domain/workout_save.dart';
 
 // EC-05 / N-07 · "Workout completion swallows persistence and celebrates
 // anyway" — docs/MASTER_REMEDIATION_REGISTRY.md:53, CONFIRMED.

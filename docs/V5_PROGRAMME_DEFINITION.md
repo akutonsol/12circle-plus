@@ -19552,3 +19552,57 @@ So the honest status is **`NOT RUN (BLOCKED)`**, not `PASS` and not `FAIL`. Veri
 Chrome's 1.4 GB code-sign clone and Docker's 475 MB update payload, which are not mine to delete.
 
 **Production was not contacted.**
+
+## §211 · Disk freed, so the `NOT RUN` gaps closed — and the analyzer went to zero
+
+### §211.1 · The full suite finally ran here
+
+Free space rose to **8.8 GiB** mid-campaign, which lifted the constraint §210.4 recorded. The
+first thing done with it was the verification that had been deferred:
+
+| check | result |
+|---|---|
+| full `flutter test`, locally | **2002 passed / 5 skipped** — exactly §210's 1996 plus the six new cursor tests |
+| `dart analyze`, whole project | **0 errors · 296 info** |
+
+So §210's `NOT RUN (BLOCKED)` is now **PASS**, measured here rather than inferred from CI, and the
+two agree.
+
+### §211.2 · Nineteen warnings to zero
+
+§210.1 corrected the record from a wrongly-reported "0 warnings" to **19**. Three were in `lib/`
+and were fixed there. The remaining sixteen were all in `test/` and `tool/`:
+
+* **13 ×** `unnecessary_non_null_assertion` — `coach!` in `tool/live_integration_test.dart`, where
+  `final coach = await _signIn(…)` is inferred non-nullable. All 13 flagged sites were **all 13
+  occurrences** in the file, which is what made a scoped replacement exact rather than hopeful.
+* **2 ×** `unused_import`, in two test files.
+* **1 ×** `unused_element` — `_location` in `needs_you_today_test.dart`.
+
+`dart analyze` is now **0 errors, 0 warnings** across the whole project.
+
+### §211.3 · And I removed the wrong line first
+
+The `unused_element` was reported at line **42**. I read the surrounding lines, saw
+`late String _location;`, and deleted it — and the analyzer immediately returned **two errors**:
+
+```
+error - needs_you_today_test.dart:50:3 - Undefined name '_location'.
+error - needs_you_today_test.dart:64:13 - Undefined name '_location'.
+```
+
+**I had inferred the element from proximity instead of confirming it.** The warning's real anchor
+was line **43**, and the two "undefined name" errors were the two sites that *assign* to it —
+which is exactly why the analyzer called it unreferenced: it is **written twice and never read**.
+
+Restored, then done properly: all **three** sites removed together, after confirming the surviving
+`GoRoute.builder` still returns its `Scaffold` so the deleted assignment carried no behaviour. The
+three touched test files were run (20 tests) and then the full suite.
+
+The lesson is the same one as §209 and §210's own test failure, in a third costume: **I verified
+against what I expected rather than against what the tool actually said.** The analyzer named a
+line; I checked the neighbourhood. It took two errors to notice, and the only reason that was
+cheap is that `dart analyze` runs in seconds — the equivalent mistake inside a guard would have
+shipped.
+
+**Production was not contacted.**

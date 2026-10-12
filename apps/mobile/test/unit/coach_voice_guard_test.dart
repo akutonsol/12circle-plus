@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:circle_fitness/features/exercise_database/presentation/widgets/coach_voice.dart';
 
 /// VOICE-G1 — a voice note that did not send must not look like one that did,
 /// and the capture must not be left on the device.

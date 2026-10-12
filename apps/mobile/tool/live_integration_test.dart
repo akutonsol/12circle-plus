@@ -98,7 +98,7 @@ Future<void> main() async {
   final coach = await _signIn(_coachEmail, _coachPass);
   coach == null
       ? _no('AUTH-002', 'coach sign-in failed')
-      : _ok('AUTH-002', 'coach signed in (${coach!.uid.substring(0, 8)})');
+      : _ok('AUTH-002', 'coach signed in (${coach.uid.substring(0, 8)})');
   if (client == null) {
     print('\nCannot continue without client session.');
     _summary();
@@ -370,10 +370,10 @@ Future<void> main() async {
   print('\nCOACH NOTES (Module 29)');
   if (coach != null) {
     final note = await _req('POST', '/rest/v1/coach_notes',
-        token: coach!.token,
+        token: coach.token,
         extraHeaders: {'Prefer': 'return=representation'},
         jsonBody: {
-          'coach_id': coach!.uid, 'client_id': uid,
+          'coach_id': coach.uid, 'client_id': uid,
           'body': '__itest private note', 'tag': 'general',
         });
     if (note.code >= 200 && note.code < 300 && note.body is List && (note.body as List).isNotEmpty) {
@@ -385,7 +385,7 @@ Future<void> main() async {
       (leak.code == 200 && leak.body is List && (leak.body as List).isEmpty)
           ? _ok('NOTE-SEC', 'client cannot read coach notes about themselves (RLS)')
           : _no('NOTE-SEC', 'PRIVACY LEAK: client read ${leak.body is List ? (leak.body as List).length : '?'} notes');
-      await _req('DELETE', '/rest/v1/coach_notes', token: coach!.token, query: {'id': 'eq.$nId'});
+      await _req('DELETE', '/rest/v1/coach_notes', token: coach.token, query: {'id': 'eq.$nId'});
     } else {
       _no('NOTE-001', 'coach note create failed (HTTP ${note.code}) ${note.body}');
     }
@@ -395,10 +395,10 @@ Future<void> main() async {
   print('\nPROGRAM BUILDER (Module 31)');
   if (coach != null) {
     final prog = await _req('POST', '/rest/v1/workout_programs',
-        token: coach!.token,
+        token: coach.token,
         extraHeaders: {'Prefer': 'return=representation'},
         jsonBody: {
-          'coach_id': coach!.uid,
+          'coach_id': coach.uid,
           'name': '__itest program',
           'goal': 'test',
           'difficulty': 'intermediate',
@@ -409,7 +409,7 @@ Future<void> main() async {
       _ok('PRG-001', 'coach created program');
       // PRG-002: add a workout with a jsonb exercises array.
       final wkt = await _req('POST', '/rest/v1/program_workouts',
-          token: coach!.token,
+          token: coach.token,
           extraHeaders: {'Prefer': 'return=representation'},
           jsonBody: {
             'program_id': pid,
@@ -437,7 +437,7 @@ Future<void> main() async {
       final wktOk = wkt.code >= 200 && wkt.code < 300;
       // PRG-003: read it back and confirm the exercises round-tripped.
       final read = await _req('GET', '/rest/v1/program_workouts',
-          token: coach!.token,
+          token: coach.token,
           query: {'program_id': 'eq.$pid', 'select': 'title,exercises'});
       final readOk = read.code == 200 &&
           read.body is List &&
@@ -451,7 +451,7 @@ Future<void> main() async {
           : _no('PRG-003', 'workout read-back failed (HTTP ${read.code})');
       // Cleanup (workouts cascade on program delete).
       await _req('DELETE', '/rest/v1/workout_programs',
-          token: coach!.token, query: {'id': 'eq.$pid'});
+          token: coach.token, query: {'id': 'eq.$pid'});
     } else {
       _no('PRG-001', 'program create failed (HTTP ${prog.code}) ${prog.body}');
     }
@@ -462,9 +462,9 @@ Future<void> main() async {
   if (coach != null) {
     // CMP-001: coach can read their active roster.
     final roster = await _req('GET', '/rest/v1/coach_client_relationships',
-        token: coach!.token,
+        token: coach.token,
         query: {
-          'coach_id': 'eq.${coach!.uid}',
+          'coach_id': 'eq.${coach.uid}',
           'status': 'eq.active',
           'select': 'client_id'
         });
@@ -482,7 +482,7 @@ Future<void> main() async {
       String? bad;
       for (final entry in sources.entries) {
         final r = await _req('GET', '/rest/v1/${entry.key}',
-            token: coach!.token, query: {'select': entry.value, 'limit': '1'});
+            token: coach.token, query: {'select': entry.value, 'limit': '1'});
         if (r.code != 200) {
           allOk = false;
           bad = '${entry.key} (HTTP ${r.code})';
@@ -612,7 +612,7 @@ Future<void> main() async {
   print('\nADMIN DASHBOARD (Module 25)');
   if (coach != null) {
     final stats = await _req('POST', '/rest/v1/rpc/admin_platform_stats',
-        token: coach!.token, jsonBody: {});
+        token: coach.token, jsonBody: {});
     // A coach (non-admin) must be denied: PostgREST surfaces the RAISE as 4xx.
     if (stats.code == 401 || stats.code == 403 ||
         (stats.code >= 400 && '${stats.body}'.toLowerCase().contains('not authorized'))) {

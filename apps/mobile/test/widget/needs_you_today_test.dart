@@ -39,7 +39,6 @@ ClientSignals _c(String id, String name,
       unansweredMessage: asked,
     );
 
-late String _location;
 
 Future<void> _pump(
   WidgetTester tester,
@@ -48,7 +47,6 @@ Future<void> _pump(
   int inactivity = 9,
   int horizon = 7,
 }) async {
-  _location = '/coach-dashboard';
   final router = GoRouter(
     initialLocation: '/coach-dashboard',
     routes: [
@@ -62,7 +60,6 @@ Future<void> _pump(
         GoRoute(
           path: p,
           builder: (_, __) {
-            _location = p;
             return Scaffold(
               body: SingleChildScrollView(
                 child: p == '/coach-dashboard'
