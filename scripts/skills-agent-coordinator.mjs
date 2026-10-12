@@ -86,10 +86,17 @@ function recoverExpired(tasks, state) {
   const now = Date.now(); let changed = false;
   for (const t of tasks) {
     const s = state.tasks[t.id];
-    if (['CLAIMED', 'IMPLEMENTED', 'VERIFYING'].includes(s.status) && s.leaseExpiresAt && Date.parse(s.leaseExpiresAt) <= now) {
+    const verifyingExpired = s.status === 'VERIFYING' && s.verificationLeaseExpiresAt && Date.parse(s.verificationLeaseExpiresAt) <= now;
+    const implementationExpired = ['CLAIMED', 'IMPLEMENTED'].includes(s.status) && s.leaseExpiresAt && Date.parse(s.leaseExpiresAt) <= now;
+    if (verifyingExpired) {
+      s.status = 'IMPLEMENTED';
+      s.verificationLeaseToken = null; s.verificationLeaseExpiresAt = null; s.verifier = null;
+      s.history.push({ at: new Date().toISOString(), event: 'VERIFICATION_LEASE_EXPIRED', note: 'Returned to independent verification without assuming task success.' });
+      changed = true;
+    } else if (implementationExpired) {
       s.status = 'RETRY_WAIT';
       s.lastFailure = 'LEASE_EXPIRED';
-      s.leaseToken = null; s.leaseExpiresAt = null; s.verificationLeaseToken = null; s.verificationLeaseExpiresAt = null;
+      s.leaseToken = null; s.leaseExpiresAt = null;
       s.history.push({ at: new Date().toISOString(), event: 'LEASE_EXPIRED', note: 'Recovered without assuming task success.' });
       changed = true;
     }
@@ -140,7 +147,7 @@ function main() {
   }
   if (command === 'event') {
     const [id, token, event, ...rest] = args;
-    if (!id || !token || !event) throw new Error('usage: event <task-id> <lease-token> <implemented|verify|verified|retry|blocked-owner|blocked-external|blocked-governance|failed> [note]');
+    if (!id || !token || !event) throw new Error('usage: event <task-id> <lease-token> <implemented|verified|retry|blocked-owner|blocked-external|blocked-governance|failed> [note]');
     const note = rest.join(' ');
     const result = withLock(() => {
       const state = loadState(tasks); const task = tasks.find(t => t.id === id);
@@ -151,7 +158,7 @@ function main() {
       if (!validToken) throw new Error('lease token mismatch; stale worker cannot change task state');
       if (event === 'verified' && (s.status !== 'VERIFYING' || process.env.SKILLS_AGENT_ROLE !== 'verifier')) throw new Error('only the independently claimed verifier may verify an IMPLEMENTED task');
       const now = new Date().toISOString();
-      const map = { implemented: 'IMPLEMENTED', verify: 'VERIFYING', verified: 'VERIFIED', retry: 'RETRY_WAIT',
+      const map = { implemented: 'IMPLEMENTED', verified: 'VERIFIED', retry: 'RETRY_WAIT',
         'blocked-owner': 'BLOCKED_OWNER', 'blocked-external': 'BLOCKED_EXTERNAL',
         'blocked-governance': 'BLOCKED_GOVERNANCE', failed: 'FAILED_TERMINAL' };
       if (!map[event]) throw new Error(`unsupported event ${event}`);
