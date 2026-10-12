@@ -160,3 +160,66 @@ cautious in the wrong direction: `ENV-3` **is** closed, and has been since 2026-
 live half all first executed six weeks before I observed them running. What remains accurate from
 that section is narrower: **the `FG` table header still describes `FG-1` and `FG-2` as "NOT
 implemented"**, and that is the one part of item 1 that stands.
+
+
+---
+
+## Evidence update, 2026-10-12 — the `FG` table header, verified at the step level
+
+Item 1 previously rested on §7.9's narrative (*"the live evidence phase executed"*). That is a
+record of one run in August. It has now been verified **against a named CI run's step
+conclusions**, which is a different and stronger thing.
+
+**`MASTER_REMEDIATION_REGISTRY.md:1603`** reads:
+
+> **Follow-up evidence gaps — recorded, NOT implemented (owner assignment required, no silent
+> scope expansion):**
+
+and the table under it lists:
+
+| ID | gap as worded |
+|---|---|
+| **`FG-1`** | *"Wire `supabase/tests/security/function-search-path.sql` into the live-qa CI job with a DB-credential path"* |
+| **`FG-2`** | *"Wire the 32-assertion workout SQL suite (`supabase/tests/workout/*.sql`) into the live-qa CI job"* |
+
+Both are worded as **wiring tasks**. So the question is not whether a suite passed — it is whether
+the wiring exists. It does:
+
+* `.github/workflows/ci.yml` carries the step **`Live SQL evidence — FG-1, FG-2, ENV-3 ledger`**,
+  with `env: QA_DB_URL: ${{ secrets.QA_DB_URL }}`, running `supabase/scripts/live-evidence.sh`.
+* That script's own manifest names `FG1='supabase/tests/security/function-search-path.sql'`,
+  `FG2A='…/workout/phase2-contract.sql'` and `FG2B='…/workout/plan-day-titles.sql'` — i.e. exactly
+  the two gaps' targets.
+* The step is gated `if: steps.creds.outputs.present == 'true'`, so **without the secret it is
+  skipped at the workflow level** and the script's own skip notice never even prints. Its
+  conclusion therefore distinguishes "ran" from "was not provisioned".
+* In run **`38275560994`** (commit `5b6206f`), job *Live QA suites*, that step's conclusion is
+  **`success`** — not `skipped`.
+
+So `QA_DB_URL` is provisioned, the gate passed, and **`FG-1`, `FG-2` and the ENV-3 live ledger
+execute in CI today.** The header's *"NOT implemented"* is stale for both rows.
+
+**Still not requesting closure, and not editing the register.** Two reasons:
+
+1. *"Wired and passing"* is not the same as *"the finding it covers is closed"*. `FG-1` covers
+   **`SEC-09` promotion** and `I-MIG-03`'s unverifiable pin; `FG-2` covers **`SEC-11`** and the
+   Phase-2 re-verification. Whether those promote is a §2.1 judgement under the closure ladder,
+   and it is yours. A green step is evidence toward it, not the ruling.
+2. The header also carries *"owner assignment required, no silent scope expansion"* — language
+   about **authority**, not about implementation state. Even once the factual half is corrected,
+   that half may still be the owner's intent.
+
+**The exact edit requested** — nothing more:
+
+> Replace the header's *"recorded, NOT implemented (owner assignment required, …)"* for the `FG-1`
+> and `FG-2` rows with *"implemented and running in CI (step `Live SQL evidence — FG-1, FG-2,
+> ENV-3 ledger`); the findings they cover remain open pending a §2.1 promotion ruling"*.
+
+**Authorization needed:** explicit owner approval to edit
+`docs/MASTER_REMEDIATION_REGISTRY.md`, which is a protected register. **It has not been edited.**
+
+**One stale comment noted, not changed.** `.github/workflows/ci.yml` still calls this *"the
+FG-1/FG-2 blocker"* in the ENV-3 static-guard step's comment, and `I-MIG-03` prints *"live evidence
+is FG-1"*. Both describe a blocker that has lifted. They are comments in a workflow file, not
+register entries, and editing CI configuration was not part of this instruction — so they are
+reported rather than touched.
