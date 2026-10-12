@@ -83,7 +83,7 @@
       "paths": ["docs/V5_REGISTER_RECONCILIATION_REQUEST.md"],
       "acceptance": [
         "State the missing V5_WORKSTREAM_REGISTRY authority and what should replace it",
-        "State that MASTER_REMEDIATION_WAVES maps migrations only to 131 while the frontier is 181, and name the authorization needed to reconcile the plan",
+        "CORRECTED by Milestone 4: the plan does not stop at 131. Its table assigns 123-131 and its final row reads \"132+ | 4+ | Assigned at wave entry, never before\", so migrations >= 132 are outside pre-assignment BY RULE. There is no migration discrepancy to reconcile; state that finding and its evidence instead",
         "Request, do not perform, any edit to a protected register or to the authoritative wave plan"
       ],
       "maxRetries": 2,

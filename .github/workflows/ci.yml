@@ -198,6 +198,11 @@ jobs:
           # (V5_WORKSTREAM_REGISTRY) and after a task was verified against a
           # commit that did not contain its deliverable.
           node scripts/skills-agent-inventory-check.mjs
+          # Migration <-> wave-plan coverage, reproducible from tracked files.
+          # Replaced a wrong finding ("51 migrations beyond the plan") that came
+          # from matching the pre-assignment table with a narrow regex; the
+          # plan's own final row assigns 132+ "at wave entry, never before".
+          node scripts/check-migration-wave-coverage.mjs --check
           node tests/skills-agent/coordinator.test.mjs
 
       - name: Function posture (definer search_path, anon EXECUTE)

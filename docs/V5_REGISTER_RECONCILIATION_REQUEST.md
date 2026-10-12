@@ -421,3 +421,94 @@ inventing statuses**, which is the one thing the reconciliation brief forbids.
 So the queue holds the ten tasks for which direct repository evidence exists, and the row-by-row
 pass stays where the registry already defers it. **That is a stated limit of this inventory, not an
 omission by oversight.**
+
+---
+
+# `MILESTONE 4` · migration reconciliation — **and a correction to Conflict 2**
+
+## ⚠ Conflict 2, as I reported it, was not a conflict
+
+Milestone 3 recorded that *"`MASTER_REMEDIATION_WAVES.md` maps migrations only to 131 while the
+frontier is 181 — 51 migrations beyond the plan"*. **That was a misreading of the document, and
+the cause was my own regex.**
+
+I matched the pre-assignment table with `^\| \*\*1[0-9][0-9]\*\* \| [0-9A-C]+ \|`, which captures
+only rows of that exact shape, and then treated *absence from that table* as *absence from the
+plan*. The table's **own final row** says otherwise:
+
+```
+| **132+** | 4+ | Assigned at wave entry, never before |
+```
+
+So migrations **132 and above are outside the pre-assignment scope by the plan's explicit rule** —
+not missing from it. §0.2 states the convention directly, and the 2026-08-31 amendment restates
+it: *"Wave 4+'s floor moves to **132+**. The numbers are not chosen…"*
+
+Two further artefacts of the same careless extraction: the "150" I counted as a migration is
+*"150 sites are invisible to it (N-03)"* — a code-site count — and the "188" is inside a long
+`W1-B2` table cell, not a migration assignment.
+
+**Of the brief's three options, the evidence supports `C`:** the plan and the manifest use
+different, stated conventions, and there is nothing to amend. **No decision is required on this
+point.** `A` and `B` both rest on a discrepancy that does not exist.
+
+## The reconciliation, machine-checkable
+
+`scripts/check-migration-wave-coverage.mjs` (also `--json`) derives this from tracked files only:
+
+| | |
+|---|---|
+| authored | **182**, range **000–181**, **contiguous** |
+| pre-programme (`< 123`) | **123** — below the plan's first assigned row |
+| pre-assigned (`123–131`) | **9** — waves 1, 2, 3A |
+| outside by rule (`≥ 132`) | **50** — *"assigned at wave entry, never before"* |
+| **unexplained** | **0** |
+| declared in the manifest | **all** — `environments.qa.applied_through = 181`, `excluded: []`, `pending: {}` |
+| applied / verified status | **NOT ESTABLISHED by this tool** — the manifest declares *intent*, not outcome |
+
+The tool refuses to infer status from a migration's number or from a file existing, and reports the
+applied state as not established rather than guessing it.
+
+**Incidentally, it also independently confirms the QA target from a tracked file:**
+`environments.qa.ref = eyqtldjqpgpljlqvpowh`.
+
+### Three bugs in my own tool, each caught by running it
+
+1. It reported **123 "unexplained"** migrations — 000–122 — because I assumed everything below the
+   `132+` floor must be pre-assigned. The table also has a **lower** bound: its first row is 123,
+   and everything before that is pre-programme history.
+2. It reported **all 182 as undeclared**, because I invented a per-file key format for
+   `expected_applied.json`. The manifest declares an `applied_through` frontier plus
+   `pending`/`excluded` — it never enumerates migrations.
+3. After fixing that, it *still* reported all 182 undeclared, because `applied_through` is the
+   **string** `"181"` and `Number.isInteger` rejected it. My own debug print showed it unquoted and
+   I misread my own output.
+
+Each would have shipped as a "finding". They are recorded because the pattern — a tool's defect
+presented as a discovery — is the same one that produced the Conflict 2 error in the first place.
+
+## Conflict 1 — the registry investigation
+
+| explanation | evidence |
+|---|---|
+| renamed or moved | **no.** `git log --all --diff-filter=A` over every branch finds no file ever added under any workstream-registry spelling |
+| superseded by an existing register | **no evidence either way.** Nothing records such a decision |
+| intended but never committed | **consistent with the evidence, unproven** |
+| referenced erroneously by queue metadata | **consistent, and the origin is identified**: the string entered in `fd86823` *"feat(v5): seed autonomous team bootstrap queue"*, whose message is a single line with **no body and no rationale** |
+
+**What the evidence does NOT establish**, and I will not infer it: whether a
+`V5_WORKSTREAM_REGISTRY` was ever intended to exist, and **who authorized the authoritative
+workstream source**. A search finding no file says nothing about intent.
+
+### Decision required — authoritative workstream source
+
+| option | consequence |
+|---|---|
+| **1** the three cited documents **are** the authority | the queue is already correct; `fd86823`'s string was simply an error. Cheapest, and loses nothing if a register was never intended |
+| **2** a `V5_WORKSTREAM_REGISTRY` **should exist** | the three-document citation is a stopgap; that register must be written, and the queue re-cited to it |
+| **3** a different existing register is the authority | name it; the queue is re-cited and the other documents demoted to sources |
+
+**Affected:** `.skills-agent/tasks.json` (`policy.queueAuthority`), every task's `sources`,
+`scripts/skills-agent-inventory-check.mjs` (which enforces that cited authority resolves).
+**Risk of deferring:** low — the queue cites documents that demonstrably govern it, and the
+unresolved authority question is recorded rather than hidden.

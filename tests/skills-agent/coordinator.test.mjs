@@ -450,6 +450,47 @@ section('11 · inventory evidence validator');
     r.status === 0, (r.stdout || r.stderr).trim().slice(0, 96));
 }
 
+// ═══ 12 · migration ↔ wave coverage, reproducible from tracked files ══════
+// The tool this exercises replaced a WRONG finding: "51 migrations beyond the
+// plan", produced by matching the pre-assignment table with a narrow regex and
+// reading absence from that table as absence from the plan. The plan's own
+// final row says migrations >= 132 are "assigned at wave entry, never before".
+section('12 · migration coverage reconciliation');
+{
+  const r = spawnSync(process.execPath,
+    [path.join(ROOT, 'scripts', 'check-migration-wave-coverage.mjs'), '--json'],
+    { encoding: 'utf8' });
+  check('the coverage tool runs clean against the tracked tree', r.status === 0,
+    (r.stderr || '').trim().slice(0, 80));
+  let out = null;
+  try { out = JSON.parse(r.stdout); } catch { /* reported below */ }
+  check('it emits a machine-readable comparison', !!out && Array.isArray(out.rows),
+    out ? `${out.rows.length} rows` : 'unparseable');
+
+  if (out) {
+    check('every authored migration is classified — none left unexplained',
+      out.summary.unexplained === 0 && out.rows.length === out.summary.authored,
+      `authored=${out.summary.authored} unexplained=${out.summary.unexplained}`);
+    check('the plan floor is read from the document, not hardcoded as a count',
+      out.summary.planFloor === 132 && out.summary.planAssignedRange === '123-131');
+    check('the three classes account for every migration exactly once',
+      out.summary.preProgramme + out.summary.preAssigned + out.summary.outsideByRule
+        === out.summary.authored,
+      `${out.summary.preProgramme}+${out.summary.preAssigned}+${out.summary.outsideByRule}`);
+    check('the authored sequence is contiguous — Gate 0.9 forbids renumbering to '
+        + 'close a gap, so a gap must surface rather than be tidied away',
+      out.summary.contiguous === true);
+    check('applied status is NOT inferred — it is reported as unestablished for '
+        + 'every migration, because tracked files declare intent not outcome',
+      out.rows.every((x) => /NOT ESTABLISHED HERE/.test(x.appliedStatus)));
+    check('the QA project is confirmed from the manifest itself, not from a name',
+      out.summary.qaRef === 'eyqtldjqpgpljlqvpowh', `ref=${out.summary.qaRef}`);
+    check('declaration is derived from applied_through, which is a STRING in the '
+        + 'manifest and must be coerced',
+      out.summary.allDeclared === true && out.summary.appliedThrough === 181);
+  }
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {
