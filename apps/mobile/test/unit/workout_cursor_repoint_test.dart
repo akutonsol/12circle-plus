@@ -130,7 +130,22 @@ void main() {
           .readAsStringSync();
       expect(src, contains('shouldRepointCursor('),
           reason: 'the decision is the extracted predicate, not an inline condition');
-      expect(src.contains('_currentSetId == null'), isFalse);
+
+      // CODE, not prose. The first version of this read `src` raw and FAILED in
+      // CI — because `shouldRepointCursor`'s own doc comment QUOTES the defective
+      // condition, `_currentSetId == null` included, to explain what was wrong
+      // with it. A detector tripping over its own documentation is the third
+      // instance of that shape here (SEC-G9's `can\w*`, the `<Icon>` glyph
+      // check), and this time it was written into a test whose comment describes
+      // that very pattern. Strip comments, and prove the strip worked.
+      final code = src
+          .replaceAll(RegExp(r'/\*.*?\*/', dotAll: true), '')
+          .replaceAll(RegExp(r'//[^\n]*'), '');
+      expect(src.contains('_currentSetId == null'), isTrue,
+          reason: 'the doc comment deliberately quotes the old condition; if this '
+              'is false, the strip below is no longer testing anything');
+      expect(code.contains('_currentSetId == null'), isFalse,
+          reason: 'the dead null comparison must not survive as CODE');
     });
   });
 }
