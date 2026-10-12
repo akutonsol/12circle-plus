@@ -19606,3 +19606,58 @@ cheap is that `dart analyze` runs in seconds — the equivalent mistake inside a
 shipped.
 
 **Production was not contacted.**
+
+### §211.4 · Both `ec03` gaps closed in the real harness, not in fixtures
+
+§208 and §209 were verified by a fixture table and a nine-line reproduction, because the disk
+would not allow the control itself to run. With space free, both were closed properly.
+
+**End-to-end, happy path.** `ec03_negative_control.sh` ran to completion locally, twice, **exit
+0**, printing the §208 judgement from real reporter output —
+
+```
+session-lost arm FAILED as declared    : EC-03 END-TO-END · a SESSION LOST MID-FLOW …
+failed-save arm still PASSED           : EC-03 END-TO-END · a SAVE THAT FAILS …
+2 test(s) judged by per-test result, not by summary text
+```
+
+— and `git status` empty afterwards.
+
+**And the failure path, which is the one that mattered.** §209's defect was only reachable when
+the control *dies while the tree is mutated*, and a green run can never exercise that. So a
+failure was induced in the real harness: the arm name the analyzer searches for was renamed in
+the test file, making `find()` die inside the mutated window.
+
+| observation | result |
+|---|---|
+| control exit code | **1** |
+| the rejection that fired | *"did not RUN at all … Absence is not evidence"* — §208's arm-never-ran guard, in the script rather than a fixture |
+| `intake_flow_screen.dart` afterwards | **restored** — §209's single-trap fix holds |
+| working tree after cleanup | clean |
+
+So the two assertions that previously rested on reasoning now rest on observation: the control
+**rejects for the right reason**, and it **leaves the tree as it found it when it rejects**. The
+renamed arm was restored and the tree re-verified clean.
+
+### §211.5 · And the live suites, locally — every `NOT RUN` in this campaign is now closed
+
+With CI finished on `bf2bb32` (all seven green) the QA project was free, so the suites that had
+only ever been run by CI during the disk constraint were run here, one runner at a time:
+
+| suite | local result |
+|---|---|
+| live security — `supabase/tests/security/run.mjs`, Node 20 | **1114/1114 across 22 suites** |
+| AI — `supabase/tests/ai/run.mjs` | **51/51 across 5 suites**, and **17/17** characterized defects still reproduce |
+| contract — offline | **PASS**, no unknown relation or column outside the 2-entry allowlist |
+| full `flutter test` | **2002 / 5 skipped** |
+| `dart analyze` | **0 errors · 0 warnings · 296 info** |
+| `ec03` control, both paths | **exit 0** green, **exit 1** on an induced mid-mutation failure with the tree restored |
+| Helix — `npm ci` · typecheck · build · `check:12circle` · self-test | **0 · 0 · 0 · 88/88 · 0** |
+
+The AI suite's second line is worth keeping in view: *"17/17 characterized defects still
+reproduce — a characterization that stops reproducing was either fixed (invert it) or drifted."*
+That is the inverse of a negative control, and it passed, which is its own small piece of
+evidence that nothing in this campaign silently closed a defect the record still calls open.
+
+**Nothing in this campaign now rests on CI alone, and nothing rests on local alone** — the two
+agree on every figure above.
