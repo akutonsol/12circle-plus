@@ -20236,3 +20236,66 @@ engine-writing branches; what is missing is the §2.1 governance authorization, 
 evidence and not mine.
 
 **Production was not contacted.**
+
+## §220 · Verifying the other four workstreams, and two items I had wrongly left open
+
+### §220.1 · `SEC-09` and `SEC-11` were never awaiting the `FG` header
+
+I listed *"whether `SEC-09`/`SEC-11` promote"* as an outstanding owner decision. **Both were
+already decided.**
+
+`SEC-11` was **promoted on 2026-08-25** on the live SQL evidence at `2a8d0b6` and is
+`VERIFIED_CLOSED`. `SEC-09` stays `ALREADY_FIXED` because the owner ruled that `FG-1`'s 5/5 is
+**necessary but not sufficient** — it closes when **`I-MIG-03`** reaches `VERIFIED_CLOSED`, and
+`I-MIG-03` is in records mode with enforcement deferred to Wave 2A and an authority question
+*escalated, not decided*.
+
+This is the **second time** I have asked the owner to promote something the register already
+closed — `ENV-3` was the first, and the cause is identical: I read a follow-up gap's `Covers`
+column as though it described the covered row's current state. The `Covers` column says what a gap
+*bears on*, not what that row *is*.
+
+It also makes the `FG`-header request **narrower**, not broader: correcting *"NOT implemented"*
+promotes nothing, because all three rows it touches are either closed or gated elsewhere.
+
+### §220.2 · The checkout fix, verified in the commit rather than in my report
+
+`09d4a83` carries `if (!mounted) return;` at line 188, immediately before `launchCheckout` at 189,
+with the pre-existing post-await check at 190. `git diff 09d4a83..HEAD` on
+`apps/mobile/lib/features/payments/` is **empty**, so nothing has drifted. Four `testWidgets`
+present and passing.
+
+The three navigator captures were re-audited for *ordering*, not analyzer silence: each is
+`await` → `!mounted` guard → `Navigator.of(context)` → `pop()` → `navigator.context`, with no
+`await` between the guard and the capture.
+
+**And my own audit tool produced four false positives**, two of them instructive:
+
+* `upgrade_screen.dart:127` — my sweep matched the word **"await" inside a comment** (*"never touch
+  a defunct context after an await"*). `messenger` is captured before any real await.
+* `coach_plan_screen.dart:90` — guarded by `&& mounted`, which my regex did not look for.
+* `manage_subscription_screen.dart:41–43` — `messenger` captured before the await, and
+  `context: context` is an **argument**, evaluated before suspension.
+
+The first is the **fifth** time in this programme a detector has matched prose instead of code —
+and this time it was a throwaway audit script I wrote to check for exactly that class of mistake.
+Zero genuine unflagged sites; `dart analyze` reports **0 errors, 0 warnings** and **0**
+`use_build_context_synchronously` in `lib/`.
+
+### §220.3 · `DESIGN-02` and Helix, re-verified rather than restated
+
+`D2-3` and `D2-4` stand as recorded in §217: the four absent components have **authorized visual
+values** (`admin.tokens.*` carries `control`, `danger`, `warning`, `radius`, `size`, `space`) and
+**no authorized anatomy or behaviour**, because `COMPONENTS.md` routes behaviour to page files that
+do not depict them. Nothing was drawn; `check-component-spec-authority.mjs` now fails if anything
+is.
+
+Helix, checked directly and not from the prior report: PR [#1](https://github.com/akutonsol/helix-design-system/pull/1)
+`c5b60d6` → `main` and PR [#2](https://github.com/akutonsol/helix-design-system/pull/2) `57d10c8` →
+`fix/12circle-violet-theme`, both **OPEN / UNSTABLE**; latest run `38184333945` (2026-10-11T23:27Z,
+`pull_request`) **failure**, whose **only** failure annotation is the billing message; violet **7**
+occurrences and lime **0** in the built theme; Q5 pin **`@phosphor-icons/react: 2.1.10`** intact.
+**No new run exists because no new push exists** — the hosted state is unchanged, and no hosted
+validation is claimed.
+
+**Production was not contacted.**

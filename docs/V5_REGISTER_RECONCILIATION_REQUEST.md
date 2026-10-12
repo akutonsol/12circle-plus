@@ -223,3 +223,50 @@ FG-1/FG-2 blocker"* in the ENV-3 static-guard step's comment, and `I-MIG-03` pri
 is FG-1"*. Both describe a blocker that has lifted. They are comments in a workflow file, not
 register entries, and editing CI configuration was not part of this instruction — so they are
 reported rather than touched.
+
+---
+
+## `SEC-09` and `SEC-11`, 2026-10-12 — **neither is awaiting the `FG` header**
+
+I previously listed *"whether `SEC-09`/`SEC-11` promote"* among the outstanding owner decisions.
+**That was wrong on both counts**, and reading the register's own status rows rather than reasoning
+from the `FG` rows' *Covers* column settles it.
+
+### `SEC-11` — **already closed**
+
+> *"**2026-08-25:** two further rows — **SEC-11** and **OBS-4** — are promoted on the live SQL
+> evidence at `2a8d0b6`."* (`:229`)
+> *"**`ENV-3`** and **`SEC-11`** — **already `VERIFIED_CLOSED`** … there is nothing to advance."*
+> (`:2045`)
+
+**Status: already closed with a stale request.** Nothing is requested. This is the **second** item
+I asked you to promote that the register had already closed on 2026-08-25 — `ENV-3` was the first.
+Both mistakes came from the same habit: reading a *follow-up gap's* `Covers` column as if it
+described the covered row's current state.
+
+### `SEC-09` — **decided, and gated on something else entirely**
+
+> *"**SEC-09** — **withdrawn from the promotion set by the owner ruling above.** FG-1's live half is
+> done and recorded; the row waits on **I-MIG-03's own closure**."* (`:1721`)
+> *"unchanged, `ALREADY_FIXED`. FG-1's 5/5 re-ran green, and under the owner ruling of 2026-08-25
+> that evidence is **necessary but not sufficient**: SEC-09 closes when **I-MIG-03** reaches
+> `VERIFIED_CLOSED`."* (`:2049`)
+> *"**SEC-09 is not promoted**: FG-1 returned 5 PASS / 0 FAIL live, but the owner ruling … requires
+> I-MIG-03 itself to reach `VERIFIED_CLOSED`, which it has not."* (`:229`)
+
+So `FG-1` going green **cannot** promote `SEC-09` — you already ruled that evidence necessary but
+not sufficient. Its gate is `I-MIG-03`, which is *"CI-verified in records mode, enforcement deferred
+to 2A"* and *"escalated as an authority question, not decided"*.
+
+**Status: blocked by a specific dependency** — `I-MIG-03`'s closure, which is itself
+architecture-gated (Wave 2A enforcement) **and** carries an undecided authority question. **Not an
+`FG`-header matter, and not requested here.**
+
+### What this leaves of the `FG` header request
+
+Only the **factual** half, unchanged from the evidence above: the header says
+*"NOT implemented"* for two rows whose wiring demonstrably runs in CI. Correcting that wording
+does **not** promote anything — `SEC-11` is closed, `SEC-09` is gated on `I-MIG-03`, and `ENV-3` is
+closed. That is now an argument **for** the edit being narrow and safe, not for deferring it.
+
+**Status: evidence complete, authorization missing.** The register remains **untouched**.
