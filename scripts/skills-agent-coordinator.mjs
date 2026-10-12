@@ -12,7 +12,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url), '..'));
 const TASKS_PATH = path.join(ROOT, '.skills-agent', 'tasks.json');
 const STATE_PATH = path.join(ROOT, '.skills-agent', 'state.json');
 const LOCK_PATH = path.join(ROOT, '.skills-agent', '.state.lock');
