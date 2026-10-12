@@ -19844,3 +19844,42 @@ billing decision, not a lint, and it is not mine.
 suite **518**; full suite **2002 / 5 skipped**.
 
 **Production was not contacted.**
+
+### §214.3 · The unauthenticated leg, extended from a sample to the class
+
+`d04` §1 probes `anon` against a **sample** of the API surface, and `predict_client` was the only
+class member in it. `SEC-R1`'s *Tests* field asks for the five to be asserted *"as a class, not
+individually"*, so the sample is now extended to the class — the last row of the FG-3 coverage
+matrix that could be filled without an owner decision.
+
+**And it is a different defence from the one §212 strengthened**, which is why it is worth its own
+assertion rather than being folded in:
+
+| caller | stopped by | observed |
+|---|---|---|
+| `anon` | the **GRANT** — the body never runs | **401** · `42501` · *"permission denied for function …"* |
+| authenticated non-owner | the **PREDICATE**, inside the body | **403** · `42501` · *"not authorized for this subject/program"* |
+
+Both carry `42501`, so a probe keyed on the code alone cannot tell them apart; it is the **status
+and the message** that distinguish the layers. A test that accepted either for both would not
+notice if one of the two defences disappeared.
+
+Negative-controlled: asserting the *predicate* message for an `anon` caller fails on all five.
+
+`d04` **71 → 76**; live suite **1124/1124 across 22 suites** (the arithmetic differs by one from
+§212's figure because of `D-02`'s documented 429 branch).
+
+### §214.4 · FG-3 coverage, as it now stands
+
+| leg | status |
+|---|---|
+| unauthenticated (`anon`) | **asserted** — all five, at the grant layer (§214.3) |
+| denial, authenticated non-owner | **asserted** — all five, 403 + `42501` + the member's own predicate (§212) |
+| source durability of the guard | **asserted** — I-MIG-03 reports all five `intact` with their defining migration |
+| **authorized positive caller** | **OWNER-BLOCKED** — `FG-3`, questions 1 and 2 |
+| **NULL scope** | **OWNER-BLOCKED** — question 2; a NULL-scope probe takes its 200 from the documented NULL arm |
+| **`service_role`** | **OWNER-BLOCKED** — question 4; passes via `auth.uid() IS NULL`, so it is liveness, not authorization |
+| **side effects of an allowed call** | **OWNER-BLOCKED** — questions 3 and 5; the engine writes four tables, and §2.1's pre-fix-failure clause cannot be met by a positive leg |
+
+Three of seven rows were fillable without a ruling, and all three are now filled. The remaining
+four are the substance of `FG-3` and are **not** implemented.

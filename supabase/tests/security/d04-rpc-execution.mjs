@@ -314,6 +314,27 @@ section('8. Every 116 engine wrapper refuses an unauthorized caller (class)');
           + `because ${fn} guards on ${wantsSubject ? 'can_act_for' : 'can_act_on_program'})`);
   }
 
+  // ── the UNAUTHENTICATED leg, for the whole class ────────────────────────
+  //
+  // §1 above probes anon against a SAMPLE of the API surface, and `predict_client`
+  // is the only class member in it. SEC-R1's Tests field asks for the five to be
+  // asserted "as a class, not individually", so the sample is extended to the
+  // class here.
+  //
+  // This is a DIFFERENT LAYER from the refusal above, and asserting the layer is
+  // the point. An anonymous caller is stopped by the GRANT — PostgREST returns
+  // 401 `42501` "permission denied for function …" and the body never runs. An
+  // authenticated non-owner reaches the body and is stopped by the PREDICATE —
+  // 403 `42501` "not authorized for this …". Two independent defences, and a
+  // probe that accepted either for both would not notice if one disappeared.
+  for (const fn of members) {
+    const r = await rpc('anon', fn, ARGS[fn]);
+    const msg = String(r.body?.message ?? '');
+    check(`${fn}() is refused to anon at the GRANT layer, before the body runs`,
+          r.status === 401 && msg.includes('permission denied for function'),
+          `status=${r.status} code=${r.body?.code ?? '-'} message=${JSON.stringify(msg).slice(0, 70)}`);
+  }
+
   // The engine implementations behind the class stay unreachable to a client
   // whatever the wrapper does — the second, independent leg of 116's design,
   // and the one that still holds for the stripped member.
