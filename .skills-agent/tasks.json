@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "policy": {
+    "queueAuthority": "V5_WORKSTREAM_REGISTRY_AND_MASTER_REMEDIATION_WAVES",
+    "doNotInferTaskCompletionFromLocalGreen": true,
+    "independentVerifierRequired": true,
+    "maxConcurrentTasks": 3
+  },
+  "tasks": [
+    {
+      "id": "V5-AUTO-001",
+      "summary": "Inspect and document the existing Skills-Agent runner entrypoint and persistence boundary",
+      "role": "architect",
+      "dependsOn": [],
+      "paths": [".claude/", ".skills-agent/", ".github/", "docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"],
+      "acceptance": [
+        "Identify actual agent launch command, runner lifecycle, durable workspace, and available credentials without printing secrets",
+        "Cite concrete repository paths and current commit evidence",
+        "Do not modify protected registers, secrets, production configuration, or release gates"
+      ],
+      "maxRetries": 2,
+      "risk": "read-only"
+    },
+    {
+      "id": "V5-AUTO-002",
+      "summary": "Implement a provider-specific adapter only after V5-AUTO-001 establishes the real runner contract",
+      "role": "implementer",
+      "dependsOn": ["V5-AUTO-001"],
+      "paths": [".skills-agent/", "scripts/skills-agent-coordinator.mjs", "tests/skills-agent/"],
+      "acceptance": [
+        "Launch bounded task envelopes through the existing runner without inventing credentials or provider APIs",
+        "Persist structured worker result, evidence references, blocker class, and retry state",
+        "Add tests for restart recovery, stale lease rejection, and failure escalation"
+      ],
+      "maxRetries": 2,
+      "risk": "bounded-code-change"
+    },
+    {
+      "id": "V5-AUTO-003",
+      "summary": "Reconcile the live V5 workstream inventory into a dependency-complete task queue",
+      "role": "integrator",
+      "dependsOn": ["V5-AUTO-001"],
+      "paths": [".skills-agent/tasks.json", "docs/MASTER_REMEDIATION_WAVES.md", "docs/RELEASE_GATES.md"],
+      "acceptance": [
+        "Read the current branch and current registries rather than relying on stale snapshot counts",
+        "Represent each task's dependencies, owned paths, migration number where applicable, acceptance checks, and governance boundary",
+        "Keep owner decisions and external blockers explicit; do not mark them resolved or silently alter source registers"
+      ],
+      "maxRetries": 2,
+      "risk": "inventory-and-planning"
+    }
+  ]
+}
