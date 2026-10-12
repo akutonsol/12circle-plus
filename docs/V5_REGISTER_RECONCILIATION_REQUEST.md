@@ -357,3 +357,67 @@ moves.
 Explicit approval to edit `docs/MASTER_REMEDIATION_REGISTRY.md` for **edits 1, 2, 3 — individually
 or in any subset**. All three are **evidence complete, authorization missing**. The register is
 **untouched**.
+
+---
+
+# `V5-REC-002` · two source-of-truth conflicts found during queue reconciliation
+
+Both were found by reading the current checkout, and **neither is resolved here**. Each needs an
+authorized decision about *which document moves*.
+
+## Conflict 1 — the queue cited an authority that does not exist
+
+`.skills-agent/tasks.json` declared:
+
+```
+"queueAuthority": "V5_WORKSTREAM_REGISTRY_AND_MASTER_REMEDIATION_WAVES"
+```
+
+**There is no `V5_WORKSTREAM_REGISTRY`.** It is not a tracked file under any spelling
+(`git ls-files | grep -iE 'workstream.*regist|regist.*workstream'` → empty), and no document in
+`docs/` carries that title. `MASTER_REMEDIATION_WAVES.md` does exist.
+
+**Taken here, because it is the queue's own metadata and not a governed register:** the field now
+names the three documents the tasks actually cite — `MASTER_REMEDIATION_WAVES.md`,
+`RELEASE_GATES.md`, `MASTER_REMEDIATION_REGISTRY.md` — with the prior text preserved in a note.
+
+**The question that remains yours:** was a `V5_WORKSTREAM_REGISTRY` ever intended to exist? If so,
+the three-document substitute is a stopgap and that register still needs writing. If not, the
+phantom name should also be removed wherever else it appears.
+
+## Conflict 2 — the authoritative wave plan stops 50 migrations short of the repository
+
+`MASTER_REMEDIATION_WAVES.md` maps migration numbers to waves, and its mapping **ends at 131**
+(Wave 3A — tasks 3A-9, 3A-10, 3A-11).
+
+The repository is far past that: `check-migration-manifest.mjs` reports **182 authored
+migration(s): 000–181**, frontier **181**. So **51 migrations exist beyond the plan's mapping.**
+
+This is not a numbering error; it is a scope statement that reality overtook. The consequence for
+this milestone is concrete: **an inventory derived only from the wave plan would omit 51
+migrations of real work**, and an inventory claiming to cover "remaining work" cannot be built from
+a plan that ends fifty migrations ago.
+
+**Not taken here.** `MASTER_REMEDIATION_WAVES.md` is the authoritative sequence this programme is
+required to preserve, and extending its mapping is a planning decision, not a transcription.
+
+**The decision requested** — one of:
+
+| option | consequence |
+|---|---|
+| **a** extend the wave mapping to 181 | the plan becomes a usable forward inventory again; someone must assign 132–181 to waves, which is real planning work |
+| **b** declare the mapping historical and closed at 131 | honest, and the plan stops being a forward planning instrument; a successor inventory is then required |
+| **c** supersede the document | the wave *sequence* is preserved as the governing order while the migration mapping moves elsewhere |
+
+**No edit was made to `MASTER_REMEDIATION_WAVES.md`.**
+
+## What was deliberately NOT enumerated
+
+The registry carries **319 canonical rows** (`37 + 48 + 24 + 177 + 4 + 29`), and it states of
+itself that *"the `P1–P3` register carries no per-row status field, so its movement is **not
+mechanically countable**"*. A per-row queue therefore cannot be derived from it **without
+inventing statuses**, which is the one thing the reconciliation brief forbids.
+
+So the queue holds the ten tasks for which direct repository evidence exists, and the row-by-row
+pass stays where the registry already defers it. **That is a stated limit of this inventory, not an
+omission by oversight.**
