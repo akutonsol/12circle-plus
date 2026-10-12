@@ -87,7 +87,7 @@ function recoverExpired(tasks, state) {
   for (const t of tasks) {
     const s = state.tasks[t.id];
     if (['CLAIMED', 'IMPLEMENTED', 'VERIFYING'].includes(s.status) && s.leaseExpiresAt && Date.parse(s.leaseExpiresAt) <= now) {
-      s.status = s.status === 'VERIFYING' ? 'IMPLEMENTED' : 'RETRY_WAIT';
+      s.status = 'RETRY_WAIT';
       s.lastFailure = 'LEASE_EXPIRED';
       s.leaseToken = null; s.leaseExpiresAt = null;
       s.history.push({ at: new Date().toISOString(), event: 'LEASE_EXPIRED', note: 'Recovered without assuming task success.' });
@@ -152,7 +152,7 @@ function main() {
       if (blocked.has(s.status)) s.blocker = { classification: s.status, note: note || 'No details supplied', at: now };
       else if (event === 'verified') s.evidence = { reference: note, recordedAt: now, verifiedBy: process.env.SKILLS_AGENT_ID ?? `pid:${process.pid}` };
       else if (event !== 'retry') s.blocker = null;
-      if (['verified', 'failed', 'blocked-owner', 'blocked-external', 'blocked-governance'].includes(event) || s.status === 'FAILED_TERMINAL') {
+      if (['verified', 'retry', 'failed', 'blocked-owner', 'blocked-external', 'blocked-governance'].includes(event) || s.status === 'FAILED_TERMINAL') {
         s.leaseToken = null; s.leaseExpiresAt = null;
       } else {
         s.leaseExpiresAt = new Date(Date.now() + DEFAULT_LEASE_MS).toISOString();
