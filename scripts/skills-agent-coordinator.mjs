@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -309,6 +310,44 @@ function main() {
         }
       }
       if (event === 'verified' && (!note || !/https?:\/\/|^artifact:|^ci:|^commit:/i.test(note))) throw new Error('verified requires an evidence reference (URL, artifact:, ci:, or commit:)');
+      // A `commit:` reference must RESOLVE. Format validation alone accepted a
+      // reference to a commit that did not contain the work: V5-AUTO-001 was
+      // verified with `commit:3216bfe`, the BASELINE, while its deliverable
+      // landed in 4c699dd. The shape was right and the content was wrong, and
+      // nothing looked.
+      //
+      // Bounded on purpose: this resolves the object, it does not judge whether
+      // the diff satisfies the acceptance criteria — a reviewer does that. It
+      // only refuses a reference that points at nothing.
+      if (event === 'verified') {
+        const m = /^commit:([0-9a-f]{7,40})$/i.exec(note.trim());
+        if (m) {
+          // "not a git repository" and "that commit does not exist" both make
+          // `cat-file` exit non-zero, and conflating them rejected VALID
+          // evidence whenever the coordinator ran outside a checkout — which is
+          // exactly how the sandboxed tests run. So the repo is established
+          // first, and only then is a missing object treated as a failure.
+          const inRepo = spawnSync('git', ['rev-parse', '--git-dir'],
+            { cwd: ROOT, stdio: 'ignore' });
+          const r = inRepo.error || inRepo.status !== 0
+            ? null
+            : spawnSync('git', ['cat-file', '-e', `${m[1]}^{commit}`],
+                { cwd: ROOT, stdio: 'ignore' });
+          if (r === null) {
+            // No git, or no repository here. The claim is unverifiable rather
+            // than false, and is recorded as such instead of silently passing.
+            s.evidenceCheck = 'UNVERIFIABLE_NO_REPO';
+          } else if (r.error) {
+            s.evidenceCheck = 'UNVERIFIABLE_NO_GIT';
+          } else if (r.status !== 0) {
+            throw new Error(
+              `evidence "${note.trim()}" does not resolve to a commit in this repository. `
+              + `An unresolvable reference is not evidence.`);
+          } else {
+            s.evidenceCheck = 'COMMIT_RESOLVED';
+          }
+        }
+      }
       if (event === 'retry' && s.attempts >= (task.maxRetries ?? MAX_RETRIES_DEFAULT) + 1) {
         s.status = 'FAILED_TERMINAL'; s.lastFailure = note || 'RETRY_BUDGET_EXHAUSTED';
       } else {

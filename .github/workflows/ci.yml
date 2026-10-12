@@ -193,6 +193,11 @@ jobs:
           # It drives the real script as a subprocess in disposable temp
           # sandboxes; it touches no QA project, no credential and no network.
           node scripts/skills-agent-coordinator.mjs --self-test
+          # Inventory evidence: a cited source must RESOLVE. Added after the
+          # queue was found declaring an authority that does not exist
+          # (V5_WORKSTREAM_REGISTRY) and after a task was verified against a
+          # commit that did not contain its deliverable.
+          node scripts/skills-agent-inventory-check.mjs
           node tests/skills-agent/coordinator.test.mjs
 
       - name: Function posture (definer search_path, anon EXECUTE)

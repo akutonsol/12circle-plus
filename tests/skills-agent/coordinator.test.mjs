@@ -399,6 +399,57 @@ section('9 · malformed task graphs are rejected, not silently accepted');
   }
 }
 
+// ═══ 10 · the REAL reconciled queue, not a synthetic one ═══════════════════
+// Everything above runs on fixtures. These assertions run against the queue
+// that actually ships, because a graph that only validates in a sandbox proves
+// nothing about the inventory.
+section('10 · the shipped .skills-agent/tasks.json');
+{
+  const realTasks = JSON.parse(
+    fs.readFileSync(path.join(ROOT, '.skills-agent', 'tasks.json'), 'utf8'));
+  const ids = realTasks.tasks.map((t) => t.id);
+
+  check('the coordinator validator accepts the shipped queue',
+    run(ROOT, ['validate']).ok, `${ids.length} tasks`);
+  check('every task id is unique', new Set(ids).size === ids.length);
+  check('every dependency resolves to a real task',
+    realTasks.tasks.every((t) => (t.dependsOn ?? []).every((d) => ids.includes(d))));
+  check('every task states runnerIndependent explicitly — it is what decides '
+      + 'whether work can start today',
+    realTasks.tasks.every((t) => typeof t.runnerIndependent === 'boolean'));
+  check('every task cites at least one authoritative source',
+    realTasks.tasks.every((t) => (t.sources ?? []).length > 0 || t.id === 'V5-INF-001'),
+    'V5-INF-001 is exempt only because its blocker is an external billing page');
+  check('the queue authority names documents, not a phantom register',
+    !/V5_WORKSTREAM_REGISTRY/.test(realTasks.policy?.queueAuthority ?? ''),
+    `authority=${(realTasks.policy?.queueAuthority ?? '').slice(0, 56)}…`);
+  check('requireAttestedIdentity is OFF with a recorded reason — turning it on '
+      + 'with no runner would block all verification',
+    realTasks.policy?.requireAttestedIdentity === false
+      && !!realTasks.policy?.requireAttestedIdentityNote);
+
+  // Blocked tasks must not be claimable, and that must not come from deleting
+  // their dependencies.
+  const blockedIds = realTasks.tasks.filter((t) => (t.blockers ?? []).length > 0).map((t) => t.id);
+  check('every task carrying a blocker says what would clear it',
+    realTasks.tasks.filter((t) => blockedIds.includes(t.id))
+      .every((t) => t.blockers.every((b) => b.kind && b.what && b.action)),
+    `${blockedIds.length} blocked task(s)`);
+  check('V5-AUTO-002 is blocked but KEEPS its dependency — blocked-ness is not '
+      + 'manufactured by removing edges',
+    realTasks.tasks.find((t) => t.id === 'V5-AUTO-002').dependsOn.includes('V5-AUTO-001'));
+}
+
+// ═══ 11 · inventory evidence must exist, not be asserted ═══════════════════
+section('11 · inventory evidence validator');
+{
+  const r = spawnSync(process.execPath,
+    [path.join(ROOT, 'scripts', 'skills-agent-inventory-check.mjs')],
+    { encoding: 'utf8' });
+  check('the shipped inventory passes the evidence validator',
+    r.status === 0, (r.stdout || r.stderr).trim().slice(0, 96));
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {
