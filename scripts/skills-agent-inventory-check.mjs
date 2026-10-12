@@ -79,6 +79,34 @@ for (const t of tasks) {
   }
 }
 
+// `policy.authorityScope` maps each governed concern to the document that
+// governs it, quoting that document's own header. Those paths must resolve too:
+// the field was added in the same change that corrected the authority from
+// three documents to five, and an unchecked mapping is how the original phantom
+// citation survived in the first place.
+for (const [concern, claim] of Object.entries(data.policy?.authorityScope ?? {})) {
+  const m = /^([^\s—-]+\.md)/.exec(String(claim).trim());
+  if (!m) {
+    problems.push(`policy.authorityScope["${concern}"] does not begin with a document path`);
+    continue;
+  }
+  checkedSources++;
+  if (!resolves(m[1])) {
+    problems.push(`policy.authorityScope["${concern}"] cites a document that does not resolve — ${m[1]}`);
+  }
+}
+
+// Every document named in queueAuthority should also appear in authorityScope,
+// or the queue claims an authority without saying what it governs.
+const scopeDocs = new Set(Object.values(data.policy?.authorityScope ?? {})
+  .map((v) => (/^([^\s—-]+\.md)/.exec(String(v).trim()) ?? [])[1])
+  .filter(Boolean));
+for (const a of String(data.policy?.queueAuthority ?? '').split('+').map((x) => x.trim())) {
+  if (a && a.includes('/') && !scopeDocs.has(a)) {
+    problems.push(`queueAuthority names ${a} but authorityScope never says what it governs`);
+  }
+}
+
 // The queue's own declared authority must resolve too — that is where the first
 // phantom citation was found.
 for (const a of String(data.policy?.queueAuthority ?? '').split('+').map((x) => x.trim())) {

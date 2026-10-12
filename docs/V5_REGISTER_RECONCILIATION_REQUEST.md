@@ -512,3 +512,56 @@ workstream source**. A search finding no file says nothing about intent.
 `scripts/skills-agent-inventory-check.mjs` (which enforces that cited authority resolves).
 **Risk of deferring:** low — the queue cites documents that demonstrably govern it, and the
 unresolved authority question is recorded rather than hidden.
+
+---
+
+# `MILESTONE 5` · queue authority resolved from the documents' own scope statements
+
+## My Milestone-3 correction was itself incomplete
+
+Milestone 3 replaced `fd86823`'s phantom `V5_WORKSTREAM_REGISTRY` with **three** documents. That
+was better than a fiction and still **wrong by omission**: it cited no authority for **owner
+decisions** or for **closure evidence**, two of the five things the queue depends on.
+
+Reading each candidate's own header settles it without inference:
+
+| concern | governing document | its own words |
+|---|---|---|
+| workstream sequencing | `MASTER_REMEDIATION_WAVES.md` | *"The dependency-aware execution plan"* |
+| release gates | `RELEASE_GATES.md` | *"Gate 0 through Gate 9"* |
+| remediation scope and finding status | `MASTER_REMEDIATION_REGISTRY.md` | *"The canonical finding ledger for the whole programme"* |
+| **owner decisions** | `MASTER_PRODUCT_DECISIONS.md` | *"Every unresolved decision extracted from workstreams A–N, deduplicated and owned"* |
+| **closure evidence** | `QA_CLOSURE_STANDARD.md` | *"What 'closed' means, and what it does not"* · *"Governs every status change in `MASTER_REMEDIATION_REGISTRY.md`"* |
+
+These are not five documents I selected. **All five declare themselves "Wave 0 deliverable", and
+they cross-reference each other as companions** — `MASTER_REMEDIATION_REGISTRY` names all four
+others; `QA_CLOSURE_STANDARD` names three; `RELEASE_GATES` names two. It is a closed,
+self-declaring set.
+
+So naming five rather than three **changes no governed decision** and is the smallest correction
+the existing authority supports. Taken, with provenance preserved in `policy.queueAuthorityNote`,
+and `policy.authorityScope` now records which document governs what, quoting each header.
+
+**The owner question is narrowed, not answered.** The five Wave 0 deliverables demonstrably cover
+all five concerns, so **nothing is missing for coverage** — which is evidence for option `1` (the
+cited documents *are* the authority). But evidence of absence still cannot establish intent:
+whether a `V5_WORKSTREAM_REGISTRY` was *meant* to exist remains yours to say.
+
+## Blockers revalidated — all seven still current
+
+| task | revalidation evidence | still blocked |
+|---|---|---|
+| `V5-AUTO-002` | `claude` CLI absent; `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` unset; `~/.claude/.credentials.json` absent; **0** self-hosted runners | **yes** |
+| `V5-GOV-001` | §2.1 line 43 still reads *"and the same probe demonstrably failed before the fix"*; last touched by `57335da`, which predates this campaign | **yes** |
+| `V5-GOV-002` | **2** occurrences of *"recorded, NOT implemented"* remain in the register | **yes** |
+| `V5-GOV-003` / `V5-GOV-004` | guard: *"no specification exists for the 4 components awaiting D2-3"* | **yes** |
+| `V5-GOV-005` | register still reads *"CI-verified in records mode, enforcement deferred to 2A"* and *"SEC-09 closes when I-MIG-03 reaches VERIFIED_CLOSED"* | **yes** |
+| `V5-INF-001` | Helix latest run still `38184333945` (2026-10-11), sole failure annotation still the billing message; no new run because no new push | **yes** |
+
+**No blocker was resolved by new evidence, and none was converted into eligible work.**
+
+## Eligibility: zero, verified
+
+All ten tasks: 3 `VERIFIED`, 2 `BLOCKED_EXTERNAL`, 1 `BLOCKED_GOVERNANCE`, 4 `BLOCKED_OWNER`.
+**No task is eligible**, and every blocked task retains its dependency edges — a test asserts that
+blocked-ness is never manufactured by deleting them.

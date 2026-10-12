@@ -1,14 +1,21 @@
 {
   "version": 1,
   "policy": {
-    "queueAuthority": "docs/MASTER_REMEDIATION_WAVES.md + docs/RELEASE_GATES.md + docs/MASTER_REMEDIATION_REGISTRY.md",
-    "queueAuthorityNote": "CORRECTED 2026-10-12. This previously read 'V5_WORKSTREAM_REGISTRY_AND_MASTER_REMEDIATION_WAVES'. No V5_WORKSTREAM_REGISTRY exists: it is not a tracked file and no document in docs/ carries that title. The three documents named above do exist and are what the tasks below actually cite.",
+    "queueAuthority": "docs/MASTER_REMEDIATION_WAVES.md + docs/RELEASE_GATES.md + docs/MASTER_REMEDIATION_REGISTRY.md + docs/MASTER_PRODUCT_DECISIONS.md + docs/QA_CLOSURE_STANDARD.md",
+    "queueAuthorityNote": "CORRECTED TWICE. fd86823 seeded 'V5_WORKSTREAM_REGISTRY_AND_MASTER_REMEDIATION_WAVES'; no such registry has ever been committed in any branch or history. Milestone 3 replaced it with three documents, which was still INCOMPLETE: it omitted the authority for owner decisions and for closure evidence. All five documents above declare themselves 'Wave 0 deliverable', state their own scope, and cross-reference each other as companions -- MASTER_REMEDIATION_REGISTRY names all four others. They are a closed, self-declaring set, so naming five rather than three changes no governed decision. Whether a V5_WORKSTREAM_REGISTRY was ever INTENDED remains an open owner question: evidence of absence does not establish intent.",
     "doNotInferTaskCompletionFromLocalGreen": true,
     "independentVerifierRequired": true,
     "requireAttestedIdentity": false,
     "requireAttestedIdentityNote": "Left false deliberately. No runner exists to mint identity tokens, so enabling it would block all verification. Turn it on when a runner holds SKILLS_AGENT_ATTESTATION_KEY out of worker reach.",
     "maxConcurrentTasks": 3,
-    "inventoryScopeNote": "This queue is NOT a per-finding enumeration of the registry's 319 canonical rows. The registry states of itself that 'the P1-P3 register carries no per-row status field, so its movement is not mechanically countable', so a row-by-row queue cannot be derived from it without inventing statuses. The tasks below are the items for which direct repository evidence exists. V5-REC-002 records the remaining enumeration as the registry's own deferred row-by-row pass."
+    "inventoryScopeNote": "This queue is NOT a per-finding enumeration of the registry's 319 canonical rows. The registry states of itself that 'the P1-P3 register carries no per-row status field, so its movement is not mechanically countable', so a row-by-row queue cannot be derived from it without inventing statuses. The tasks below are the items for which direct repository evidence exists. V5-REC-002 records the remaining enumeration as the registry's own deferred row-by-row pass.",
+    "authorityScope": {
+      "workstream sequencing": "docs/MASTER_REMEDIATION_WAVES.md — 'The dependency-aware execution plan'",
+      "release gates": "docs/RELEASE_GATES.md — 'Gate 0 through Gate 9'",
+      "remediation scope and finding status": "docs/MASTER_REMEDIATION_REGISTRY.md — 'The canonical finding ledger for the whole programme'",
+      "owner decisions": "docs/MASTER_PRODUCT_DECISIONS.md — 'Every unresolved decision extracted from workstreams A-N, deduplicated and owned'",
+      "closure evidence": "docs/QA_CLOSURE_STANDARD.md — \"What 'closed' means, and what it does not\"; 'Governs every status change in MASTER_REMEDIATION_REGISTRY.md'"
+    }
   },
   "tasks": [
     {
@@ -16,7 +23,12 @@
       "summary": "Inspect and document the existing Skills-Agent runner entrypoint and persistence boundary",
       "role": "architect",
       "dependsOn": [],
-      "paths": [".claude/", ".skills-agent/", ".github/", "docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"],
+      "paths": [
+        ".claude/",
+        ".skills-agent/",
+        ".github/",
+        "docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"
+      ],
       "acceptance": [
         "Identify actual agent launch command, runner lifecycle, durable workspace, and available credentials without printing secrets",
         "Cite concrete repository paths and current commit evidence",
@@ -26,17 +38,29 @@
       "risk": "read-only",
       "workstream": "autonomous-team",
       "wave": "n/a",
-      "sources": ["docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"],
-      "verification": ["node scripts/skills-agent-coordinator.mjs --self-test"],
-      "evidenceRequired": ["commit: containing the written finding"],
+      "sources": [
+        "docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"
+      ],
+      "verification": [
+        "node scripts/skills-agent-coordinator.mjs --self-test"
+      ],
+      "evidenceRequired": [
+        "commit: containing the written finding"
+      ],
       "runnerIndependent": true
     },
     {
       "id": "V5-AUTO-002",
       "summary": "Implement a provider-specific runner adapter once a real agent invocation mechanism and credential exist",
       "role": "implementer",
-      "dependsOn": ["V5-AUTO-001"],
-      "paths": [".skills-agent/", "scripts/skills-agent-coordinator.mjs", "tests/skills-agent/"],
+      "dependsOn": [
+        "V5-AUTO-001"
+      ],
+      "paths": [
+        ".skills-agent/",
+        "scripts/skills-agent-coordinator.mjs",
+        "tests/skills-agent/"
+      ],
       "acceptance": [
         "Invoke real agents through a documented provider interface; never simulate a worker",
         "Receive role and identity from the runner, not from worker-set environment variables",
@@ -46,21 +70,43 @@
       "risk": "bounded-code-change",
       "workstream": "autonomous-team",
       "wave": "n/a",
-      "sources": ["docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"],
-      "verification": ["node tests/skills-agent/coordinator.test.mjs"],
-      "evidenceRequired": ["a real agent invocation, not a subprocess stand-in"],
+      "sources": [
+        "docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"
+      ],
+      "verification": [
+        "node tests/skills-agent/coordinator.test.mjs"
+      ],
+      "evidenceRequired": [
+        "a real agent invocation, not a subprocess stand-in"
+      ],
       "runnerIndependent": false,
       "blockers": [
-        { "kind": "external", "what": "no agent invocation mechanism", "evidence": "no claude binary on PATH, /usr/local/bin, /opt/homebrew/bin, ~/.claude/local, ~/.local/bin, /Applications or any nvm bin", "action": "provide a supported agent entrypoint" },
-        { "kind": "external", "what": "no credential", "evidence": "ANTHROPIC_API_KEY, CLAUDE_API_KEY, CLAUDE_CODE_OAUTH_TOKEN all unset; ~/.claude/.credentials.json absent", "action": "provision a credential; must not be guessed" }
+        {
+          "kind": "external",
+          "what": "no agent invocation mechanism",
+          "evidence": "no claude binary on PATH, /usr/local/bin, /opt/homebrew/bin, ~/.claude/local, ~/.local/bin, /Applications or any nvm bin",
+          "action": "provide a supported agent entrypoint"
+        },
+        {
+          "kind": "external",
+          "what": "no credential",
+          "evidence": "ANTHROPIC_API_KEY, CLAUDE_API_KEY, CLAUDE_CODE_OAUTH_TOKEN all unset; ~/.claude/.credentials.json absent",
+          "action": "provision a credential; must not be guessed"
+        }
       ]
     },
     {
       "id": "V5-AUTO-003",
       "summary": "Reconcile the live V5 workstream inventory into a dependency-complete queue",
       "role": "integrator",
-      "dependsOn": ["V5-AUTO-001"],
-      "paths": [".skills-agent/tasks.json", "tests/skills-agent/", "docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"],
+      "dependsOn": [
+        "V5-AUTO-001"
+      ],
+      "paths": [
+        ".skills-agent/tasks.json",
+        "tests/skills-agent/",
+        "docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"
+      ],
       "acceptance": [
         "Every task cites an authoritative source document that exists in this checkout",
         "The graph is acyclic, every dependency resolves, and blocked tasks are not made eligible by removing dependencies",
@@ -70,17 +116,30 @@
       "risk": "inventory-and-planning",
       "workstream": "autonomous-team",
       "wave": "n/a",
-      "sources": ["docs/MASTER_REMEDIATION_WAVES.md", "docs/RELEASE_GATES.md", "docs/MASTER_REMEDIATION_REGISTRY.md"],
-      "verification": ["node scripts/skills-agent-coordinator.mjs validate", "node tests/skills-agent/coordinator.test.mjs"],
-      "evidenceRequired": ["commit: containing the reconciled queue and its tests"],
+      "sources": [
+        "docs/MASTER_REMEDIATION_WAVES.md",
+        "docs/RELEASE_GATES.md",
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "verification": [
+        "node scripts/skills-agent-coordinator.mjs validate",
+        "node tests/skills-agent/coordinator.test.mjs"
+      ],
+      "evidenceRequired": [
+        "commit: containing the reconciled queue and its tests"
+      ],
       "runnerIndependent": true
     },
     {
       "id": "V5-REC-002",
       "summary": "Record the two source-of-truth conflicts found during reconciliation and request the authorized resolution for each",
       "role": "integrator",
-      "dependsOn": ["V5-AUTO-003"],
-      "paths": ["docs/V5_REGISTER_RECONCILIATION_REQUEST.md"],
+      "dependsOn": [
+        "V5-AUTO-003"
+      ],
+      "paths": [
+        "docs/V5_REGISTER_RECONCILIATION_REQUEST.md"
+      ],
       "acceptance": [
         "State the missing V5_WORKSTREAM_REGISTRY authority and what should replace it",
         "CORRECTED by Milestone 4: the plan does not stop at 131. Its table assigns 123-131 and its final row reads \"132+ | 4+ | Assigned at wave entry, never before\", so migrations >= 132 are outside pre-assignment BY RULE. There is no migration discrepancy to reconcile; state that finding and its evidence instead",
@@ -90,9 +149,16 @@
       "risk": "documentation-request",
       "workstream": "governance",
       "wave": "0",
-      "sources": ["docs/MASTER_REMEDIATION_WAVES.md", "supabase/expected_applied.json"],
-      "verification": ["node supabase/scripts/check-migration-manifest.mjs"],
-      "evidenceRequired": ["commit: containing the recorded conflicts"],
+      "sources": [
+        "docs/MASTER_REMEDIATION_WAVES.md",
+        "supabase/expected_applied.json"
+      ],
+      "verification": [
+        "node supabase/scripts/check-migration-manifest.mjs"
+      ],
+      "evidenceRequired": [
+        "commit: containing the recorded conflicts"
+      ],
       "runnerIndependent": true
     },
     {
@@ -100,7 +166,10 @@
       "summary": "Obtain the governance ruling on QA_CLOSURE_STANDARD.md §2.1 so FG-3's positive legs can be assessed for closure",
       "role": "owner-decision",
       "dependsOn": [],
-      "paths": ["docs/QA_CLOSURE_STANDARD.md", "docs/V5_FG3_DECISION_REQUEST.md"],
+      "paths": [
+        "docs/QA_CLOSURE_STANDARD.md",
+        "docs/V5_FG3_DECISION_REQUEST.md"
+      ],
       "acceptance": [
         "A recorded ruling: approve, reject, or amend the proposed scoping of the pre-fix-failure clause to denial evidence",
         "No edit to QA_CLOSURE_STANDARD.md without that ruling"
@@ -109,12 +178,24 @@
       "risk": "governance-decision",
       "workstream": "security-evidence",
       "wave": "2",
-      "sources": ["docs/V5_FG3_DECISION_REQUEST.md", "docs/QA_CLOSURE_STANDARD.md"],
-      "verification": ["node supabase/tests/security/d23-fg3-positive-legs.mjs"],
-      "evidenceRequired": ["a recorded governance ruling"],
+      "sources": [
+        "docs/V5_FG3_DECISION_REQUEST.md",
+        "docs/QA_CLOSURE_STANDARD.md"
+      ],
+      "verification": [
+        "node supabase/tests/security/d23-fg3-positive-legs.mjs"
+      ],
+      "evidenceRequired": [
+        "a recorded governance ruling"
+      ],
       "runnerIndependent": true,
       "blockers": [
-        { "kind": "governance", "what": "§2.1's pre-fix-failure clause cannot be satisfied by a positive leg where the fix ADDED a guard", "evidence": "docs/QA_CLOSURE_STANDARD.md line 43; evidence complete at d23 37/37", "action": "rule on the decision record" }
+        {
+          "kind": "governance",
+          "what": "§2.1's pre-fix-failure clause cannot be satisfied by a positive leg where the fix ADDED a guard",
+          "evidence": "docs/QA_CLOSURE_STANDARD.md line 43; evidence complete at d23 37/37",
+          "action": "rule on the decision record"
+        }
       ]
     },
     {
@@ -122,7 +203,10 @@
       "summary": "Authorize the three FG-header wording edits in MASTER_REMEDIATION_REGISTRY.md",
       "role": "owner-decision",
       "dependsOn": [],
-      "paths": ["docs/MASTER_REMEDIATION_REGISTRY.md", "docs/V5_REGISTER_RECONCILIATION_REQUEST.md"],
+      "paths": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/V5_REGISTER_RECONCILIATION_REQUEST.md"
+      ],
       "acceptance": [
         "Authorize or decline each of the three edits individually",
         "The register is not edited without that authorization"
@@ -131,12 +215,24 @@
       "risk": "protected-register-edit",
       "workstream": "governance",
       "wave": "2",
-      "sources": ["docs/V5_REGISTER_RECONCILIATION_REQUEST.md"],
-      "verification": ["none — this is a decision, not an implementation"],
-      "evidenceRequired": ["explicit owner authorization to edit a protected register"],
+      "sources": [
+        "docs/V5_REGISTER_RECONCILIATION_REQUEST.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md"
+      ],
+      "verification": [
+        "none — this is a decision, not an implementation"
+      ],
+      "evidenceRequired": [
+        "explicit owner authorization to edit a protected register"
+      ],
       "runnerIndependent": true,
       "blockers": [
-        { "kind": "owner", "what": "edits to a protected register require explicit authorization", "evidence": "headers at :1603 and :1836 state 'NOT implemented' while the wiring runs in CI (step conclusion success)", "action": "authorize edits 1, 2, 3 individually or in any subset" }
+        {
+          "kind": "owner",
+          "what": "edits to a protected register require explicit authorization",
+          "evidence": "headers at :1603 and :1836 state 'NOT implemented' while the wiring runs in CI (step conclusion success)",
+          "action": "authorize edits 1, 2, 3 individually or in any subset"
+        }
       ]
     },
     {
@@ -144,7 +240,10 @@
       "summary": "Supply the missing design authority for radio, date range, toast and inline error (D2-3)",
       "role": "owner-decision",
       "dependsOn": [],
-      "paths": ["docs/V5_DESIGN_AUTHORITY_REQUEST.md", "docs/design/admin-dashboard/COMPONENT-SPECS.md"],
+      "paths": [
+        "docs/V5_DESIGN_AUTHORITY_REQUEST.md",
+        "docs/design/admin-dashboard/COMPONENT-SPECS.md"
+      ],
       "acceptance": [
         "Per component: supply the behaviour, rule it redundant or out of V1 scope, name an existing pattern that governs it, or defer",
         "No component anatomy, interaction state, validation or accessibility behaviour is invented"
@@ -153,12 +252,25 @@
       "risk": "design-authority-decision",
       "workstream": "design",
       "wave": "7",
-      "sources": ["docs/V5_DESIGN_AUTHORITY_REQUEST.md", "931218b:docs/design/admin-dashboard/COMPONENTS.md"],
-      "verification": ["node supabase/scripts/check-component-spec-authority.mjs"],
-      "evidenceRequired": ["a recorded design ruling per component"],
+      "sources": [
+        "docs/V5_DESIGN_AUTHORITY_REQUEST.md",
+        "931218b:docs/design/admin-dashboard/COMPONENTS.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md"
+      ],
+      "verification": [
+        "node supabase/scripts/check-component-spec-authority.mjs"
+      ],
+      "evidenceRequired": [
+        "a recorded design ruling per component"
+      ],
       "runnerIndependent": true,
       "blockers": [
-        { "kind": "owner", "what": "the four components are named in COMPONENTS.md but depicted in no approved screen; their behaviour is routed to page files that do not contain them", "evidence": "tokens supply colour/radius/size only", "action": "decide per component" }
+        {
+          "kind": "owner",
+          "what": "the four components are named in COMPONENTS.md but depicted in no approved screen; their behaviour is routed to page files that do not contain them",
+          "evidence": "tokens supply colour/radius/size only",
+          "action": "decide per component"
+        }
       ]
     },
     {
@@ -166,7 +278,9 @@
       "summary": "Rule whether the audit row's before/after field list is a sufficient specification or a designed diff treatment is required (D2-4)",
       "role": "owner-decision",
       "dependsOn": [],
-      "paths": ["docs/V5_DESIGN_AUTHORITY_REQUEST.md"],
+      "paths": [
+        "docs/V5_DESIGN_AUTHORITY_REQUEST.md"
+      ],
       "acceptance": [
         "An explicit ruling: the field list is the specification, or a diff design is required",
         "The field list is not treated as a designed diff by default"
@@ -175,12 +289,24 @@
       "risk": "design-authority-decision",
       "workstream": "design",
       "wave": "7",
-      "sources": ["docs/V5_DESIGN_AUTHORITY_REQUEST.md"],
-      "verification": ["none — this is a decision, not an implementation"],
-      "evidenceRequired": ["a recorded design ruling"],
+      "sources": [
+        "docs/V5_DESIGN_AUTHORITY_REQUEST.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md"
+      ],
+      "verification": [
+        "none — this is a decision, not an implementation"
+      ],
+      "evidenceRequired": [
+        "a recorded design ruling"
+      ],
       "runnerIndependent": true,
       "blockers": [
-        { "kind": "owner", "what": "COMPONENTS.md names 'audit row with before/after diff'; the screens show the field list once, in a table cell, and draw no diff", "evidence": "docs/V5_DESIGN_AUTHORITY_REQUEST.md", "action": "rule D2-4a or D2-4b" }
+        {
+          "kind": "owner",
+          "what": "COMPONENTS.md names 'audit row with before/after diff'; the screens show the field list once, in a table cell, and draw no diff",
+          "evidence": "docs/V5_DESIGN_AUTHORITY_REQUEST.md",
+          "action": "rule D2-4a or D2-4b"
+        }
       ]
     },
     {
@@ -188,7 +314,9 @@
       "summary": "Resolve I-MIG-03's authority question and Wave 2A enforcement, which together gate SEC-09",
       "role": "owner-decision",
       "dependsOn": [],
-      "paths": ["docs/MASTER_REMEDIATION_REGISTRY.md"],
+      "paths": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
       "acceptance": [
         "I-MIG-03's escalated authority question is ruled",
         "Wave 2A enforcement is authorized or deferred explicitly",
@@ -198,13 +326,30 @@
       "risk": "governance-decision",
       "workstream": "security-evidence",
       "wave": "2A",
-      "sources": ["docs/MASTER_REMEDIATION_REGISTRY.md"],
-      "verification": ["node supabase/tests/security/migration-durability-guard.mjs"],
-      "evidenceRequired": ["a recorded ruling on I-MIG-03"],
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md"
+      ],
+      "verification": [
+        "node supabase/tests/security/migration-durability-guard.mjs"
+      ],
+      "evidenceRequired": [
+        "a recorded ruling on I-MIG-03"
+      ],
       "runnerIndependent": true,
       "blockers": [
-        { "kind": "owner", "what": "SEC-09 closes only when I-MIG-03 reaches VERIFIED_CLOSED; the owner ruled FG-1's 5/5 necessary but NOT sufficient", "evidence": "MASTER_REMEDIATION_REGISTRY.md :1721, :2049, :229", "action": "rule the I-MIG-03 authority question and Wave 2A enforcement" },
-        { "kind": "architecture", "what": "I-MIG-03 runs in records mode; enforcement is deferred to Wave 2A", "evidence": "registry :2049", "action": "authorize Wave 2A" }
+        {
+          "kind": "owner",
+          "what": "SEC-09 closes only when I-MIG-03 reaches VERIFIED_CLOSED; the owner ruled FG-1's 5/5 necessary but NOT sufficient",
+          "evidence": "MASTER_REMEDIATION_REGISTRY.md :1721, :2049, :229",
+          "action": "rule the I-MIG-03 authority question and Wave 2A enforcement"
+        },
+        {
+          "kind": "architecture",
+          "what": "I-MIG-03 runs in records mode; enforcement is deferred to Wave 2A",
+          "evidence": "registry :2049",
+          "action": "authorize Wave 2A"
+        }
       ]
     },
     {
@@ -222,12 +367,23 @@
       "risk": "external-infrastructure",
       "workstream": "design-system",
       "wave": "n/a",
-      "sources": ["docs/V5_HELIX_CI_UNBLOCK_REQUEST.md"],
-      "verification": ["the hosted run's own job conclusions"],
-      "evidenceRequired": ["a hosted Helix run that reaches step 1"],
+      "sources": [
+        "docs/V5_HELIX_CI_UNBLOCK_REQUEST.md"
+      ],
+      "verification": [
+        "the hosted run's own job conclusions"
+      ],
+      "evidenceRequired": [
+        "a hosted Helix run that reaches step 1"
+      ],
       "runnerIndependent": true,
       "blockers": [
-        { "kind": "external", "what": "GitHub Actions billing on the akutonsol User account", "evidence": "run 38184333945, job 'Theme contract (12circle)', steps=0, sole failure annotation is the billing message", "action": "resolve at https://github.com/settings/billing" }
+        {
+          "kind": "external",
+          "what": "GitHub Actions billing on the akutonsol User account",
+          "evidence": "run 38184333945, job 'Theme contract (12circle)', steps=0, sole failure annotation is the billing message",
+          "action": "resolve at https://github.com/settings/billing"
+        }
       ]
     }
   ]

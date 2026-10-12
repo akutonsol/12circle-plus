@@ -423,6 +423,28 @@ section('10 · the shipped .skills-agent/tasks.json');
   check('the queue authority names documents, not a phantom register',
     !/V5_WORKSTREAM_REGISTRY/.test(realTasks.policy?.queueAuthority ?? ''),
     `authority=${(realTasks.policy?.queueAuthority ?? '').slice(0, 56)}…`);
+
+  // The authority is the five mutually-referencing Wave 0 deliverables. Three
+  // was the previous answer and it was INCOMPLETE — it omitted the authority
+  // for owner decisions and for closure evidence, so the queue cited no source
+  // for two of the five things it depends on.
+  const authorityDocs = String(realTasks.policy?.queueAuthority ?? '')
+    .split('+').map((x) => x.trim()).filter(Boolean);
+  check('all five Wave 0 deliverables are named as authority',
+    authorityDocs.length === 5
+      && ['MASTER_REMEDIATION_WAVES', 'RELEASE_GATES', 'MASTER_REMEDIATION_REGISTRY',
+          'MASTER_PRODUCT_DECISIONS', 'QA_CLOSURE_STANDARD']
+         .every((d) => authorityDocs.some((a) => a.includes(d))),
+    `${authorityDocs.length} documents`);
+  check('each names what it governs, quoted from its own header',
+    Object.keys(realTasks.policy?.authorityScope ?? {}).length === 5,
+    Object.keys(realTasks.policy?.authorityScope ?? {}).join(', '));
+  check('every authority document exists in this checkout',
+    authorityDocs.every((a) => fs.existsSync(path.join(ROOT, a))));
+  check('the owner-decision tasks cite the owner-decision authority',
+    ['V5-GOV-002', 'V5-GOV-003', 'V5-GOV-004', 'V5-GOV-005'].every((id) =>
+      realTasks.tasks.find((t) => t.id === id).sources
+        .includes('docs/MASTER_PRODUCT_DECISIONS.md')));
   check('requireAttestedIdentity is OFF with a recorded reason — turning it on '
       + 'with no runner would block all verification',
     realTasks.policy?.requireAttestedIdentity === false
