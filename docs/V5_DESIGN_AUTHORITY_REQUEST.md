@@ -155,15 +155,48 @@ because `DESIGN-02`'s gap is the **specification**, not an implementation count.
 component derived without an approved spec as progress against the item that asks for approved
 specs would be the inference the standing constraints forbid.
 
-### Options
+### `DESIGN-02` is TWO decisions, and answering it as one cannot work
 
-`1` **supply the per-component sheet** — anatomy, variants, spacing annotations, for all 32 ·
-`2` **rule that the six screens suffice** for the 24 that are derivable, **and** supply or defer
-the nine that are not in the screens *(this is option 2 made honest; the ruling as written in
-`COMPONENTS.md` does not distinguish them)* ·
-`3` **ratify `COMPONENT-SPECS.md` as authoritative** for the 24 and record the nine as out of scope
-for V1 ·
-`4` defer.
+The ruling `COMPONENTS.md` offers — *"the six screens are sufficient specification"* — does not
+distinguish the components the screens **depict** from the ones they **do not**. Measured across
+the six non-superseded `screens/*.dc.html` at `931218b`, all nine undepicted components return
+**zero** occurrences: `toast` · `skeleton` · `type="radio"` · `date` · `timeline` · `read-only` ·
+`permission` · `audit row` · `before/after` / `diff`. So a single ruling would silently decide two
+different things, and one of them it cannot decide at all.
+
+#### `D2-1` · Are the six screens authoritative for the components they DO depict?
+
+**Scope: the 24 with a specification section in `COMPONENT-SPECS.md`.** These are derived from the
+screens' inline styles — the only available source, since the referenced `_ds/nocturne-…` bundle is
+absent from the package (0 files). The Flutter admin surfaces already ship against these values.
+
+| option | consequence |
+|---|---|
+| `D2-1a` **ratify** — the screens are authoritative, and `COMPONENT-SPECS.md` is their faithful derivation | the shipped values become authorized. A later visual correction is a **change**, not a bug |
+| `D2-1b` **supply the sheet** for these 24 — anatomy, variants, spacing annotations | the derivation is replaced by designed specification; any divergence found becomes a **bug** |
+| `D2-1c` **defer** | surfaces keep shipping against values that are provisional rather than authorized |
+
+**What engineering cannot supply:** whether a faithful derivation is the *intended* design. The
+derivation can be accurate and still be the wrong composition.
+
+#### `D2-2` · What authority governs the nine the screens do NOT depict?
+
+**This is the decision `D2-1` cannot reach.** A component absent from the screens cannot be derived
+from them, so *"the screens suffice"* leaves these nine with **no authority at all** — not with
+derived authority. Three of the nine are `A11` **state surfaces** (`skeleton`,
+`permission-denied panel`, `read-only banner`) that `SCREEN-INVENTORY.md` designs as *patterns*
+while `COMPONENTS.md` also lists them as *components*, so for those the question is partly whether
+the pattern already is the specification.
+
+| option | consequence |
+|---|---|
+| `D2-2a` **supply specifications** for the nine | closes `DESIGN-02` completely |
+| `D2-2b` **rule that for the three `A11` state surfaces, `SCREEN-INVENTORY.md`'s pattern IS the specification**, and supply or defer the remaining six (`timeline`, `audit row with before/after diff`, `radio`, `date range`, `toast`, `inline error`) | closes the overlap without inventing anything, and narrows the open set from nine to six |
+| `D2-2c` **record all nine as out of scope for V1** | `DESIGN-02` closes as scoped-out rather than specified. Any later need for them reopens it |
+| `D2-2d` **defer** | the nine stay unspecified and unowned |
+
+**Engineering has built none of the nine against an invented spec**, and will not. Where one is
+needed, the absence is the finding.
 
 **What it blocks.** No current surface — the Flutter admin pages ship against the derived values.
 It governs whether those values are **authoritative** or **provisional**, and therefore whether a

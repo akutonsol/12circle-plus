@@ -19241,3 +19241,108 @@ stated condition is now observed to pass. **Both are reported for authorization,
 satisfied is a §2.1 judgement and is not claimed here.
 
 **Production was not contacted.**
+
+## §207 · Three decisions made answerable — and `FG-3` is under-specified in four ways
+
+No implementation this section. The frontier was already at the owner boundary, so the work was to
+make each remaining decision answerable without the owner re-deriving the evidence.
+
+### §207.1 · `FG-3` cannot be implemented as written, and the reasons are not pedantic
+
+`FG-3` asks for *"the owning coach → 200 and `service_role` → 200 for each of the five
+wrappers"*. Four things stop that being a build instruction:
+
+**Two of the five wrappers have no owning coach.** The class splits by predicate, which `FG-3`'s
+wording does not capture: `evaluate_week`, `regenerate_program` and `materialize_program_week`
+guard on `can_act_on_program(p_program_id)`; **`predict_client` and `assemble_weekly_review` guard
+on `can_act_for(p_subject)`** — no program, no coach_id, nothing to own. The authorized positive
+caller for that pair is a different question with a different answer.
+
+**A naive positive probe would pass without testing anything.** Both predicates admit a NULL
+scope, and say so in their own comments — `program IS NULL`, and `subject IS NULL -- unscoped call,
+subject defaulted`. These are documented design, not defects; they keep optional-parameter call
+sites working and let the internal engine call through. But a probe that passes NULL **takes its
+200 from the NULL arm**. The existing negative probe depends on the mirror-image property, passing
+a non-program uuid so the predicate is false. So the positive contract has to require a *real*
+owned program, and that has to be stated rather than assumed.
+
+**`service_role → 200` is not authorization evidence.** It passes via the
+`(SELECT auth.uid()) IS NULL` arm — the internal-engine arm. It would pass identically if every
+relationship arm were deleted. It proves the engine path is reachable, which is liveness.
+
+**And "→ 200" is not sufficient by this repository's own rule** that an HTTP status alone never
+proves a write. Each wrapper delegates to an engine that writes to `decision_traces`,
+`communications`, `predictions` or `program_versions`. A no-op engine returns 200 too.
+
+### §207.2 · The part only the owner can resolve: the closure standard disagrees with itself here
+
+`QA_CLOSURE_STANDARD.md` §2.1 defines **VERIFIED LIVE** as a real request that reproduces the
+correct behaviour *"**and the same probe demonstrably failed before the fix**"*.
+
+**A positive leg cannot satisfy that.** Before the fix the wrapper had **no guard** — so the owning
+coach got **200 then as well**. The pre-fix state was *more* permissive, not less. There is no
+pre-fix failure to show, and manufacturing one would mean reverting an applied migration, which §8
+forbids.
+
+The definition is written for **denial** evidence. A positive leg is the opposite shape, and
+`FG-3` is a positive leg. That is a governance question, not an engineering one, and it is the
+reason `FG-3`'s registry row insists on owner assignment rather than listing a task.
+
+What *was* established, so the assignment is cheap: `KNOWN_OPEN` is now **`[]`** — migration 124
+restored the last stripped guard, so no member is exempt from probing any more — and a coach-owned
+`workout_programs` fixture is already established practice in `d05` and `d17`. The fixture
+mechanism is not the blocker. **The side effects are**: a positive probe executes the engine and
+writes to tables other suites measure, `decision_traces` among them at 979 rows. `d04` §8 already
+declined to run such a probe once, on exactly that reasoning.
+
+Written up as `V5_FG3_DECISION_REQUEST.md`. **`FG-3` is not closed and nothing was implemented.**
+
+### §207.3 · `DESIGN-02` was one question that cannot be answered once
+
+The ruling on offer — *"the six screens are sufficient specification"* — silently decides two
+different things, and one of them it cannot decide at all. Split into:
+
+* **`D2-1`** · are the screens authoritative for the **24** components they depict? That ratifies
+  `COMPONENT-SPECS.md`'s derivation, or replaces it with a designed sheet. Its real consequence is
+  whether a later visual correction is a **change** or a **bug**.
+* **`D2-2`** · what governs the **nine** they do not depict? Measured across the six
+  non-superseded `screens/*.dc.html` at `931218b`, all nine return **zero** occurrences — `toast`,
+  `skeleton`, `type="radio"`, `date`, `timeline`, `read-only`, `permission`, `audit row`,
+  `before/after`/`diff`. **A component absent from the screens cannot be derived from them**, so
+  "the screens suffice" leaves these nine with *no* authority rather than derived authority.
+
+`D2-2` carries an option worth naming because it costs nothing: three of the nine are `A11` state
+surfaces — `skeleton`, `permission-denied panel`, `read-only banner` — which
+`SCREEN-INVENTORY.md` already designs as **patterns** while `COMPONENTS.md` also lists them as
+**components**. Ruling that the pattern *is* the specification for those three closes the overlap
+without inventing anything and narrows the open set from nine to six.
+
+### §207.4 · Helix: the minimum action is a billing fix, and `main` turns out to be unprotected
+
+The hosted-CI blocker is an account matter — *"recent account payments have failed or your
+spending limit needs to be increased"* — and the asymmetry is explained: `12circlefitness` is
+**public** (free minutes), `helix-design-system` is **private** (paid). The minimum owner action
+is resolving Actions billing. **Making the repository public would also work and is NOT the
+minimum**: it is a disclosure decision, it needs explicit authorization, and it is not offered as
+a default.
+
+Two things worth recording for whoever reads the PRs next.
+
+**The failure is indistinguishable from a real one in the UI**, and distinguishable in exactly one
+place: a genuine failure has step conclusions, this has `steps: []`. `gh run view --log` returns
+*"log not found"*. The annotation is only reachable through
+`gh api repos/<owner>/<repo>/check-runs/<job_id>/annotations`.
+
+**And `main` carries no branch protection** — `404 Branch not protected`, so no required status
+checks. The failing check is therefore **advisory**: both PRs report `MERGEABLE` /
+`UNSTABLE`, where the single `FAILURE` is the job that never started. **That makes merging
+possible, not advisable**, and not mine to do — it would land changes whose only hosted evidence is
+a job that never ran. Neither PR was merged.
+
+Q16 and Q5 were re-verified in place rather than assumed from the checkpoint: build exit 0,
+**88/88**, generated CSS carrying the violet and **zero** lime, the four-theme registry intact with
+`12circle` distinct from `12circle-communities`, Phosphor pinned exactly at `2.1.10` with
+`CalendarDots` and all eight `fill`-weight glyphs resolving.
+
+**Production was not contacted.** No probe was run against QA for any of this beyond read-only
+inspection of committed source.
