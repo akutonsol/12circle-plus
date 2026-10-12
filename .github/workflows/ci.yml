@@ -151,6 +151,17 @@ jobs:
           # name the commit it points at.
           node supabase/scripts/check-design-citations.mjs
 
+          # §218 · DESIGN-02's ratified boundary. The citation guard above proves
+          # every cited design path RESOLVES; nothing proved the ratified SET.
+          # D2-1a made 24 derived specifications authoritative and D2-2b left four
+          # components (radio, date range, toast, inline error) deliberately
+          # unspecified, because the approved screens do not depict them and
+          # COMPONENTS.md routes their behaviour to page files that lack them.
+          # A boundary held only in prose decays: this fails if a specification
+          # appears for a component whose design input (D2-3) is still pending,
+          # so an invented design cannot become indistinguishable from a ratified one.
+          node supabase/scripts/check-component-spec-authority.mjs
+
       - name: Function posture (definer search_path, anon EXECUTE)
         run: |
           set -euo pipefail

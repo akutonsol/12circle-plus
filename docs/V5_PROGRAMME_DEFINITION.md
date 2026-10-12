@@ -20123,3 +20123,35 @@ asks governance to write down a bar the evidence already clears rather than to l
 **`FG-3` remains OPEN. `VERIFIED LIVE` is not claimed for the positive legs.**
 
 **Production was not contacted.**
+
+## §218 · The ratified boundary, held by a guard instead of by prose
+
+`D2-1a` made 24 derived specifications authoritative and `D2-2b` left four components —
+`radio`, `date range`, `toast`, `inline error` — **deliberately unspecified**, because the approved
+screens do not depict them and `COMPONENTS.md` routes their behaviour to page files that lack them.
+The missing design input is requested as `D2-3`.
+
+That boundary existed only in prose, and prose decays. `check-design-citations.mjs` proves every
+cited design path **resolves**; nothing proved the ratified **set**. The realistic failure is not
+malice — it is somebody later reading *"provide specifications for the four genuinely absent
+components"*, forgetting that the visual details were explicitly **not** authorized, writing a
+`### Toast` section, and an invented design becoming indistinguishable from a ratified one. This
+programme has already produced the mirror of that: §213.2's component measurement was wrong for six
+weeks because nothing checked that the probe worked.
+
+`check-component-spec-authority.mjs`, wired into **Static guards**, asserts the membership:
+
+| drift | result |
+|---|---|
+| an invented `### Toast` section | **FAIL**, naming `D2-3` as unanswered — *"Do not delete this section to get green"* |
+| a ratified spec renamed or removed (`Stat tile` → `Stat tyle`) | **FAIL** on both halves: the ratified one is missing, the new one is not in the 24 |
+| an unrelated `### Carousel` | **FAIL** — not in `D2-1a`'s 24 |
+| the tree as ratified | **PASS** — 24/24, and no spec for the four awaiting `D2-3` |
+
+Real exit code on drift verified as **1**, not inferred from a piped `head`.
+
+The failure message deliberately tells the reader what to ask for rather than how to get green,
+because the cheap way out of this guard is to delete the section — which would hide the very
+question `D2-3` exists to pose.
+
+**Production was not contacted.**
