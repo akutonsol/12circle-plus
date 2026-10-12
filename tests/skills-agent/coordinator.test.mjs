@@ -11,7 +11,7 @@
  * into the next one, and nothing here touches the repository's own
  * `.skills-agent/state.json`.
  */
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -41,14 +41,14 @@ function sandbox(tasks) {
 // Returns {ok, out, err}. Never throws: a non-zero exit is an OUTCOME under
 // test, not a harness failure.
 function run(dir, args, env = {}) {
-  try {
-    const out = execFileSync(process.execPath,
-      [path.join(dir, 'scripts', 'skills-agent-coordinator.mjs'), ...args],
-      { encoding: 'utf8', env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
-    return { ok: true, out, err: '' };
-  } catch (e) {
-    return { ok: false, out: e.stdout ?? '', err: (e.stderr ?? '') + (e.stdout ?? '') };
-  }
+  const r = spawnSync(process.execPath,
+    [path.join(dir, 'scripts', 'skills-agent-coordinator.mjs'), ...args],
+    { encoding: 'utf8', env: { ...process.env, ...env } });
+  // stdout AND stderr are kept whatever the exit code: the coordinator writes
+  // operational notices (a stale-lock reclaim) to stderr while still
+  // succeeding, and a non-zero exit is an OUTCOME under test, not a harness
+  // failure.
+  return { ok: r.status === 0, out: r.stdout ?? '', err: (r.stderr ?? '') + (r.stdout ?? '') };
 }
 const json = (r) => { try { return JSON.parse(r.out); } catch { return null; } };
 const stateOf = (dir) =>
@@ -352,6 +352,34 @@ section('8 · state survives a process exit without inventing success');
   check('once genuinely verified, the dependent task becomes eligible — the '
       + 'coordinator dispatches the next work by itself',
     final.tasks.find((t) => t.id === 'B').eligible === true);
+}
+
+// ═══ 8b · a crashed coordinator must not retire the queue ══════════════════
+// The lock is released in a `finally`, which SIGKILL, power loss and an OOM
+// kill never run. Before this, the orphaned file made every later command fail
+// with "queue lock already held" FOREVER — one crash retired the queue.
+section('8b · stale lock recovery, fail-closed');
+{
+  const dir = sandbox([T('A')]);
+  const lock = path.join(dir, '.skills-agent', '.state.lock');
+
+  fs.writeFileSync(lock, JSON.stringify({ pid: 999999, at: '2026-01-01T00:00:00Z' }));
+  const stale = run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w1' });
+  check('a lock whose holder is gone is reclaimed, and the claim proceeds',
+    stale.ok && json(stale)?.task?.id === 'A');
+  check('…and the reclaim is announced, not silent',
+    /reclaiming a stale queue lock/.test(stale.err + stale.out));
+
+  // The opposite direction matters more: a LIVE holder must still win.
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, at: '2026-01-01T00:00:00Z' }));
+  const live = run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w2' });
+  check('a lock held by a RUNNING process is still refused — reclaim is '
+      + 'fail-closed, so a recycled pid keeps the lock rather than losing it',
+    !live.ok && /held by running pid/.test(live.err), live.err.trim().slice(0, 72));
+  fs.unlinkSync(lock);
+
+  const ok = run(dir, ['recover'], {});
+  check('with the lock gone the queue works again', ok.ok);
 }
 
 // ═══ 9 · invalid graphs ════════════════════════════════════════════════════

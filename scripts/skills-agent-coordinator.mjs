@@ -30,14 +30,51 @@ function writeAtomic(file, value) {
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { flag: 'wx' });
   fs.renameSync(tmp, file);
 }
+// Is the process holding the lock still running?
+//
+// `process.kill(pid, 0)` sends no signal and only tests reachability. EPERM
+// means the process EXISTS but belongs to another user — alive, and not ours to
+// disturb. Anything else means gone.
+function holderAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (e) { return e.code === 'EPERM'; }
+}
+
 function withLock(fn) {
   fs.mkdirSync(path.dirname(LOCK_PATH), { recursive: true });
   let fd;
   try {
     fd = fs.openSync(LOCK_PATH, 'wx');
   } catch (e) {
-    if (e.code === 'EEXIST') throw new Error('queue lock already held; do not bypass it');
-    throw e;
+    if (e.code !== 'EEXIST') throw e;
+    // A STALE lock used to deadlock the queue permanently.
+    //
+    // The lock is released in a `finally`, which a SIGKILL, a power loss or an
+    // OOM kill never runs. The file then survived its owner, and every later
+    // command failed with "queue lock already held" forever — so a single crash
+    // retired the queue. Demonstrated by planting a lock naming a dead pid:
+    // the next claim was refused although nothing held it.
+    //
+    // The recovery is deliberately FAIL-CLOSED. The lock is reclaimed only when
+    // its recorded holder is PROVABLY gone. If the pid is reachable — including
+    // EPERM, another user's process — the original refusal stands untouched.
+    // A recycled pid therefore reads as alive and keeps the lock, which is the
+    // safe direction to be wrong in.
+    const held = readJson(LOCK_PATH, null);
+    const pid = held?.pid;
+    if (holderAlive(pid)) {
+      throw new Error(`queue lock already held by running pid ${pid}; do not bypass it`);
+    }
+    console.error(`skills-agent: reclaiming a stale queue lock left by pid ${pid ?? 'unknown'} `
+      + `(no such process; held since ${held?.at ?? 'unknown'})`);
+    try { fs.unlinkSync(LOCK_PATH); } catch (e2) { if (e2.code !== 'ENOENT') throw e2; }
+    // Single retry. If this races another reclaimer, that one wins and we refuse.
+    try { fd = fs.openSync(LOCK_PATH, 'wx'); }
+    catch (e3) {
+      if (e3.code === 'EEXIST') throw new Error('queue lock was re-taken while reclaiming it; retry');
+      throw e3;
+    }
   }
   try { fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() })); return fn(); }
   finally { fs.closeSync(fd); fs.unlinkSync(LOCK_PATH); }
