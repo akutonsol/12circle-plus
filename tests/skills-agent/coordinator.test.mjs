@@ -460,6 +460,29 @@ section('10 · the shipped .skills-agent/tasks.json');
   check('V5-AUTO-002 is blocked but KEEPS its dependency — blocked-ness is not '
       + 'manufactured by removing edges',
     realTasks.tasks.find((t) => t.id === 'V5-AUTO-002').dependsOn.includes('V5-AUTO-001'));
+
+  // The queue modelled ONLY infrastructure and governance until Milestone 6 —
+  // zero product remediation, against a board carrying ~177 READY_TO_REMEDIATE
+  // rows. These five are the wave-level product work at the current frontier.
+  const product = ['V5-W2A-001', 'V5-W2B-001', 'V5-SECR-001', 'V5-CON-003', 'V5-W3B-001'];
+  check('the product backlog is represented, not just the agent infrastructure',
+    product.every((id) => ids.includes(id)), product.join(', '));
+  check('each product task names its wave', 
+    product.every((id) => !!realTasks.tasks.find((t) => t.id === id).wave));
+  check('the Wave 3B-1 task keeps BOTH prerequisite edges the plan names — '
+      + 'CON-03 and SEC-R2 — rather than being made startable',
+    (() => {
+      const d = realTasks.tasks.find((t) => t.id === 'V5-W3B-001').dependsOn;
+      return d.includes('V5-CON-003') && d.includes('V5-SECR-001');
+    })());
+  check('Wave 2B stays sequenced behind 2A, as the plan requires',
+    realTasks.tasks.find((t) => t.id === 'V5-W2B-001').dependsOn.includes('V5-W2A-001'));
+  check('the two tasks with NO dependency edges carry an authorization blocker '
+      + 'instead — they are blocked by a decision, not by sequence',
+    ['V5-SECR-001', 'V5-CON-003'].every((id) => {
+      const t = realTasks.tasks.find((x) => x.id === id);
+      return t.dependsOn.length === 0 && (t.blockers ?? []).length > 0;
+    }));
 }
 
 // ═══ 11 · inventory evidence must exist, not be asserted ═══════════════════

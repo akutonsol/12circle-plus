@@ -8,7 +8,7 @@
     "requireAttestedIdentity": false,
     "requireAttestedIdentityNote": "Left false deliberately. No runner exists to mint identity tokens, so enabling it would block all verification. Turn it on when a runner holds SKILLS_AGENT_ATTESTATION_KEY out of worker reach.",
     "maxConcurrentTasks": 3,
-    "inventoryScopeNote": "This queue is NOT a per-finding enumeration of the registry's 319 canonical rows. The registry states of itself that 'the P1-P3 register carries no per-row status field, so its movement is not mechanically countable', so a row-by-row queue cannot be derived from it without inventing statuses. The tasks below are the items for which direct repository evidence exists. V5-REC-002 records the remaining enumeration as the registry's own deferred row-by-row pass.",
+    "inventoryScopeNote": "SCOPE CORRECTED, Milestone 6. The earlier ten tasks modelled only the autonomous-team infrastructure and the governance blockers -- ZERO product remediation work. The registry's board carries ~177 READY_TO_REMEDIATE rows (canonical total 319 = 37+48+24+177+4+29), none of which were represented. The five tasks added below are the WAVE-LEVEL product work at the current frontier, each traced to the wave plan or the registry. This is still NOT a per-row enumeration of the 177: the registry states that the P1-P3 register carries no per-row status field and its movement is not mechanically countable, so a per-row queue cannot be derived without inventing statuses.",
     "authorityScope": {
       "workstream sequencing": "docs/MASTER_REMEDIATION_WAVES.md — 'The dependency-aware execution plan'",
       "release gates": "docs/RELEASE_GATES.md — 'Gate 0 through Gate 9'",
@@ -383,6 +383,196 @@
           "what": "GitHub Actions billing on the akutonsol User account",
           "evidence": "run 38184333945, job 'Theme contract (12circle)', steps=0, sole failure annotation is the billing message",
           "action": "resolve at https://github.com/settings/billing"
+        }
+      ]
+    },
+    {
+      "id": "V5-W2A-001",
+      "summary": "Wave 2A — promote I-MIG-03 from records mode to enforcement",
+      "role": "implementer",
+      "dependsOn": [
+        "V5-GOV-005"
+      ],
+      "paths": [
+        "supabase/tests/security/migration-durability-guard.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "acceptance": [
+        "I-MIG-03 enforces rather than records, with KNOWN_OPEN empty",
+        "No authorization wrapper, search_path pin or security trigger can be dropped by a redefinition without CI failing",
+        "SEC-09's recorded gate is satisfied only if the owner rules it so"
+      ],
+      "maxRetries": 2,
+      "risk": "security-guard-promotion",
+      "workstream": "security",
+      "wave": "2A",
+      "sources": [
+        "docs/MASTER_REMEDIATION_WAVES.md",
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "verification": [
+        "node supabase/tests/security/migration-durability-guard.mjs"
+      ],
+      "evidenceRequired": [
+        "commit: plus a CI run showing the guard enforcing"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "I-MIG-03's authority question is escalated, not decided, and enforcement is deferred to 2A",
+          "evidence": "MASTER_REMEDIATION_REGISTRY.md: 'CI-verified in records mode, enforcement deferred to 2A'",
+          "action": "rule the I-MIG-03 authority question (V5-GOV-005)"
+        }
+      ]
+    },
+    {
+      "id": "V5-W2B-001",
+      "summary": "Wave 2 task 2B — the class guard, promoted from recording the posture to enforcing it",
+      "role": "implementer",
+      "dependsOn": [
+        "V5-W2A-001"
+      ],
+      "paths": [
+        "supabase/tests/security/"
+      ],
+      "acceptance": [
+        "The guard is written against the pre-2A tree first, as the plan requires",
+        "Assertions are promoted to enforcement only after 2A's live re-verification"
+      ],
+      "maxRetries": 2,
+      "risk": "gated-implementation",
+      "workstream": "security",
+      "wave": "2B",
+      "sources": [
+        "docs/MASTER_REMEDIATION_WAVES.md"
+      ],
+      "verification": [
+        "the guard's own self-test"
+      ],
+      "evidenceRequired": [
+        "commit: plus CI"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "governance",
+          "what": "Wave 2 task 2B is gated and sequenced after 2A",
+          "evidence": "MASTER_REMEDIATION_WAVES.md: '2A -> live re-verification -> 2B's assertions promoted'",
+          "action": "authorize 2B after 2A completes"
+        }
+      ]
+    },
+    {
+      "id": "V5-SECR-001",
+      "summary": "SEC-R2 and SEC-R3 — supply the missing VERIFIED END-TO-END state",
+      "role": "implementer",
+      "dependsOn": [],
+      "paths": [
+        "supabase/tests/ai/"
+      ],
+      "acceptance": [
+        "The full chain runs UI -> state -> service -> authorization -> API -> database -> persistence -> response -> UI state",
+        "Both rows reach 5 of 5 for the AI / safety input class",
+        "No waiver is written into the rows instead of evidence"
+      ],
+      "maxRetries": 2,
+      "risk": "end-to-end-verification",
+      "workstream": "ai-safety",
+      "wave": "3B",
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/QA_CLOSURE_STANDARD.md"
+      ],
+      "verification": [
+        "supabase/tests/ai/fj17-parq-risk-contract.sql",
+        "supabase/tests/ai/fj07-rule-accumulator-contract.sql"
+      ],
+      "evidenceRequired": [
+        "an end-to-end run covering the full chain"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "VERIFIED END-TO-END is Step 4, and Step 4 is not authorized",
+          "evidence": "MASTER_REMEDIATION_REGISTRY.md: 'VERIFIED END-TO-END is Step 4'; 'Step 4 is not authorized' (three occurrences). Both rows read '4 of 5 present' with END-TO-END absent",
+          "action": "authorize Step 4 (End-to-End Product verification), and resolve §7.10's status-vocabulary gap"
+        }
+      ]
+    },
+    {
+      "id": "V5-CON-003",
+      "summary": "CON-03 — reconcile the two dietary_restrictions serializers against one column",
+      "role": "implementer",
+      "dependsOn": [],
+      "paths": [
+        "apps/mobile/lib/"
+      ],
+      "acceptance": [
+        "One serializer, matching the column's actual type",
+        "The production column type is established by an AUTHORIZED means, never by contacting production"
+      ],
+      "maxRetries": 2,
+      "risk": "data-contract",
+      "workstream": "contract-truth",
+      "wave": "3B",
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "verification": [
+        "npm run test:contract"
+      ],
+      "evidenceRequired": [
+        "commit: plus the contract suite"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "governance",
+          "what": "the registry records the production column type as UNKNOWN, and Gate 9B forbids contacting production to find out",
+          "evidence": "MASTER_REMEDIATION_REGISTRY.md: 'dietary_restrictions -- two serializers, one column, prod type unknown'",
+          "action": "supply the production column type through an authorized channel, or rule that QA's type governs"
+        }
+      ]
+    },
+    {
+      "id": "V5-W3B-001",
+      "summary": "Wave 3B-1 — safety inputs: Edge Functions refuse rather than degrade on a PostgREST error",
+      "role": "implementer",
+      "dependsOn": [
+        "V5-CON-003",
+        "V5-SECR-001"
+      ],
+      "paths": [
+        "supabase/functions/"
+      ],
+      "acceptance": [
+        "Every PostgREST destructure checks `error` and refuses rather than degrading",
+        "risk_level ?? 'low' becomes 'not assessed' at all four sites",
+        "Onboarding stops marking itself complete on a failed save"
+      ],
+      "maxRetries": 2,
+      "risk": "behaviour-change",
+      "workstream": "error-contract",
+      "wave": "3B",
+      "sources": [
+        "docs/MASTER_REMEDIATION_WAVES.md"
+      ],
+      "verification": [
+        "npm run test:contract",
+        "node supabase/tests/security/run.mjs"
+      ],
+      "evidenceRequired": [
+        "commit: plus CI"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "architecture",
+          "what": "3B-1 depends on CON-03 and SEC-R2, both unresolved",
+          "evidence": "MASTER_REMEDIATION_WAVES.md: 'Depends on CON-03 ... and on SEC-R2'",
+          "action": "resolve V5-CON-003 and V5-SECR-001 first"
         }
       ]
     }

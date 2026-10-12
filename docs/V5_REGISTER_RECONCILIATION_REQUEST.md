@@ -565,3 +565,51 @@ whether a `V5_WORKSTREAM_REGISTRY` was *meant* to exist remains yours to say.
 All ten tasks: 3 `VERIFIED`, 2 `BLOCKED_EXTERNAL`, 1 `BLOCKED_GOVERNANCE`, 4 `BLOCKED_OWNER`.
 **No task is eligible**, and every blocked task retains its dependency edges — a test asserts that
 blocked-ness is never manufactured by deleting them.
+
+---
+
+# `MILESTONE 6` · the queue was not the backlog
+
+## The finding
+
+The ten-task queue modelled the autonomous-team infrastructure and the governance blockers and
+**nothing else**. It contained **zero product remediation work**, against a registry board of
+**~177 `READY_TO_REMEDIATE`** rows (canonical total **319** = `37 + 48 + 24 + 177 + 4 + 29`).
+
+So the previous milestones' "zero eligible tasks" was true of the queue and **misleading about the
+programme**. Five wave-level product tasks are now represented.
+
+## Why none of it is executable — traced link by link, not asserted
+
+| path | blocked by | evidence |
+|---|---|---|
+| **Wave 2A** (I-MIG-03 enforcement) | owner | registry: *"CI-verified in records mode, enforcement deferred to 2A"*, authority question *"escalated… not decided"* |
+| **Wave 2B** (class guard) | sequence + gate | plan: *"2A → live re-verification → 2B's assertions promoted"* |
+| **SEC-R2 / SEC-R3** | owner | both read **`4 of 5 present`** with `VERIFIED END-TO-END` **❌ absent**; *"VERIFIED END-TO-END is Step 4"* and **"Step 4 is not authorized"** appears three times |
+| **CON-03** | governance | *"`dietary_restrictions` — two serializers, one column, **prod type unknown**"*. Establishing it means reading **production**, which Gate 9B forbids |
+| **Wave 3B-1** | both of the above | plan: *"Depends on CON-03 … and on SEC-R2"* |
+
+**Wave 3A is implemented**: migrations `129_notification_contract_and_pr_timing`,
+`130_private_storage_buckets`, `131_identity_constraints` exist and match tasks 3A-9/10/11.
+
+**Wave 3B-0 is complete as specified, and its apparent gap is not one.** `AppFailure` and
+`reportFailure()` exist, and `reportFailure` has **zero call sites** — which looks like unfinished
+wiring until the file's own scope statement is read: it closes *"the capability half"*, while
+*"classifying and wiring the remaining ~234 swallow sites is **Phase B4** … deliberately NOT done
+here."* EC-23's visible half is also done: **zero** bare `print()` calls remain in `lib/`, and the
+analyzer reports **0** `avoid_print`.
+
+## Queue state
+
+**15 tasks · 0 eligible.** 3 `VERIFIED` · 2 `BLOCKED_EXTERNAL` · 2 `BLOCKED_GOVERNANCE` ·
+5 `BLOCKED_OWNER` · 3 `READY` but gated behind unmet dependencies.
+
+`V5-SECR-001` and `V5-CON-003` have **no dependency edges** and are blocked by **authorization**
+instead — recorded as blockers rather than as fake edges, and a test asserts exactly that.
+
+## Still not a per-row enumeration
+
+The ~177 rows are **not** expanded individually. The registry states that the `P1–P3` register
+carries no per-row status field and *"its movement is not mechanically countable"*, so a per-row
+queue cannot be derived without inventing statuses. These five are the **wave-level** work at the
+current frontier, each traced to the plan or the registry.
