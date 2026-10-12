@@ -105,9 +105,24 @@ section('J-04A  who can read a decision trace');
   // That was a measurement nobody re-ran. This re-runs it every time, through
   // the AUTHORIZED read path rather than a service key: `admin` holds the admin
   // arm, so if any NULL-creator trace were readable at all, admin would see it.
+  //
+  // NON-VACUITY FIRST. "admin sees zero NULL-creator traces" is also what you get
+  // when admin can read NOTHING — a denied read and an empty subset are the same
+  // number. So admin's read capability is established BEFORE the subset claim is
+  // made, in that order, or the assertion below proves nothing. This is the same
+  // trap as a page-capped `1000 === 1000` (§203) and a suite reporting `PASS 0/0`
+  // (§205.5): a zero that was never able to be non-zero.
+  const anyTrace = await rest(admin, 'decision_traces?select=id&limit=1');
+  invariant('admin can read decision traces at all — the premise the NULL-creator ' +
+            'assertion below depends on',
+    Array.isArray(anyTrace.body) && anyTrace.body.length > 0,
+    `${Array.isArray(anyTrace.body) ? anyTrace.body.length : anyTrace.status} row(s) — ` +
+    `if this is 0, the next assertion is vacuous rather than reassuring`);
+
   const nullCreator = await rest(admin, 'decision_traces?select=id&created_by=is.null');
   invariant('no decision trace with a NULL creator is readable — the arm the ' +
-            'created_by filter above now covers is empty, and that is measured',
+            'created_by filter above now covers is empty, and that is measured ' +
+            'against a read path proved non-empty',
     Array.isArray(nullCreator.body) && nullCreator.body.length === 0,
     `${Array.isArray(nullCreator.body) ? nullCreator.body.length : nullCreator.status} ` +
     `NULL-creator trace(s) visible to admin`);
