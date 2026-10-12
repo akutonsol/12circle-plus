@@ -89,7 +89,7 @@ function recoverExpired(tasks, state) {
     if (['CLAIMED', 'IMPLEMENTED', 'VERIFYING'].includes(s.status) && s.leaseExpiresAt && Date.parse(s.leaseExpiresAt) <= now) {
       s.status = 'RETRY_WAIT';
       s.lastFailure = 'LEASE_EXPIRED';
-      s.leaseToken = null; s.leaseExpiresAt = null;
+      s.leaseToken = null; s.leaseExpiresAt = null; s.verificationLeaseToken = null; s.verificationLeaseExpiresAt = null;
       s.history.push({ at: new Date().toISOString(), event: 'LEASE_EXPIRED', note: 'Recovered without assuming task success.' });
       changed = true;
     }
@@ -117,15 +117,24 @@ function main() {
     const leaseMs = Math.max(1, Number(args[1] ?? 30)) * 60 * 1000;
     const claimed = withLock(() => {
       const state = loadState(tasks); recoverExpired(tasks, state);
-      const task = tasks.find(t => t.role === role && eligible(t, state));
+      const isVerifier = role === 'verifier';
+      const task = isVerifier
+        ? tasks.find(t => state.tasks[t.id]?.status === 'IMPLEMENTED' && !state.tasks[t.id]?.verificationLeaseToken && depsVerified(t, state))
+        : tasks.find(t => t.role === role && eligible(t, state));
       if (!task) { writeAtomic(STATE_PATH, state); return null; }
       const s = state.tasks[task.id]; const token = crypto.randomUUID();
-      s.status = 'CLAIMED'; s.attempts += 1; s.leaseToken = token;
+      if (isVerifier) {
+        s.status = 'VERIFYING'; s.verificationLeaseToken = token;
+        s.verifier = process.env.SKILLS_AGENT_ID ?? `pid:${process.pid}`;
+        s.verificationLeaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
+      } else {
+        s.status = 'CLAIMED'; s.attempts += 1; s.leaseToken = token;
+      }
       s.leaseExpiresAt = new Date(Date.now() + leaseMs).toISOString();
       s.claimedBy = process.env.SKILLS_AGENT_ID ?? `pid:${process.pid}`;
-      s.history.push({ at: new Date().toISOString(), event: 'CLAIMED', worker: s.claimedBy, attempt: s.attempts });
+      s.history.push({ at: new Date().toISOString(), event: isVerifier ? 'VERIFICATION_CLAIMED' : 'CLAIMED', worker: isVerifier ? s.verifier : s.claimedBy, attempt: s.attempts });
       state.updatedAt = new Date().toISOString(); writeAtomic(STATE_PATH, state);
-      return { task, token, leaseExpiresAt: s.leaseExpiresAt };
+      return { task, token, leaseExpiresAt: isVerifier ? s.verificationLeaseExpiresAt : s.leaseExpiresAt, assignment: isVerifier ? 'independent-verification' : 'implementation' };
     });
     console.log(JSON.stringify(claimed ?? { claimed: false, reason: 'NO_ELIGIBLE_TASK_FOR_ROLE', role }, null, 2)); return;
   }
@@ -137,7 +146,10 @@ function main() {
       const state = loadState(tasks); const task = tasks.find(t => t.id === id);
       if (!task) throw new Error(`unknown task ${id}`);
       const s = state.tasks[id];
-      if (s.leaseToken !== token) throw new Error('lease token mismatch; stale worker cannot change task state');
+      const isVerifierEvent = event === 'verified' || event === 'retry' && process.env.SKILLS_AGENT_ROLE === 'verifier';
+      const validToken = isVerifierEvent ? s.verificationLeaseToken === token : s.leaseToken === token;
+      if (!validToken) throw new Error('lease token mismatch; stale worker cannot change task state');
+      if (event === 'verified' && (s.status !== 'VERIFYING' || process.env.SKILLS_AGENT_ROLE !== 'verifier')) throw new Error('only the independently claimed verifier may verify an IMPLEMENTED task');
       const now = new Date().toISOString();
       const map = { implemented: 'IMPLEMENTED', verify: 'VERIFYING', verified: 'VERIFIED', retry: 'RETRY_WAIT',
         'blocked-owner': 'BLOCKED_OWNER', 'blocked-external': 'BLOCKED_EXTERNAL',
