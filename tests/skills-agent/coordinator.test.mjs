@@ -1235,6 +1235,93 @@ section('16 · CON-03 authority (PD-A22 route b)');
     'and names the cancelled push run as not evidence');
 }
 
+// ── declared blockers must veto eligibility (Milestone 17) ─────────────────
+//
+// `.skills-agent/state.json` is GITIGNORED (.gitignore:40), and loadState's
+// `??=` defaults every unknown task to READY. So on any fresh clone -- which
+// is CI's situation and any new runner's -- all 16 blocker-declaring tasks
+// read as READY. The hand-maintained statuses were the only thing holding
+// them back and they do not travel. Measured on a fresh state with the veto
+// removed in place: 12 tasks eligible, including V5-PROM-001/002 (finding
+// promotions), V5-GOV-002 (protected-register edits), V5-GOV-006 (Step 4) and
+// V5-CON-003 (writing the migration on an undecided contract). With the veto:
+// 1 (V5-AUTO-001, read-only, no deps, no blockers).
+{
+  const coord = fs.readFileSync(path.join(ROOT, 'scripts',
+    'skills-agent-coordinator.mjs'), 'utf8');
+
+  check('eligible() vetoes any task that declares a blocker',
+    /if \(declaredBlockers\(task\)\.length > 0\) return false;/.test(coord),
+    'the only protection that survives a fresh clone');
+  check('…and the veto sits inside eligible(), not somewhere bypassable',
+    /function eligible\(task, state\)[\s\S]{0,220}?declaredBlockers\(task\)\.length > 0/
+      .test(coord),
+    'claim/status/event all route through eligible()');
+  check('declaredBlockers treats a non-array blockers field as empty',
+    /Array\.isArray\(task\.blockers\) \? task\.blockers : \[\]/.test(coord),
+    'a malformed field must not silently block or silently pass');
+
+  // The self-test must carry the regression case, not just the code.
+  check('the coordinator self-test asserts the declared-blocker veto',
+    /declared-blocker veto self-test failed/.test(coord)
+      && /declared-blocker veto/.test(coord),
+    'verified by mutation: removing the veto makes --self-test exit 1');
+  check('…and proves the veto is not vetoing everything',
+    /blockers: \[\] \}, state\)\) throw new Error\('declared-blocker veto/.test(coord)
+      && /blockers: undefined \}/.test(coord),
+    'an empty or absent blockers array must still be eligible');
+
+  // state.json being gitignored is load-bearing for the reasoning above.
+  const ignore = fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8');
+  check('state.json is still gitignored (so READY defaults still ship)',
+    /\.skills-agent\/state\.json/.test(ignore),
+    '.gitignore:40 — if this changes, re-reason about the fresh-clone case');
+  check('loadState still defaults an unknown task to READY',
+    /state\.tasks\[t\.id\] \?\?= \{ status: 'READY'/.test(coord),
+    'the default that made the veto necessary');
+
+  // The drift reporter, and that it reports rather than throws.
+  check('validate reports blocker/status drift',
+    /blockerStatusDrift/.test(coord)
+      && /declare an unresolved blocker but sit in a runnable status/.test(coord),
+    'verified by positive control: re-setting V5-W3B-001 to READY reports 1');
+  check('…as a warning, not a throw that would block unrelated commands',
+    /console\.error\(`WARNING — \$\{drift\.length\} task\(s\) declare/.test(coord),
+    'the status field is operator-owned');
+
+  // The queue must not still claim CON-03 needs no owner ruling.
+  const q = JSON.parse(fs.readFileSync(path.join(ROOT, '.skills-agent',
+    'tasks.json'), 'utf8'));
+  const con = q.tasks.find((t) => t.id === 'V5-CON-003');
+  const conFlat = JSON.stringify(con);
+  check('V5-CON-003 is classified as owner-blocked',
+    con.blockers.length === 1 && con.blockers[0].kind === 'owner',
+    `kind=${con.blockers.map((b) => b.kind).join(',')}`);
+  // Assert the OPERATIVE field, not the narrative. The corrected `what`
+  // deliberately QUOTES the old wording ("no owner ruling needed") to record
+  // what was wrong with it, so a flattened-JSON match finds the very string it
+  // is checking for -- the same self-documentation trap that caught the
+  // workout-cursor detector, SEC-G9's `can\w*`, and the <Icon> glyph check.
+  check('V5-CON-003\'s action now requires an owner answer',
+    /owner answers CON-03-TYPE/.test(con.blockers[0].action),
+    `action=${con.blockers[0].action.slice(0, 70)}`);
+  check('…and the stale claim survives only as an attributed correction',
+    /CORRECTED 2026-10-13[\s\S]*no owner ruling needed/.test(con.blockers[0].what)
+      && /CON-03-TYPE/.test(conFlat),
+    'the old wording is quoted as history, never asserted as current');
+  check('…and still records that PD-A22 authorizes DESIGN only',
+    /names no target/.test(conFlat) && /PD-A22/.test(conFlat),
+    'Proceed? = Yes is not approval of the target type');
+
+  // Every task that declares a blocker names an action, so a blocker is
+  // actionable rather than a dead end.
+  const noAction = q.tasks.filter((t) => (t.blockers || [])
+    .some((b) => !b.action || !b.evidence));
+  check('every declared blocker still names both evidence and an action',
+    noAction.length === 0,
+    noAction.length ? `missing on ${noAction.map((t) => t.id).join(', ')}` : 'all complete');
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {

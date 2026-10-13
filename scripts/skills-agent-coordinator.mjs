@@ -115,6 +115,22 @@ function loadState(tasks) {
   for (const t of tasks) state.tasks[t.id] ??= { status: 'READY', attempts: 0, history: [] };
   return state;
 }
+// A task that declares an unresolved blocker must not be sitting in a runnable
+// status. `eligible()` vetoes it either way, so this is about the FILE not
+// lying: READY is the `??=` default above, so a blocked task added to
+// tasks.json without a state entry reads as runnable to any human or agent
+// inspecting state.json. Three tasks were in exactly that condition
+// (V5-W2A-001, V5-W2B-001, V5-W3B-001) and two of them are gated Wave 2B /
+// 3B-1 work. Reported, not thrown: the queue's status field is operator-owned,
+// and a hard failure here would block every unrelated command.
+function blockerStatusDrift(tasks, state) {
+  const runnable = new Set(['READY', 'RETRY_WAIT']);
+  return tasks
+    .filter((t) => (Array.isArray(t.blockers) ? t.blockers : []).length > 0)
+    .filter((t) => runnable.has(state.tasks[t.id]?.status))
+    .map((t) => ({ id: t.id, status: state.tasks[t.id].status,
+      kinds: [...new Set(t.blockers.map((b) => b.kind))] }));
+}
 // ── IDENTITY ───────────────────────────────────────────────────────────────
 // Identity is self-asserted: a worker sets SKILLS_AGENT_ID. That is a real
 // limit of a local coordinator and is NOT pretended away — see
@@ -199,8 +215,20 @@ function assertIndependentVerifier(taskState, verifierId) {
 const terminal = new Set(['VERIFIED', 'FAILED_TERMINAL']);
 const blocked = new Set(['BLOCKED_OWNER', 'BLOCKED_EXTERNAL', 'BLOCKED_GOVERNANCE']);
 function depsVerified(task, state) { return task.dependsOn.every(id => state.tasks[id]?.status === 'VERIFIED'); }
+// A declared blocker is, by this schema, an UNRESOLVED one: a blocker object is
+// {kind, what, evidence, action} and carries no "resolved" flag, so the way a
+// blocker goes away is that it is removed from the task. Until this check
+// existed, `blockers` was a field the coordinator never read -- every one of the
+// sixteen blocked tasks was held back only by a hand-set status in state.json.
+// `:115` defaults a task with no state record to READY, so a blocked task added
+// to tasks.json without a matching state entry, or any task whose status was
+// reset, became eligible the moment its dependencies verified -- with its own
+// declared owner/governance/external blocker sitting there unread. That is how a
+// gated Wave 2B or 3B-1 task could have been claimed by a worker.
+function declaredBlockers(task) { return Array.isArray(task.blockers) ? task.blockers : []; }
 function eligible(task, state) {
   const s = state.tasks[task.id];
+  if (declaredBlockers(task).length > 0) return false;
   return ['READY', 'RETRY_WAIT'].includes(s.status) && depsVerified(task, state) && (s.retryAt == null || Date.parse(s.retryAt) <= Date.now());
 }
 function recoverExpired(tasks, state) {
@@ -233,7 +261,17 @@ function main() {
   const [command, ...args] = process.argv.slice(2);
   if (command === '--self-test') return selfTest();
   const tasks = loadTasks();
-  if (command === 'validate') { console.log(JSON.stringify({ valid: true, taskCount: tasks.length }, null, 2)); return; }
+  if (command === 'validate') {
+    const drift = blockerStatusDrift(tasks, loadState(tasks));
+    console.log(JSON.stringify({ valid: true, taskCount: tasks.length,
+      blockerStatusDrift: drift }, null, 2));
+    if (drift.length) {
+      console.error(`WARNING — ${drift.length} task(s) declare an unresolved blocker but sit in a runnable status:`);
+      for (const d of drift) console.error(`  ${d.id}  status=${d.status}  blockerKinds=[${d.kinds.join(',')}]`);
+      console.error('eligible() vetoes them regardless; the status field is misleading and should be corrected.');
+    }
+    return;
+  }
   if (command === 'status') {
     const state = loadState(tasks); const changed = recoverExpired(tasks, state);
     if (changed) writeAtomic(STATE_PATH, state);
@@ -400,11 +438,26 @@ function selfTest() {
     c: { status: 'READY', attempts: 0, history: [] }
   }};
   if (!eligible(tasks[0], state) || eligible(tasks[1], state) || !eligible(tasks[2], state)) throw new Error('dependency scheduling self-test failed');
+
+  // A declared blocker must veto eligibility even when every other condition
+  // is satisfied. `d` is the exact shape that used to slip through: status
+  // READY (the `??=` default for a task with no state record), no dependencies
+  // to gate it, and an owner blocker the coordinator never read. Before this
+  // check, `eligible(d)` was TRUE. The two assertions after it prove the veto
+  // comes from the blocker and nothing else -- remove the blocker and the same
+  // task becomes eligible again, so this cannot pass by vetoing everything.
+  const d = { id: 'd', role: 'implementer', summary: 'd', dependsOn: [], paths: ['d'], acceptance: ['test'], maxRetries: 1,
+    blockers: [{ kind: 'owner', what: 'an undecided product contract', evidence: 'self-test', action: 'owner ruling' }] };
+  state.tasks.d = { status: 'READY', attempts: 0, history: [] };
+  if (eligible(d, state)) throw new Error('declared-blocker veto self-test failed: a task with an unresolved blocker was eligible');
+  if (!eligible({ ...d, blockers: [] }, state)) throw new Error('declared-blocker veto self-test failed: an empty blockers array must not block');
+  if (!eligible({ ...d, blockers: undefined }, state)) throw new Error('declared-blocker veto self-test failed: an absent blockers field must not block');
+
   state.tasks.a = { status: 'CLAIMED', attempts: 1, leaseExpiresAt: new Date(Date.now() - 1000).toISOString(), history: [] };
   if (!recoverExpired(tasks, state) || state.tasks.a.status !== 'RETRY_WAIT') throw new Error('expired lease recovery self-test failed');
   let cycleRejected = false;
   try { detectCycles([{ id: 'x', dependsOn: ['y'] }, { id: 'y', dependsOn: ['x'] }]); } catch { cycleRejected = true; }
   if (!cycleRejected) throw new Error('cycle detection self-test failed');
-  console.log('PASS: dependency scheduling, independent task eligibility, expired-lease recovery, dependency-cycle rejection');
+  console.log('PASS: dependency scheduling, independent task eligibility, declared-blocker veto, expired-lease recovery, dependency-cycle rejection');
 }
 try { main(); } catch (e) { fail(e.message); }

@@ -10,11 +10,11 @@
     "maxConcurrentTasks": 3,
     "inventoryScopeNote": "SCOPE CORRECTED, Milestone 6. The earlier ten tasks modelled only the autonomous-team infrastructure and the governance blockers -- ZERO product remediation work. The registry's board carries ~177 READY_TO_REMEDIATE rows (canonical total 319 = 37+48+24+177+4+29), none of which were represented. The five tasks added below are the WAVE-LEVEL product work at the current frontier, each traced to the wave plan or the registry. This is still NOT a per-row enumeration of the 177: the registry states that the P1-P3 register carries no per-row status field and its movement is not mechanically countable, so a per-row queue cannot be derived without inventing statuses.",
     "authorityScope": {
-      "workstream sequencing": "docs/MASTER_REMEDIATION_WAVES.md — 'The dependency-aware execution plan'",
-      "release gates": "docs/RELEASE_GATES.md — 'Gate 0 through Gate 9'",
-      "remediation scope and finding status": "docs/MASTER_REMEDIATION_REGISTRY.md — 'The canonical finding ledger for the whole programme'",
-      "owner decisions": "docs/MASTER_PRODUCT_DECISIONS.md — 'Every unresolved decision extracted from workstreams A-N, deduplicated and owned'",
-      "closure evidence": "docs/QA_CLOSURE_STANDARD.md — \"What 'closed' means, and what it does not\"; 'Governs every status change in MASTER_REMEDIATION_REGISTRY.md'"
+      "workstream sequencing": "docs/MASTER_REMEDIATION_WAVES.md \u2014 'The dependency-aware execution plan'",
+      "release gates": "docs/RELEASE_GATES.md \u2014 'Gate 0 through Gate 9'",
+      "remediation scope and finding status": "docs/MASTER_REMEDIATION_REGISTRY.md \u2014 'The canonical finding ledger for the whole programme'",
+      "owner decisions": "docs/MASTER_PRODUCT_DECISIONS.md \u2014 'Every unresolved decision extracted from workstreams A-N, deduplicated and owned'",
+      "closure evidence": "docs/QA_CLOSURE_STANDARD.md \u2014 \"What 'closed' means, and what it does not\"; 'Governs every status change in MASTER_REMEDIATION_REGISTRY.md'"
     }
   },
   "tasks": [
@@ -163,7 +163,7 @@
     },
     {
       "id": "V5-GOV-001",
-      "summary": "Obtain the governance ruling on QA_CLOSURE_STANDARD.md §2.1 so FG-3's positive legs can be assessed for closure",
+      "summary": "Obtain the governance ruling on QA_CLOSURE_STANDARD.md \u00a72.1 so FG-3's positive legs can be assessed for closure",
       "role": "owner-decision",
       "dependsOn": [],
       "paths": [
@@ -192,7 +192,7 @@
       "blockers": [
         {
           "kind": "governance",
-          "what": "§2.1's pre-fix-failure clause cannot be satisfied by a positive leg where the fix ADDED a guard",
+          "what": "\u00a72.1's pre-fix-failure clause cannot be satisfied by a positive leg where the fix ADDED a guard",
           "evidence": "docs/QA_CLOSURE_STANDARD.md line 43; evidence complete at d23 37/37",
           "action": "rule on the decision record"
         }
@@ -220,7 +220,7 @@
         "docs/MASTER_PRODUCT_DECISIONS.md"
       ],
       "verification": [
-        "none — this is a decision, not an implementation"
+        "none \u2014 this is a decision, not an implementation"
       ],
       "evidenceRequired": [
         "explicit owner authorization to edit a protected register"
@@ -294,7 +294,7 @@
         "docs/MASTER_PRODUCT_DECISIONS.md"
       ],
       "verification": [
-        "none — this is a decision, not an implementation"
+        "none \u2014 this is a decision, not an implementation"
       ],
       "evidenceRequired": [
         "a recorded design ruling"
@@ -388,7 +388,7 @@
     },
     {
       "id": "V5-W2A-001",
-      "summary": "Wave 2A — promote I-MIG-03 from records mode to enforcement",
+      "summary": "Wave 2A \u2014 promote I-MIG-03 from records mode to enforcement",
       "role": "implementer",
       "dependsOn": [
         "V5-GOV-005"
@@ -428,7 +428,7 @@
     },
     {
       "id": "V5-W2B-001",
-      "summary": "Wave 2 task 2B — the class guard, promoted from recording the posture to enforcing it",
+      "summary": "Wave 2 task 2B \u2014 the class guard, promoted from recording the posture to enforcing it",
       "role": "implementer",
       "dependsOn": [
         "V5-W2A-001"
@@ -465,7 +465,7 @@
     },
     {
       "id": "V5-SECR-001",
-      "summary": "SEC-R2 and SEC-R3 — supply the VERIFIED END-TO-END rung their AI / safety input class demands",
+      "summary": "SEC-R2 and SEC-R3 \u2014 supply the VERIFIED END-TO-END rung their AI / safety input class demands",
       "role": "implementer",
       "dependsOn": [
         "V5-GOV-006"
@@ -474,8 +474,8 @@
         "supabase/tests/ai/"
       ],
       "acceptance": [
-        "A CI e2e probe supplies the full chain INCLUDING the failure leg, as §2.1 requires",
-        "An owner ruling establishes that the evidence satisfies the rung for these rows, citing §2.1's class row and §3 step 12 -- the §7.13 / §7.18 pattern",
+        "A CI e2e probe supplies the full chain INCLUDING the failure leg, as \u00a72.1 requires",
+        "An owner ruling establishes that the evidence satisfies the rung for these rows, citing \u00a72.1's class row and \u00a73 step 12 -- the \u00a77.13 / \u00a77.18 pattern",
         "Neither row is promoted on four of five, and no waiver is substituted for the fifth state"
       ],
       "maxRetries": 2,
@@ -500,15 +500,15 @@
       "blockers": [
         {
           "kind": "owner",
-          "what": "the fifth rung is unevidenced for these two rows. CORRECTION: UIX-1 and M-03 were previously listed here and are NOT blocked -- §7.18 records them VERIFIED_CLOSED on VERIFIED END-TO-END at CI run #49 (2026-08-28). The lines saying otherwise (:2727, :2739) are a dated earlier checkpoint that §7.18 supersedes",
-          "evidence": "registry §7.18 at :2940 and :1060 'M-03 VERIFIED_CLOSED 2026-08-28'; both rows' own evidence rows still read '4 of 5 present' with END-TO-END absent",
-          "action": "choose route C1 (a per-row ruling on the §7.13 pattern, twice exercised) or C2 (define Step 4 as a phase) -- see V5-GOV-006"
+          "what": "the fifth rung is unevidenced for these two rows. CORRECTION: UIX-1 and M-03 were previously listed here and are NOT blocked -- \u00a77.18 records them VERIFIED_CLOSED on VERIFIED END-TO-END at CI run #49 (2026-08-28). The lines saying otherwise (:2727, :2739) are a dated earlier checkpoint that \u00a77.18 supersedes",
+          "evidence": "registry \u00a77.18 at :2940 and :1060 'M-03 VERIFIED_CLOSED 2026-08-28'; both rows' own evidence rows still read '4 of 5 present' with END-TO-END absent",
+          "action": "choose route C1 (a per-row ruling on the \u00a77.13 pattern, twice exercised) or C2 (define Step 4 as a phase) -- see V5-GOV-006"
         }
       ]
     },
     {
       "id": "V5-CON-003",
-      "summary": "CON-03 — write the forward migration converging from either dietary_restrictions type (route b, already authorized)",
+      "summary": "CON-03 \u2014 write the forward migration converging from either dietary_restrictions type (route b, already authorized)",
       "role": "implementer",
       "dependsOn": [],
       "paths": [
@@ -537,16 +537,16 @@
       "runnerIndependent": true,
       "blockers": [
         {
-          "kind": "architecture",
-          "what": "CORRECTED 2026-10-13. This previously read 'production column type unknown and Gate 9B forbids contacting production', classifying CON-03 as governance-blocked. That was WRONG. PD-A22's Proceed? column reads 'Yes -- via (b)': write the forward migration to converge from either starting type WITHOUT inspecting. No owner decision and no production access is required for the QA-side fix. What remains is unwritten migration work, not a blocked decision.",
-          "evidence": "MASTER_PRODUCT_DECISIONS.md:136 PD-A22 (Proceed? 'Yes -- via (b)'; '(b) is required regardless; (a) is a prerequisite for the production rollout plan, not for QA work'); MASTER_REMEDIATION_WAVES.md:335; MASTER_QA_RECONCILIATION.md:513 Q-6",
-          "action": "authorize a migration-writing milestone; no owner ruling needed"
+          "kind": "owner",
+          "what": "CORRECTED 2026-10-13 (Milestone 17). The previous text read 'What remains is unwritten migration work, not a blocked decision' and 'no owner ruling needed'. That was written before the target representation was examined, and it is WRONG. PD-A22's Proceed? ('Yes -- via (b)') authorizes DESIGNING a migration that converges from either starting type without inspecting production -- it names no target. CON-03-TYPE (text vs text[]) is an undecided owner decision, and the migration cannot be written without it. Milestones 15 and 16 verified that no governing document answers it: product-bible.md, decision-log.md and WORKOUT_DOMAIN_CONTRACT.md contain no occurrence of 'dietary', so MASTER_PRODUCT_DECISIONS.md section 0.2's 'already answered by governing documents' path does not apply. CON-03-COMMA and CON-03-ROLLOUT are open alongside it, and CON-03-VOCAB is a separate product question.",
+          "evidence": "docs/V5_CON03_STORAGE_CONTRACT_DECISION_MEMO.md sections 2, 5 and 8 (response sheet); MASTER_PRODUCT_DECISIONS.md:6 ('Nothing in this document is decided') with only PD-A05 and PD-A23 carrying ANSWERED amendments; decision-log.md has no CON-03 entry; no CHECK constraint or enum on dietary_restrictions in any of the 182 migrations",
+          "action": "owner answers CON-03-TYPE on the memo's section 8 response sheet (with CON-03-COMMA and CON-03-ROLLOUT); implementation is fully specified by memo section 7 once it lands"
         }
       ]
     },
     {
       "id": "V5-W3B-001",
-      "summary": "Wave 3B-1 — safety inputs: Edge Functions refuse rather than degrade on a PostgREST error",
+      "summary": "Wave 3B-1 \u2014 safety inputs: Edge Functions refuse rather than degrade on a PostgREST error",
       "role": "implementer",
       "dependsOn": [
         "V5-CON-003",
@@ -586,7 +586,7 @@
     },
     {
       "id": "V5-GOV-006",
-      "summary": "Choose how the VERIFIED END-TO-END rung is authorized: a per-row ruling (the exercised §7.13/§7.18 route) or a defined Step 4 phase",
+      "summary": "Choose how the VERIFIED END-TO-END rung is authorized: a per-row ruling (the exercised \u00a77.13/\u00a77.18 route) or a defined Step 4 phase",
       "role": "owner-decision",
       "dependsOn": [],
       "paths": [
@@ -595,7 +595,7 @@
       ],
       "acceptance": [
         "Route C1 or C2 is chosen",
-        "If C1: the ruling names the rows, cites §2.1's class row and §3 step 12, and is confined to those rows as §7.13's pattern requires",
+        "If C1: the ruling names the rows, cites \u00a72.1's class row and \u00a73 step 12, and is confined to those rows as \u00a77.13's pattern requires",
         "If C2: Step 4's entry criteria, approver, scope, and recording mechanism are stated",
         "Either way, Gate 9B is not opened and no release gate changes"
       ],
@@ -619,8 +619,8 @@
       "blockers": [
         {
           "kind": "owner",
-          "what": "Step 4 is named once in all of docs/ and never defined -- BUT the rung has been satisfied twice without it, by a per-row owner ruling plus a CI job (§7.13 EC-01, §7.18 UIX-1/M-03). So the question is which route applies, not merely 'define the phase'. A conflict is also recorded: :1805's 'no safety finding can reach VERIFIED_CLOSED before Step 4 runs' is inconsistent with §7.18's outcome",
-          "evidence": "registry:1802 names Step 4 once; §7.13 'explicitly confined to EC-01'; §7.18 'extends §7.13's standard to this rung for this row'",
+          "what": "Step 4 is named once in all of docs/ and never defined -- BUT the rung has been satisfied twice without it, by a per-row owner ruling plus a CI job (\u00a77.13 EC-01, \u00a77.18 UIX-1/M-03). So the question is which route applies, not merely 'define the phase'. A conflict is also recorded: :1805's 'no safety finding can reach VERIFIED_CLOSED before Step 4 runs' is inconsistent with \u00a77.18's outcome",
+          "evidence": "registry:1802 names Step 4 once; \u00a77.13 'explicitly confined to EC-01'; \u00a77.18 'extends \u00a77.13's standard to this rung for this row'",
           "action": "choose C1 or C2, and resolve the :1805 conflict"
         }
       ]
@@ -635,7 +635,7 @@
         "docs/MASTER_REMEDIATION_REGISTRY.md"
       ],
       "acceptance": [
-        "Either (i) a status is added to §2 for 'every state but END-TO-END', or (ii) the rows stay understated until Step 4 closes them",
+        "Either (i) a status is added to \u00a72 for 'every state but END-TO-END', or (ii) the rows stay understated until Step 4 closes them",
         "No sixth status is invented without this ruling",
         "The rows are not moved to REMEDIATED or RETEST_REQUIRED, both of which the registry records as FALSE for them"
       ],
@@ -658,15 +658,15 @@
       "blockers": [
         {
           "kind": "owner",
-          "what": "§2's status table has no term for four-of-five. REMEDIATED means 'not yet retested' and RETEST_REQUIRED means 'live assertion outstanding'; the registry records BOTH as false for these rows, and inventing a sixth status is a governance decision",
-          "evidence": "MASTER_REMEDIATION_REGISTRY.md:1815-1828 'The rows therefore stay at READY_TO_REMEDIATE -- an understatement ... The owner is asked to choose: (i) add a status to §2 ... or (ii) leave the rows understated until Step 4 closes them'",
+          "what": "\u00a72's status table has no term for four-of-five. REMEDIATED means 'not yet retested' and RETEST_REQUIRED means 'live assertion outstanding'; the registry records BOTH as false for these rows, and inventing a sixth status is a governance decision",
+          "evidence": "MASTER_REMEDIATION_REGISTRY.md:1815-1828 'The rows therefore stay at READY_TO_REMEDIATE -- an understatement ... The owner is asked to choose: (i) add a status to \u00a72 ... or (ii) leave the rows understated until Step 4 closes them'",
           "action": "rule (i) or (ii)"
         }
       ]
     },
     {
       "id": "V5-PROM-001",
-      "summary": "SEC-04 — reclassify out of OPEN on its satisfied evidence, once the ladder transition is ruled",
+      "summary": "SEC-04 \u2014 reclassify out of OPEN on its satisfied evidence, once the ladder transition is ruled",
       "role": "owner-decision",
       "dependsOn": [],
       "paths": [
@@ -675,7 +675,7 @@
       "acceptance": [
         "All three requirements named in the row's missing-evidence clause are confirmed present",
         "The owner rules which state SEC-04 may move to from OPEN",
-        "No promotion to VERIFIED_CLOSED unless §2's ladder permits OPEN to reach it directly"
+        "No promotion to VERIFIED_CLOSED unless \u00a72's ladder permits OPEN to reach it directly"
       ],
       "maxRetries": 0,
       "risk": "protected-register-edit",
@@ -705,7 +705,7 @@
     },
     {
       "id": "V5-PROM-002",
-      "summary": "ENV-6 — promote from REMEDIATED; its stated criterion 'closes at the first PR' is satisfied",
+      "summary": "ENV-6 \u2014 promote from REMEDIATED; its stated criterion 'closes at the first PR' is satisfied",
       "role": "owner-decision",
       "dependsOn": [],
       "paths": [
