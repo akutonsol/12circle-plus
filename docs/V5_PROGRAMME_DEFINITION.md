@@ -20740,3 +20740,112 @@ of making it autonomous.
 change. No QA write, live probe or production operation. No credential accessed. No finding
 promoted and no evidence count changed. No C1 widening. Production `nxdbooufqzkpslkcogxc` not
 contacted. PR #1 open, draft, unmerged.**
+
+---
+
+## §226 · CI-gated integration and three unenforced fields (Milestone 18)
+
+### §226.1 · The integration completed through the normal gate
+
+Milestone 17's three held commits were released by the pre-push guard itself, without
+override, once `9d8cf13`'s run reached terminal green. `ALLOW_PUSH_OVER_CI=1` was never used
+and CI concurrency was never altered.
+
+| SHA | `pull_request` run | result |
+|---|---|---|
+| `04e4604` | `38415078848` | `completed` / `success` |
+| `9d8cf13` | `38417690039` | `completed` / `success` — 7 of 7 jobs |
+| `3a8d2b7` | `38419228862` | `completed` / `success` — 7 of 7 jobs |
+
+Each paired `push` run is `cancelled` by `concurrency.group`, which is the designed behaviour
+and is not evidence of anything.
+
+### §226.2 · `paths` was the second declared field nothing read
+
+`blockers` (§225.1) turned out not to be unique. `paths` is validated as an array at `:92` and
+was then **never consulted**. Demonstrated: two tasks both declaring
+`lib/shared/thing.dart` were handed to `w1` and `w2` and **both held live leases**. A lease
+protected a *task* from double-claim; nothing protected a *file*.
+
+This is not hypothetical for this queue. It carries **27 overlapping path pairs**, and **nine
+tasks contend on `docs/MASTER_REMEDIATION_REGISTRY.md`** — the protected register. Two workers
+could have edited it concurrently.
+
+An implementer lease now reserves its declared paths, prefix-aware because the queue mixes
+directories and files: `.skills-agent/` conflicts with `.skills-agent/tasks.json`, while
+`docs/A.md` and `docs/B.md` do not. Verified at command level including the legs that prove it
+is neither over-blocking nor deadlocking — the queue routes **around** a conflict (the second
+worker takes a non-conflicting task rather than getting nothing), siblings in one directory stay
+independently claimable, an expired lease releases its paths, and a verifier may still claim a
+contended task.
+
+**The change had a real blast radius and the suite caught it.** Two existing tests failed,
+because the `T()` helper gave *every* test task `paths: ['x']` — harmless while the field was
+unread, but it made all default tasks mutually conflicting. Those tests concern dependency
+scheduling and independent advancement, never file contention, so the helper now assigns one
+path per task and a test wanting contention passes `paths` explicitly. The failures were
+correct; they were fixed in the helper, not by weakening the rule.
+
+### §226.3 · `maxConcurrentTasks` was the third
+
+With `policy.maxConcurrentTasks: 3`, six workers took six live leases. Now enforced over
+implementer leases only — a verification lease is review, not edit, and is already serialised
+by the independent-verifier rules. An unset or non-positive value means *no limit*, preserving
+prior behaviour rather than silently tightening it. An expired lease frees a slot, so the bound
+is not a dead end.
+
+### §226.4 · The rest of the audit, judged rather than mechanically "fixed"
+
+Most declared fields are documentation: **4 of 10 task fields and 1 of 6 policy keys** are read
+by the coordinator. Each remaining one was judged on its merits:
+
+- `independentVerifierRequired` — redundant. The behaviour is **unconditionally** enforced in
+  code, so the key documents an always-on rule.
+- `verification` — holds shell command strings. Auto-running them would execute arbitrary data
+  as code. **Deliberately left alone.**
+- `runnerIndependent`, `sources`, `risk`, `wave`, `workstream` — consumed by
+  `skills-agent-inventory-check.mjs`, not dead.
+- `doNotInferTaskCompletionFromLocalGreen` — an instruction to humans, not mechanizable.
+
+Real-queue eligibility on a fresh state is **unchanged** at `V5-AUTO-001` after both new rules,
+so no authorized work was newly blocked.
+
+### §226.5 · Autonomous capability, answered question by question
+
+| question | answer |
+|---|---|
+| provider invocation mechanism | **none.** `V5-AUTO-002` is `BLOCKED_EXTERNAL` on "no agent invocation mechanism" and "no credential" |
+| can workers be launched and observed | **no** |
+| is worker identity authenticated | **no** — `SKILLS_AGENT_ID` is self-asserted. With a key, trust records `attested`, but the code states the limit: while runner and worker share a process tree this is **a contract, not an enforced boundary** |
+| authorization enforced across delegated work | **yes, now** — declared blockers veto eligibility (§225.1) |
+| file ownership enforced | **yes, now** — §226.2 |
+| failed / interrupted / duplicated / retried state | **yes** — expired-lease recovery, fail-closed stale-lock reclaim, bounded `maxRetries`, single-claim leases |
+| execution and evidence auditable | **yes** — `history[]`, plus evidence references that must resolve and now must match the task's declared kind |
+| can a blocked task be executed on a fresh clone | **no, now** — verified through the real `claim` command with no `state.json` present |
+
+`policy.requireAttestedIdentity` stays **false**, and deliberately: no runner exists to mint
+tokens, so enabling it would refuse all verification. Flipping it would manufacture a security
+appearance while breaking the system. **The minimum step to real trusted identity is a runner
+process that mints identity tokens and holds `SKILLS_AGENT_ATTESTATION_KEY` where the worker
+cannot read it** — an infrastructure and credential-custody change that is not authorized here.
+
+**Autonomous execution remains NOT operational.** This milestone again made the scheduler
+safer, which is not the same thing.
+
+### §226.6 · Everything else re-verified as still blocked
+
+No owner response has arrived: `MASTER_PRODUCT_DECISIONS.md` still carries exactly two
+`ANSWERED` amendments (`PD-A05`, `PD-A23`) and `decision-log.md` still has no CON-03 entry, with
+no commits to either authority since `527438a`. `CON-03-TYPE`/`-COMMA`/`-ROLLOUT`/`-VOCAB` remain
+pending; the intake and meal-plan vocabularies were **not** merged and the restriction/allergen
+distinction is preserved. `SEC-R2` and `SEC-R3` remain four of five states with END-TO-END
+absent and **not promoted**; `SEC-04` remains not promoted on `F-J-01`'s live-probe requirement;
+3B-1 remains gated on CON-03 **and** SEC-R2; the §7.10/§7.18 conflict is preserved.
+
+`coordinator.test.mjs` **215 → 238**.
+
+**No migration created or executed. No serializer, SQL function, seed, schema, RLS, policy or
+role change. No QA write, live probe or production operation. No credential accessed or
+provisioned. No finding promoted and no evidence count changed. No C1 widening. No guard
+bypassed, no force-push, no history rewrite. Production `nxdbooufqzkpslkcogxc` not contacted.
+PR #1 open, draft, unmerged.**
