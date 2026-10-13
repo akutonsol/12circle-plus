@@ -756,12 +756,40 @@ section('15 · SEC-R3 failure-leg prerequisite (offline source check)');
   const svc = fs.readFileSync(path.join(ROOT, 'apps', 'mobile', 'lib',
     'features', 'coach', 'data', 'coach_program_service.dart'), 'utf8');
 
-  const swallows = (svc.match(/catch \(_\) \{ return (null|false); \}/g) ?? []).length;
-  check('the SEC-R3 call sites still swallow into a benign default — recorded as '
-      + 'the PREREQUISITE, not as an acceptable state',
-    swallows > 0,
-    `${swallows} swallow(s) in coach_program_service.dart; Wave 3B-1 "refuse `
-    + `rather than degrade" is the fix and is blocked`);
+  // STRENGTHENED in Milestone 12: the three SEC-R3 methods are named, rather
+  // than a bare count being pinned. A count would be satisfied by any eleven
+  // swallows anywhere in the file; what matters is that THESE methods still
+  // convert a thrown RPC error into ordinary absence.
+  //
+  // Each is checked by its own enclosing method so the guard says which site
+  // regressed. (The earlier attribution attempt used `Future<[^>]+>`, which
+  // stops at the first `>` and so missed `Future<Map<String, dynamic>?>`
+  // declarations entirely — the count was right and the names were wrong.)
+  const methodSwallows = (name) => {
+    const i = svc.indexOf(`> ${name}(`) >= 0 ? svc.indexOf(`> ${name}(`) : svc.indexOf(`${name}(`);
+    if (i < 0) return null;
+    const body = svc.slice(i, i + 900);
+    return /catch \(_\) \{ return (?:null|false); \}/.test(body);
+  };
+  for (const m of ['predictClient', 'evaluateWeek', 'regenerateProgram']) {
+    check(`SEC-R3 prerequisite: ${m} still converts a thrown RPC error into `
+        + `ordinary absence — recorded as the BLOCKER, not an acceptable state`,
+      methodSwallows(m) === true,
+      'fix belongs to Wave 3B-4 (service-layer sweep), which follows 3B-1; '
+      + '3B-1 depends on CON-03 and SEC-R2');
+  }
+
+  // The contract to adopt already exists and is deliberately unwired. If
+  // reportFailure gains call sites, 3B-4 has begun and these assertions should
+  // be revisited on purpose rather than quietly inverted.
+  const sinkUsers = (fs.readFileSync(path.join(ROOT, 'apps', 'mobile', 'lib',
+    'core', 'observability', 'app_failure.dart'), 'utf8').length > 0)
+    && spawnSync('grep', ['-rl', 'reportFailure(',
+        path.join(ROOT, 'apps', 'mobile', 'lib')], { encoding: 'utf8' })
+       .stdout.split('\n').filter((f) => f && !f.includes('core/observability')).length;
+  check('3B-0\'s AppFailure sink exists and is still UNWIRED — so 3B-4 has not '
+      + 'silently begun',
+    sinkUsers === 0, `${sinkUsers} call site(s) outside the sink`);
 
   // The product path must keep going through the WRAPPERS. If a call site were
   // switched to an *_engine name, authorization would leave §2.1's chain and
