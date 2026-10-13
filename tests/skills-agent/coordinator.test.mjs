@@ -563,6 +563,49 @@ section('12 · migration coverage reconciliation');
   }
 }
 
+// ═══ 13 · the Step 4 bar, asserted against the register itself ═════════════
+// §2.1 puts SEC-R2 and SEC-R3 in the AI / safety input class — "all five. A
+// safety input is never closed on source review" — and VERIFIED END-TO-END is
+// Step 4, which "is not authorized to begin". The registry records both rows at
+// four of five.
+//
+// Nothing stopped those rows being promoted anyway. This is that check: if the
+// evidence columns change, or either row is moved to VERIFIED_CLOSED while
+// END-TO-END is still absent, the build fails and names it.
+section('13 · SEC-R2 / SEC-R3 cannot be promoted without the fifth state');
+{
+  const reg = fs.readFileSync(
+    path.join(ROOT, 'docs', 'MASTER_REMEDIATION_REGISTRY.md'), 'utf8');
+
+  for (const row of ['SEC-R2', 'SEC-R3']) {
+    const line = reg.split('\n').find((l) => l.startsWith(`| **${row}** |`));
+    check(`${row}'s evidence row is still present in the register`, !!line);
+    if (!line) continue;
+    check(`${row} still records VERIFIED END-TO-END as absent`,
+      /❌\s*\*\*absent\*\*/.test(line), line.trim().slice(0, 86));
+    check(`${row} still reads "4 of 5 present" — a promotion to 5 of 5 without `
+        + `Step 4 would be a false evidence claim`,
+      /4 of 5 present/.test(line));
+  }
+
+  // The structural statement, quoted. If this sentence is ever removed the
+  // programme-wide consequence has changed and this test should be revisited
+  // deliberately rather than silently.
+  const flat = reg.replace(/\s+/g, ' ');
+  check('the register still states the consequence programme-wide, not per-row',
+    flat.includes('no safety finding in this programme can reach'),
+    'registry:1805');
+  check('Step 4 is still recorded as unauthorized',
+    /Step 4 is not authorized/.test(reg));
+
+  // And the queue must not have quietly made the dependent task startable.
+  const q = JSON.parse(fs.readFileSync(
+    path.join(ROOT, '.skills-agent', 'tasks.json'), 'utf8'));
+  const secr = q.tasks.find((t) => t.id === 'V5-SECR-001');
+  check('the dependent queue task still carries an owner blocker naming Step 4',
+    (secr.blockers ?? []).some((b) => b.kind === 'owner' && /Step 4/.test(b.what)));
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {

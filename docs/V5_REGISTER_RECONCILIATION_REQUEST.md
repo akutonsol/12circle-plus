@@ -686,3 +686,119 @@ You are asked to choose **(i)** add a status to §2 for *"every state but END-TO
 
 Promotion is a **protected-register edit**, so it needs your authorization — but it needs nothing
 else. This is the shortest path to movement on the board.
+
+---
+
+# `MILESTONE 7` (continued) · the two deliverables I owed
+
+My first pass on this milestone established that Step 4 is undefined, but did **not** produce §4's
+evidence matrix or §5's source-cited dependency map. Both are below.
+
+## §4 · SEC-R2 / SEC-R3 evidence matrix
+
+`§2.1` class for both: **AI / safety input** — *"all five. A safety input is never closed on source
+review"*.
+
+| element | `SEC-R2` / F-J-17 | `SEC-R3` / F-J-07 |
+|---|---|---|
+| FIXED IN CODE | ✅ migration **126** | ✅ migration **127** |
+| FIXED ON QA | ✅ ledger **127** | ✅ ledger **127** |
+| VERIFIED LIVE | ✅ **FJ17 8/8** | ✅ **FJ07 10/10** |
+| VERIFIED IN CI | ✅ Dart class invariant | ✅ j03 inversion + Dart |
+| **VERIFIED END-TO-END** | ❌ **absent** | ❌ **absent** |
+| row reads | **4 of 5 present** | **4 of 5 present** |
+
+### The exact assertion that remains unverified
+
+`§2.1` defines the missing element precisely: *"The full chain runs — **UI → state → service →
+authorization → API/function → database → persistence → response → UI state** — with the correct
+**failure** behaviour, and the regression suite is green."*
+
+So for each row the unverified assertion is the **whole chain including its failure leg** — for
+`SEC-R2`, that a PAR-Q submission classifies, persists, reads back and renders, *and* that the UI
+behaves correctly when the classifier throws; for `SEC-R3`, the same for a typed rule-accumulator
+append. **None of the four present elements covers that**: the live rungs are SQL suites, and the
+CI rungs are source/class invariants.
+
+### The test and environment needed — and this is the useful finding
+
+**The capability already exists in this repository.** Six `integration_test/` probes sign in and
+traverse the real chain, and two of them are CI jobs:
+
+* `uix1_booking_e2e_test.dart` — *"UIX-1 / M-03 — VERIFIED END-TO-END runner"*
+* `wrk01_progression_live_test.dart` — the I-WRK-01 live progression job
+
+So the shape of a valid Step 4 rung is **already established and running**. What SEC-R2/R3 need is
+a probe of the same kind for the PAR-Q and accumulator chains, driven on a real target against
+**QA**, with a signed-in identity and a real write.
+
+**Equally important: the existing `EC-04` runner is NOT that, and must not be mistaken for it.**
+Its own header states the limit: *"the probe overrides `clientDetailProvider` with an in-memory
+profile. **NOTHING IS SIGNED IN, no backend is written**, and no real client's risk is asserted."*
+It verifies that *"NOT ASSESSED"* fits its pill at real font and dpr — the rendering half only.
+
+### Is the proposed verification authorized?
+
+**No, on two counts, and they are separate:**
+
+1. **Step 4 is not authorized to begin** (`registry:1802`) — and, per `V5-GOV-006`, it is not even
+   defined, so the authorization cannot be requested until the definition exists.
+2. **The probe requires a QA write.** A signed-in run that persists a PAR-Q assessment writes to
+   QA. That needs its own authorization, independent of Step 4, and the QA target must be
+   confirmed as `eyqtldjqpgpljlqvpowh` — which `expected_applied.json`'s `environments.qa.ref`
+   does, from a tracked file.
+
+**Dependent tasks:** `V5-SECR-001` → `V5-W3B-001` (Wave 3B-1). And structurally, *"no safety
+finding in this programme can reach `VERIFIED_CLOSED` before Step 4 runs"* — so the whole
+**AI / safety input** class waits on it, not only these two rows.
+
+## §5 · Source-cited dependency map
+
+Link types: **[T]** technical prerequisite · **[S]** explicit sequencing rule · **[A]** owner
+authorization · **[G]** release gate · **[D]** unresolved decision.
+
+### Chain 1 — the Wave 2 spine
+
+```
+V5-GOV-006  define Step 4                     [D] named once, never defined (registry:1802)
+     │ [A]
+V5-GOV-005  rule I-MIG-03's authority          [D] "escalated as an authority question, not decided" (:2049)
+     │ [A]
+V5-W2A-001  Wave 2A — I-MIG-03 enforcement     [T] "CI-verified in records mode, enforcement deferred to 2A" (:2049)
+     │ [S]  "2A → live re-verification → 2B's assertions promoted" (WAVES:215-216)
+V5-W2B-001  Wave 2B — the class guard          [G] gated; "must be written against the pre-2A tree first"
+     │ [A]
+   SEC-09                                      [A] "SEC-09 closes when I-MIG-03 reaches VERIFIED_CLOSED" (:2049)
+     │                                             FG-1's 5/5 ruled "necessary but not sufficient" (:229)
+V5-W3B-001  Wave 3B-1                          [T] "Depends on CON-03 … and on SEC-R2" (WAVES)
+```
+
+### Chain 2 — the Step 4 spine, in parallel
+
+```
+V5-GOV-006  define Step 4                     [D]
+     │ [A]  authorize Step 4
+V5-SECR-001  SEC-R2 · SEC-R3 · UIX-1 · M-03    [A] "not authorized to begin"; and [A] a QA write
+     │ [T]
+V5-W3B-001  Wave 3B-1
+```
+
+### Chain 3 — CON-03, which is neither
+
+```
+V5-CON-003  dietary_restrictions type          [G] "prod type unknown"; Gate 9B forbids reading production
+     │ [T]
+V5-W3B-001  Wave 3B-1
+```
+
+**`V5-W3B-001` is the join**: it needs Chain 1's `SEC-R2` evidence **and** Chain 3's `CON-03`
+ruling. Neither chain alone releases it.
+
+### Not on any chain — and therefore the shortest path
+
+```
+V5-PROM-001  promote SEC-04 · ENV-6            [A] protected-register edit, and NOTHING else
+```
+`SEC-04`'s class is **Security / authorization**, which does **not** require `VERIFIED END-TO-END`
+— so **Step 4 does not gate it**, and its substantive blocker (the F-J-01 blind spot) is recorded
+as resolved by SEC-R1's closure.
