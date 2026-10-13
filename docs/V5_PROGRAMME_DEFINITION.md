@@ -20643,3 +20643,100 @@ make the downstream sequence startable** — SEC-R2 blocks 3B-1 independently, 3
 RLS or policy change. No QA write, live probe or production operation. No credential accessed.
 No SEC-R2/SEC-R3 promotion or evidence-count change. No C1 widening. §7.10/§7.18 untouched.
 Production `nxdbooufqzkpslkcogxc` not contacted. The decisions remain PENDING.**
+
+---
+
+## §225 · Autonomous execution checkpoint (Milestone 17)
+
+### §225.1 · The queue's only real protection did not travel
+
+`blockers` was a declared field on 16 of 19 tasks that **the coordinator never read**. Every
+blocked task was held back solely by a hand-set status in `.skills-agent/state.json` — and
+that file is **gitignored** (`.gitignore:40`), while `loadState`'s `??=` (`:115`) defaults any
+unknown task to `READY`. So on a fresh clone, which is CI's situation and any new runner's,
+all 16 read as runnable.
+
+Measured on a fresh state, with the veto removed **in place**:
+
+| | eligible |
+|---|---|
+| fresh clone, no veto | **12** |
+| fresh clone, veto | **1** — `V5-AUTO-001`, read-only, no deps, no blockers |
+
+The eleven it newly blocks include `V5-PROM-001`/`V5-PROM-002` (finding promotions),
+`V5-GOV-002` (protected-register edits), `V5-GOV-006` (defining Step 4) and `V5-CON-003`
+(writing the migration on an undecided contract) — each forbidden by the programme's own
+boundaries. A fresh worker could have claimed any of them.
+
+The rule is schema-respecting: a blocker is `{kind, what, evidence, action}` with no
+`resolved` flag, so its presence *is* its unresolvedness. **No new task state was invented.**
+Verified by mutation — removing the veto makes `--self-test` exit **1**, the fixed version
+exits **0** — with two companion assertions proving an empty and an absent `blockers` array
+both stay eligible, so the veto is not vetoing everything.
+
+`validate` now also reports blocker/status drift (a blocker declared while `READY`/
+`RETRY_WAIT`), warning rather than throwing because the status field is operator-owned.
+Positive control: re-setting `V5-W3B-001` to `READY` reports exactly 1; a fresh state reports
+all 16.
+
+**A measurement error worth recording.** My first attempt reported "0 eligible without the
+veto", which is impossible — removing a veto cannot reduce eligibility. `ROOT` derives from
+the script's own location (`:16`), so a scratchpad copy read a nonexistent `tasks.json` and
+saw zero tasks. The number was real and measured nothing, the same class of error as a `tail`
+pipeline's exit code. Redone in place.
+
+**Schema gap, reported not invented:** blocker kind `architecture` has no corresponding status
+in `{BLOCKED_OWNER, BLOCKED_EXTERNAL, BLOCKED_GOVERNANCE}`.
+
+### §225.2 · 3B-0 is complete, and no `AppFailure` wiring is authorized
+
+`WAVES:280-283` describes 3B-0 as "An `AppFailure` type and one `reportFailure()` sink; **wire
+the five sanctioned swallow categories to it**", which reads as though wiring were in scope
+and outstanding — `AppFailure` has zero call sites. The registry settles it:
+
+**`ERR-1` / `EC-01` is `VERIFIED_CLOSED` (2026-08-27)**, closure class **RELEASE /
+ENVIRONMENT** by owner ruling, so §2.1 requires `FIXED IN CODE · VERIFIED IN CI` and nothing
+more. Both are present and named: `580932f` for the sink, run **#33** (`33043897947`) for the
+post-fix half, run **#34** (`33081949579`) step 7 for the pre-fix half, with `EC-23` closing
+as an alias.
+
+**Its closure evidence is the sink existing, compiling, and being exercised by the EC-23
+guard — not the wiring of any call site.** So 3B-0 is done, the wiring belongs to a later
+phase, and the standing restriction against wiring `AppFailure`/`reportFailure()` before its
+authorized wave is correct and unaffected. No wiring was performed.
+
+### §225.3 · Every other named concern re-verified as blocked
+
+| concern | state, from source | blocker |
+|---|---|---|
+| `CON-03-TYPE` | **PENDING** | owner; no governing document answers it |
+| `CON-03-COMMA` | **PENDING** | owner; and **no `CHECK`/enum constrains the column** in any of 182 migrations |
+| `CON-03-ROLLOUT` | **PENDING** | owner |
+| `CON-03-VOCAB` | **PENDING** | owner; a separate product question |
+| `SEC-R2` | 4 of 5 states; **END-TO-END absent**; NOT promoted | fifth rung + Step 4 unauthorized |
+| `SEC-R3` | 4 of 5 states; **END-TO-END absent**; NOT promoted | same |
+| `SEC-04` | **Deliberately NOT promoted** | open regression `F-J-01`: needs migration 124 + the I-MIG-03 class guard + a **live 403 probe**, all Wave 2. The probe needs QA authorization (absent); enforcement is owner-blocked at `V5-GOV-005` |
+| 3B-1 | not startable | `WAVES:287-288` — depends on CON-03 **and** SEC-R2 |
+| 3B-2…3B-5 | not startable | behind 3B-1 |
+| §7.10 / §7.18 | **conflict preserved, not resolved** | owner |
+
+`ERR-2` is `EC-02`, which this programme is instructed not to reconcile. 177 findings sit at
+`READY_TO_REMEDIATE`, essentially the whole remainder, in gated waves or on the restricted
+list — so the absence of further startable implementation work is a property of the gates, not
+of effort.
+
+### §225.4 · Autonomous execution: still a scheduler, not a team
+
+Unchanged and not overstated. The coordinator schedules, leases, verifies identity separation
+and now refuses blocked work. It **does not launch workers**: there is no provider invocation
+path, no trusted worker identity (`SKILLS_AGENT_ID` is self-asserted), and `V5-AUTO-002`
+remains `BLOCKED_EXTERNAL` on "no agent invocation mechanism" and "no credential". **Autonomous
+execution is NOT operational.** This milestone made the scheduler safer, which is the opposite
+of making it autonomous.
+
+`coordinator.test.mjs` **190 → 204**.
+
+**No migration created or executed. No serializer, SQL function, seed, schema, RLS or policy
+change. No QA write, live probe or production operation. No credential accessed. No finding
+promoted and no evidence count changed. No C1 widening. Production `nxdbooufqzkpslkcogxc` not
+contacted. PR #1 open, draft, unmerged.**
