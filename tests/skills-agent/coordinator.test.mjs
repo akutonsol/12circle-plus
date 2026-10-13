@@ -489,9 +489,16 @@ section('10 · the shipped .skills-agent/tasks.json');
     ids.includes('V5-GOV-007')
       && !/status-vocabulary/i.test(JSON.stringify(
            realTasks.tasks.find((t) => t.id === 'V5-SECR-001').blockers)));
-  check('the Step-4-blocked task names every row Step 4 gates, not only SEC-R2/R3',
-    ['SEC-R2', 'SEC-R3', 'UIX-1', 'M-03'].every((r) =>
-      realTasks.tasks.find((t) => t.id === 'V5-SECR-001').summary.includes(r)));
+  // CORRECTED in Milestone 9. This used to require UIX-1 and M-03 in the summary.
+  // They are NOT blocked — §7.18 closed them on 2026-08-28 — so naming them here
+  // was asserting a falsehood. The assertion is inverted: they must be ABSENT.
+  check('the END-TO-END task names the two rows that are genuinely short of the '
+      + 'rung, and no longer claims the two that closed',
+    (() => {
+      const sum = realTasks.tasks.find((t) => t.id === 'V5-SECR-001').summary;
+      return ['SEC-R2', 'SEC-R3'].every((r) => sum.includes(r))
+        && !/UIX-1|M-03/.test(sum);
+    })());
   check('the promotion candidates whose blockers are already resolved are tracked',
     ids.includes('V5-PROM-001')
       && /SEC-04/.test(JSON.stringify(realTasks.tasks.find((t) => t.id === 'V5-PROM-001'))));
@@ -576,6 +583,27 @@ section('13 · SEC-R2 / SEC-R3 cannot be promoted without the fifth state');
 {
   const reg = fs.readFileSync(
     path.join(ROOT, 'docs', 'MASTER_REMEDIATION_REGISTRY.md'), 'utf8');
+  const flat = reg.replace(/\s+/g, ' ');
+
+  // UIX-1 and M-03 are NOT Step-4-blocked. §7.18 records them VERIFIED_CLOSED on
+  // VERIFIED END-TO-END at CI run #49 (2026-08-28), and §7.x lines :2727/:2739
+  // saying otherwise are a dated EARLIER checkpoint. A prior milestone cited
+  // those lines as current state and got it wrong; this pins the correction.
+  check('§7.18 still records UIX-1 / M-03 as VERIFIED END-TO-END and closed',
+    flat.includes('UIX-1` / `M-03` VERIFIED END-TO-END and `VERIFIED_CLOSED`'),
+    'registry:2940');
+  check('M-03 still carries its VERIFIED_CLOSED date',
+    /M-03`[^\n]*VERIFIED_CLOSED` 2026-08-28/.test(reg), 'registry:1060');
+  check('and the queue no longer claims UIX-1 / M-03 are Step-4-blocked',
+    !/UIX-1|M-03/.test(JSON.parse(fs.readFileSync(
+      path.join(ROOT, '.skills-agent', 'tasks.json'), 'utf8'))
+      .tasks.find((t) => t.id === 'V5-SECR-001').summary));
+
+  // The per-row ruling pattern that actually produced that rung, twice.
+  check('§7.13\'s confined-ruling pattern is still recorded — it is the route '
+      + 'the precedent used, and C1 depends on it',
+    flat.includes('explicitly confined') && flat.includes('extends §7.13'),
+    'registry §7.13 / §7.18');
 
   for (const row of ['SEC-R2', 'SEC-R3']) {
     const line = reg.split('\n').find((l) => l.startsWith(`| **${row}** |`));
@@ -591,7 +619,6 @@ section('13 · SEC-R2 / SEC-R3 cannot be promoted without the fifth state');
   // The structural statement, quoted. If this sentence is ever removed the
   // programme-wide consequence has changed and this test should be revisited
   // deliberately rather than silently.
-  const flat = reg.replace(/\s+/g, ' ');
   check('the register still states the consequence programme-wide, not per-row',
     flat.includes('no safety finding in this programme can reach'),
     'registry:1805');
@@ -602,8 +629,16 @@ section('13 · SEC-R2 / SEC-R3 cannot be promoted without the fifth state');
   const q = JSON.parse(fs.readFileSync(
     path.join(ROOT, '.skills-agent', 'tasks.json'), 'utf8'));
   const secr = q.tasks.find((t) => t.id === 'V5-SECR-001');
-  check('the dependent queue task still carries an owner blocker naming Step 4',
-    (secr.blockers ?? []).some((b) => b.kind === 'owner' && /Step 4/.test(b.what)));
+  // Also corrected: the blocker no longer has to say "Step 4" in its `what`,
+  // because the route question is now C1-or-C2 and C1 does not involve the
+  // phase at all. What must survive is that it is an OWNER blocker naming the
+  // missing rung, with an action that points at the route decision.
+  check('the dependent queue task still carries an owner blocker for the missing '
+      + 'rung, pointing at the route decision',
+    (secr.blockers ?? []).some((b) =>
+      b.kind === 'owner'
+      && /rung|END-TO-END/i.test(b.what)
+      && /V5-GOV-006|C1|C2/.test(b.action)));
 }
 
 // ═══ 14 · the closure candidates' evidence claims, re-derived ══════════════

@@ -465,7 +465,7 @@
     },
     {
       "id": "V5-SECR-001",
-      "summary": "SEC-R2, SEC-R3, UIX-1 and M-03 — supply the VERIFIED END-TO-END state that Step 4 would permit",
+      "summary": "SEC-R2 and SEC-R3 — supply the VERIFIED END-TO-END rung their AI / safety input class demands",
       "role": "implementer",
       "dependsOn": [
         "V5-GOV-006"
@@ -474,9 +474,9 @@
         "supabase/tests/ai/"
       ],
       "acceptance": [
-        "Step 4 is authorized and recorded before any end-to-end evidence is claimed",
-        "The full chain runs for each affected row, per its §2.1 class",
-        "No waiver is substituted for the fifth state, and no row is promoted on four of five"
+        "A CI e2e probe supplies the full chain INCLUDING the failure leg, as §2.1 requires",
+        "An owner ruling establishes that the evidence satisfies the rung for these rows, citing §2.1's class row and §3 step 12 -- the §7.13 / §7.18 pattern",
+        "Neither row is promoted on four of five, and no waiver is substituted for the fifth state"
       ],
       "maxRetries": 2,
       "risk": "end-to-end-verification",
@@ -500,9 +500,9 @@
       "blockers": [
         {
           "kind": "owner",
-          "what": "Step 4 (End-to-End Product Verification) is not authorized to begin, and it gates EVERY row whose §2.1 class demands VERIFIED END-TO-END -- not only SEC-R2/R3",
-          "evidence": "MASTER_REMEDIATION_REGISTRY.md:1802-1805 'VERIFIED END-TO-END is Step 4 (End-to-End Product Verification), which is not authorized to begin ... no safety finding in this programme can reach VERIFIED_CLOSED before Step 4 runs'; the same bar is recorded for UIX-1 (:2727, :2739) and M-03 (REMEDIATION_PROGRESS.md:401)",
-          "action": "authorize Step 4 -- and first establish WHAT it is: see V5-GOV-006"
+          "what": "the fifth rung is unevidenced for these two rows. CORRECTION: UIX-1 and M-03 were previously listed here and are NOT blocked -- §7.18 records them VERIFIED_CLOSED on VERIFIED END-TO-END at CI run #49 (2026-08-28). The lines saying otherwise (:2727, :2739) are a dated earlier checkpoint that §7.18 supersedes",
+          "evidence": "registry §7.18 at :2940 and :1060 'M-03 VERIFIED_CLOSED 2026-08-28'; both rows' own evidence rows still read '4 of 5 present' with END-TO-END absent",
+          "action": "choose route C1 (a per-row ruling on the §7.13 pattern, twice exercised) or C2 (define Step 4 as a phase) -- see V5-GOV-006"
         }
       ]
     },
@@ -583,7 +583,7 @@
     },
     {
       "id": "V5-GOV-006",
-      "summary": "Define Step 4 (End-to-End Product Verification): its entry criteria, its authorized approver, and what approval permits",
+      "summary": "Choose how the VERIFIED END-TO-END rung is authorized: a per-row ruling (the exercised §7.13/§7.18 route) or a defined Step 4 phase",
       "role": "owner-decision",
       "dependsOn": [],
       "paths": [
@@ -591,11 +591,10 @@
         "docs/QA_CLOSURE_STANDARD.md"
       ],
       "acceptance": [
-        "Step 4's entry criteria are stated",
-        "The role authorized to approve it is named",
-        "The scope of approval is stated -- whether it permits verification only, or also code, data, register or release-status changes",
-        "The environment restrictions that survive approval are stated, including that Gate 9B stays closed",
-        "What constitutes a valid record of the approval is stated"
+        "Route C1 or C2 is chosen",
+        "If C1: the ruling names the rows, cites §2.1's class row and §3 step 12, and is confined to those rows as §7.13's pattern requires",
+        "If C2: Step 4's entry criteria, approver, scope, and recording mechanism are stated",
+        "Either way, Gate 9B is not opened and no release gate changes"
       ],
       "maxRetries": 0,
       "risk": "governance-definition",
@@ -617,9 +616,9 @@
       "blockers": [
         {
           "kind": "owner",
-          "what": "Step 4 is NAMED but never DEFINED. The phrase 'End-to-End Product Verification' occurs exactly ONCE across all of docs/, in a parenthetical. No document states its entry criteria, its approver, or what approval would permit -- so the authorization cannot be requested, only the definition can",
-          "evidence": "multi-line search of docs/*.md: 1 occurrence, MASTER_REMEDIATION_REGISTRY.md:1802. No step table exists; no document ties any Step number to an approver",
-          "action": "define Step 4 and name who may authorize it"
+          "what": "Step 4 is named once in all of docs/ and never defined -- BUT the rung has been satisfied twice without it, by a per-row owner ruling plus a CI job (§7.13 EC-01, §7.18 UIX-1/M-03). So the question is which route applies, not merely 'define the phase'. A conflict is also recorded: :1805's 'no safety finding can reach VERIFIED_CLOSED before Step 4 runs' is inconsistent with §7.18's outcome",
+          "evidence": "registry:1802 names Step 4 once; §7.13 'explicitly confined to EC-01'; §7.18 'extends §7.13's standard to this rung for this row'",
+          "action": "choose C1 or C2, and resolve the :1805 conflict"
         }
       ]
     },

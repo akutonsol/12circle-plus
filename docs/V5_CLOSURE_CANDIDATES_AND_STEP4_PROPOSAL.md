@@ -150,3 +150,102 @@ evidence above, if the owner accepts PR #1 as satisfying *"the first PR"*.
 
 **Who may authorize Step 4?** The sources do not say. Until that is answered the phase cannot be
 started by anyone, and this proposal cannot be adopted. See `V5-GOV-006`.
+
+---
+
+# `MILESTONE 9` · three decision records — and a correction that changes Decision C
+
+## ⚠ Correction first: `UIX-1` and `M-03` are **not** Step-4-blocked. They closed on 2026-08-28.
+
+Milestone 7 listed them among the rows Step 4 gates. **That was wrong**, and the error is one this
+programme has named before: I read a **dated record of an earlier position** as a current-state
+claim.
+
+The lines I cited (`registry:2727`, `:2739` — *"VERIFIED END-TO-END is absent and `UIX-1` is NOT
+`VERIFIED_CLOSED`"*) are a §7.x checkpoint record. **§7.18 supersedes them:**
+
+> *"### 7.18 `UIX-1` / `M-03` VERIFIED END-TO-END and `VERIFIED_CLOSED` — 2026-08-28 · evidence:
+> CI run **#49** `33200559221`"* — with the `UIX-1` job `98949037130`, *"steps 1–7 all `success`"*,
+> and the rung moving **`ABSENT` → `PRESENT`**, status **`REMEDIATED` → `VERIFIED_CLOSED`**.
+
+`:1060` confirms it independently: *"`M-03` · P0 · ✅ `VERIFIED_CLOSED` 2026-08-28"*.
+
+**So `VERIFIED END-TO-END` has already been obtained and accepted in this programme — twice —
+while "Step 4 is not authorized to begin" remained true.** That is the single most useful fact in
+this milestone, and it reframes Decision C.
+
+### How it was done — the exercised mechanism
+
+§7.18 records *"the owner ruling that **extends §7.13's standard to this rung for this row**"*. And
+§7.13's standard is a **per-row owner ruling on closure class and rung satisfaction**, stated with
+a deliberate limit:
+
+> *"Owner ruling 2026-08-27: EC-01 is **RELEASE / ENVIRONMENT**… The ruling is **explicitly
+> confined to EC-01** and does **not** extend to EC-05 or any other error-contract /
+> false-success finding."*
+
+So the pattern, exercised twice: **(1)** a CI job supplies the rung's evidence; **(2)** an owner
+ruling, confined to the named row, establishes that this evidence satisfies that rung; **(3)**
+§2.1's row and §3 step 12 are cited verbatim before the promotion.
+
+---
+
+## Decision A · `ENV-6` and the first-PR criterion
+
+**Criterion, verbatim** (`registry:1594`): *"push-triggered runs proven; the row's own retest names
+a PR run — **closes at the first PR**"*. Status: **`REMEDIATED`** (`:1523`).
+
+**PR history, verified:** PR **#1** is the repository's **only** pull request, created
+2026-10-12T17:45:05Z. **15** `pull_request` CI runs recorded, **9** successful; most recent
+`38332911288`, all seven jobs green.
+
+| | **Interpretation A** — PR #1 satisfies it | **Interpretation B** — it does not |
+|---|---|---|
+| evidence for | The criterion says *"the first PR"* and **adds no qualifier**. PR #1 is the first PR, it is a real `pull_request` event, and its runs are green — the condition as written is met. The row's concern (`:618`) was *"No CI, and the only workflow contacts production"*; PR-triggered CI demonstrably exists now | The row's purpose was to prove CI works **for product change**. PR #1 carries this programme's own queue infrastructure; its green runs partly exercise guards written in the same PR. A criterion meant to retire *"No CI"* arguably wants a PR that CI was protecting, not one that added CI tooling |
+| consequence if chosen | `ENV-6` promotes from `REMEDIATED` on evidence already in hand. **No further work.** | `ENV-6` stays `REMEDIATED` until a product-change PR runs. **No work is unblocked by waiting**, and the row remains understated |
+| risk | A reader later disputes that an infrastructure PR counted | The row stays open indefinitely if product PRs remain blocked — which they currently are |
+
+**I am not selecting.** Both readings are available on the text, and the distinction is about
+intent, which the text does not record.
+
+---
+
+## Decision B · `SEC-04`'s status transition
+
+| question | answer, with evidence |
+|---|---|
+| **1 · Are the technical requirements satisfied?** | **Yes.** `:1585` names three: migration 124 (`124_wave_2a_security_regressions.sql` present) · the I-MIG-03 **class guard** (`migration-durability-guard.mjs`, twice in `ci.yml`, reporting *"established 116 → stripped 119 → restored 124"*) · the live 403 probe (`d04` §8, all five wrappers). The blocker `F-J-01` is `VERIFIED_CLOSED` (`:360`) |
+| **2 · Does the evidence support classifying it as remediated?** | **The four states its class needs appear present** — FIXED IN CODE (116+124), FIXED ON QA (ledger; frontier 181), VERIFIED LIVE (d04's 403 probe), VERIFIED IN CI (the class guard + d04). Its class is **Security / authorization**, which `§2.1` gives four states and **no `VERIFIED END-TO-END`** |
+| **3 · Does the standard permit `OPEN` → `VERIFIED_CLOSED`?** | **The standard does not say.** §2 defines `OPEN` as *"Suspected; needs a probe or a decision before it can be classified"*, and `§3 step 12` says *"Mark `VERIFIED_CLOSED` only when §2.1's required states all exist"* — which is a condition on the states, not on the starting status. **No source establishes whether the ladder may be entered at `OPEN` and exited at `VERIFIED_CLOSED` in one move** |
+| **4 · Is an intermediate transition required?** | **Unestablished — this is the decision.** The §7.13/§7.18 precedent shows rows moving `REMEDIATED → VERIFIED_CLOSED`, not `OPEN → VERIFIED_CLOSED`. That is evidence about practice, not a rule |
+| **5 · Which authority must approve?** | A **protected-register edit**, so the product owner. The §7.13 pattern also requires the ruling to **cite §2.1's class row and §3 step 12 verbatim** and to be **confined to the named row** |
+
+**Not recommended for direct closure.** The requirements are met; the ladder question is open.
+
+---
+
+## Decision C · Step 4 authority — **reframed by the precedent**
+
+**What I asked for in Milestone 7/8:** define Step 4 as a programme phase and name its approver.
+
+**What the evidence now shows is actually needed:** possibly **neither**. `VERIFIED END-TO-END` was
+established twice — EC-01's rung at §7.13, `UIX-1`/`M-03`'s at §7.18 — **without Step 4 being
+authorized**, by a per-row owner ruling plus a CI job.
+
+So there are **two routes**, and choosing between them is the decision:
+
+| | **C1 · the exercised route** | **C2 · the programme-phase route** |
+|---|---|---|
+| what it is | A per-row owner ruling extending §7.13's standard to the `VERIFIED END-TO-END` rung for `SEC-R2` and `SEC-R3`, with a CI e2e job supplying the evidence | Define Step 4 — entry criteria, approver, scope, recording — and authorize the phase |
+| precedent | **Twice exercised**, §7.13 and §7.18 | **Never exercised**; the phase is named once in all of `docs/` and never defined |
+| cost | One ruling per row, plus building the probes | A governance definition, then an authorization, then the probes |
+| what it leaves | *"Step 4 is not authorized to begin"* stays true, and the structural claim *"no safety finding can reach `VERIFIED_CLOSED` before Step 4 runs"* becomes **inconsistent with practice** — because two rows already did | A general mechanism, and the structural claim becomes true again |
+| risk | Ruling-by-ruling drift; the §7.13 pattern's own *"explicitly confined"* language exists to prevent that, so each ruling is narrow by design | A large definition written once, for a phase that may never be needed as a phase |
+
+**Still unresolved either way, and not inferable:** who may issue such a ruling is **recorded in
+practice** (*"the product owner ruled"*) but **never stated as a rule**; and the structural
+sentence at `:1805` now conflicts with §7.18's outcome. **That conflict is recorded here, not
+resolved.**
+
+**Neither route opens Gate 9B.** Production `nxdbooufqzkpslkcogxc` stays out of scope, QA only, and
+no release gate changes.
