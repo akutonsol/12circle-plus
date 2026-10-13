@@ -53,8 +53,15 @@ function run(dir, args, env = {}) {
 const json = (r) => { try { return JSON.parse(r.out); } catch { return null; } };
 const stateOf = (dir) =>
   JSON.parse(fs.readFileSync(path.join(dir, '.skills-agent', 'state.json'), 'utf8'));
+// `paths` defaults to a PER-TASK path, not a shared 'x'. It was shared while
+// `paths` was a field nothing read; once an implementer lease began reserving
+// its paths, every default task conflicted with every other and two existing
+// tests failed -- correctly. Those tests are about dependency scheduling and
+// independent advancement, never about file contention, so the realistic
+// default is one file per task. A test that WANTS contention passes `paths`
+// explicitly.
 const T = (id, extra = {}) => ({
-  id, role: 'implementer', summary: id, dependsOn: [], paths: ['x'],
+  id, role: 'implementer', summary: id, dependsOn: [], paths: [`${id}.dart`],
   acceptance: ['test'], maxRetries: 2, ...extra,
 });
 
@@ -1442,6 +1449,175 @@ section('the attestation key and identity token stay out of all output');
   check('the state file stores neither the key nor the token',
     !persisted.includes(SECRET) && !persisted.includes(expected),
     'state.json records trust LEVEL, not the secret that established it');
+}
+
+// ── the fresh-clone case, driven through `claim` (Milestone 18) ────────────
+//
+// `sandbox()` writes ONLY tasks.json, so these runs have NO state.json at all
+// -- which is precisely the production scenario: state.json is gitignored
+// (.gitignore:40) and loadState's `??=` defaults every unknown task to READY.
+// Milestone 17 proved the veto's effect by counting eligibility in-process
+// (12 -> 1). This asserts the same thing through the real `claim` command,
+// which is what an actual worker invokes.
+section('on a fresh clone with no state, a blocked task is never handed out');
+{
+  const dir = sandbox([
+    T('BLOCKED', { blockers: [{ kind: 'owner', what: 'an undecided contract',
+      evidence: 'memo', action: 'owner ruling' }] }),
+    T('FREE'),
+  ]);
+  // No state.json exists yet -- assert the premise rather than assume it.
+  check('the sandbox genuinely has no persisted state (the fresh-clone premise)',
+    !fs.existsSync(path.join(dir, '.skills-agent', 'state.json')),
+    'if this file existed, the test below would not be testing a fresh clone');
+
+  const first = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w1' }));
+  check('claim hands out the UNBLOCKED task, not the blocked one',
+    first?.task?.id === 'FREE',
+    `claimed ${first?.task?.id ?? '(none)'}`);
+  check('…and the blocked task defaulted to READY, so only the veto excluded it',
+    stateOf(dir).tasks.BLOCKED.status === 'READY',
+    'this is the exact condition that made the veto necessary');
+
+  // With the only unblocked task taken, a second worker must get nothing --
+  // NOT the blocked task.
+  const second = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w2' }));
+  check('a second worker is refused rather than given the blocked task',
+    second?.claimed === false && second?.reason === 'NO_ELIGIBLE_TASK_FOR_ROLE',
+    JSON.stringify(second).slice(0, 80));
+  check('…and the blocked task was never claimed',
+    !stateOf(dir).tasks.BLOCKED.leaseToken
+      && stateOf(dir).tasks.BLOCKED.status === 'READY',
+    'no lease was ever issued against it');
+}
+{
+  // The non-regression legs at command level: an empty and an absent blockers
+  // array must both remain claimable, so the veto is not blocking everything.
+  const dirEmpty = sandbox([T('A', { blockers: [] })]);
+  const a = json(run(dirEmpty, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w1' }));
+  check('an EMPTY blockers array is still claimable on a fresh clone',
+    a?.task?.id === 'A', `claimed ${a?.task?.id ?? '(none)'}`);
+
+  const dirAbsent = sandbox([T('B')]);
+  const b = json(run(dirAbsent, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w1' }));
+  check('an ABSENT blockers field is still claimable on a fresh clone',
+    b?.task?.id === 'B', `claimed ${b?.task?.id ?? '(none)'}`);
+}
+{
+  // A blocked task must not block its dependents' siblings either: the queue
+  // has to keep advancing around it (the "blocked tasks do not prevent
+  // unrelated tasks from advancing" requirement), and a task depending on a
+  // blocked one must stay unreachable.
+  const dir = sandbox([
+    T('GATE', { blockers: [{ kind: 'governance', what: 'gated wave',
+      evidence: 'waves', action: 'authorize the wave' }] }),
+    T('DOWNSTREAM', { dependsOn: ['GATE'] }),
+    T('UNRELATED'),
+  ]);
+  const got = [];
+  for (const id of ['w1', 'w2', 'w3']) {
+    const c = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: id }));
+    if (c?.task?.id) got.push(c.task.id);
+  }
+  check('only the unrelated task is ever handed out',
+    got.length === 1 && got[0] === 'UNRELATED',
+    `handed out: [${got.join(', ')}]`);
+  check('…and the task depending on a blocked task stays unclaimed',
+    stateOf(dir).tasks.DOWNSTREAM.status === 'READY'
+      && !stateOf(dir).tasks.DOWNSTREAM.leaseToken,
+    'depsVerified already covered this; it must still hold with the veto');
+}
+
+// ── file ownership: `paths` must reserve files, not decorate the queue ─────
+//
+// `paths` was the SECOND declared field validated and never read. Demonstrated
+// before the fix: two tasks both declaring `lib/shared/thing.dart` were handed
+// to w1 and w2 and BOTH held live leases. Leases protected a TASK from
+// double-claim; nothing protected a FILE.
+section('an implementer lease reserves its declared paths');
+{
+  const P = 'lib/shared/thing.dart';
+  const dir = sandbox([
+    T('X', { paths: [P] }),
+    T('Y', { paths: [P] }),
+    T('Z', { paths: ['lib/other/elsewhere.dart'] }),
+  ]);
+  const a = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w1' }));
+  check('the first worker claims the contended task', a?.task?.id === 'X',
+    `claimed ${a?.task?.id ?? '(none)'}`);
+
+  // The queue must route AROUND the conflict, not stall on it.
+  const b = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w2' }));
+  check('the second worker gets the NON-conflicting task, not nothing',
+    b?.task?.id === 'Z', `claimed ${b?.task?.id ?? '(none)'}`);
+
+  const c = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w3' }));
+  check('a worker is refused the task whose path is already held',
+    c?.claimed === false && c?.reason === 'NO_ELIGIBLE_TASK_FOR_ROLE',
+    JSON.stringify(c).slice(0, 70));
+  check('…and the conflicting task holds no lease and stays READY',
+    stateOf(dir).tasks.Y.status === 'READY' && !stateOf(dir).tasks.Y.leaseToken,
+    'a path conflict must not consume a retry or change status');
+}
+{
+  // Prefix-aware, because the real queue mixes directories and files.
+  const dir = sandbox([
+    T('DIR', { paths: ['.skills-agent/'] }),
+    T('FILE', { paths: ['.skills-agent/tasks.json'] }),
+  ]);
+  run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w1' });
+  const second = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w2' }));
+  check('a directory lease conflicts with a file inside it',
+    second?.claimed === false,
+    `got ${second?.task?.id ?? 'refused'} — '.skills-agent/' must cover its contents`);
+}
+{
+  // And the inverse must NOT over-block: siblings in one directory are
+  // independent. Without this leg the test above would pass against a rule
+  // that treats every path as conflicting.
+  const dir = sandbox([
+    T('A', { paths: ['docs/A.md'] }),
+    T('B', { paths: ['docs/B.md'] }),
+  ]);
+  const a = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w1' }));
+  const b = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w2' }));
+  check('sibling files in one directory are both claimable',
+    a?.task?.id && b?.task?.id && a.task.id !== b.task.id,
+    `claimed ${a?.task?.id} and ${b?.task?.id}`);
+}
+{
+  // The reservation must be RELEASED, or a path conflict becomes a permanent
+  // deadlock -- the failure mode the stale-lock fix already had to undo once.
+  const P = 'lib/contended.dart';
+  const dir = sandbox([T('X', { paths: [P] }), T('Y', { paths: [P] })]);
+  const a = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w1' }));
+  const blocked = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w2' }));
+  check('Y is blocked while X holds the path', blocked?.claimed === false,
+    'premise for the release test below');
+
+  // Expire X's lease and recover it; Y must become claimable.
+  const st = stateOf(dir);
+  st.tasks.X.leaseExpiresAt = new Date(Date.now() - 60_000).toISOString();
+  fs.writeFileSync(path.join(dir, '.skills-agent', 'state.json'),
+    JSON.stringify(st, null, 2));
+  run(dir, ['recover'], { SKILLS_AGENT_ID: 'w1' });
+  const after = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w3' }));
+  check('once the holding lease expires, the path is released',
+    after?.task?.id === 'X' || after?.task?.id === 'Y',
+    `claimed ${after?.task?.id ?? 'refused'} — a conflict must not deadlock`);
+}
+{
+  // A verifier reviews rather than writes, and its independence is enforced
+  // separately, so path reservation must not stop verification.
+  const P = 'lib/v.dart';
+  const dir = sandbox([T('X', { paths: [P] }), T('Y', { paths: [P] })]);
+  const c = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'mallory' }));
+  run(dir, ['event', 'X', c.token, 'implemented', 'done'], { SKILLS_AGENT_ID: 'mallory' });
+  const v = json(run(dir, ['claim', 'verifier'],
+    { SKILLS_AGENT_ID: 'alice', SKILLS_AGENT_ROLE: 'verifier' }));
+  check('a verifier can still claim a task whose paths are contended',
+    v?.assignment === 'independent-verification',
+    JSON.stringify(v).slice(0, 70));
 }
 
 console.log(`\n${'='.repeat(74)}`);

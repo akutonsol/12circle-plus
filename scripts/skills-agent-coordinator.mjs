@@ -226,6 +226,44 @@ function depsVerified(task, state) { return task.dependsOn.every(id => state.tas
 // declared owner/governance/external blocker sitting there unread. That is how a
 // gated Wave 2B or 3B-1 task could have been claimed by a worker.
 function declaredBlockers(task) { return Array.isArray(task.blockers) ? task.blockers : []; }
+// `paths` was the SECOND declared field the coordinator validated and then
+// never used (`:92` checks it is an array; nothing read it). Demonstrated:
+// two tasks both declaring `lib/shared/thing.dart` were handed to w1 and w2
+// and BOTH held live leases, so two workers would edit one file concurrently.
+// Leases protect a task from double-claim; nothing protected a FILE.
+//
+// Overlap is prefix-aware because the real queue mixes directories and files
+// (`.skills-agent/` and `docs/V5_PROGRAMME_DEFINITION.md`), so `.skills-agent`
+// must conflict with `.skills-agent/tasks.json` while `docs/A.md` and
+// `docs/B.md` must not.
+function normPath(p) {
+  return String(p).trim().replace(/^\.\/+/, '').replace(/\/+$/, '').replace(/\/{2,}/g, '/');
+}
+function pathsOverlap(a, b) {
+  const x = normPath(a); const y = normPath(b);
+  if (!x || !y) return false;
+  return x === y || x.startsWith(`${y}/`) || y.startsWith(`${x}/`);
+}
+// Only an implementer lease reserves files. A verifier reviews, and its
+// independence is already enforced separately.
+function heldPaths(tasks, state) {
+  const out = [];
+  for (const t of tasks) {
+    const s = state.tasks[t.id];
+    if (!s || !s.leaseToken) continue;
+    if (!['CLAIMED', 'IMPLEMENTED'].includes(s.status)) continue;
+    for (const p of (Array.isArray(t.paths) ? t.paths : [])) out.push({ id: t.id, path: p });
+  }
+  return out;
+}
+function pathConflict(task, tasks, state) {
+  const held = heldPaths(tasks, state).filter((h) => h.id !== task.id);
+  for (const p of (Array.isArray(task.paths) ? task.paths : [])) {
+    const hit = held.find((h) => pathsOverlap(p, h.path));
+    if (hit) return { path: p, heldBy: hit.id, heldPath: hit.path };
+  }
+  return null;
+}
 function eligible(task, state) {
   const s = state.tasks[task.id];
   if (declaredBlockers(task).length > 0) return false;
@@ -286,7 +324,7 @@ function main() {
       const isVerifier = role === 'verifier';
       const task = isVerifier
         ? tasks.find(t => state.tasks[t.id]?.status === 'IMPLEMENTED' && !state.tasks[t.id]?.verificationLeaseToken && depsVerified(t, state))
-        : tasks.find(t => t.role === role && eligible(t, state));
+        : tasks.find(t => t.role === role && eligible(t, state) && !pathConflict(t, tasks, state));
       if (!task) { writeAtomic(STATE_PATH, state); return null; }
       const s = state.tasks[task.id]; const token = crypto.randomUUID();
       if (isVerifier) {
