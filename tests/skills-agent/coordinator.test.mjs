@@ -679,8 +679,43 @@ section('14 · SEC-04 / ENV-6 closure-candidate evidence');
   // ENV-6 — one stated condition.
   check('ENV-6\'s criterion still reads "closes at the first PR"',
     flat.includes('closes at the first PR'), 'registry:1594');
-  check('ENV-6 is still recorded REMEDIATED — not promoted by this session',
-    /\| ENV-6 \| 4 \| `REMEDIATED`/.test(reg), 'registry:1523');
+  // SUPERSEDED by the owner's own commit d99ff79 (§7.25, 2026-10-12), which
+  // adopted interpretation A and recorded "ENV-6 is VERIFIED_CLOSED as of
+  // 2026-10-12". The previous assertion here said "not promoted by this
+  // session" — true of this session, and misleading afterwards, because the
+  // OWNER promoted it. It is replaced by the two things that are actually true
+  // and worth holding.
+  check('the owner\'s ENV-6 ruling is recorded in the register',
+    flat.includes('ENV-6 is **VERIFIED_CLOSED as of 2026-10-12**')
+      && flat.includes('interpretation A adopted'),
+    'registry §7.25');
+
+  // And the divergence that ruling leaves behind. §7.25 records the promotion;
+  // §6's own row still reads REMEDIATED, with a parenthetical — "ci.yml has
+  // never run" — that is now doubly untrue. Reconciling the §6 row is a
+  // PROTECTED-REGISTER edit and is the owner's, so this does not fail: it
+  // reports, so the divergence cannot be forgotten.
+  const env6Row = /\| ENV-6 \| 4 \| `REMEDIATED`/.test(reg);
+  check('RECORDED DIVERGENCE (not a defect in this repo\'s code): §7.25 promotes '
+      + 'ENV-6 while §6\'s row still reads REMEDIATED "(ci.yml has never run)" — '
+      + 'the §6 row needs the owner\'s edit to agree with the ruling',
+    true,
+    env6Row
+      ? 'divergence PRESENT at registry:1523 — owner edit still needed'
+      : 'divergence resolved — the §6 row no longer claims REMEDIATED');
+
+  // §7.25's three rulings, pinned. The owner recorded them; a later edit that
+  // dropped one would change what this programme is allowed to do.
+  check('§7.25 records C1 as a PER-ROW route with no blanket authorization',
+    flat.includes('per-row acceptance route selected; no blanket Step 4 authorization'),
+    'registry §7.25 Ruling B');
+  check('§7.25 keeps SEC-04 OPEN and says so explicitly',
+    flat.includes('SEC-04 remains **OPEN**')
+      && flat.includes('No\nSEC-04 status promotion is authorized or performed by this entry'.replace('\n', ' ')),
+    'registry §7.25');
+  check('§7.25 preserves the Step 4 authority conflict rather than reconciling it',
+    flat.includes('is in tension with the per-row precedent in §7.18'),
+    'registry §7.25');
 
   // And the proposal must not have been quietly applied.
   check('the proposal document exists and states that nothing was applied',
