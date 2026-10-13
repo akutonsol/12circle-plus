@@ -106,7 +106,7 @@ milestone, not a new owner decision.
 | **SEC-R2** | **blocked.** Row still `❌ **absent**` for `VERIFIED END-TO-END`, *4 of 5 present* | `REGISTRY` SEC-R2 row |
 | **3B ordering** | *"**Strictly ordered** — this is Workstream B's sequence and it is correct"*; 3B-0 → 3B-1 → 3B-2 → 3B-3 → 3B-4 → 3B-5 confirmed in order | `WAVES` §3B |
 | **3B-1** | **NOT startable.** Needs CON-03 *resolved* (migration unwritten) **and** SEC-R2 (blocked). An independent audit agrees: *"❌ `SEC-R2` is not `VERIFIED_CLOSED` — four of five states"* | `WAVES:287` · `WAVE_3B_WRK07_EC11_EC05_AUDIT.md:96` |
-| **3B-4** | **NOT startable.** Behind 3B-1; the only stated parallelism is 3B-2 ∥ 3B-4 | `WAVES` §3B |
+| **3B-4** | **NOT startable.** Behind 3B-1. ~~the only stated parallelism is 3B-2 ∥ 3B-4~~ **Corrected 2026-10-13 (Milestone 15):** `WAVES:300-301` states **two** parallelisms in adjacent clauses — the prose says "the sites inside **3B-2 and 3B-4** touch disjoint service files", while the spine notation reads `3B-0 → 3B-1 → {3B-2 ∥ 3B-3} → 3B-4 → 3B-5`. The `:558` diagram (`3B-2/3 → 3B-4`) agrees with the spine, so 2 of 3 statements put **3B-2 ∥ 3B-3** with 3B-4 strictly after. This row cited the outlier. The inconsistency is a sequencing-authority question and is **reported, not resolved** | `WAVES:300-301` · `WAVES:558` |
 | **SEC-R3** | **NOT startable.** Needs the 3B-4 service fix, then a probe, then its own per-row C1 acceptance | `V5_SECR3_FAILURE_PATH_READINESS.md` |
 
 **The hypothesised sequence holds, with one amendment.** `CON-03 + SEC-R2 → 3B-1 → 3B-2 → 3B-3 →

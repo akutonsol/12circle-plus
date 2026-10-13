@@ -222,7 +222,7 @@ either a `postgresql` server on the runner or authorized QA execution — neithe
 
 - CON-03 gates **Wave 3B-1**, which with SEC-R2 gates **SEC-R3**'s failure-path leg
   (`V5_SECR3_FAILURE_PATH_READINESS.md`). CON-03 remaining undecided keeps 3B-1 unstartable.
-- 3B order is strict: 3B-0 → 3B-1 → 3B-2 → 3B-3 → 3B-4 → 3B-5 (only 3B-2 ∥ 3B-4).
+- 3B order is strict: `3B-0 → 3B-1 → {3B-2 ∥ 3B-3} → 3B-4 → 3B-5` (`WAVES:301`, agreeing with the `:558` diagram). ~~only 3B-2 ∥ 3B-4~~ **Corrected 2026-10-13:** that came from the prose clause at `WAVES:300`, which states a *different* parallelism than the spine in the same sentence pair. Reported as a documentation inconsistency, not resolved here.
 - Q-6 (`MASTER_QA_RECONCILIATION.md:513`) stands: production is not inspected and will not be
   without explicit authorization. Confirming prod's type is "a prerequisite to a production
   rollout, not to QA work" — consistent with PD-A22's "(b) now, (a) before rollout".
@@ -232,3 +232,36 @@ either a `postgresql` server on the runner or authorized QA execution — neithe
 No migration file created. No QA write, live probe, or schema change. Production
 `nxdbooufqzkpslkcogxc` not contacted. No target invented. No registry or closure-standard row
 mutated. Creating a migration file would not be permission to execute it, so none was created.
+
+---
+
+## 8. Amendment, 2026-10-13 (Milestone 15) — two pieces of evidence this design missed
+
+Additive. Nothing above is rewritten; §1.2 and §4.3 are **qualified** by the following.
+
+**§1.2's "copied comment" account is incomplete.** Milestone 15 found two further artifacts
+that assume `text[]`:
+
+1. `supabase/seeds/test_accounts.sql:156` inserts **`ARRAY[]::text[]`** into the column. A
+   committed seed, not a comment. Against a `text` column it fails outright; it has never
+   surfaced because the seed is referenced nowhere in `.github/`, `supabase/scripts/`,
+   `scripts/`, `package.json` or `Makefile` — the same latency `141`'s header describes.
+   (The same seed uses `ARRAY[]` *correctly* at `:120-121` for genuine `text[]` columns.)
+2. `apps/mobile/lib/.../client_detail_screen.dart:773` documents "JSON arrays".
+
+So the `text[]` intent is held in **four** places, not one. §4.3's cost analysis is unchanged
+— the `141` function consequence and the absent type-change precedent still hold — but the
+recommendation is no longer safe to present as merely correcting a stray comment. See
+`V5_CON03_STORAGE_CONTRACT_DECISION_MEMO.md` §2.
+
+**Evidence about the out-of-band channel, which §2 did not consider.**
+`supabase/APPLY_TO_REMOTE.sql` ("PASTE THIS ENTIRE FILE INTO THE SUPABASE DASHBOARD SQL EDITOR
+AND RUN IT") declares `dietary_restrictions TEXT NOT NULL DEFAULT ''` at `:32`. This is the
+out-of-band mechanism the registry hypothesised. It is **evidence about the committed channel,
+not about production's current type** — `ADD COLUMN IF NOT EXISTS … TEXT` is a no-op against an
+existing column of any type. **Production was not inspected; Q-6 is unchanged.**
+
+**Also corrected:** §4 priced Option B's `42804` risk without identifying who breaks.
+`get_client_assessment()` has **no application call site**; its only exerciser is
+`supabase/tests/security/d09-assessment-access.mjs`. The break is real but confined to the live
+security suite, which lowers Option B's cost somewhat relative to how §4.2 read.

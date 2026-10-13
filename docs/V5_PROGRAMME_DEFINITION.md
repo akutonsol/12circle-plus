@@ -20455,3 +20455,102 @@ test that asserted the unset behaviour was asserting something false and now ass
 
 **No migration file created. No QA write, live probe, or schema change. No target invented. No
 protected register or closure standard mutated. Production `nxdbooufqzkpslkcogxc` not contacted.**
+
+---
+
+## §223 · CON-03 canonical storage contract (Milestone 15)
+
+Deliverable: `V5_CON03_STORAGE_CONTRACT_DECISION_MEMO.md`. **The decision is PENDING and was
+never requested of any owner** — no authorized route to the product owner exists in this
+workflow. `MASTER_PRODUCT_DECISIONS.md` was **not** modified; its §2 mechanism ("update this
+document's row to `ANSWERED` with the date and the owner") belongs to the owner taking the
+decision, not to the party proposing one.
+
+### §223.1 · §0.2's "already answered" path does not apply
+
+`MASTER_PRODUCT_DECISIONS.md` §0.2 is the sanctioned route for a question that governing
+documents already answer — *"Each is a finding, not a decision."* It was the first thing worth
+testing. `product-bible.md`, `decision-log.md` and `WORKOUT_DOMAIN_CONTRACT.md` contain **no
+occurrence of "dietary"** at all. So CON-03's target is a genuine open decision, not a finding.
+
+### §223.2 · The repository is split nine ways, and Milestone 14 under-read it
+
+Milestone 14 framed the `text[]` belief as one comment copied from the `activities` pattern.
+That account is **incomplete**. Two further artifacts assume an array:
+
+- `supabase/seeds/test_accounts.sql:156` inserts **`ARRAY[]::text[]`** into the column. A
+  committed seed, not a comment — and against a `text` column it fails outright. It has never
+  surfaced because the seed is referenced nowhere in `.github/`, `supabase/scripts/`,
+  `scripts/`, `package.json` or `Makefile`: the same latency `141`'s header describes, *"it
+  survived because the suite had never been executed"*. The same file uses `ARRAY[]`
+  **correctly** at `:120-121` for genuine `text[]` columns, so the idiom was understood and
+  this one column is the outlier.
+- `client_detail_screen.dart:773` documents "JSON arrays".
+
+Eight artifacts favour `text` (`013:15`, `APPLY_TO_REMOTE:32`, `140:138`, `141:69`,
+`intake_data.dart:252`, `:170`, the QA probe, both sibling columns); five favour `text[]`. The
+cost analysis is unchanged, but the recommendation can no longer be presented as merely
+correcting a stray comment.
+
+### §223.3 · `APPLY_TO_REMOTE.sql` — the out-of-band channel, found and correctly bounded
+
+The registry reasons that an in-code `text[]` comment implies an out-of-band production change.
+`supabase/APPLY_TO_REMOTE.sql` **is** that channel, committed — *"PASTE THIS ENTIRE FILE INTO
+THE SUPABASE DASHBOARD SQL EDITOR AND RUN IT"* — and `:32` declares `dietary_restrictions TEXT
+NOT NULL DEFAULT ''`. Milestone 14 never found this file.
+
+It is **evidence about the committed channel, not about production's type**: `ADD COLUMN IF NOT
+EXISTS … TEXT` is a no-op against an existing column of any type, so running it against a
+`text[]` column would leave it `text[]`. Labelled as inference, with that limit stated.
+**Production was not inspected. Q-6 is unchanged.**
+
+### §223.4 · The comma question, answered from the value domain rather than asserted
+
+Milestone 14 asserted `join(',')` was lossy "in general". The brief was right to press it. The
+domain is a **closed set of nine literals** at `intake_flow_screen.dart:5734-5737` — none
+contains a comma, and `'Other'` is itself a chip, not a text field. The lone `TextField` on that
+page writes `foodAllergies`, a separate unsplit scalar, which is why its comma-bearing hint is
+harmless. `_toggle` makes duplicates unreachable; order is selection order.
+
+So **Option A round-trips losslessly today — as a property of the closed set, not of the
+encoding.** It holds only while the domain stays closed, and the dead `'Other'` chip invites a
+free-text field that would break it silently. Option A therefore requires the domain to be
+*constrained*, not merely the serializer changed. That is decision `CON-03-COMMA`, not an
+engineering default.
+
+Secondary product gap: the app carries **two** restriction vocabularies — intake's nine chips
+and the meal-plan screen's six (`QA_WORKSTREAM_E…:845-846`), differing in spelling and
+membership. Which is canonical is a product question repository evidence cannot settle, and
+Workstream E's planned fix makes them collide. Filed as `CON-03-VOCAB`.
+
+### §223.5 · Two corrections to my own artifacts
+
+`WAVES:300-301` states **two different parallelisms in adjacent clauses**: the prose says "the
+sites inside **3B-2 and 3B-4** touch disjoint service files", the spine says
+`3B-0 → 3B-1 → {3B-2 ∥ 3B-3} → 3B-4 → 3B-5`, and the `:558` diagram (`3B-2/3 → 3B-4`) agrees
+with the spine. `V5_CON03_AUTHORITY_DETERMINATION.md:109` and the Milestone 14 design both
+cited the **outlier** prose. Corrected in place, struck through rather than deleted, in both.
+The inconsistency is a sequencing-authority question and is **reported, not resolved**. Both
+statements are now pinned by tests, so it cannot be "fixed" in one place and leave the
+correction wrong.
+
+Also corrected: Milestone 14 priced Option B's `42804` without saying who breaks.
+`get_client_assessment()` has **no application call site**; its only exerciser is
+`supabase/tests/security/d09-assessment-access.mjs`. Real, but confined to the live security
+suite — which lowers Option B's cost relative to how that section read.
+
+### §223.6 · A guard that proved nothing, again
+
+Extracting CI's ENV-4 guard with too small a `sed` window produced a script containing only
+`set -euo pipefail` and comments. It exited 0. Had that been reported, it would have been the
+sixth control in this programme to pass by measuring nothing. Re-bounded to the real 52-line
+body, which runs its own self-test and prints *"OK — app_env.dart carries no baked-in
+project"*.
+
+`coordinator.test.mjs` **156 → 179**. Five static guards green, inventory PASS, migration
+coverage PASS, `git diff --check` clean. No Dart or SQL changed, so Flutter runs are not
+applicable.
+
+**No migration file created. No product-code change. No QA write, live probe, schema, RLS or
+policy change. No SEC-R2/SEC-R3 promotion. No C1 widening. §7.10/§7.18 untouched. Production
+`nxdbooufqzkpslkcogxc` not contacted. The decision remains PENDING.**

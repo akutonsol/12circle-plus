@@ -1014,6 +1014,140 @@ section('16 · CON-03 authority (PD-A22 route b)');
     'negative-control.sh:47,86-87');
 }
 
+// ── CON-03 canonical storage contract (Milestone 15) ───────────────────────
+//
+// The memo's recommendation rests on a nine-artifact evidence split and on the
+// value domain being closed. Both are repository facts that can drift.
+{
+  const R = (...p) => fs.readFileSync(path.join(ROOT, ...p), 'utf8');
+  const migDir = path.join(ROOT, 'supabase', 'migrations');
+
+  // §2 — the text[] intent is systemic, not one comment. The seed is the
+  // artifact that disproved Milestone 14's "copied comment" framing. If it is
+  // ever corrected, the memo's §2 table and the design's §8 go stale.
+  const seed = R('supabase', 'seeds', 'test_accounts.sql');
+  check('the seed still inserts ARRAY[]::text[] into dietary_restrictions',
+    /dietary_restrictions/.test(seed) && /ARRAY\[\]::text\[\]/.test(seed),
+    'seeds/test_accounts.sql:156 — a committed artifact assuming text[]');
+  check('…and the same seed uses ARRAY[] correctly for real text[] columns',
+    /ARRAY\['Fat Loss'/.test(seed) || /ARRAY\['NASM-CPT'/.test(seed),
+    ':120-121 — so the author knew the idiom; this one column is the outlier');
+
+  // …and it is still unexercised, which is why it has never failed.
+  const refs = [];
+  for (const f of ['package.json', 'Makefile']) {
+    const fp = path.join(ROOT, f);
+    if (fs.existsSync(fp) && /test_accounts/.test(fs.readFileSync(fp, 'utf8'))) refs.push(f);
+  }
+  for (const dir of [['.github'], ['supabase', 'scripts'], ['scripts']]) {
+    const dp = path.join(ROOT, ...dir);
+    if (!fs.existsSync(dp)) continue;
+    const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]);
+    for (const f of walk(dp)) {
+      try { if (/test_accounts/.test(fs.readFileSync(f, 'utf8'))) refs.push(f); } catch {}
+    }
+  }
+  check('the seed is still referenced by no runner (why the array never failed)',
+    refs.length === 0, refs.length ? `now referenced by ${refs.join(', ')}` : 'unexercised');
+
+  // §2.1 — the out-of-band channel declares TEXT. Evidence about the channel,
+  // NOT about production. The assertion is deliberately about the FILE only.
+  const remote = R('supabase', 'APPLY_TO_REMOTE.sql');
+  check('APPLY_TO_REMOTE.sql still declares the column TEXT NOT NULL DEFAULT \'\'',
+    /dietary_restrictions\s+TEXT\s+NOT NULL DEFAULT ''/.test(remote),
+    ':32 — the committed out-of-band channel; proves nothing about prod');
+  check('…and is still an ADD COLUMN IF NOT EXISTS (so it cannot retype anything)',
+    /ADD COLUMN IF NOT EXISTS dietary_restrictions/.test(remote),
+    'the reason §2.1 is labelled inference and Q-6 stands');
+
+  // §1.1 — no governing document answers the question, so §0.2's
+  // "already answered → a finding, not a decision" path does not apply.
+  for (const g of ['product-bible.md', 'decision-log.md', 'WORKOUT_DOMAIN_CONTRACT.md']) {
+    check(`${g} still says nothing about dietary restrictions`,
+      !/dietar/i.test(R('docs', g)),
+      'if this ever changes, the decision may already be answered');
+  }
+
+  // §4 — losslessness is a property of the CLOSED SET. These are the two
+  // facts that make it true; either one drifting silently breaks Option A.
+  const flow = R('apps', 'mobile', 'lib', 'features', 'onboarding',
+    'presentation', 'intake_flow_screen.dart');
+  const chips = flow.match(/static const _restrictions = \[([\s\S]*?)\];/);
+  check('the restriction vocabulary is still a hard-coded closed list',
+    !!chips, 'intake_flow_screen.dart:5734-5737');
+  const values = chips ? [...chips[1].matchAll(/'([^']*)'/g)].map((m) => m[1]) : [];
+  check('…of nine values, none of which contains the delimiter',
+    values.length === 9 && values.every((v) => !v.includes(',')),
+    `${values.length} values: ${values.join(' | ')}`);
+  check('…and selection cannot produce duplicates',
+    /_selected\.contains\(r\) \? _selected\.remove\(r\) : _selected\.add\(r\)/.test(flow),
+    '_toggle at :5749-5754 — so ordering/duplicate semantics are decidable');
+
+  // The only TextField on that page must stay bound to allergies, not
+  // restrictions. A free-text restriction field is exactly what breaks §4.
+  check('the restrictions page has no free-text field for RESTRICTIONS',
+    /_allergyCtrl/.test(flow)
+      && !/onChanged:[^\n]*dietaryRestrictions\s*=\s*[^\n]*Ctrl\.text/.test(flow),
+    'the lone TextField writes foodAllergies, a separate unsplit scalar');
+
+  // §3 — Option B's cost. No application caller; one exerciser.
+  const appDirs = [path.join(ROOT, 'apps')];
+  let rpcCallSites = 0;
+  const walkApp = (d) => fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true })
+    .flatMap((e) => e.isDirectory() ? walkApp(path.join(d, e.name)) : [path.join(d, e.name)]) : [];
+  for (const f of appDirs.flatMap(walkApp)) {
+    if (!/\.(dart|ts)$/.test(f) || /[/\\]test[/\\]/.test(f)) continue;
+    if (/rpc\(\s*['"]get_client_assessment/.test(fs.readFileSync(f, 'utf8'))) rpcCallSites++;
+  }
+  check('get_client_assessment still has NO application call site',
+    rpcCallSites === 0,
+    'so Option B\'s 42804 breaks the d09 live suite, not the app');
+  check('…and d09 is still its exerciser',
+    fs.existsSync(path.join(ROOT, 'supabase', 'tests', 'security',
+      'd09-assessment-access.mjs')),
+    'supabase/tests/security/d09-assessment-access.mjs');
+  const m141 = R('supabase', 'migrations', '141_assessment_access_sleep_hours_type.sql');
+  check('the three grants Option B would have to re-issue are still there',
+    (m141.match(/get_client_assessment\(uuid\)/g) || []).length >= 3,
+    '141:135-137 — REVOKE PUBLIC, REVOKE anon, GRANT authenticated');
+
+  // WAVES states two different parallelisms. Pin BOTH, so the inconsistency
+  // cannot be silently "fixed" in one place and leave my correction wrong.
+  const waves = R('docs', 'MASTER_REMEDIATION_WAVES.md');
+  check('WAVES still contains the spine {3B-2 ∥ 3B-3}',
+    /3B-0 → 3B-1 → \{3B-2 ∥ 3B-3\} → 3B-4 → 3B-5/.test(waves), 'WAVES:301');
+  check('WAVES still ALSO contains the 3B-2/3B-4 disjointness prose',
+    /the sites inside 3B-2 and 3B-4 touch disjoint service files/.test(waves),
+    'WAVES:300 — the outlier my earlier artifact cited; reported, not resolved');
+  check('3B-1 still depends on CON-03 AND SEC-R2',
+    /Depends on CON-03[\s\S]{0,160}SEC-R2/.test(waves), 'WAVES:287-288');
+
+  // §9 — the governance boundary. The memo must be PENDING, and the
+  // source-of-truth decisions document must be untouched by it.
+  const memo = R('docs', 'V5_CON03_STORAGE_CONTRACT_DECISION_MEMO.md');
+  // Flattened: the disclaimer wraps across a line break, and a single-line
+  // regex silently missed it -- the same wrap that hid "End-to-End Product
+  // Verification" from a grep earlier in this programme.
+  const memoFlat = memo.replace(/\s+/g, ' ');
+  check('the memo declares itself PENDING, not requested and not approved',
+    /PENDING — NOT REQUESTED, NOT APPROVED/.test(memoFlat)
+      && /has NOT been requested, received, or approved/.test(memoFlat),
+    'a recommendation must never read as consent');
+  check('the memo states it does not modify MASTER_PRODUCT_DECISIONS.md',
+    /is \*\*not modified by this memo\.\*\*/.test(memo), '§preamble');
+  const pd = R('docs', 'MASTER_PRODUCT_DECISIONS.md');
+  check('MASTER_PRODUCT_DECISIONS.md still says nothing in it is decided',
+    /\*\*Nothing in this document is decided\.\*\*/.test(pd),
+    'the row was not flipped to ANSWERED');
+  check('…and PD-A22 is still not recorded as ANSWERED',
+    !/PD-A22[^\n]*ANSWERED/.test(pd) && !/\*\*`PD-A22` is `ANSWERED`\*\*/.test(pd),
+    'only PD-A05 and PD-A23 carry ANSWERED amendments');
+  check('no CON-03 migration file exists (still design-only)',
+    !fs.readdirSync(migDir).some((f) => /dietary|con.?03/i.test(f)),
+    'the decision gates implementation');
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {
