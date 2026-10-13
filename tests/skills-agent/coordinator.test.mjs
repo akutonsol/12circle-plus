@@ -736,6 +736,60 @@ section('14 · SEC-04 / ENV-6 closure-candidate evidence');
       .includes('Nothing in this document has been applied'));
 }
 
+// ═══ 15 · SEC-R3's end-to-end prerequisite, tracked mechanically ═══════════
+// SEC-R2 and SEC-R3 are NOT symmetric, and the asymmetry is the finding.
+//
+// SEC-R2's failure leg is already correct in the product: _finish() refuses on
+// a null session and its catch leaves the intake "NOT marked complete".
+//
+// SEC-R3's is not. Every call site to the three affected functions swallows a
+// failure into a benign default — `catch (_) { return null; }` — so a 22P02
+// from the rule accumulator becomes `null` and the surface renders "no data".
+// §2.1 requires "the correct FAILURE behaviour", and Wave 3B-1 names the fix
+// ("refuse rather than degrade"), which is blocked.
+//
+// This is offline and reads source only: no QA, no network, no probe. It exists
+// so the prerequisite cannot be quietly lost, and so a later claim that SEC-R3
+// is end-to-end verified while the swallows remain fails loudly.
+section('15 · SEC-R3 failure-leg prerequisite (offline source check)');
+{
+  const svc = fs.readFileSync(path.join(ROOT, 'apps', 'mobile', 'lib',
+    'features', 'coach', 'data', 'coach_program_service.dart'), 'utf8');
+
+  const swallows = (svc.match(/catch \(_\) \{ return (null|false); \}/g) ?? []).length;
+  check('the SEC-R3 call sites still swallow into a benign default — recorded as '
+      + 'the PREREQUISITE, not as an acceptable state',
+    swallows > 0,
+    `${swallows} swallow(s) in coach_program_service.dart; Wave 3B-1 "refuse `
+    + `rather than degrade" is the fix and is blocked`);
+
+  // The product path must keep going through the WRAPPERS. If a call site were
+  // switched to an *_engine name, authorization would leave §2.1's chain and
+  // any future probe would be measuring the wrong thing.
+  for (const fn of ['predict_client', 'evaluate_week']) {
+    check(`${fn} is called by its PUBLIC wrapper name, so authorization stays `
+        + `in the chain`,
+      svc.includes(`rpc('${fn}'`) && !svc.includes(`rpc('${fn}_engine'`));
+  }
+
+  // And the contract suite's own limitation, quoted from the file, so nobody
+  // later mistakes it for end-to-end evidence.
+  const fj07 = fs.readFileSync(path.join(ROOT, 'supabase', 'tests', 'ai',
+    'fj07-rule-accumulator-contract.sql'), 'utf8').replace(/\s+/g, ' ');
+  check('fj07 still records that it calls the ENGINES and skips authorization — '
+      + 'so it cannot serve as the end-to-end rung',
+    fj07.includes('calls the ENGINES')
+      && fj07.includes('deliberately not re-tested here'),
+    'fj07 header');
+
+  // Neither row may be presented as having the fifth state by this work.
+  const matrices = fs.readFileSync(path.join(ROOT, 'docs',
+    'V5_SECR2_SECR3_E2E_EVIDENCE_MATRICES.md'), 'utf8');
+  check('the matrices state plainly that neither finding is promoted',
+    /Neither finding is promoted/.test(matrices)
+      && /neither has its fifth state/.test(matrices));
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {
