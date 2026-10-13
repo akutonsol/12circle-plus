@@ -15,7 +15,7 @@ nor SEC-R2 is promoted.
 | 3B-4 therefore follows **3B-1** | the order above; the only stated parallelism is *"**Parallel-safe within 3B:** the sites inside 3B-2 and 3B-4 touch disjoint service files"* — parallel **with each other**, not with 3B-1 |
 | 3B-1 is **blocked** | *"**Depends on CON-03** (the serializer mismatch that triggers it today) **and on SEC-R2** (the trigger throw that is the second trigger)."* |
 | SEC-R2 is unresolved | its registry row still reads `❌ **absent**` for `VERIFIED END-TO-END`, **4 of 5 present** |
-| CON-03 is unresolved | *"`dietary_restrictions` — two serializers, one column, **prod type unknown**"*, and Gate 9B forbids reading production to establish it |
+| CON-03 is unresolved | ~~*"prod type unknown"*, and Gate 9B forbids reading production to establish it~~ **CORRECTED 2026-10-13 — see `V5_CON03_AUTHORITY_DETERMINATION.md`.** CON-03 is **not** production-blocked: `PD-A22`'s *Proceed?* column reads **"Yes — via (b)"**, authorizing a forward migration that converges from either type **without inspecting**. It is unwritten work, not a blocked decision. **SEC-R2 remains 3B-1's binding constraint.** |
 
 **So the chain is: the SEC-R3 Dart fix ← 3B-4 ← 3B-1 ← {CON-03, SEC-R2}.** Two gates behind, and
 neither gate is mine to open.
@@ -129,8 +129,8 @@ re-tested here"* — so wrapper and service behaviour is covered **separately**,
 
 **In order, because the order is forced:**
 
-1. **CON-03** — supply the production column type through an authorized channel, or rule that QA's
-   type governs. *(Gate 9B forbids reading production to find out.)*
+1. **CON-03** — **no owner decision needed.** Write the forward migration under the already-authorized
+   route (b): converge from either type without inspecting production. *(Corrected 2026-10-13.)*
 2. **SEC-R2** — authorize a live QA probe, then the per-row C1 acceptance ruling.
 3. **3B-1** — becomes startable once 1 and 2 land.
 4. **3B-4** — then startable; the seam and this fix land here.

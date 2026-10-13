@@ -508,22 +508,25 @@
     },
     {
       "id": "V5-CON-003",
-      "summary": "CON-03 — reconcile the two dietary_restrictions serializers against one column",
+      "summary": "CON-03 — write the forward migration converging from either dietary_restrictions type (route b, already authorized)",
       "role": "implementer",
       "dependsOn": [],
       "paths": [
         "apps/mobile/lib/"
       ],
       "acceptance": [
-        "One serializer, matching the column's actual type",
-        "The production column type is established by an AUTHORIZED means, never by contacting production"
+        "One serializer, one type",
+        "The forward migration converges from EITHER `text` or `text[]` without inspecting production, per PD-A22 option (b)",
+        "No production inspection is attempted; PD-A22 option (a) remains outstanding for the ROLLOUT plan only"
       ],
       "maxRetries": 2,
       "risk": "data-contract",
       "workstream": "contract-truth",
       "wave": "3B",
       "sources": [
-        "docs/MASTER_REMEDIATION_REGISTRY.md"
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "docs/V5_CON03_AUTHORITY_DETERMINATION.md"
       ],
       "verification": [
         "npm run test:contract"
@@ -534,10 +537,10 @@
       "runnerIndependent": true,
       "blockers": [
         {
-          "kind": "governance",
-          "what": "the registry records the production column type as UNKNOWN, and Gate 9B forbids contacting production to find out",
-          "evidence": "MASTER_REMEDIATION_REGISTRY.md: 'dietary_restrictions -- two serializers, one column, prod type unknown'",
-          "action": "supply the production column type through an authorized channel, or rule that QA's type governs"
+          "kind": "architecture",
+          "what": "CORRECTED 2026-10-13. This previously read 'production column type unknown and Gate 9B forbids contacting production', classifying CON-03 as governance-blocked. That was WRONG. PD-A22's Proceed? column reads 'Yes -- via (b)': write the forward migration to converge from either starting type WITHOUT inspecting. No owner decision and no production access is required for the QA-side fix. What remains is unwritten migration work, not a blocked decision.",
+          "evidence": "MASTER_PRODUCT_DECISIONS.md:136 PD-A22 (Proceed? 'Yes -- via (b)'; '(b) is required regardless; (a) is a prerequisite for the production rollout plan, not for QA work'); MASTER_REMEDIATION_WAVES.md:335; MASTER_QA_RECONCILIATION.md:513 Q-6",
+          "action": "authorize a migration-writing milestone; no owner ruling needed"
         }
       ]
     },
@@ -575,9 +578,9 @@
       "blockers": [
         {
           "kind": "architecture",
-          "what": "3B-1 depends on CON-03 and SEC-R2, both unresolved",
-          "evidence": "MASTER_REMEDIATION_WAVES.md: 'Depends on CON-03 ... and on SEC-R2'",
-          "action": "resolve V5-CON-003 and V5-SECR-001 first"
+          "what": "3B-1 depends on CON-03 and SEC-R2. CORRECTED: CON-03 is NOT decision-blocked -- its route is authorized (PD-A22 option b) and merely unwritten. SEC-R2 is the binding constraint: its row still reads '4 of 5 present' with VERIFIED END-TO-END absent, and an independent audit records the same.",
+          "evidence": "MASTER_REMEDIATION_WAVES.md:287 'Depends on CON-03 ... and on SEC-R2'; WAVE_3B_WRK07_EC11_EC05_AUDIT.md:96; V5_CON03_AUTHORITY_DETERMINATION.md",
+          "action": "write CON-03's migration (authorized), and resolve SEC-R2 via a live probe plus its per-row C1 ruling"
         }
       ]
     },

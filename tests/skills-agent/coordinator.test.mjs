@@ -818,6 +818,60 @@ section('15 · SEC-R3 failure-leg prerequisite (offline source check)');
       && /neither has its fifth state/.test(matrices));
 }
 
+// ═══ 16 · CON-03's authority, pinned to the source that governs it ═════════
+// I classified CON-03 as production-blocked across four milestones, from the
+// registry's one-line "prod type unknown" summary, without consulting
+// MASTER_PRODUCT_DECISIONS.md — the document this programme's own queue names
+// as the authority for owner decisions. PD-A22 says the opposite.
+//
+// These assertions hold the correction in place: if PD-A22's Proceed? column
+// or the corroborating wave text changes, the determination becomes stale and
+// fails here rather than silently misleading a later reader.
+section('16 · CON-03 authority (PD-A22 route b)');
+{
+  const pd = fs.readFileSync(path.join(ROOT, 'docs',
+    'MASTER_PRODUCT_DECISIONS.md'), 'utf8');
+  const pdFlat = pd.replace(/\s+/g, ' ');
+
+  check('PD-A22 still authorizes proceeding via option (b) — converge from '
+      + 'either type WITHOUT inspecting production',
+    pdFlat.includes('write the forward migration to converge from either starting type without inspecting')
+      && /PD-A22[\s\S]{0,1400}?\*\*Yes\*\* — via \(b\)/.test(pdFlat),
+    'MASTER_PRODUCT_DECISIONS.md:136');
+  check('…and still records that (a) is for the ROLLOUT plan, not QA work',
+    pdFlat.includes('a prerequisite for the production rollout plan, not for QA work'));
+  check('the document still states nothing in it is decided — so Proceed? is '
+      + 'permission to work, NOT an answered decision',
+    pdFlat.includes('Nothing in this document is decided'));
+  check('PD-A22 is still NOT in the already-closed list — the decision remains '
+      + 'open even though proceeding is authorized',
+    !/Decisions already closed[\s\S]{0,900}?PD-A22/.test(pdFlat));
+
+  const waves = fs.readFileSync(path.join(ROOT, 'docs',
+    'MASTER_REMEDIATION_WAVES.md'), 'utf8').replace(/\s+/g, ' ');
+  check('the wave plan still requires convergence from EITHER starting type',
+    waves.includes('must converge from **either** starting type because production')
+      || waves.includes('converge from **either** starting type'),
+    'MASTER_REMEDIATION_WAVES.md:335');
+
+  // Production stays out of reach: the corroborating source must keep saying so.
+  const qa = fs.readFileSync(path.join(ROOT, 'docs',
+    'MASTER_QA_RECONCILIATION.md'), 'utf8').replace(/\s+/g, ' ');
+  check('Q-6 still records that production will NOT be inspected without '
+      + 'explicit authorization',
+    qa.includes('Production was not inspected and will not be without explicit authorization'),
+    'MASTER_QA_RECONCILIATION.md:513');
+
+  // And my own artifact must carry the correction, not the old claim.
+  const q = JSON.parse(fs.readFileSync(path.join(ROOT, '.skills-agent',
+    'tasks.json'), 'utf8'));
+  const con = q.tasks.find((t) => t.id === 'V5-CON-003');
+  check('the queue no longer classifies CON-03 as governance/production-blocked',
+    con.blockers.every((b) => b.kind !== 'governance')
+      && /CORRECTED/.test(JSON.stringify(con.blockers)),
+    `kind=${con.blockers.map((b) => b.kind).join(',')}`);
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {
