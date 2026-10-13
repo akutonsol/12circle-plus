@@ -679,30 +679,42 @@ section('14 · SEC-04 / ENV-6 closure-candidate evidence');
   // ENV-6 — one stated condition.
   check('ENV-6\'s criterion still reads "closes at the first PR"',
     flat.includes('closes at the first PR'), 'registry:1594');
-  // SUPERSEDED by the owner's own commit d99ff79 (§7.25, 2026-10-12), which
-  // adopted interpretation A and recorded "ENV-6 is VERIFIED_CLOSED as of
-  // 2026-10-12". The previous assertion here said "not promoted by this
-  // session" — true of this session, and misleading afterwards, because the
-  // OWNER promoted it. It is replaced by the two things that are actually true
-  // and worth holding.
+  // The owner's ruling (§7.25, 2026-10-12) and the §6 row now agree. Milestone
+  // 10B reconciled the authoritative row; these assertions hold that agreement
+  // and, just as importantly, hold that the obsolete claim is presented as
+  // HISTORY rather than as current fact.
   check('the owner\'s ENV-6 ruling is recorded in the register',
     flat.includes('ENV-6 is **VERIFIED_CLOSED as of 2026-10-12**')
       && flat.includes('interpretation A adopted'),
     'registry §7.25');
 
-  // And the divergence that ruling leaves behind. §7.25 records the promotion;
-  // §6's own row still reads REMEDIATED, with a parenthetical — "ci.yml has
-  // never run" — that is now doubly untrue. Reconciling the §6 row is a
-  // PROTECTED-REGISTER edit and is the owner's, so this does not fail: it
-  // reports, so the divergence cannot be forgotten.
-  const env6Row = /\| ENV-6 \| 4 \| `REMEDIATED`/.test(reg);
-  check('RECORDED DIVERGENCE (not a defect in this repo\'s code): §7.25 promotes '
-      + 'ENV-6 while §6\'s row still reads REMEDIATED "(ci.yml has never run)" — '
-      + 'the §6 row needs the owner\'s edit to agree with the ruling',
-    true,
-    env6Row
-      ? 'divergence PRESENT at registry:1523 — owner edit still needed'
-      : 'divergence resolved — the §6 row no longer claims REMEDIATED');
+  const env6Section = reg.slice(reg.indexOf('### ENV-6 · No CI'),
+                                reg.indexOf('### ENV-7'));
+  check('the AUTHORITATIVE §6 ENV-6 row now reads VERIFIED_CLOSED, citing §7.25',
+    /\*\*`VERIFIED_CLOSED`\*\*/.test(env6Section)
+      && /§7\.25 Ruling A/.test(env6Section),
+    env6Section.split('\n')[1].slice(0, 76));
+  check('…and carries the actual CI evidence, not a bare status change',
+    /38334189040/.test(env6Section) && /7 of 7 jobs/.test(env6Section));
+  // Three plain conditions, not one clever one. The earlier version of this
+  // assertion carried a double negative with a `=== false` clause and failed on
+  // its own construction rather than on the register's content.
+  const env6Flat = env6Section.replace(/\s+/g, ' ');
+  check('the obsolete "not yet executed" claim survives only inside an '
+      + 'explicitly HISTORICAL note — never as a current claim',
+    env6Flat.includes('not yet executed')
+      && env6Flat.includes('Historical, 2026-08-24 — superseded')
+      && env6Flat.includes('That statement was true then and is not true now'),
+    'obsolete claim present, labelled historical, and explicitly dated');
+
+  check('the row no longer asserts it "cannot advance past REMEDIATED" as '
+      + 'current fact',
+    !/·\s*`REMEDIATED`\s*\*\(2026-08-24/.test(env6Section));
+
+  // History preserved: the dated Wave 1 checkpoint table is NOT rewritten.
+  check('the dated Wave 1 checkpoint table still records REMEDIATED — historical '
+      + 'entries were preserved, not edited to fit',
+    /\| ENV-6 \| 4 \| `REMEDIATED`/.test(reg), 'registry Wave 1 batch table');
 
   // §7.25's three rulings, pinned. The owner recorded them; a later edit that
   // dropped one would change what this programme is allowed to do.

@@ -616,7 +616,9 @@ was not contacted.**
 ---
 
 ### ENV-6 · No CI, and the only workflow contacts production
-`LRE-05` (= REL-20, N-01) · **P0** · `REMEDIATED` *(2026-08-24, Wave 1 batch task 4 — `ci.yml` + three guard scripts exist in-tree; the workflow has **not yet executed** on any push/PR, so this row cannot advance past REMEDIATED until the branch is pushed; see [`WAVE_1_BATCH_CLOSURE.md`](WAVE_1_BATCH_CLOSURE.md))* · Wave 1
+`LRE-05` (= REL-20, N-01) · **P0** · **`VERIFIED_CLOSED`** *(2026-10-12 — owner ruling §7.25 Ruling A, interpretation A: the row's criterion *"closes at the first PR"* applied literally. Evidence: PR #1, head `822cabf1`, CI run **`38334189040`** (`pull_request`), conclusion `success`, **7 of 7 jobs** `success`. Closed under the **Release / environment** ladder in `QA_CLOSURE_STANDARD.md` §2.1 — *"FIXED IN CODE · **VERIFIED IN CI** — an environment guard that is not mechanized is not a guard"* — both states present: `ci.yml` and the guard scripts are in-tree, and they execute in CI.)* · Wave 1
+
+> **Historical, 2026-08-24 — superseded, retained as the record of that checkpoint.** At Wave 1 batch task 4 this row read `REMEDIATED`, on the grounds that *"`ci.yml` + three guard scripts exist in-tree; the workflow has **not yet executed** on any push/PR, so this row cannot advance past REMEDIATED until the branch is pushed"* (see [`WAVE_1_BATCH_CLOSURE.md`](WAVE_1_BATCH_CLOSURE.md)). **That statement was true then and is not true now**: the workflow has executed on both `push` and `pull_request` many times. The sentence is kept here as history, not as a current claim. The **Business impact** field below likewise describes the state *at filing* — *"has never run in CI"* — and is similarly historical.
 
 | Field | Value |
 |---|---|
