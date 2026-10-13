@@ -20554,3 +20554,92 @@ applicable.
 **No migration file created. No product-code change. No QA write, live probe, schema, RLS or
 policy change. No SEC-R2/SEC-R3 promotion. No C1 widening. §7.10/§7.18 untouched. Production
 `nxdbooufqzkpslkcogxc` not contacted. The decision remains PENDING.**
+
+---
+
+## §224 · CON-03 decision state and the CI confirmation (Milestone 16)
+
+### §224.1 · CI is terminal and green, on the exact SHA
+
+Milestone 15 reported run `38413431946` as `queued` and explicitly declined to call it green.
+It is now terminal:
+
+| | |
+|---|---|
+| run | **`38413431946`** · workflow `CI` · event **`pull_request`** |
+| head SHA | `daeca225c91e5622e215cd26fbf58de18d3b34c3` — matches HEAD exactly |
+| status / conclusion | **`completed`** / **`success`** |
+| jobs | **7 of 7 `success`** — Flutter · EC-04 · Static guards · Negative control · Live QA suites · I-WRK-01 · UIX-1 |
+
+The sibling `push` run `38413424352` is `cancelled`: the expected `concurrency.group` behaviour
+keyed on `github.head_ref || github.ref_name`, not a failure and not evidence of anything. No
+commit was made to obtain a run, and CI was neither polled in a loop nor reconfigured.
+
+**Incidental confirmation:** the *Negative control* job is green on a commit that contains
+Milestone 14's hardened `find_pg`. That guard now has evidence from both sides — it dies
+correctly on this client-only machine, and it does **not** false-positive on a runner that has
+a real `postgres` server.
+
+### §224.2 · All three decisions remain PENDING — verified, not restated
+
+`MASTER_PRODUCT_DECISIONS.md` carries exactly **two** `ANSWERED` amendments, `PD-A05`
+(2026-08-27) and `PD-A23` (2026-08-28), and still states "Nothing in this document is decided."
+`decision-log.md` — §2's standing record for a decision actually taken — contains **no** CON-03
+or dietary entry. The latest commits touching either authority are `840c007` and `527438a`.
+
+**This workflow has no authorized route to the product owner, and no owner was contacted.**
+`CON-03-TYPE`, `CON-03-COMMA` and `CON-03-ROLLOUT` stay open with their Milestone 15 wording
+and options unchanged. I did not act as the owner, approve my own recommendation, or close a
+decision by editing a document. A test now asserts that exactly `PD-A05` and `PD-A23` are
+`ANSWERED`, so the memo cannot keep claiming "pending" past the point an owner answers.
+
+### §224.3 · The vocabularies, verified from source rather than from a report
+
+Milestone 15 cited `QA_WORKSTREAM_E…:845-846` — a report — for the meal-plan vocabulary. Read
+from source, the report is accurate and the picture is sharper. `meal_plan_screen.dart:27`
+declares six values; `intake_flow_screen.dart:5734-5737` declares nine. These are the **only
+two** definitions — no shared constant, no third, anywhere in `apps/mobile/lib`, `supabase` or
+`apps/api`.
+
+- **Only three are spelled identically:** `Vegetarian`, `Vegan`, `Halal`.
+- **Two differ only by a hyphen:** `Gluten Free`/`Gluten-Free`, `Dairy Free`/`Dairy-Free`.
+  Milestone 15 named only the first.
+- **Intake only:** `Keto`, `Paleo`, `Kosher`, `Other`. **Meal plan only:** `Nut-Free`.
+
+**The divergence is one of scope, not spelling.** `Nut-Free` is an *allergen*, and intake keeps
+allergens in the separate free-text `food_allergies` column. The meal-plan screen therefore
+merges an allergen into "restrictions" — precisely what Workstream E's own fix #2 forbids
+(*"Send allergies as a distinct, emphatic constraint — not merged into 'restrictions'"*).
+
+Harmless today and about to stop being so: `meal_plan_screen.dart:24`'s `_restrictions` is a
+transient local list with no database write, so the clash is display-only until Workstream E's
+fix #1 loads the profile column into that screen. Filed as `CON-03-VOCAB`; **not** resolved
+here, and it must not be resolved by a schema or serializer change.
+
+### §224.4 · Nothing enforces the closed domain
+
+The brief cautioned against assuming a closed UI guarantees a permanently closed domain. It
+does not, and the evidence is stronger than "it might change": there is **no `CHECK` constraint
+and no enum on `dietary_restrictions` in any of the 182 migrations**, and no shared constant
+defines the vocabulary. The closure is one widget's hard-coded list, enforced nowhere. A
+free-text value — which the unusable `'Other'` chip invites — would be accepted silently and
+without any database-level objection.
+
+That is what makes `CON-03-COMMA` a real decision rather than a formality, and why Option A
+requires the domain to be *pinned*, not merely the serializer changed.
+
+### §224.5 · Readiness
+
+**Nothing is startable.** CON-03's target is undecided, and `WAVES:287-288` makes 3B-1 depend
+on CON-03 **and** SEC-R2. SEC-R2 and SEC-R3 were each re-read: four of five states present,
+**VERIFIED END-TO-END absent**, both **NOT promoted**, §2.1 requiring all five for an
+AI/safety-input finding and Step 4 unauthorized. **So resolving the storage contract would not
+make the downstream sequence startable** — SEC-R2 blocks 3B-1 independently, 3B-4 sits behind
+3B-1, and SEC-R3 behind 3B-4.
+
+`coordinator.test.mjs` **179 → 190**.
+
+**No migration created or executed. No serializer, deserializer, SQL function, seed, schema,
+RLS or policy change. No QA write, live probe or production operation. No credential accessed.
+No SEC-R2/SEC-R3 promotion or evidence-count change. No C1 widening. §7.10/§7.18 untouched.
+Production `nxdbooufqzkpslkcogxc` not contacted. The decisions remain PENDING.**

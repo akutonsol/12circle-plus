@@ -140,20 +140,45 @@ The value domain is a **closed set of nine literals**, hard-coded at
   trailing whitespace.
 
 **So Option A round-trips losslessly today — as a property of the closed set, not of the
-encoding.** It holds only while the domain stays closed and comma-free. The unusable `'Other'`
-chip actively invites a future free-text field, which would break the encoding silently. If
-Option A is selected, the contract must therefore **pin the domain**, not merely change the
-serializer (§6.1).
+encoding.** It holds only while the domain stays closed and comma-free.
+
+**Nothing enforces that closure.** Verified 2026-10-13: there is **no `CHECK` constraint and no
+enum on `dietary_restrictions` in any of the 182 migrations**, and no shared constant defines
+the vocabulary. The closed domain is a property of one widget's hard-coded list. The unusable
+`'Other'` chip actively invites a future free-text field, which would break the encoding
+silently and without any database-level objection. If Option A is selected, the contract must
+therefore **pin the domain**, not merely change the serializer (§6.1).
 
 ### 4.1 A second, independent product gap this exposed
 
-The app contains **two divergent restriction vocabularies**: intake's nine chips above, and the
-meal-plan screen's six (`Vegetarian, Vegan, Gluten-Free, Dairy-Free, Nut-Free, Halal`) recorded
-at `QA_WORKSTREAM_E_NUTRITION_CHECKIN_RECONCILIATION.md:845-846`. They differ in spelling
-(`Gluten Free` vs `Gluten-Free`) and in membership (`Keto/Paleo/Kosher/Other` vs `Nut-Free`).
-**Which vocabulary is canonical is a product question that repository evidence cannot settle**,
-and it is independent of the type decision. Workstream E's planned fix (`:868`) loads this
-column into the meal-plan screen as locked context, so the vocabularies will collide there.
+**Verified from source 2026-10-13 (Milestone 16), not from the workstream report.** The app
+contains **two divergent restriction vocabularies**, and these are the only two — there is no
+shared constant and no third definition anywhere in `apps/mobile/lib`, `supabase` or `apps/api`:
+
+| | source | values |
+|---|---|---|
+| intake | `intake_flow_screen.dart:5734-5737` | `Vegetarian · Vegan · Gluten Free · Dairy Free · Keto · Paleo · Halal · Kosher · Other` (9) |
+| meal plan | `meal_plan_screen.dart:27` | `Vegetarian · Vegan · Gluten-Free · Dairy-Free · Nut-Free · Halal` (6) |
+
+- **Identical in both: only three** — `Vegetarian`, `Vegan`, `Halal`.
+- **Spelling differs on two** — `Gluten Free`/`Gluten-Free` and `Dairy Free`/`Dairy-Free`.
+  (Milestone 15 named only the first.)
+- **Intake only:** `Keto`, `Paleo`, `Kosher`, `Other`. **Meal plan only:** `Nut-Free`.
+
+**The divergence is one of scope, not just spelling.** `Nut-Free` is an *allergen*, and at
+intake allergens live in the separate free-text `food_allergies` column. So the meal-plan
+screen merges an allergen into "restrictions" — which is exactly what Workstream E's own
+planned fix #2 forbids: *"Send allergies as a distinct, emphatic constraint — not merged into
+'restrictions'"* (`QA_WORKSTREAM_E…:870`).
+
+**Currently harmless, and about to stop being so.** `meal_plan_screen.dart:24`'s
+`_restrictions` is a transient local list with no database write, so the divergence is
+display-only today. Workstream E's planned fix #1 (`:868`) loads `user_profiles.dietary_restrictions`
+into that screen as locked context — at which point the two vocabularies collide directly.
+
+**Which vocabulary is canonical is a product question that repository evidence cannot settle.**
+It is independent of the type decision and must not be resolved by a schema or serializer
+change. Filed as `CON-03-VOCAB`.
 
 ---
 
@@ -282,3 +307,30 @@ probe, schema, RLS or policy change. Production `nxdbooufqzkpslkcogxc` not conta
 credential or secret accessed. No SEC-R2/SEC-R3 promotion or evidence-count change. No C1
 widening. The §7.10 / §7.18 Step 4 authority conflict untouched. **The decision is PENDING and
 was never requested of any owner.**
+
+---
+
+## 10 · Status re-confirmed, 2026-10-13 (Milestone 16)
+
+**All three decisions remain PENDING. No owner response has been received.** Verified against
+the authorities directly rather than restated:
+
+- `MASTER_PRODUCT_DECISIONS.md` still carries exactly **two** `ANSWERED` amendments, `PD-A05`
+  (2026-08-27) and `PD-A23` (2026-08-28), and still states "Nothing in this document is
+  decided." `PD-A22` is not among them.
+- `decision-log.md` — §2's standing record for a taken decision — contains **no** CON-03 or
+  dietary entry.
+- The most recent commits touching either authority are `840c007` (PD-A05) and `527438a`
+  (PD-A23's implementation). Nothing since.
+- **This workflow has no authorized route to the product owner.** No owner was contacted in
+  this milestone or any previous one. The response sheet in §8 stands unanswered.
+
+**CI, for the record.** The commit that introduced this memo,
+`daeca225c91e5622e215cd26fbf58de18d3b34c3`, now has a **terminal** authoritative result:
+`pull_request` run **`38413431946`**, `status=completed`, `conclusion=success`, **7 of 7 jobs
+`success`**, head SHA matching exactly. (The sibling `push` run `38413424352` is `cancelled` —
+the expected `concurrency.group` behaviour, not a failure, and not evidence of anything.)
+Milestone 15 correctly declined to call this green while it was `queued`.
+
+**Implementation remains gated** on `CON-03-TYPE` at minimum, and independently on SEC-R2 for
+anything downstream — see §7 of `V5_CON03_AUTHORITY_DETERMINATION.md`.

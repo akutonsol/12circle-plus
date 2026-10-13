@@ -1148,6 +1148,93 @@ section('16 · CON-03 authority (PD-A22 route b)');
     'the decision gates implementation');
 }
 
+// ── CON-03 decision state and the two vocabularies (Milestone 16) ──────────
+//
+// Milestone 15 cited the workstream REPORT for the meal-plan vocabulary. These
+// assert the SOURCE, so the memo's §4.1 table cannot drift from the widgets.
+{
+  const R = (...p) => fs.readFileSync(path.join(ROOT, ...p), 'utf8');
+
+  const intake = R('apps', 'mobile', 'lib', 'features', 'onboarding',
+    'presentation', 'intake_flow_screen.dart');
+  const meal = R('apps', 'mobile', 'lib', 'features', 'ai_nutrition',
+    'presentation', 'meal_plan_screen.dart');
+
+  const listOf = (src, re) => {
+    const m = src.match(re);
+    return m ? [...m[1].matchAll(/'([^']*)'/g)].map((x) => x[1]) : null;
+  };
+  const a = listOf(intake, /static const _restrictions = \[([\s\S]*?)\];/);
+  // The meal-plan list is asserted by its exact literal below rather than
+  // parsed: it has no named constant to anchor a parse on, and a parse that
+  // silently returned null would make the comparisons pass vacuously.
+
+  check('intake still declares exactly nine restriction values',
+    a && a.length === 9, a ? a.join(' | ') : 'list not found');
+  check('the meal-plan screen declares its own separate vocabulary',
+    /'Vegetarian', 'Vegan', 'Gluten-Free', 'Dairy-Free', 'Nut-Free', 'Halal'/.test(meal),
+    'meal_plan_screen.dart:27 — six values, verified from source');
+
+  // The scope divergence, which is the part that matters to the owner.
+  check('Nut-Free is in the meal-plan list but NOT in intake\'s',
+    /'Nut-Free'/.test(meal) && a && !a.includes('Nut-Free'),
+    'an allergen merged into restrictions; intake keeps allergens in food_allergies');
+  check('only three values are spelled identically in both',
+    a && ['Vegetarian', 'Vegan', 'Halal'].every((v) => a.includes(v)
+      && new RegExp(`'${v}'`).test(meal))
+      && a.includes('Gluten Free') && /'Gluten-Free'/.test(meal)
+      && a.includes('Dairy Free') && /'Dairy-Free'/.test(meal),
+    'the hyphenation split on Gluten/Dairy is real, in both directions');
+
+  // Still display-only. If this ever writes, the collision becomes data.
+  const mealWrites = /_restrictions[\s\S]{0,120}?(upsert|insert|update)\(/.test(meal)
+    || /dietary_restrictions/.test(meal);
+  check('the meal-plan list is still transient (no DB write, no column reference)',
+    !mealWrites,
+    'meal_plan_screen.dart:24 — so the divergence is display-only until E\'s fix #1');
+
+  // Nothing enforces the closed domain. This is what makes CON-03-COMMA a
+  // real decision rather than a formality.
+  const migDir = path.join(ROOT, 'supabase', 'migrations');
+  const constrained = fs.readdirSync(migDir).filter((f) => f.endsWith('.sql'))
+    .filter((f) => /dietary_restrictions[^;]*(CHECK|ENUM)/i
+      .test(fs.readFileSync(path.join(migDir, f), 'utf8')));
+  check('NO migration constrains the column\'s values (no CHECK, no enum)',
+    constrained.length === 0,
+    constrained.length ? `constrained by ${constrained.join(', ')}`
+      : 'the closed domain is one widget\'s list, enforced nowhere');
+
+  // Decision state: still pending. These must fail the moment an owner answers,
+  // so the memo cannot keep claiming "pending" after the fact.
+  const pd = R('docs', 'MASTER_PRODUCT_DECISIONS.md');
+  const answered = [...pd.matchAll(/\*\*`(PD-A\d+)` is `ANSWERED`\*\*/g)].map((m) => m[1]);
+  check('exactly PD-A05 and PD-A23 are ANSWERED — no more, no fewer',
+    answered.length === 2 && answered.includes('PD-A05') && answered.includes('PD-A23'),
+    `ANSWERED: ${answered.join(', ') || 'none found'}`);
+  check('decision-log.md still records no CON-03 / dietary answer',
+    !/dietar|CON-03/i.test(R('docs', 'decision-log.md')),
+    '§2 names decision-log.md as the standing record of a taken decision');
+
+  // SEC-R2 independently gates 3B-1 and is unchanged.
+  const reg = R('docs', 'MASTER_REMEDIATION_REGISTRY.md');
+  const secr2 = reg.slice(reg.indexOf('### SEC-R2 ·'), reg.indexOf('### SEC-R3 ·'));
+  check('SEC-R2 still lacks VERIFIED END-TO-END and is still NOT promoted',
+    /\*\*VERIFIED END-TO-END is absent\.\*\*/.test(secr2)
+      && /\*\*NOT promoted\*\*/.test(secr2),
+    'so resolving CON-03 does not make 3B-1 startable');
+
+  // The memo's own re-confirmation must stay honest about contact.
+  const memo = R('docs', 'V5_CON03_STORAGE_CONTRACT_DECISION_MEMO.md')
+    .replace(/\s+/g, ' ');
+  check('the memo still states no owner was contacted',
+    /No owner was contacted in this milestone or any previous one/.test(memo),
+    '§10 — a pending decision must never read as a requested one');
+  check('the memo records the TERMINAL CI result for daeca22, with its run id',
+    /38413431946/.test(memo) && /conclusion=success/.test(memo)
+      && /7 of 7 jobs/.test(memo),
+    'and names the cancelled push run as not evidence');
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {
