@@ -348,6 +348,22 @@ function main() {
         }
       }
       if (event === 'verified' && (!note || !/https?:\/\/|^artifact:|^ci:|^commit:/i.test(note))) throw new Error('verified requires an evidence reference (URL, artifact:, ci:, or commit:)');
+      // The check above accepts ANY of the four reference kinds for ANY task,
+      // so a task whose own `evidenceRequired` says `commit:` could be verified
+      // with a bare URL. Where the task declares a machine-checkable kind,
+      // require THAT kind. Seven of nineteen tasks declare `commit:`; the other
+      // twelve declare prose ("a recorded governance ruling", "explicit owner
+      // authorization") that no rule can check, and this deliberately does not
+      // pretend otherwise -- those still rest on the reviewer.
+      if (event === 'verified') {
+        const required = Array.isArray(task.evidenceRequired) ? task.evidenceRequired : [];
+        const kinds = [...new Set(required
+          .map((e) => /^(commit|ci|artifact):/i.exec(String(e).trim()))
+          .filter(Boolean).map((m) => m[1].toLowerCase()))];
+        if (kinds.length && !kinds.some((k) => new RegExp(`^${k}:`, 'i').test(note.trim()))) {
+          throw new Error(`${task.id} requires ${kinds.map((k) => `${k}:`).join(' or ')} evidence; got "${note.trim().slice(0, 40)}"`);
+        }
+      }
       // A `commit:` reference must RESOLVE. Format validation alone accepted a
       // reference to a commit that did not contain the work: V5-AUTO-001 was
       // verified with `commit:3216bfe`, the BASELINE, while its deliverable

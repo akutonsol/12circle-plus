@@ -1322,6 +1322,68 @@ section('16 · CON-03 authority (PD-A22 route b)');
     noAction.length ? `missing on ${noAction.map((t) => t.id).join(', ')}` : 'all complete');
 }
 
+// ── a task's own evidenceRequired kind is enforced (Milestone 17) ──────────
+//
+// The generic check accepts ANY of URL / artifact: / ci: / commit: for ANY
+// task, so a task whose evidenceRequired says `commit:` could be closed with a
+// bare URL. Seven of nineteen tasks declare `commit:`. The other twelve
+// declare prose no rule can check, and that is left to the reviewer rather
+// than faked. Driven through the real lease dance, not asserted on source.
+section('evidenceRequired kind is enforced for the kinds that are checkable');
+{
+  const dir = sandbox([T('A', { evidenceRequired: ['commit: containing the work'] })]);
+  const c = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'mallory' }));
+  run(dir, ['event', 'A', c.token, 'implemented', 'done'], { SKILLS_AGENT_ID: 'mallory' });
+  const v = json(run(dir, ['claim', 'verifier'],
+    { SKILLS_AGENT_ID: 'alice', SKILLS_AGENT_ROLE: 'verifier' }));
+
+  // A URL passes the generic reference check and must STILL be refused,
+  // because this task declared commit: evidence.
+  const wrongKind = run(dir, ['event', 'A', v.token, 'verified', 'https://example.com/run/1'],
+    { SKILLS_AGENT_ID: 'alice', SKILLS_AGENT_ROLE: 'verifier' });
+  check('a URL is refused when the task declares commit: evidence',
+    !wrongKind.ok && /requires commit: evidence/.test(wrongKind.err),
+    wrongKind.err.trim().slice(0, 90));
+  check('…and the task did NOT advance to VERIFIED',
+    stateOf(dir).tasks.A.status !== 'VERIFIED',
+    `status=${stateOf(dir).tasks.A.status}`);
+
+  // The positive leg: the declared kind is accepted. Without this, the test
+  // above would pass against a rule that refuses everything.
+  const right = run(dir, ['event', 'A', v.token, 'verified', 'commit:abc123'],
+    { SKILLS_AGENT_ID: 'alice', SKILLS_AGENT_ROLE: 'verifier' });
+  check('the declared kind IS accepted',
+    right.ok && stateOf(dir).tasks.A.status === 'VERIFIED',
+    right.ok ? 'VERIFIED' : right.err.trim().slice(0, 90));
+}
+{
+  // A task with prose-only evidenceRequired must not be made unverifiable by
+  // the new rule -- twelve of nineteen tasks are in this position.
+  const dir = sandbox([T('B', { evidenceRequired: ['a recorded governance ruling'] })]);
+  const c = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'mallory' }));
+  run(dir, ['event', 'B', c.token, 'implemented', 'done'], { SKILLS_AGENT_ID: 'mallory' });
+  const v = json(run(dir, ['claim', 'verifier'],
+    { SKILLS_AGENT_ID: 'alice', SKILLS_AGENT_ROLE: 'verifier' }));
+  const ok = run(dir, ['event', 'B', v.token, 'verified', 'https://example.com/ruling'],
+    { SKILLS_AGENT_ID: 'alice', SKILLS_AGENT_ROLE: 'verifier' });
+  check('a prose-only requirement still accepts any valid reference kind',
+    ok.ok && stateOf(dir).tasks.B.status === 'VERIFIED',
+    ok.ok ? 'VERIFIED' : ok.err.trim().slice(0, 90));
+}
+{
+  // And a task declaring NO evidenceRequired is unaffected.
+  const dir = sandbox([T('C')]);
+  const c = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'mallory' }));
+  run(dir, ['event', 'C', c.token, 'implemented', 'done'], { SKILLS_AGENT_ID: 'mallory' });
+  const v = json(run(dir, ['claim', 'verifier'],
+    { SKILLS_AGENT_ID: 'alice', SKILLS_AGENT_ROLE: 'verifier' }));
+  const ok = run(dir, ['event', 'C', v.token, 'verified', 'ci:12345'],
+    { SKILLS_AGENT_ID: 'alice', SKILLS_AGENT_ROLE: 'verifier' });
+  check('a task with no evidenceRequired is unaffected by the new rule',
+    ok.ok && stateOf(dir).tasks.C.status === 'VERIFIED',
+    ok.ok ? 'VERIFIED' : ok.err.trim().slice(0, 90));
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {
