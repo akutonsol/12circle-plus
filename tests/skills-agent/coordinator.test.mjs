@@ -872,6 +872,148 @@ section('16 · CON-03 authority (PD-A22 route b)');
     `kind=${con.blockers.map((b) => b.kind).join(',')}`);
 }
 
+// ── CON-03 forward-migration design: the facts the design rests on ──────────
+//
+// Milestone 14. Every one of these is a repository-source fact that, if it
+// drifted, would silently invalidate V5_CON03_FORWARD_MIGRATION_DESIGN.md.
+{
+  const intake = fs.readFileSync(path.join(ROOT, 'apps', 'mobile', 'lib',
+    'features', 'onboarding', 'domain', 'intake_data.dart'), 'utf8');
+
+  // §1 — the asymmetry IS the defect. Both halves must be pinned: if either
+  // serializer is changed, CON-03 is either fixed or changed shape, and the
+  // design document must be re-read rather than trusted.
+  check('toSupabasePartial still sends dietary_restrictions as an ARRAY',
+    /m\['dietary_restrictions'\]\s*=\s*dietaryRestrictions\.toList\(\)/.test(intake),
+    'intake_data.dart:213 — the per-step write that fails against a text column');
+  check('toSupabase still sends dietary_restrictions as a JOINED STRING',
+    /'dietary_restrictions':\s*dietaryRestrictions\.join\(','\)/.test(intake),
+    'intake_data.dart:252');
+
+  // §1.1 — scope is ONE column. The siblings are consistent; if one of them
+  // ever gains a .toList() the finding widens and §1.1's table is wrong.
+  for (const sib of ['medical_conditions', 'injury_locations']) {
+    const partial = new RegExp(`m\\['${sib}'\\]\\s*=\\s*\\w+\\.join\\(','\\)`);
+    const final_ = new RegExp(`'${sib}':\\s*\\w+\\.join\\(','\\)`);
+    check(`${sib} comma-joins in BOTH serializers (so CON-03 stays one column)`,
+      partial.test(intake) && final_.test(intake),
+      'the premise of §1.1: only dietary_restrictions disagrees');
+    check(`${sib} is never sent as an array`,
+      !new RegExp(`m\\['${sib}'\\]\\s*=\\s*\\w+\\.toList\\(\\)`).test(intake),
+      `a .toList() here would widen CON-03 beyond its finding`);
+  }
+
+  // §3.1 — the conversion expression is derived from _splitList. No trim and
+  // no empty-filtering is not an oversight; it is the semantics the SQL must
+  // reproduce. A trim added here would make §3.2's CASE expression wrong.
+  check('_splitList maps empty/null to [] and otherwise splits on comma only',
+    /if \(raw == null \|\| raw\.isEmpty\) return \[\];\s*return raw\.split\(','\);/
+      .test(intake),
+    'intake_data.dart:123-126 — delimiter and edge case the migration mirrors');
+  const splitBody = intake.slice(intake.indexOf('static List<String> _splitList'));
+  check('_splitList does NOT trim or filter (so the SQL must not either)',
+    !/_splitList[\s\S]{0,200}(\.trim\(\)|where\()/.test(splitBody.slice(0, 220)),
+    'a trim/filter here would silently change what stored rows mean');
+
+  // §3.1 — the read path already converges from both types. This is why the
+  // design says no client read change is needed under either target.
+  check('the read path handles BOTH List and String (target-independent)',
+    /d\['dietary_restrictions'\] is List/.test(intake)
+      && /_splitList\(d\['dietary_restrictions'\] as String\?\)/.test(intake),
+    'intake_data.dart:168-170');
+
+  // §3.4 — "first column type change in the project's history". A single
+  // ALTER COLUMN ... TYPE appearing anywhere falsifies that claim.
+  const migDir = path.join(ROOT, 'supabase', 'migrations');
+  const migs = fs.readdirSync(migDir).filter((f) => f.endsWith('.sql'));
+  check('the migration corpus is large enough for this sweep to mean something',
+    migs.length > 150, `${migs.length} migrations scanned`);
+  const typeChanges = migs.filter((f) =>
+    /ALTER\s+COLUMN\s+\w+\s+(SET\s+DATA\s+)?TYPE/i
+      .test(fs.readFileSync(path.join(migDir, f), 'utf8')));
+  check('ZERO committed migrations change a column type (§3.4)',
+    typeChanges.length === 0,
+    typeChanges.length ? `found in ${typeChanges.join(', ')}` : 'no precedent exists');
+
+  // §3.4 — but text[] columns are conventional, which is the house style a
+  // text[] target would follow. Positive control for the sweep above: this
+  // proves the corpus IS being read, so the zero result is real.
+  const arrayCols = migs.filter((f) =>
+    /\w+\s+text\[\]/i.test(fs.readFileSync(path.join(migDir, f), 'utf8')));
+  check('text[] columns DO exist (positive control + §3.4 house style)',
+    arrayCols.length > 0, `${arrayCols.length} migration files use text[]`);
+
+  // §3.2 — the starting state from repository history.
+  const m013 = fs.readFileSync(path.join(migDir, '013_health_assessment.sql'), 'utf8');
+  check('013 declares the column TEXT NOT NULL DEFAULT \'\' (why the \'\' guard matters)',
+    /dietary_restrictions\s+TEXT\s+NOT NULL DEFAULT ''/.test(m013),
+    '013_health_assessment.sql:15');
+
+  // §4.2(3) — the hard cost of the text[] target. If 141 ever declares the
+  // column as text[], that drop/recreate has happened and §4.2 is stale.
+  const m141 = fs.readFileSync(path.join(migDir,
+    '141_assessment_access_sleep_hours_type.sql'), 'utf8');
+  check('the LIVE get_client_assessment() still declares dietary_restrictions text',
+    /dietary_restrictions\s+text,/.test(m141),
+    '141:69 — a text[] column would make this 42804 on every call');
+  check('141 records that a return type cannot be changed by CREATE OR REPLACE',
+    /return type cannot be changed by CREATE OR REPLACE/i.test(m141)
+      || /cannot be changed by `CREATE OR REPLACE`/.test(m141),
+    'the precedent §4.2(3) cites for the third drop/recreate');
+
+  // §2 — the blocker. No target may be asserted as decided.
+  const pd = fs.readFileSync(path.join(ROOT, 'docs',
+    'MASTER_PRODUCT_DECISIONS.md'), 'utf8');
+  check('PD-A22 authorizes route (b) and nothing more',
+    /PD-A22/.test(pd) && /\*\*Yes\*\* — via \(b\)/.test(pd),
+    'the authorization the design operates under');
+
+  // §7 / the brief — a design proposal, NOT an executable migration. The
+  // absence of a new migration file is itself the deliverable's boundary.
+  check('no CON-03 migration file was created (execution boundary held)',
+    !migs.some((f) => /dietary|con.?03/i.test(f)),
+    'creating a migration file would not be permission to execute it');
+
+  const design = fs.readFileSync(path.join(ROOT, 'docs',
+    'V5_CON03_FORWARD_MIGRATION_DESIGN.md'), 'utf8');
+  check('the design labels itself a proposal and disclaims execution',
+    /PROPOSAL, NOT EXECUTABLE/.test(design)
+      && /Nothing in this document has been applied to any database/.test(design),
+    'so it cannot be mistaken for an applied change');
+  check('the design records the offline-verification failure, not a success',
+    /NOT POSSIBLE/.test(design) && /was not found/.test(design),
+    '§5 — libpq ships initdb/pg_ctl without the postgres server');
+}
+
+// ── the offline harness must not claim a server it does not have ───────────
+//
+// Milestone 14 found this the hard way: libpq ships initdb/pg_ctl, `--version`
+// answers 18.6 from them, and the old guard passed on a runner with no server
+// at all -- then initdb died. Verified as a pair on this runner: old guard
+// reached `say "postgres: ..."`, new guard dies naming the cause.
+{
+  const nc = fs.readFileSync(path.join(ROOT, 'supabase', 'scripts',
+    'negative-control.sh'), 'utf8');
+  check('find_pg requires the postgres SERVER binary, not just the wrappers',
+    /-x "\$pgbin\/postgres"/.test(nc) && /command -v postgres/.test(nc),
+    'a client-only install (Homebrew libpq) must be rejected up front');
+  check('…and says WHY, so the next runner failure is not mysterious',
+    /client-only install/.test(nc) && /Install a full postgresql server package/.test(nc),
+    'the old message named the condition but could not detect it');
+  // My first version of this asserted the script UNSETS the credential vars.
+  // It does not -- it REFUSES TO RUN if any is set, which is strictly stronger
+  // (fail closed, no silent sanitising). Assert the real, stronger guarantee.
+  check('the harness still REFUSES to run when any credential var is set',
+    /assert_no_credentials/.test(nc)
+      && /is set in this environment/.test(nc)
+      && /refuses rather than proceeding/.test(nc),
+    'fail-closed, not unset — hardening find_pg must not have weakened this');
+  check('…and still pins the target host to loopback',
+    /PGHOST_=127\.0\.0\.1/.test(nc)
+      && /the target host is not loopback/.test(nc),
+    'negative-control.sh:47,86-87');
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {

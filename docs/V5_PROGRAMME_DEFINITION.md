@@ -20366,3 +20366,92 @@ inventory rather than contradicting it.
 
 **No protected register was touched. `QA_CLOSURE_STANDARD.md` has no commit against it in this
 campaign. Production was not contacted.**
+
+---
+
+## §222 · CON-03 forward-migration design (Milestone 14)
+
+Deliverable: `V5_CON03_FORWARD_MIGRATION_DESIGN.md` — a **design proposal**, deliberately not a
+file under `supabase/migrations/`. PD-A22's `Proceed? = "**Yes** — via (b)"` authorizes designing
+a migration that converges from either starting type without inspecting production. It authorizes
+nothing else, and nothing was executed anywhere.
+
+### §222.1 · CON-03 is one column, not three
+
+`140:209-216` notes that `medical_conditions`, `injury_locations` and `dietary_restrictions` are
+all modelled `List<String>` over `TEXT`. True about the modelling, and it reads as a three-column
+problem. It is not. Comparing **both** serializers for each:
+
+| column | `toSupabasePartial` | `toSupabase` | consistent? |
+|---|---|---|---|
+| `medical_conditions` | `join(',')` `:202` | `join(',')` `:243` | yes |
+| `injury_locations` | `join(',')` `:204` | `join(',')` `:245` | yes |
+| `dietary_restrictions` | `toList()` `:213` | `join(',')` `:252` | **NO** |
+
+Only one column has the serializer disagreement; the siblings round-trip correctly through
+`_splitList`. Any remediation touching all three is wider than the finding.
+
+Probable origin, visible at `:184`: `activities.toList()` — and `activities` is the column the QA
+probe confirmed *is* `text[]`. The comment at `:212`, "Live column is text[] — send a real array",
+is true of `activities` and false of `dietary_restrictions`. The pattern was copied with its
+justification attached.
+
+### §222.2 · The delimiter was never ambiguous — and the read path already converges
+
+I expected to report the delimiter as an open question blocking the conversion. Code answers it:
+`:168-170` branches on `is List` and otherwise calls `_splitList`, which is `''`/null → `[]`, else
+`raw.split(',')` — **no trim, no empty-filtering**. So the conversion expression is determined, and
+**the client read path needs no change under either target.** Only the write side must be made to agree.
+
+The `col = ''` guard in the `text → text[]` expression is load-bearing, because `013:15` declares
+the column `TEXT NOT NULL DEFAULT ''` and so empty string is the common stored value. It is written
+so that whether `string_to_array('', ',')` yields `{}` or `{''}` **cannot matter** — an unverifiable
+detail must not be load-bearing.
+
+### §222.3 · The recommendation inverts
+
+The registry **recommends** `text[]`. The evidence found here prices that option honestly:
+
+- **Zero** `ALTER COLUMN … TYPE` statements exist in all 182 migrations (swept with a positive
+  control: 44 files use `text[]`, so the corpus was genuinely read). It would be the first.
+- `141:69` — the **live** `get_client_assessment()` — declares the output column
+  `dietary_restrictions text`. 141's own header records that a `RETURNS TABLE` signature is
+  validated at **execution** time, yielding `42804` on *every call*, and that a return type cannot
+  be changed by `CREATE OR REPLACE`. So `text[]` **reintroduces exactly the defect 141 was written
+  to repair** and requires a third drop/recreate plus re-grants.
+- It leaves the two sibling columns on the opposite convention in the same table.
+
+`text` achieves CON-03's stated "one serializer, one type" with a one-line change at `:213` and no
+DDL at all. Recommended on that basis. **The target remains the owner's decision and was not made
+here** — `MASTER_PRODUCT_DECISIONS.md` contains no decision naming a target, and `:6` still says
+"Nothing in this document is decided."
+
+### §222.4 · A version flag is not a capability check
+
+I reported before this milestone that a safe ephemeral harness "does exist" and its binaries were
+"functional", because `initdb --version` and `pg_ctl --version` both returned `18.6`. They resolve
+to `/opt/homebrew/opt/libpq/bin` — the **client** keg. `initdb` fails with *program "postgres" is
+needed by initdb but was not found*. There is no `postgresql@*` keg, no `postgres` binary under
+Cellar or on PATH, and the docker daemon is down. **Offline behavioural verification is
+unavailable on this runner**, and §5 of the design records that rather than implying coverage.
+
+`negative-control.sh` could not detect this either: `find_pg` tested `-x pg_ctl && -x initdb &&
+-n psql`, all of which pass here, then died inside `initdb`. Hardened to require the `postgres`
+server binary next to `initdb` or on PATH, with a message naming the client-only case. **Verified
+as a pair on this runner**: the old guard reached `say "  postgres: initdb (PostgreSQL) 18.6"` and
+continued; the new one dies naming the cause. That reassuring version string is precisely what
+misled me.
+
+### §222.5 · A guard I described as weaker than it is
+
+I had recorded `assert_no_credentials` as *guarding/unsetting* nine credential variables. It does
+not unset anything — it **refuses to run** if any is set, because "a set variable means the job
+scope has widened". `QA_URL`, `QA_SERVICE` and `QA_ANON` are set in this shell, so the harness
+would refuse here regardless of the missing server. Fail-closed is strictly stronger than
+sanitising; the stronger behaviour is what is implemented, and **I did not work around it.** The
+test that asserted the unset behaviour was asserting something false and now asserts the real guarantee.
+
+`coordinator.test.mjs` **123 → 156**.
+
+**No migration file created. No QA write, live probe, or schema change. No target invented. No
+protected register or closure standard mutated. Production `nxdbooufqzkpslkcogxc` not contacted.**
