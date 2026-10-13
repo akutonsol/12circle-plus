@@ -256,6 +256,20 @@ function heldPaths(tasks, state) {
   }
   return out;
 }
+// `policy.maxConcurrentTasks` was the THIRD declared field nothing read.
+// Demonstrated: with the policy set to 3, six workers took six live leases.
+// Counted over implementer leases only -- a verification lease is review, not
+// edit, and is already serialised by the independent-verifier rules. An unset
+// or non-positive value means "no limit", preserving prior behaviour.
+function concurrencyLimitReached(tasks, state) {
+  const limit = Number(policy.maxConcurrentTasks);
+  if (!Number.isFinite(limit) || limit <= 0) return false;
+  const live = tasks.filter((t) => {
+    const st = state.tasks[t.id];
+    return st && st.leaseToken && ['CLAIMED', 'IMPLEMENTED'].includes(st.status);
+  }).length;
+  return live >= limit;
+}
 function pathConflict(task, tasks, state) {
   const held = heldPaths(tasks, state).filter((h) => h.id !== task.id);
   for (const p of (Array.isArray(task.paths) ? task.paths : [])) {
@@ -324,7 +338,9 @@ function main() {
       const isVerifier = role === 'verifier';
       const task = isVerifier
         ? tasks.find(t => state.tasks[t.id]?.status === 'IMPLEMENTED' && !state.tasks[t.id]?.verificationLeaseToken && depsVerified(t, state))
-        : tasks.find(t => t.role === role && eligible(t, state) && !pathConflict(t, tasks, state));
+        : concurrencyLimitReached(tasks, state)
+          ? undefined
+          : tasks.find(t => t.role === role && eligible(t, state) && !pathConflict(t, tasks, state));
       if (!task) { writeAtomic(STATE_PATH, state); return null; }
       const s = state.tasks[task.id]; const token = crypto.randomUUID();
       if (isVerifier) {

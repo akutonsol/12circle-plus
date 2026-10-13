@@ -1620,6 +1620,63 @@ section('an implementer lease reserves its declared paths');
     JSON.stringify(v).slice(0, 70));
 }
 
+// ── policy.maxConcurrentTasks must bound live leases ──────────────────────
+//
+// The THIRD declared field nothing read. Demonstrated before the fix: with the
+// policy set to 3, six workers took six live leases.
+section('policy.maxConcurrentTasks bounds concurrent implementer leases');
+{
+  const sandboxWithPolicy = (policy, tasks) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-conc-'));
+    fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(dir, '.skills-agent'), { recursive: true });
+    fs.copyFileSync(COORD, path.join(dir, 'scripts', 'skills-agent-coordinator.mjs'));
+    fs.writeFileSync(path.join(dir, '.skills-agent', 'tasks.json'),
+      JSON.stringify({ version: 1, policy, tasks }, null, 2));
+    return dir;
+  };
+  const six = [1, 2, 3, 4, 5, 6].map((n) => T(`T${n}`, { paths: [`f${n}.dart`] }));
+
+  const dir = sandboxWithPolicy({ maxConcurrentTasks: 3 }, six);
+  const got = [];
+  for (const w of ['w1', 'w2', 'w3', 'w4', 'w5']) {
+    const c = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: w }));
+    got.push(c?.task?.id ?? 'refused');
+  }
+  check('exactly the limit is handed out, then claims are refused',
+    got.slice(0, 3).every((g) => g !== 'refused')
+      && got.slice(3).every((g) => g === 'refused'),
+    `[${got.join(', ')}]`);
+  const live = Object.values(stateOf(dir).tasks)
+    .filter((v) => v.leaseToken && ['CLAIMED', 'IMPLEMENTED'].includes(v.status)).length;
+  check('live leases never exceed the declared limit', live === 3, `live=${live}`);
+
+  // Releasing a lease must free a slot, or the limit becomes a dead end.
+  const st = stateOf(dir);
+  const firstHeld = Object.keys(st.tasks).find((k) => st.tasks[k].leaseToken);
+  st.tasks[firstHeld].leaseExpiresAt = new Date(Date.now() - 60_000).toISOString();
+  fs.writeFileSync(path.join(dir, '.skills-agent', 'state.json'),
+    JSON.stringify(st, null, 2));
+  run(dir, ['recover'], { SKILLS_AGENT_ID: 'w1' });
+  const after = json(run(dir, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w6' }));
+  check('an expired lease frees a concurrency slot',
+    !!after?.task?.id, `claimed ${after?.task?.id ?? 'refused'}`);
+
+  // No limit declared -> prior behaviour, unbounded. Without this leg the test
+  // above would pass against a rule that refuses everything beyond 3 always.
+  const unlimited = sandboxWithPolicy({}, six);
+  const n = ['a', 'b', 'c', 'd', 'e'].filter((w) =>
+    json(run(unlimited, ['claim', 'implementer'], { SKILLS_AGENT_ID: w }))?.task?.id).length;
+  check('with no limit declared, concurrency is unbounded as before',
+    n === 5, `claimed ${n} of 5`);
+
+  // A non-positive limit must also mean "no limit", not "refuse everything".
+  const zero = sandboxWithPolicy({ maxConcurrentTasks: 0 }, six);
+  const z = json(run(zero, ['claim', 'implementer'], { SKILLS_AGENT_ID: 'w1' }));
+  check('a zero limit is treated as no limit, not a total block',
+    !!z?.task?.id, `claimed ${z?.task?.id ?? 'refused'}`);
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {
