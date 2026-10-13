@@ -1384,6 +1384,66 @@ section('evidenceRequired kind is enforced for the kinds that are checkable');
     ok.ok ? 'VERIFIED' : ok.err.trim().slice(0, 90));
 }
 
+// ── the attestation secret must never reach stdout or stderr ───────────────
+//
+// `identityTrust` reads SKILLS_AGENT_ATTESTATION_KEY and mints an HMAC from
+// it. A source grep would only prove nobody wrote `console.log(key)` today, so
+// this drives the real paths with sentinel values and asserts the sentinels
+// appear in NO output -- including the error path, which is where a secret is
+// most likely to be echoed back for "debuggability".
+section('the attestation key and identity token stay out of all output');
+{
+  const SECRET = 'SENTINEL-ATTESTATION-KEY-d41d8cd9';
+  const TOKEN = 'SENTINEL-IDENTITY-TOKEN-8f14e45f';
+  const dir = sandbox([T('A')]);
+
+  // 1 · key set, token MISSING -> the error path fires.
+  const noTok = run(dir, ['claim', 'implementer'],
+    { SKILLS_AGENT_ID: 'w1', SKILLS_AGENT_ATTESTATION_KEY: SECRET });
+  check('a configured key with no identity token is refused',
+    !noTok.ok && /identity token is required/.test(noTok.err),
+    noTok.err.trim().slice(0, 70));
+  check('…and that refusal does not echo the key',
+    !`${noTok.out}${noTok.err}`.includes(SECRET),
+    'the error path is where a secret most often leaks');
+
+  // 2 · key set, token WRONG -> the mismatch path fires.
+  const badTok = run(dir, ['claim', 'implementer'],
+    { SKILLS_AGENT_ID: 'w1', SKILLS_AGENT_ATTESTATION_KEY: SECRET,
+      SKILLS_AGENT_IDENTITY_TOKEN: TOKEN });
+  const bothOut = `${badTok.out}${badTok.err}`;
+  check('a wrong identity token leaks neither the key nor the token',
+    !bothOut.includes(SECRET) && !bothOut.includes(TOKEN),
+    bothOut.trim().slice(0, 70) || '(no output)');
+
+  // 3 · the success path, with a correctly minted token, must not echo either.
+  const expected = crypto.createHmac('sha256', SECRET)
+    .update('A:implementer:w1').digest('hex');
+  const good = run(dir, ['claim', 'implementer'],
+    { SKILLS_AGENT_ID: 'w1', SKILLS_AGENT_ATTESTATION_KEY: SECRET,
+      SKILLS_AGENT_IDENTITY_TOKEN: expected });
+  const goodOut = `${good.out}${good.err}`;
+  // The trust level is PERSISTED (:311), not returned in the claim JSON --
+  // my first version of this looked in the claim output and failed while the
+  // claim had in fact succeeded. Assert where the value actually lives.
+  const trust = JSON.parse(fs.readFileSync(
+    path.join(dir, '.skills-agent', 'state.json'), 'utf8'))
+    .tasks.A.implementerIdentityTrust;
+  check('a correctly attested claim succeeds and records attested trust',
+    good.ok && trust && trust !== 'self-asserted',
+    good.ok ? `trust=${trust}` : good.err.trim().slice(0, 70));
+  check('…and the success path echoes neither the key nor the HMAC',
+    !goodOut.includes(SECRET) && !goodOut.includes(expected),
+    'an attested claim must not publish the proof it was given');
+
+  // 4 · the persisted state must not carry them either -- it is committed in
+  // other repositories even though it is gitignored here.
+  const persisted = fs.readFileSync(path.join(dir, '.skills-agent', 'state.json'), 'utf8');
+  check('the state file stores neither the key nor the token',
+    !persisted.includes(SECRET) && !persisted.includes(expected),
+    'state.json records trust LEVEL, not the secret that established it');
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {
