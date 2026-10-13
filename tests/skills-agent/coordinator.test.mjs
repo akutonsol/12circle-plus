@@ -477,12 +477,39 @@ section('10 · the shipped .skills-agent/tasks.json');
     })());
   check('Wave 2B stays sequenced behind 2A, as the plan requires',
     realTasks.tasks.find((t) => t.id === 'V5-W2B-001').dependsOn.includes('V5-W2A-001'));
-  check('the two tasks with NO dependency edges carry an authorization blocker '
-      + 'instead — they are blocked by a decision, not by sequence',
-    ['V5-SECR-001', 'V5-CON-003'].every((id) => {
-      const t = realTasks.tasks.find((x) => x.id === id);
-      return t.dependsOn.length === 0 && (t.blockers ?? []).length > 0;
-    }));
+  // Step 4 gates every row whose §2.1 class demands VERIFIED END-TO-END, and it
+  // is NAMED but never DEFINED — the phrase occurs once, in a parenthetical. So
+  // the authorization cannot even be requested until the definition exists, and
+  // the queue must express that ordering rather than asking for a blank cheque.
+  check('the Step 4 definition task exists and the verification task depends ON it',
+    ids.includes('V5-GOV-006')
+      && realTasks.tasks.find((t) => t.id === 'V5-SECR-001').dependsOn.includes('V5-GOV-006'));
+  check('the status-vocabulary ruling is its OWN task, not folded into Step 4 — '
+      + 'they are different decisions with different consequences',
+    ids.includes('V5-GOV-007')
+      && !/status-vocabulary/i.test(JSON.stringify(
+           realTasks.tasks.find((t) => t.id === 'V5-SECR-001').blockers)));
+  check('the Step-4-blocked task names every row Step 4 gates, not only SEC-R2/R3',
+    ['SEC-R2', 'SEC-R3', 'UIX-1', 'M-03'].every((r) =>
+      realTasks.tasks.find((t) => t.id === 'V5-SECR-001').summary.includes(r)));
+  check('the promotion candidates whose blockers are already resolved are tracked',
+    ids.includes('V5-PROM-001')
+      && /SEC-04/.test(JSON.stringify(realTasks.tasks.find((t) => t.id === 'V5-PROM-001'))));
+
+  // V5-SECR-001 USED to belong here. It gained a real edge in Milestone 7 — on
+  // V5-GOV-006, because Step 4 cannot be authorized before it is defined — so
+  // this now covers the tasks that genuinely have no sequence prerequisite and
+  // are held purely by a decision.
+  const decisionOnly = realTasks.tasks.filter(
+    (t) => (t.dependsOn ?? []).length === 0 && (t.blockers ?? []).length > 0);
+  check('every task with NO dependency edge is held by a recorded blocker, not '
+      + 'left falsely startable',
+    decisionOnly.length > 0
+      && decisionOnly.every((t) => t.blockers.every((b) => b.kind && b.what && b.action)),
+    `${decisionOnly.length} decision-only task(s): ${decisionOnly.map((t) => t.id).join(', ')}`);
+  check('V5-CON-003 remains decision-only — the production column type is not a '
+      + 'sequencing problem',
+    decisionOnly.some((t) => t.id === 'V5-CON-003'));
 }
 
 // ═══ 11 · inventory evidence must exist, not be asserted ═══════════════════

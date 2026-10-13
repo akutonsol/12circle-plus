@@ -613,3 +613,76 @@ The ~177 rows are **not** expanded individually. The registry states that the `P
 carries no per-row status field and *"its movement is not mechanically countable"*, so a per-row
 queue cannot be derived without inventing statuses. These five are the **wave-level** work at the
 current frontier, each traced to the plan or the registry.
+
+---
+
+# `MILESTONE 7` · Step 4 cannot be authorized, because it has never been defined
+
+## The finding that changes the ask
+
+I previously asked you to **authorize Step 4**. That request was not answerable, and the reason is
+specific: **Step 4 is named but never defined.**
+
+The phrase *"End-to-End Product Verification"* occurs **exactly once in the whole of `docs/`** — a
+parenthetical in `MASTER_REMEDIATION_REGISTRY.md:1802`. There is:
+
+* **no entry criteria** for it,
+* **no named approver** — no document ties any Step number to a role or an owner,
+* **no scope statement** — whether approval permits verification only, or also code, data,
+  register or release-status changes,
+* **no step table** anywhere; the step numbers that appear across `docs/` (0, 1, 2, 3, 4, 6, 7, 10,
+  24) belong to unrelated local sequences, not one programme phase list.
+
+*(A single-line search missed this phrase because it wraps across two lines. The multi-line search
+is what established the single occurrence — the earlier "appears nowhere" reading was a line-based
+grep artefact.)*
+
+**So the decision has to come before the authorization**: `V5-GOV-006` asks you to define Step 4
+and name who may approve it. `V5-SECR-001` now depends on it, because authorizing an undefined
+phase would be a blank cheque.
+
+## Step 4 gates more than SEC-R2/R3
+
+| row | §2.1 class | source |
+|---|---|---|
+| `SEC-R2` · `SEC-R3` | AI / safety input — *"all five. A safety input is never closed on source review"* | registry `:1795–1805` |
+| `UIX-1` | class requires *"a human or a driver reached the surface"* | registry `:2727`, `:2739` |
+| `M-03` | **not** `VERIFIED_CLOSED` at *"two of three class states"* | `REMEDIATION_PROGRESS.md:401` |
+
+And the consequence is stated structurally, not per-row: ***"no safety finding in this programme
+can reach `VERIFIED_CLOSED` before Step 4 runs."***
+
+**Which classes Step 4 does NOT gate** — this matters, because it bounds the damage:
+
+| class | requires `VERIFIED END-TO-END` |
+|---|---|
+| Security / authorization | **no** — four states |
+| Data contract / schema | **no** |
+| Error contract / false success | yes, for any user-facing success state |
+| AI / safety input | yes, all five |
+| Billing / entitlement | yes, for anything that moves money |
+
+## A second decision, previously folded into the first
+
+`V5-GOV-007`, now its own task. SEC-R2/R3 hold four of five, and **§2's status table has no term
+for that position**: `REMEDIATED` means *"not yet retested"* and `RETEST_REQUIRED` means *"live
+assertion outstanding"*, and the registry records **both as false** for these rows. It also records
+that *"inventing a sixth status would be a governance decision this session has no authority to
+take"*, so the rows sit at `READY_TO_REMEDIATE` — **explicitly "an understatement"**.
+
+You are asked to choose **(i)** add a status to §2 for *"every state but END-TO-END"*, or
+**(ii)** leave the rows understated until Step 4 closes them.
+
+## Work that is ready and is NOT Step-4-blocked
+
+`V5-PROM-001`. Two rows are recorded as promotion candidates whose blockers are already resolved:
+
+* **`SEC-04`** — *"untouched. §7.8 held it on the F-J-01 blind spot, which SEC-R1's closure now
+  resolves, so it is a **consequential promotion candidate**… **not** promoted here. Assigned to
+  the next checkpoint"* (`:1806`). Its class is **Security / authorization**, which does **not**
+  require `VERIFIED END-TO-END` — **so Step 4 does not gate it.**
+* **`ENV-6`** — named alongside it: *"It does not promote `SEC-04`, `ENV-6`, `SEC-09` or
+  `I-MIG-03`"* (`:2998`).
+
+Promotion is a **protected-register edit**, so it needs your authorization — but it needs nothing
+else. This is the shortest path to movement on the board.

@@ -465,16 +465,18 @@
     },
     {
       "id": "V5-SECR-001",
-      "summary": "SEC-R2 and SEC-R3 — supply the missing VERIFIED END-TO-END state",
+      "summary": "SEC-R2, SEC-R3, UIX-1 and M-03 — supply the VERIFIED END-TO-END state that Step 4 would permit",
       "role": "implementer",
-      "dependsOn": [],
+      "dependsOn": [
+        "V5-GOV-006"
+      ],
       "paths": [
         "supabase/tests/ai/"
       ],
       "acceptance": [
-        "The full chain runs UI -> state -> service -> authorization -> API -> database -> persistence -> response -> UI state",
-        "Both rows reach 5 of 5 for the AI / safety input class",
-        "No waiver is written into the rows instead of evidence"
+        "Step 4 is authorized and recorded before any end-to-end evidence is claimed",
+        "The full chain runs for each affected row, per its §2.1 class",
+        "No waiver is substituted for the fifth state, and no row is promoted on four of five"
       ],
       "maxRetries": 2,
       "risk": "end-to-end-verification",
@@ -482,7 +484,9 @@
       "wave": "3B",
       "sources": [
         "docs/MASTER_REMEDIATION_REGISTRY.md",
-        "docs/QA_CLOSURE_STANDARD.md"
+        "docs/QA_CLOSURE_STANDARD.md",
+        "docs/REMEDIATION_PROGRESS.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md"
       ],
       "verification": [
         "supabase/tests/ai/fj17-parq-risk-contract.sql",
@@ -495,9 +499,9 @@
       "blockers": [
         {
           "kind": "owner",
-          "what": "VERIFIED END-TO-END is Step 4, and Step 4 is not authorized",
-          "evidence": "MASTER_REMEDIATION_REGISTRY.md: 'VERIFIED END-TO-END is Step 4'; 'Step 4 is not authorized' (three occurrences). Both rows read '4 of 5 present' with END-TO-END absent",
-          "action": "authorize Step 4 (End-to-End Product verification), and resolve §7.10's status-vocabulary gap"
+          "what": "Step 4 (End-to-End Product Verification) is not authorized to begin, and it gates EVERY row whose §2.1 class demands VERIFIED END-TO-END -- not only SEC-R2/R3",
+          "evidence": "MASTER_REMEDIATION_REGISTRY.md:1802-1805 'VERIFIED END-TO-END is Step 4 (End-to-End Product Verification), which is not authorized to begin ... no safety finding in this programme can reach VERIFIED_CLOSED before Step 4 runs'; the same bar is recorded for UIX-1 (:2727, :2739) and M-03 (REMEDIATION_PROGRESS.md:401)",
+          "action": "authorize Step 4 -- and first establish WHAT it is: see V5-GOV-006"
         }
       ]
     },
@@ -573,6 +577,124 @@
           "what": "3B-1 depends on CON-03 and SEC-R2, both unresolved",
           "evidence": "MASTER_REMEDIATION_WAVES.md: 'Depends on CON-03 ... and on SEC-R2'",
           "action": "resolve V5-CON-003 and V5-SECR-001 first"
+        }
+      ]
+    },
+    {
+      "id": "V5-GOV-006",
+      "summary": "Define Step 4 (End-to-End Product Verification): its entry criteria, its authorized approver, and what approval permits",
+      "role": "owner-decision",
+      "dependsOn": [],
+      "paths": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/QA_CLOSURE_STANDARD.md"
+      ],
+      "acceptance": [
+        "Step 4's entry criteria are stated",
+        "The role authorized to approve it is named",
+        "The scope of approval is stated -- whether it permits verification only, or also code, data, register or release-status changes",
+        "The environment restrictions that survive approval are stated, including that Gate 9B stays closed",
+        "What constitutes a valid record of the approval is stated"
+      ],
+      "maxRetries": 0,
+      "risk": "governance-definition",
+      "workstream": "governance",
+      "wave": "n/a",
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/QA_CLOSURE_STANDARD.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md"
+      ],
+      "verification": [
+        "none -- this is a governance definition, not an implementation"
+      ],
+      "evidenceRequired": [
+        "a recorded definition and approval authority for Step 4"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "Step 4 is NAMED but never DEFINED. The phrase 'End-to-End Product Verification' occurs exactly ONCE across all of docs/, in a parenthetical. No document states its entry criteria, its approver, or what approval would permit -- so the authorization cannot be requested, only the definition can",
+          "evidence": "multi-line search of docs/*.md: 1 occurrence, MASTER_REMEDIATION_REGISTRY.md:1802. No step table exists; no document ties any Step number to an approver",
+          "action": "define Step 4 and name who may authorize it"
+        }
+      ]
+    },
+    {
+      "id": "V5-GOV-007",
+      "summary": "Rule the status-vocabulary gap: how to record a row holding every state but VERIFIED END-TO-END",
+      "role": "owner-decision",
+      "dependsOn": [],
+      "paths": [
+        "docs/QA_CLOSURE_STANDARD.md",
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "acceptance": [
+        "Either (i) a status is added to §2 for 'every state but END-TO-END', or (ii) the rows stay understated until Step 4 closes them",
+        "No sixth status is invented without this ruling",
+        "The rows are not moved to REMEDIATED or RETEST_REQUIRED, both of which the registry records as FALSE for them"
+      ],
+      "maxRetries": 0,
+      "risk": "governance-decision",
+      "workstream": "governance",
+      "wave": "n/a",
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/QA_CLOSURE_STANDARD.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md"
+      ],
+      "verification": [
+        "none -- this is a governance decision"
+      ],
+      "evidenceRequired": [
+        "a recorded ruling, (i) or (ii)"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "§2's status table has no term for four-of-five. REMEDIATED means 'not yet retested' and RETEST_REQUIRED means 'live assertion outstanding'; the registry records BOTH as false for these rows, and inventing a sixth status is a governance decision",
+          "evidence": "MASTER_REMEDIATION_REGISTRY.md:1815-1828 'The rows therefore stay at READY_TO_REMEDIATE -- an understatement ... The owner is asked to choose: (i) add a status to §2 ... or (ii) leave the rows understated until Step 4 closes them'",
+          "action": "rule (i) or (ii)"
+        }
+      ]
+    },
+    {
+      "id": "V5-PROM-001",
+      "summary": "Authorize the consequential promotions whose blockers are already resolved: SEC-04 and ENV-6",
+      "role": "owner-decision",
+      "dependsOn": [],
+      "paths": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "acceptance": [
+        "Each row is promoted only if its own §2.1 class states are met",
+        "SEC-04's class is Security / authorization, which does NOT require VERIFIED END-TO-END, so Step 4 does not gate it",
+        "No row is promoted merely because its blocker was resolved elsewhere"
+      ],
+      "maxRetries": 0,
+      "risk": "protected-register-edit",
+      "workstream": "security",
+      "wave": "2",
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/QA_CLOSURE_STANDARD.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md"
+      ],
+      "verification": [
+        "node supabase/tests/security/run.mjs"
+      ],
+      "evidenceRequired": [
+        "owner authorization to edit the protected register, plus the class-state evidence per row"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "SEC-04 is recorded as a 'consequential promotion candidate from SEC-R1's closure' and was explicitly left unpromoted; ENV-6 is named alongside it. Promotion is a protected-register edit",
+          "evidence": "MASTER_REMEDIATION_REGISTRY.md:1806 'SEC-04 -- untouched ... a consequential promotion candidate; it is outside the three rows this ruling authorizes and is NOT promoted here. Assigned to the next checkpoint'; :2998 'It does not promote SEC-04, ENV-6, SEC-09 or I-MIG-03'",
+          "action": "authorize the promotion of SEC-04 and ENV-6, or decline each"
         }
       ]
     }
