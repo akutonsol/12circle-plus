@@ -486,7 +486,8 @@
         "docs/MASTER_REMEDIATION_REGISTRY.md",
         "docs/QA_CLOSURE_STANDARD.md",
         "docs/REMEDIATION_PROGRESS.md",
-        "docs/MASTER_PRODUCT_DECISIONS.md"
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "docs/V5_CLOSURE_CANDIDATES_AND_STEP4_PROPOSAL.md"
       ],
       "verification": [
         "supabase/tests/ai/fj17-parq-risk-contract.sql",
@@ -603,7 +604,8 @@
       "sources": [
         "docs/MASTER_REMEDIATION_REGISTRY.md",
         "docs/QA_CLOSURE_STANDARD.md",
-        "docs/MASTER_PRODUCT_DECISIONS.md"
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "docs/V5_CLOSURE_CANDIDATES_AND_STEP4_PROPOSAL.md"
       ],
       "verification": [
         "none -- this is a governance definition, not an implementation"
@@ -662,16 +664,16 @@
     },
     {
       "id": "V5-PROM-001",
-      "summary": "Authorize the consequential promotions whose blockers are already resolved: SEC-04 and ENV-6",
+      "summary": "SEC-04 — reclassify out of OPEN on its satisfied evidence, once the ladder transition is ruled",
       "role": "owner-decision",
       "dependsOn": [],
       "paths": [
         "docs/MASTER_REMEDIATION_REGISTRY.md"
       ],
       "acceptance": [
-        "Each row is promoted only if its own §2.1 class states are met",
-        "SEC-04's class is Security / authorization, which does NOT require VERIFIED END-TO-END, so Step 4 does not gate it",
-        "No row is promoted merely because its blocker was resolved elsewhere"
+        "All three requirements named in the row's missing-evidence clause are confirmed present",
+        "The owner rules which state SEC-04 may move to from OPEN",
+        "No promotion to VERIFIED_CLOSED unless §2's ladder permits OPEN to reach it directly"
       ],
       "maxRetries": 0,
       "risk": "protected-register-edit",
@@ -680,7 +682,8 @@
       "sources": [
         "docs/MASTER_REMEDIATION_REGISTRY.md",
         "docs/QA_CLOSURE_STANDARD.md",
-        "docs/MASTER_PRODUCT_DECISIONS.md"
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "docs/V5_CLOSURE_CANDIDATES_AND_STEP4_PROPOSAL.md"
       ],
       "verification": [
         "node supabase/tests/security/run.mjs"
@@ -692,9 +695,48 @@
       "blockers": [
         {
           "kind": "owner",
-          "what": "SEC-04 is recorded as a 'consequential promotion candidate from SEC-R1's closure' and was explicitly left unpromoted; ENV-6 is named alongside it. Promotion is a protected-register edit",
-          "evidence": "MASTER_REMEDIATION_REGISTRY.md:1806 'SEC-04 -- untouched ... a consequential promotion candidate; it is outside the three rows this ruling authorizes and is NOT promoted here. Assigned to the next checkpoint'; :2998 'It does not promote SEC-04, ENV-6, SEC-09 or I-MIG-03'",
-          "action": "authorize the promotion of SEC-04 and ENV-6, or decline each"
+          "what": "the three requirements its own clause names are MET -- migration 124 present, the I-MIG-03 class guard exists and runs in CI, and d04's live 403 probe covers materialize_program_week -- but the row sits at OPEN, defined as 'Suspected; needs a probe or a decision before it can be classified'",
+          "evidence": "registry:1585 names the three; :1681-1686 records the owner ruling for reading B ('I-MIG-03 class guard', not its closure); :360 F-J-01 VERIFIED_CLOSED; :1719 records SEC-04 as OPEN",
+          "action": "rule which state SEC-04 may move to from OPEN, then authorize the protected-register edit"
+        }
+      ]
+    },
+    {
+      "id": "V5-PROM-002",
+      "summary": "ENV-6 — promote from REMEDIATED; its stated criterion 'closes at the first PR' is satisfied",
+      "role": "owner-decision",
+      "dependsOn": [],
+      "paths": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "acceptance": [
+        "The owner accepts, or rejects, PR #1 as satisfying the row's 'first PR' criterion",
+        "If accepted, ENV-6 is promoted from REMEDIATED in the protected register",
+        "No other row is promoted alongside it"
+      ],
+      "maxRetries": 0,
+      "risk": "protected-register-edit",
+      "workstream": "environment",
+      "wave": "1",
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/QA_CLOSURE_STANDARD.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "docs/V5_CLOSURE_CANDIDATES_AND_STEP4_PROPOSAL.md"
+      ],
+      "verification": [
+        "the PR's own pull_request CI run conclusions"
+      ],
+      "evidenceRequired": [
+        "owner authorization to edit the protected register"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "the criterion is a single mechanically checkable condition and it is MET: 15 pull_request CI runs recorded, 9 successful, and PR #1 is the repository's only and first pull request. What remains is a READING -- the criterion says 'the first PR' without qualifying whether an infrastructure PR counts",
+          "evidence": "registry:1594 'ENV-6 (push-triggered runs proven; the row's own retest names a PR run -- closes at the first PR)'; :1523 ENV-6 REMEDIATED; gh: PR #1 created 2026-10-12T17:45:05Z, run 38330259334 all seven jobs green",
+          "action": "rule whether PR #1 satisfies 'the first PR', then authorize the protected-register edit"
         }
       ]
     }

@@ -606,6 +606,54 @@ section('13 · SEC-R2 / SEC-R3 cannot be promoted without the fifth state');
     (secr.blockers ?? []).some((b) => b.kind === 'owner' && /Step 4/.test(b.what)));
 }
 
+// ═══ 14 · the closure candidates' evidence claims, re-derived ══════════════
+// Both claims rest on strings in the register. If those strings move, the
+// matrices in V5_CLOSURE_CANDIDATES_AND_STEP4_PROPOSAL.md become stale
+// assertions about a document that no longer says that — the exact decay this
+// programme keeps finding. So they are re-derived here rather than trusted.
+section('14 · SEC-04 / ENV-6 closure-candidate evidence');
+{
+  const reg = fs.readFileSync(
+    path.join(ROOT, 'docs', 'MASTER_REMEDIATION_REGISTRY.md'), 'utf8');
+  const flat = reg.replace(/\s+/g, ' ');
+
+  // SEC-04 — the three requirements its own clause names.
+  check('SEC-04\'s missing-evidence clause still names all three requirements',
+    flat.includes('needs migration 124 + I-MIG-03 class guard + live 403 probe'),
+    'registry:1585');
+  check('requirement 1 — migration 124 exists',
+    fs.existsSync(path.join(ROOT, 'supabase', 'migrations',
+      '124_wave_2a_security_regressions.sql')));
+  check('requirement 2 — the I-MIG-03 class guard exists AND is wired into CI',
+    fs.existsSync(path.join(ROOT, 'supabase', 'tests', 'security',
+      'migration-durability-guard.mjs'))
+      && fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8')
+           .includes('migration-durability-guard'));
+  check('requirement 3 — d04 carries the live authorization-error probe',
+    fs.readFileSync(path.join(ROOT, 'supabase', 'tests', 'security',
+      'd04-rpc-execution.mjs'), 'utf8')
+      .includes('refuses an unauthorized caller with the AUTHORIZATION error'));
+  check('the owner ruling for reading B is still recorded — SEC-04 needs the '
+      + 'class guard RUNNING, not I-MIG-03\'s own closure',
+    flat.includes('ruled on 2026-08-25 for **reading B**'), 'registry:1681-1686');
+  check('SEC-04 is still recorded OPEN, so the ladder question is still live',
+    /SEC-04[^\n]*unchanged, OPEN|unchanged, OPEN[^\n]*SEC-04/.test(reg)
+      || flat.includes('SEC-04 / SEC-R1 / SEC-R2 / SEC-R3 / F-J-01 — unchanged, OPEN'),
+    'registry:1719');
+
+  // ENV-6 — one stated condition.
+  check('ENV-6\'s criterion still reads "closes at the first PR"',
+    flat.includes('closes at the first PR'), 'registry:1594');
+  check('ENV-6 is still recorded REMEDIATED — not promoted by this session',
+    /\| ENV-6 \| 4 \| `REMEDIATED`/.test(reg), 'registry:1523');
+
+  // And the proposal must not have been quietly applied.
+  check('the proposal document exists and states that nothing was applied',
+    fs.readFileSync(path.join(ROOT, 'docs',
+      'V5_CLOSURE_CANDIDATES_AND_STEP4_PROPOSAL.md'), 'utf8')
+      .includes('Nothing in this document has been applied'));
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {
