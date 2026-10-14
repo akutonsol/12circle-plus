@@ -129,6 +129,16 @@ const found = { missingRelation: new Map(), missingColumn: new Map() };
 // shape today, and failing them would break CI on pre-existing code. Resolving a
 // payload across functions needs dataflow analysis and is not attempted here.
 const writeSites = { total: 0, inlineLiteral: 0, opaquePayload: 0, hasSpread: 0 };
+// `--list-unseen` names the sites behind the COVERAGE counts, so the blind spot
+// can be audited instead of merely feared. It must come from HERE, inside the
+// scanning loop where the table is already resolved: a standalone
+// re-implementation of this walk over-counted 31 as 81, because it matched
+// Dart's own `Map.update(k, fn, ifAbsent:)` and `List.insert(i, x)` and the
+// vendored plugin tree under `linux/flutter/ephemeral/.plugin_symlinks/`. The
+// `.from(...)` window above excludes all of that; a reimplementation did not.
+// Opt-in, so CI output stays stable.
+const LIST_UNSEEN = process.argv.includes('--list-unseen');
+const unseenSites = [];
 const unresolvableEmbed = new Map();
 const detail = [];
 
@@ -192,10 +202,19 @@ for (const path of ROOTS.flatMap((r) => sources(r))) {
       if (end > 0) {
         const body = s.slice(open, end);
         writeSites.total++;
-        if (!body.includes('{')) writeSites.opaquePayload++;
+        const opaque = !body.includes('{');
+        const spread = !opaque && body.includes('...');
+        if (opaque) writeSites.opaquePayload++;
         else {
           writeSites.inlineLiteral++;
-          if (body.includes('...')) writeSites.hasSpread++;
+          if (spread) writeSites.hasSpread++;
+        }
+        if (LIST_UNSEEN && (opaque || spread)) {
+          unseenSites.push({
+            shape: opaque ? 'opaque' : 'spread', table, op: wm[1],
+            at: `${path}:${line}`,
+            payload: body.trim().replace(/\s+/g, ' ').slice(0, 46),
+          });
         }
         // A key is a column only at brace depth 1 of the payload object; a key
         // deeper than that belongs to a nested jsonb value, not to the table.
@@ -273,6 +292,13 @@ console.log(
   `  COVERAGE  write sites ${writeSites.total}: ${writeSites.inlineLiteral - writeSites.hasSpread} fully analysed, `
   + `${writeSites.hasSpread} with a spread (literal keys only), ${writeSites.opaquePayload} opaque (payload by variable)`,
 );
+if (LIST_UNSEEN && unseenSites.length) {
+  console.log('\n  Sites whose column keys this guard cannot see:');
+  for (const u of unseenSites.sort((a, b) => a.table.localeCompare(b.table))) {
+    console.log(`    ${u.shape.padEnd(6)} ${u.table.padEnd(24)} ${u.op.padEnd(6)} ${u.at}  ${u.payload}`);
+  }
+  console.log('');
+}
 if (unseen > 0) {
   console.log(
     `  COVERAGE  ${unseen} write site(s) contribute column keys this guard CANNOT see. `

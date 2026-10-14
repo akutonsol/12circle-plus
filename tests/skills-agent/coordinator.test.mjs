@@ -1700,10 +1700,23 @@ section('policy.maxConcurrentTasks bounds concurrent implementer leases');
     /writeSites = \{ total: 0, inlineLiteral: 0, opaquePayload: 0, hasSpread: 0 \}/
       .test(runner),
     'so a PASS can be read against what was actually analysed');
-  check('…and classifies an opaque payload separately from an inline literal',
-    /if \(!body\.includes\('\{'\)\) writeSites\.opaquePayload\+\+;/.test(runner)
-      && /body\.includes\('\.\.\.'\)\) writeSites\.hasSpread\+\+/.test(runner),
-    'a payload passed by variable yields NO keys, silently');
+  // Behavioural, not syntactic. The first version of this pinned the exact
+  // `if (!body.includes('{')) writeSites.opaquePayload++;` text and broke the
+  // moment the classification was refactored into two consts -- while the
+  // behaviour was unchanged. Run the guard and check its own numbers instead,
+  // so a refactor cannot break it and a REGRESSION cannot pass it.
+  const cov = spawnSync(process.execPath,
+    [path.join(ROOT, 'supabase', 'tests', 'contract', 'run.mjs')],
+    { encoding: 'utf8', cwd: ROOT });
+  const m = /write sites (\d+): (\d+) fully analysed, (\d+) with a spread[^,]*, (\d+) opaque/
+    .exec(cov.stdout ?? '');
+  check('the guard reports coverage numbers that add up',
+    !!m && Number(m[2]) + Number(m[3]) + Number(m[4]) === Number(m[1]),
+    m ? `${m[2]}+${m[3]}+${m[4]} = ${m[1]}` : 'COVERAGE line not found in output');
+  check('…and still finds BOTH unseen shapes present in this tree',
+    !!m && Number(m[3]) > 0 && Number(m[4]) > 0,
+    m ? `spread=${m[3]} opaque=${m[4]} — if either hits 0, re-check the classifier`
+      : 'no COVERAGE line');
   check('the guard prints a COVERAGE line next to its verdict',
     /COVERAGE {2}write sites \$\{writeSites\.total\}/.test(runner),
     'the number must travel with the PASS, not be inferable only from source');
@@ -1720,6 +1733,27 @@ section('policy.maxConcurrentTasks bounds concurrent implementer leases');
   check('the counts are computed, not hard-coded literals',
     !/write sites 174/.test(runner) && !/31 write site/.test(runner),
     'today\'s numbers are 174 / 143 / 11 / 20 -> 31 unseen, and must float');
+}
+
+// ── the blind spot must be auditable, not just counted ────────────────────
+{
+  const runner = fs.readFileSync(path.join(ROOT, 'supabase', 'tests',
+    'contract', 'run.mjs'), 'utf8');
+  check('--list-unseen names the sites behind the COVERAGE counts',
+    /--list-unseen/.test(runner)
+      && /Sites whose column keys this guard cannot see/.test(runner),
+    'so the 31 can be audited instead of feared');
+  check('…and is opt-in, so CI output stays stable',
+    /const LIST_UNSEEN = process\.argv\.includes\('--list-unseen'\)/.test(runner)
+      && /if \(LIST_UNSEEN && unseenSites\.length\)/.test(runner),
+    'verified: the list does not print by default');
+  check('the listing is built inside the resolved-table loop',
+    /if \(LIST_UNSEEN && \(opaque \|\| spread\)\)[\s\S]{0,180}?table,/.test(runner),
+    'a standalone re-implementation counted 31 as 81 — Map.update, List.insert '
+      + 'and the vendored .plugin_symlinks tree all matched without the .from() window');
+  check('…and that over-count is recorded where someone would repeat it',
+    /over-counted 31 as 81/.test(runner) && /plugin_symlinks/.test(runner),
+    'the reimplementation trap, written down');
 }
 
 console.log(`\n${'='.repeat(74)}`);

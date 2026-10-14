@@ -20932,3 +20932,30 @@ free, 95 % used** — above the ~1.5 GiB floor, so nothing was deleted and no va
 **No application code, schema, migration, RLS, policy, QA fixture or status change. No QA write,
 live probe or production operation. No credential accessed. No finding promoted. No guard
 weakened to make anything pass. PR #1 open, draft, unmerged.**
+
+### §227.4 · The 31 sites, named — and both CON-03 writes are among them
+
+`--list-unseen` (opt-in; CI output unchanged) names what the counts cover. It must be produced
+**inside** the guard's scanning loop, where the table is already resolved. A standalone
+re-implementation of that walk reported **81** rather than 31, because without the `.from(...)`
+window it also matched Dart's own `Map.update(k, fn, ifAbsent:)` and `List.insert(i, x)` and the
+vendored plugin tree under `linux/flutter/ephemeral/.plugin_symlinks/`. **The guard's 31 is
+authoritative; my reimplementation was wrong by 2.6×.** Recorded because the next person to
+re-derive this number will hit the same trap.
+
+The list confirms the §227.2 claim exactly — **both CON-03 write sites are invisible**:
+
+```
+opaque  user_profiles  update  intake_flow_screen.dart:171  (_data.toSupabasePartial(_step)
+spread  user_profiles  upsert  intake_flow_screen.dart:280  ({'id': uid, ..._data.toSupabase()}
+```
+
+`:171` is the per-step save whose swallowed failure *is* CON-03; `:280` is the final save. Also
+unseen, and worth the owner's attention when the dataflow question is funded: both
+`subscriptions` writes in `supabase/functions/stripe-webhook/index.ts` (`:71` upsert, `:190`
+update — **billing**), `daily_scores` (`score_service.dart:85`), `messages`
+(`messaging_service.dart:165`), and four `coach_packages` writes.
+
+**No site in this list was modified.** Changing any of them would be unauthorized application
+work, and the two `user_profiles` entries are CON-03 itself, which remains blocked on
+`CON-03-TYPE`.
