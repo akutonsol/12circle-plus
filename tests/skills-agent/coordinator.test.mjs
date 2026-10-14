@@ -1677,6 +1677,51 @@ section('policy.maxConcurrentTasks bounds concurrent implementer leases');
     !!z?.task?.id, `claimed ${z?.task?.id ?? 'refused'}`);
 }
 
+// ── the contract guard must not overstate its coverage ────────────────────
+//
+// Found by paired mutation, 2026-10-13. The schema contract guard's own
+// contract says it checks "every .insert/.update/.upsert({...}) key names a
+// real column". It reads keys only at brace depth 1 of the payload, so:
+//
+//   inline   .upsert({'zzz_bad': 1})            -> FAILS correctly
+//   helper   key added to toSupabase(), which is spread in at
+//            intake_flow_screen.dart:281 as .upsert({'id': uid, ...})  -> PASSES
+//
+// `.insert(payload)` is worse than partial: `body` is the identifier, there is
+// no `{`, brace never reaches 1, and the site is skipped in SILENCE. Those two
+// serializers are the subject of CON-03, so the guard cannot see the functions
+// the finding is about. Reported, never failed — 31 of 174 sites are in this
+// shape and failing them would break CI on pre-existing code.
+{
+  const runner = fs.readFileSync(path.join(ROOT, 'supabase', 'tests',
+    'contract', 'run.mjs'), 'utf8');
+
+  check('the contract guard counts its write sites by payload shape',
+    /writeSites = \{ total: 0, inlineLiteral: 0, opaquePayload: 0, hasSpread: 0 \}/
+      .test(runner),
+    'so a PASS can be read against what was actually analysed');
+  check('…and classifies an opaque payload separately from an inline literal',
+    /if \(!body\.includes\('\{'\)\) writeSites\.opaquePayload\+\+;/.test(runner)
+      && /body\.includes\('\.\.\.'\)\) writeSites\.hasSpread\+\+/.test(runner),
+    'a payload passed by variable yields NO keys, silently');
+  check('the guard prints a COVERAGE line next to its verdict',
+    /COVERAGE {2}write sites \$\{writeSites\.total\}/.test(runner),
+    'the number must travel with the PASS, not be inferable only from source');
+  check('…and says in words that PASS does not mean every key was checked',
+    /A PASS below does not mean every write key was checked/.test(runner),
+    'the sixth vacuous-control lesson, written where it will be read');
+  check('the blind spot is recorded with its cause, not just its existence',
+    /brace never reaches 1/.test(runner) && /CON-03/.test(runner),
+    'so a later reader knows why, and which finding it touches');
+
+  // The coverage line must be derived, never hard-coded: a literal count would
+  // go stale the moment a call site is added, which is exactly the failure
+  // mode this check exists to prevent.
+  check('the counts are computed, not hard-coded literals',
+    !/write sites 174/.test(runner) && !/31 write site/.test(runner),
+    'today\'s numbers are 174 / 143 / 11 / 20 -> 31 unseen, and must float');
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {

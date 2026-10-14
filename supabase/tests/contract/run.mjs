@@ -116,6 +116,19 @@ const schema = deriveSchema();
 const foreignKeys = deriveForeignKeys();
 const relations = new Set([...schema.keys(), ...VIEWS]);
 const found = { missingRelation: new Map(), missingColumn: new Map() };
+// Write-site COVERAGE, not a pass/fail signal. The key check below reads keys
+// only at brace depth 1 of the payload, so `.insert(payload)` yields NO keys --
+// `body` is the identifier, there is no `{`, brace never reaches 1, and the site
+// is skipped in silence. A spread (`{...row, 'user_id': uid}`) is worse: the
+// literal keys ARE checked, so the site looks covered while the spread's keys are
+// not. Verified by paired mutation: an inline bad key FAILS correctly, the same
+// bad key added to `toSupabase()` -- spread in at intake_flow_screen.dart:281 as
+// `.upsert({'id': uid, ..._data.toSupabase()})` -- PASSES. Those two serializers
+// are the subject of CON-03, so this blind spot covers the very functions the
+// finding is about. Reported rather than failed: 19 of 145 sites are in this
+// shape today, and failing them would break CI on pre-existing code. Resolving a
+// payload across functions needs dataflow analysis and is not attempted here.
+const writeSites = { total: 0, inlineLiteral: 0, opaquePayload: 0, hasSpread: 0 };
 const unresolvableEmbed = new Map();
 const detail = [];
 
@@ -178,6 +191,12 @@ for (const path of ROOTS.flatMap((r) => sources(r))) {
       const end = closing(s, open);
       if (end > 0) {
         const body = s.slice(open, end);
+        writeSites.total++;
+        if (!body.includes('{')) writeSites.opaquePayload++;
+        else {
+          writeSites.inlineLiteral++;
+          if (body.includes('...')) writeSites.hasSpread++;
+        }
         // A key is a column only at brace depth 1 of the payload object; a key
         // deeper than that belongs to a nested jsonb value, not to the table.
         let brace = 0;
@@ -249,6 +268,17 @@ for (const [k, sites] of unresolvableEmbed) {
   sites.forEach((x) => console.log(`           at ${x}`));
 }
 
+const unseen = writeSites.opaquePayload + writeSites.hasSpread;
+console.log(
+  `  COVERAGE  write sites ${writeSites.total}: ${writeSites.inlineLiteral - writeSites.hasSpread} fully analysed, `
+  + `${writeSites.hasSpread} with a spread (literal keys only), ${writeSites.opaquePayload} opaque (payload by variable)`,
+);
+if (unseen > 0) {
+  console.log(
+    `  COVERAGE  ${unseen} write site(s) contribute column keys this guard CANNOT see. `
+    + 'A PASS below does not mean every write key was checked.',
+  );
+}
 console.log(
   failures === 0
     ? `\nPASS  no unknown relation or column outside the ${allowedRel.size + allowedCol.size}-entry known-violations allowlist\n`
