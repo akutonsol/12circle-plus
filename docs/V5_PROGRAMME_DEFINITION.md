@@ -20849,3 +20849,86 @@ role change. No QA write, live probe or production operation. No credential acce
 provisioned. No finding promoted and no evidence count changed. No C1 widening. No guard
 bypassed, no force-push, no history rewrite. Production `nxdbooufqzkpslkcogxc` not contacted.
 PR #1 open, draft, unmerged.**
+
+---
+
+## §227 · The guards that had never been tested, and the one that was blind
+
+Post-Milestone-18 continuation. The queue was fully blocked, so rather than stop on that, the
+question became whether any *existing* control was weaker than its green tick implied. Four CI
+guards carry **no self-test of their own** — `:65` migration hygiene, `:115` ENV-3 static,
+`:222` schema contract, `:237` edge-function JWT posture — and only `:62` had ever been
+mutation-verified. All four were tested by planting a real violation and reverting it.
+
+### §227.1 · Three are genuinely effective
+
+| guard | planted violation | result |
+|---|---|---|
+| `:237` E-09 | a second function set `verify_jwt = false` | exit **1** — *"unexpected verify_jwt = false on: stripe-webhook, ai-coach"* |
+| `:65` ENV-1 | an untracked file in `supabase/migrations` | exit **1** — *"is not clean"* |
+| `:115` ENV-3 | `qa.applied_through` 181 → 175 | exit **1** — *"1 problem(s) in the declaration"* |
+
+Each returned to exit **0** after revert, with a clean tree. `:115` also confirms the QA ref
+`eyqtldjqpgpljlqvpowh` from a tracked source, which is the pre-condition every QA operation is
+supposed to satisfy.
+
+A first attempt at `:115` dropped a **prose note** from `expected_applied.json` and the guard
+correctly did not fire. That exit 0 proved nothing about the guard — it proved the mutation was
+invalid. Recorded because an invalid mutation reads exactly like an effective guard.
+
+### §227.2 · `:222` passes while blind to 31 of 174 write sites
+
+The schema contract guard's own contract reads: *"every `.insert/.update/.upsert({...})` key
+names a real column."* It reads keys only at **brace depth 1** of the payload. Paired mutation:
+
+- **inline** `.upsert({'zzz_bad_inline_col': 1})` → **FAIL**, correctly:
+  *"column `user_profiles.zzz_bad_inline_col` is referenced but does not exist"*
+- **helper** — the same key added to `toSupabase()`, which is spread in at
+  `intake_flow_screen.dart:281` as `.upsert({'id': uid, ..._data.toSupabase()})` → **PASS**, blind
+
+`.insert(payload)` is worse than partial: `body` is the identifier, there is no `{`, `brace`
+never reaches 1, and the site is skipped **in silence**.
+
+**This is not bookkeeping.** `toSupabase()` and `toSupabasePartial()` are the two serializers
+**CON-03** is about, so the guard whose job is "every upsert key names a real column" cannot see
+the functions that finding concerns. A green `:222` was never evidence about them.
+
+The guard now prints its own coverage beside its verdict:
+
+```
+COVERAGE  write sites 174: 143 fully analysed, 11 with a spread (literal keys only),
+                           20 opaque (payload by variable)
+COVERAGE  31 write site(s) contribute column keys this guard CANNOT see.
+          A PASS below does not mean every write key was checked.
+```
+
+**Reported, deliberately not failed.** Thirty-one of 174 sites are in this shape today and
+failing them would break CI on pre-existing code. Resolving a payload across function
+boundaries needs dataflow analysis; it is **not attempted and not disguised as done**. The
+counts are computed, and a test asserts they are *not* hard-coded — a literal would go stale the
+moment a call site is added, which is the precise failure mode this change exists to prevent.
+
+**A correction to my own measurement.** An earlier grep put the blind spot at 19 sites. That was
+Dart-only; the scanner also reads `.ts`, and its own count of **31** is authoritative.
+
+This is the **seventh** control in this programme found to pass while measuring less than it
+appeared to. The preceding six are recorded at §213.2, §221.3, §224.6 and in the
+`negative-control.sh` guard note.
+
+### §227.3 · Everything else re-verified as blocked
+
+Queue: 19 tasks, 16 declaring unresolved blockers (11 owner, 3 governance, 2 external); the
+three blocker-free tasks are `VERIFIED`; **eligible: none**. All four coordinator safeguards
+present. `MASTER_PRODUCT_DECISIONS.md` still carries exactly two `ANSWERED` amendments and
+`decision-log.md` still has no CON-03 entry, so **all four CON-03 decisions remain pending**;
+no storage type was chosen and no serializer or migration was touched. SEC-R2 and SEC-R3 both
+still read *"VERIFIED END-TO-END is absent"* and are unpromoted; SEC-04 unchanged; 3B-1 still
+gated on CON-03 **and** SEC-R2; the §7.10/§7.18 conflict preserved. `workstream/12c-plus-website`
+remains remote-only and was never fetched.
+
+`coordinator.test.mjs` **238 → 244**. Disk re-checked before any expensive operation: **8.8 GiB
+free, 95 % used** — above the ~1.5 GiB floor, so nothing was deleted and no validation weakened.
+
+**No application code, schema, migration, RLS, policy, QA fixture or status change. No QA write,
+live probe or production operation. No credential accessed. No finding promoted. No guard
+weakened to make anything pass. PR #1 open, draft, unmerged.**
