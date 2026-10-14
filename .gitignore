@@ -32,3 +32,10 @@ node_modules/
 # Coverage
 **/coverage/
 supabase/tests/security/ids.json
+
+# Skills-Agent runtime queue state. Machine-local, written atomically by
+# scripts/skills-agent-coordinator.mjs. Committing it would make one machine's
+# run history look like shared progress — a fresh clone would start with tasks
+# already marked VERIFIED by somebody else's demonstration.
+.skills-agent/state.json
+.skills-agent/.state.lock

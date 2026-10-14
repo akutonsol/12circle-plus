@@ -616,7 +616,9 @@ was not contacted.**
 ---
 
 ### ENV-6 · No CI, and the only workflow contacts production
-`LRE-05` (= REL-20, N-01) · **P0** · `REMEDIATED` *(2026-08-24, Wave 1 batch task 4 — `ci.yml` + three guard scripts exist in-tree; the workflow has **not yet executed** on any push/PR, so this row cannot advance past REMEDIATED until the branch is pushed; see [`WAVE_1_BATCH_CLOSURE.md`](WAVE_1_BATCH_CLOSURE.md))* · Wave 1
+`LRE-05` (= REL-20, N-01) · **P0** · **`VERIFIED_CLOSED`** *(2026-10-12 — owner ruling §7.25 Ruling A, interpretation A: the row's criterion *"closes at the first PR"* applied literally. Evidence: PR #1, head `822cabf1`, CI run **`38334189040`** (`pull_request`), conclusion `success`, **7 of 7 jobs** `success`. Closed under the **Release / environment** ladder in `QA_CLOSURE_STANDARD.md` §2.1 — *"FIXED IN CODE · **VERIFIED IN CI** — an environment guard that is not mechanized is not a guard"* — both states present: `ci.yml` and the guard scripts are in-tree, and they execute in CI.)* · Wave 1
+
+> **Historical, 2026-08-24 — superseded, retained as the record of that checkpoint.** At Wave 1 batch task 4 this row read `REMEDIATED`, on the grounds that *"`ci.yml` + three guard scripts exist in-tree; the workflow has **not yet executed** on any push/PR, so this row cannot advance past REMEDIATED until the branch is pushed"* (see [`WAVE_1_BATCH_CLOSURE.md`](WAVE_1_BATCH_CLOSURE.md)). **That statement was true then and is not true now**: the workflow has executed on both `push` and `pull_request` many times. The sentence is kept here as history, not as a current claim. The **Business impact** field below likewise describes the state *at filing* — *"has never run in CI"* — and is similarly historical.
 
 | Field | Value |
 |---|---|
@@ -3505,3 +3507,71 @@ The six `spec_*` files (133 tests) import nothing from `lib/`: the known copy-of
 [`RELEASE_GATES.md`](RELEASE_GATES.md) ·
 [`QA_CLOSURE_STANDARD.md`](QA_CLOSURE_STANDARD.md) ·
 [`REMEDIATION_PROGRESS.md`](REMEDIATION_PROGRESS.md)
+
+### 7.25 ENV-6 owner ruling and Step 4 approach — 2026-10-12 · governance + CI evidence
+
+This is an additive owner ruling. Historical checkpoint entries above are retained as historical
+records; this section records the current decision and resulting classification. It does not
+authorize production activity, alter Gate 9B, or amend the closure standard.
+
+#### Ruling A — ENV-6: interpretation A adopted
+
+**Owner ruling, 2026-10-12:** apply the criterion literally as written: **“push-triggered runs
+proven; the row's own retest names a PR run — closes at the first PR.”** The criterion contains no
+product-PR qualifier. PR #1 therefore satisfies the “first PR” condition, provided the PR-triggered
+CI evidence is green.
+
+**Evidence checked before ruling:**
+- PR #1 is open, draft, unmerged, and targets `reconcile/12circle-integrated`; its head is
+  `822cabf197519063488b426c9c30e5fa2f3c7f7e`.
+- GitHub's PR-triggered workflow-run lookup for that exact head returns CI run
+  `38334189040` (run 307), conclusion `success`.
+- The run's seven jobs are all `success`: Flutter analyze/test/QA web build; EC-04; Static guards;
+  Live QA suites; Negative control; I-WRK-01; and UIX-1.
+- The registry's existing ENV-6 criterion at §6 / the prior retest note says “closes at the first
+  PR”; the owner ruling chooses the literal reading and does not add a new criterion.
+
+**Disposition:** ENV-6 is **VERIFIED_CLOSED as of 2026-10-12**, under the
+**Release / environment** ladder in `QA_CLOSURE_STANDARD.md` §2.1 (FIXED IN CODE and VERIFIED IN
+CI). The ruling accepts PR #1 as the qualifying PR; it does not claim that every product finding
+is verified, nor does it authorize a merge. The old Wave 1 checkpoint at §6 remains an historical
+record of the status at that checkpoint.
+
+#### Ruling C — per-row acceptance route selected; no blanket Step 4 authorization
+
+**Owner ruling, 2026-10-12:** choose **C1**. For a finding whose closure class requires
+`VERIFIED END-TO-END`, use a **row-specific owner ruling** that names the finding, the exact
+`QA_CLOSURE_STANDARD.md` §2.1 rung, the applicable evidence and CI run, and the scope of the
+acceptance. This follows the limited precedent recorded in §7.13 and §7.18. A green CI run alone
+does not make the owner-acceptance decision, and an acceptance for one row does not extend to
+another row.
+
+**Limits:** C1 is an acceptance method, not blanket authorization to begin a programme-wide Step 4
+phase. It does not itself promote SEC-R2, SEC-R3, or any other finding; each needs its own complete
+evidence and explicit row-specific acceptance before status changes. No production work is included,
+and Gate 9B remains closed.
+
+#### Authority conflict retained — registry §7.10 / §7.25 and QA closure standard
+
+The statement at registry §7.10 that “no safety finding in this programme can reach
+`VERIFIED_CLOSED` before Step 4 runs” is in tension with the per-row precedent in §7.18, where
+`UIX-1` / `M-03` reached `VERIFIED_CLOSED` while the programme-wide Step 4 remained unauthorized.
+**This ruling does not silently amend or strike §7.10's statement.** The conflict is recorded for
+explicit reconciliation. C1 is limited to the per-row acceptance mechanism evidenced by §7.13 and
+§7.18; it does not establish general authority to waive a required state.
+
+#### SEC-04 — no promotion
+
+SEC-04 remains **OPEN**. Migration 124, the running I-MIG-03 class guard, and the d04 §8 live 403
+probe are recorded as satisfying the three named technical requirements; F-J-01 is recorded
+`VERIFIED_CLOSED`. However, neither `QA_CLOSURE_STANDARD.md` §2 nor §3 step 12 expressly defines
+whether `OPEN → VERIFIED_CLOSED` is a permitted direct transition or whether an intermediate
+classification is required. This ruling does not decide that unresolved transition rule. **No
+SEC-04 status promotion is authorized or performed by this entry.**
+
+#### Safety and scope record
+
+No production request, QA write, migration, schema/RLS change, deployment, secret change, release
+gate change, force-push, or merge was performed for these rulings. PR #1 remains draft and unmerged.
+Autonomous provider invocation, credentials, and trusted worker identity remain unestablished; this
+ruling does not claim continuous autonomous execution.

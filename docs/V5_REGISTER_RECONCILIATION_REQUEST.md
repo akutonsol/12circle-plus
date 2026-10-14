@@ -357,3 +357,448 @@ moves.
 Explicit approval to edit `docs/MASTER_REMEDIATION_REGISTRY.md` for **edits 1, 2, 3 — individually
 or in any subset**. All three are **evidence complete, authorization missing**. The register is
 **untouched**.
+
+---
+
+# `V5-REC-002` · two source-of-truth conflicts found during queue reconciliation
+
+Both were found by reading the current checkout, and **neither is resolved here**. Each needs an
+authorized decision about *which document moves*.
+
+## Conflict 1 — the queue cited an authority that does not exist
+
+`.skills-agent/tasks.json` declared:
+
+```
+"queueAuthority": "V5_WORKSTREAM_REGISTRY_AND_MASTER_REMEDIATION_WAVES"
+```
+
+**There is no `V5_WORKSTREAM_REGISTRY`.** It is not a tracked file under any spelling
+(`git ls-files | grep -iE 'workstream.*regist|regist.*workstream'` → empty), and no document in
+`docs/` carries that title. `MASTER_REMEDIATION_WAVES.md` does exist.
+
+**Taken here, because it is the queue's own metadata and not a governed register:** the field now
+names the three documents the tasks actually cite — `MASTER_REMEDIATION_WAVES.md`,
+`RELEASE_GATES.md`, `MASTER_REMEDIATION_REGISTRY.md` — with the prior text preserved in a note.
+
+**The question that remains yours:** was a `V5_WORKSTREAM_REGISTRY` ever intended to exist? If so,
+the three-document substitute is a stopgap and that register still needs writing. If not, the
+phantom name should also be removed wherever else it appears.
+
+## Conflict 2 — the authoritative wave plan stops 50 migrations short of the repository
+
+`MASTER_REMEDIATION_WAVES.md` maps migration numbers to waves, and its mapping **ends at 131**
+(Wave 3A — tasks 3A-9, 3A-10, 3A-11).
+
+The repository is far past that: `check-migration-manifest.mjs` reports **182 authored
+migration(s): 000–181**, frontier **181**. So **51 migrations exist beyond the plan's mapping.**
+
+This is not a numbering error; it is a scope statement that reality overtook. The consequence for
+this milestone is concrete: **an inventory derived only from the wave plan would omit 51
+migrations of real work**, and an inventory claiming to cover "remaining work" cannot be built from
+a plan that ends fifty migrations ago.
+
+**Not taken here.** `MASTER_REMEDIATION_WAVES.md` is the authoritative sequence this programme is
+required to preserve, and extending its mapping is a planning decision, not a transcription.
+
+**The decision requested** — one of:
+
+| option | consequence |
+|---|---|
+| **a** extend the wave mapping to 181 | the plan becomes a usable forward inventory again; someone must assign 132–181 to waves, which is real planning work |
+| **b** declare the mapping historical and closed at 131 | honest, and the plan stops being a forward planning instrument; a successor inventory is then required |
+| **c** supersede the document | the wave *sequence* is preserved as the governing order while the migration mapping moves elsewhere |
+
+**No edit was made to `MASTER_REMEDIATION_WAVES.md`.**
+
+## What was deliberately NOT enumerated
+
+The registry carries **319 canonical rows** (`37 + 48 + 24 + 177 + 4 + 29`), and it states of
+itself that *"the `P1–P3` register carries no per-row status field, so its movement is **not
+mechanically countable**"*. A per-row queue therefore cannot be derived from it **without
+inventing statuses**, which is the one thing the reconciliation brief forbids.
+
+So the queue holds the ten tasks for which direct repository evidence exists, and the row-by-row
+pass stays where the registry already defers it. **That is a stated limit of this inventory, not an
+omission by oversight.**
+
+---
+
+# `MILESTONE 4` · migration reconciliation — **and a correction to Conflict 2**
+
+## ⚠ Conflict 2, as I reported it, was not a conflict
+
+Milestone 3 recorded that *"`MASTER_REMEDIATION_WAVES.md` maps migrations only to 131 while the
+frontier is 181 — 51 migrations beyond the plan"*. **That was a misreading of the document, and
+the cause was my own regex.**
+
+I matched the pre-assignment table with `^\| \*\*1[0-9][0-9]\*\* \| [0-9A-C]+ \|`, which captures
+only rows of that exact shape, and then treated *absence from that table* as *absence from the
+plan*. The table's **own final row** says otherwise:
+
+```
+| **132+** | 4+ | Assigned at wave entry, never before |
+```
+
+So migrations **132 and above are outside the pre-assignment scope by the plan's explicit rule** —
+not missing from it. §0.2 states the convention directly, and the 2026-08-31 amendment restates
+it: *"Wave 4+'s floor moves to **132+**. The numbers are not chosen…"*
+
+Two further artefacts of the same careless extraction: the "150" I counted as a migration is
+*"150 sites are invisible to it (N-03)"* — a code-site count — and the "188" is inside a long
+`W1-B2` table cell, not a migration assignment.
+
+**Of the brief's three options, the evidence supports `C`:** the plan and the manifest use
+different, stated conventions, and there is nothing to amend. **No decision is required on this
+point.** `A` and `B` both rest on a discrepancy that does not exist.
+
+## The reconciliation, machine-checkable
+
+`scripts/check-migration-wave-coverage.mjs` (also `--json`) derives this from tracked files only:
+
+| | |
+|---|---|
+| authored | **182**, range **000–181**, **contiguous** |
+| pre-programme (`< 123`) | **123** — below the plan's first assigned row |
+| pre-assigned (`123–131`) | **9** — waves 1, 2, 3A |
+| outside by rule (`≥ 132`) | **50** — *"assigned at wave entry, never before"* |
+| **unexplained** | **0** |
+| declared in the manifest | **all** — `environments.qa.applied_through = 181`, `excluded: []`, `pending: {}` |
+| applied / verified status | **NOT ESTABLISHED by this tool** — the manifest declares *intent*, not outcome |
+
+The tool refuses to infer status from a migration's number or from a file existing, and reports the
+applied state as not established rather than guessing it.
+
+**Incidentally, it also independently confirms the QA target from a tracked file:**
+`environments.qa.ref = eyqtldjqpgpljlqvpowh`.
+
+### Three bugs in my own tool, each caught by running it
+
+1. It reported **123 "unexplained"** migrations — 000–122 — because I assumed everything below the
+   `132+` floor must be pre-assigned. The table also has a **lower** bound: its first row is 123,
+   and everything before that is pre-programme history.
+2. It reported **all 182 as undeclared**, because I invented a per-file key format for
+   `expected_applied.json`. The manifest declares an `applied_through` frontier plus
+   `pending`/`excluded` — it never enumerates migrations.
+3. After fixing that, it *still* reported all 182 undeclared, because `applied_through` is the
+   **string** `"181"` and `Number.isInteger` rejected it. My own debug print showed it unquoted and
+   I misread my own output.
+
+Each would have shipped as a "finding". They are recorded because the pattern — a tool's defect
+presented as a discovery — is the same one that produced the Conflict 2 error in the first place.
+
+## Conflict 1 — the registry investigation
+
+| explanation | evidence |
+|---|---|
+| renamed or moved | **no.** `git log --all --diff-filter=A` over every branch finds no file ever added under any workstream-registry spelling |
+| superseded by an existing register | **no evidence either way.** Nothing records such a decision |
+| intended but never committed | **consistent with the evidence, unproven** |
+| referenced erroneously by queue metadata | **consistent, and the origin is identified**: the string entered in `fd86823` *"feat(v5): seed autonomous team bootstrap queue"*, whose message is a single line with **no body and no rationale** |
+
+**What the evidence does NOT establish**, and I will not infer it: whether a
+`V5_WORKSTREAM_REGISTRY` was ever intended to exist, and **who authorized the authoritative
+workstream source**. A search finding no file says nothing about intent.
+
+### Decision required — authoritative workstream source
+
+| option | consequence |
+|---|---|
+| **1** the three cited documents **are** the authority | the queue is already correct; `fd86823`'s string was simply an error. Cheapest, and loses nothing if a register was never intended |
+| **2** a `V5_WORKSTREAM_REGISTRY` **should exist** | the three-document citation is a stopgap; that register must be written, and the queue re-cited to it |
+| **3** a different existing register is the authority | name it; the queue is re-cited and the other documents demoted to sources |
+
+**Affected:** `.skills-agent/tasks.json` (`policy.queueAuthority`), every task's `sources`,
+`scripts/skills-agent-inventory-check.mjs` (which enforces that cited authority resolves).
+**Risk of deferring:** low — the queue cites documents that demonstrably govern it, and the
+unresolved authority question is recorded rather than hidden.
+
+---
+
+# `MILESTONE 5` · queue authority resolved from the documents' own scope statements
+
+## My Milestone-3 correction was itself incomplete
+
+Milestone 3 replaced `fd86823`'s phantom `V5_WORKSTREAM_REGISTRY` with **three** documents. That
+was better than a fiction and still **wrong by omission**: it cited no authority for **owner
+decisions** or for **closure evidence**, two of the five things the queue depends on.
+
+Reading each candidate's own header settles it without inference:
+
+| concern | governing document | its own words |
+|---|---|---|
+| workstream sequencing | `MASTER_REMEDIATION_WAVES.md` | *"The dependency-aware execution plan"* |
+| release gates | `RELEASE_GATES.md` | *"Gate 0 through Gate 9"* |
+| remediation scope and finding status | `MASTER_REMEDIATION_REGISTRY.md` | *"The canonical finding ledger for the whole programme"* |
+| **owner decisions** | `MASTER_PRODUCT_DECISIONS.md` | *"Every unresolved decision extracted from workstreams A–N, deduplicated and owned"* |
+| **closure evidence** | `QA_CLOSURE_STANDARD.md` | *"What 'closed' means, and what it does not"* · *"Governs every status change in `MASTER_REMEDIATION_REGISTRY.md`"* |
+
+These are not five documents I selected. **All five declare themselves "Wave 0 deliverable", and
+they cross-reference each other as companions** — `MASTER_REMEDIATION_REGISTRY` names all four
+others; `QA_CLOSURE_STANDARD` names three; `RELEASE_GATES` names two. It is a closed,
+self-declaring set.
+
+So naming five rather than three **changes no governed decision** and is the smallest correction
+the existing authority supports. Taken, with provenance preserved in `policy.queueAuthorityNote`,
+and `policy.authorityScope` now records which document governs what, quoting each header.
+
+**The owner question is narrowed, not answered.** The five Wave 0 deliverables demonstrably cover
+all five concerns, so **nothing is missing for coverage** — which is evidence for option `1` (the
+cited documents *are* the authority). But evidence of absence still cannot establish intent:
+whether a `V5_WORKSTREAM_REGISTRY` was *meant* to exist remains yours to say.
+
+## Blockers revalidated — all seven still current
+
+| task | revalidation evidence | still blocked |
+|---|---|---|
+| `V5-AUTO-002` | `claude` CLI absent; `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` unset; `~/.claude/.credentials.json` absent; **0** self-hosted runners | **yes** |
+| `V5-GOV-001` | §2.1 line 43 still reads *"and the same probe demonstrably failed before the fix"*; last touched by `57335da`, which predates this campaign | **yes** |
+| `V5-GOV-002` | **2** occurrences of *"recorded, NOT implemented"* remain in the register | **yes** |
+| `V5-GOV-003` / `V5-GOV-004` | guard: *"no specification exists for the 4 components awaiting D2-3"* | **yes** |
+| `V5-GOV-005` | register still reads *"CI-verified in records mode, enforcement deferred to 2A"* and *"SEC-09 closes when I-MIG-03 reaches VERIFIED_CLOSED"* | **yes** |
+| `V5-INF-001` | Helix latest run still `38184333945` (2026-10-11), sole failure annotation still the billing message; no new run because no new push | **yes** |
+
+**No blocker was resolved by new evidence, and none was converted into eligible work.**
+
+## Eligibility: zero, verified
+
+All ten tasks: 3 `VERIFIED`, 2 `BLOCKED_EXTERNAL`, 1 `BLOCKED_GOVERNANCE`, 4 `BLOCKED_OWNER`.
+**No task is eligible**, and every blocked task retains its dependency edges — a test asserts that
+blocked-ness is never manufactured by deleting them.
+
+---
+
+# `MILESTONE 6` · the queue was not the backlog
+
+## The finding
+
+The ten-task queue modelled the autonomous-team infrastructure and the governance blockers and
+**nothing else**. It contained **zero product remediation work**, against a registry board of
+**~177 `READY_TO_REMEDIATE`** rows (canonical total **319** = `37 + 48 + 24 + 177 + 4 + 29`).
+
+So the previous milestones' "zero eligible tasks" was true of the queue and **misleading about the
+programme**. Five wave-level product tasks are now represented.
+
+## Why none of it is executable — traced link by link, not asserted
+
+| path | blocked by | evidence |
+|---|---|---|
+| **Wave 2A** (I-MIG-03 enforcement) | owner | registry: *"CI-verified in records mode, enforcement deferred to 2A"*, authority question *"escalated… not decided"* |
+| **Wave 2B** (class guard) | sequence + gate | plan: *"2A → live re-verification → 2B's assertions promoted"* |
+| **SEC-R2 / SEC-R3** | owner | both read **`4 of 5 present`** with `VERIFIED END-TO-END` **❌ absent**; *"VERIFIED END-TO-END is Step 4"* and **"Step 4 is not authorized"** appears three times |
+| **CON-03** | governance | *"`dietary_restrictions` — two serializers, one column, **prod type unknown**"*. Establishing it means reading **production**, which Gate 9B forbids |
+| **Wave 3B-1** | both of the above | plan: *"Depends on CON-03 … and on SEC-R2"* |
+
+**Wave 3A is implemented**: migrations `129_notification_contract_and_pr_timing`,
+`130_private_storage_buckets`, `131_identity_constraints` exist and match tasks 3A-9/10/11.
+
+**Wave 3B-0 is complete as specified, and its apparent gap is not one.** `AppFailure` and
+`reportFailure()` exist, and `reportFailure` has **zero call sites** — which looks like unfinished
+wiring until the file's own scope statement is read: it closes *"the capability half"*, while
+*"classifying and wiring the remaining ~234 swallow sites is **Phase B4** … deliberately NOT done
+here."* EC-23's visible half is also done: **zero** bare `print()` calls remain in `lib/`, and the
+analyzer reports **0** `avoid_print`.
+
+## Queue state
+
+**15 tasks · 0 eligible.** 3 `VERIFIED` · 2 `BLOCKED_EXTERNAL` · 2 `BLOCKED_GOVERNANCE` ·
+5 `BLOCKED_OWNER` · 3 `READY` but gated behind unmet dependencies.
+
+`V5-SECR-001` and `V5-CON-003` have **no dependency edges** and are blocked by **authorization**
+instead — recorded as blockers rather than as fake edges, and a test asserts exactly that.
+
+## Still not a per-row enumeration
+
+The ~177 rows are **not** expanded individually. The registry states that the `P1–P3` register
+carries no per-row status field and *"its movement is not mechanically countable"*, so a per-row
+queue cannot be derived without inventing statuses. These five are the **wave-level** work at the
+current frontier, each traced to the plan or the registry.
+
+---
+
+# `MILESTONE 7` · Step 4 cannot be authorized, because it has never been defined
+
+## The finding that changes the ask
+
+I previously asked you to **authorize Step 4**. That request was not answerable, and the reason is
+specific: **Step 4 is named but never defined.**
+
+The phrase *"End-to-End Product Verification"* occurs **exactly once in the whole of `docs/`** — a
+parenthetical in `MASTER_REMEDIATION_REGISTRY.md:1802`. There is:
+
+* **no entry criteria** for it,
+* **no named approver** — no document ties any Step number to a role or an owner,
+* **no scope statement** — whether approval permits verification only, or also code, data,
+  register or release-status changes,
+* **no step table** anywhere; the step numbers that appear across `docs/` (0, 1, 2, 3, 4, 6, 7, 10,
+  24) belong to unrelated local sequences, not one programme phase list.
+
+*(A single-line search missed this phrase because it wraps across two lines. The multi-line search
+is what established the single occurrence — the earlier "appears nowhere" reading was a line-based
+grep artefact.)*
+
+**So the decision has to come before the authorization**: `V5-GOV-006` asks you to define Step 4
+and name who may approve it. `V5-SECR-001` now depends on it, because authorizing an undefined
+phase would be a blank cheque.
+
+## Step 4 gates more than SEC-R2/R3
+
+| row | §2.1 class | source |
+|---|---|---|
+| `SEC-R2` · `SEC-R3` | AI / safety input — *"all five. A safety input is never closed on source review"* | registry `:1795–1805` |
+| `UIX-1` | class requires *"a human or a driver reached the surface"* | registry `:2727`, `:2739` |
+| `M-03` | **not** `VERIFIED_CLOSED` at *"two of three class states"* | `REMEDIATION_PROGRESS.md:401` |
+
+And the consequence is stated structurally, not per-row: ***"no safety finding in this programme
+can reach `VERIFIED_CLOSED` before Step 4 runs."***
+
+**Which classes Step 4 does NOT gate** — this matters, because it bounds the damage:
+
+| class | requires `VERIFIED END-TO-END` |
+|---|---|
+| Security / authorization | **no** — four states |
+| Data contract / schema | **no** |
+| Error contract / false success | yes, for any user-facing success state |
+| AI / safety input | yes, all five |
+| Billing / entitlement | yes, for anything that moves money |
+
+## A second decision, previously folded into the first
+
+`V5-GOV-007`, now its own task. SEC-R2/R3 hold four of five, and **§2's status table has no term
+for that position**: `REMEDIATED` means *"not yet retested"* and `RETEST_REQUIRED` means *"live
+assertion outstanding"*, and the registry records **both as false** for these rows. It also records
+that *"inventing a sixth status would be a governance decision this session has no authority to
+take"*, so the rows sit at `READY_TO_REMEDIATE` — **explicitly "an understatement"**.
+
+You are asked to choose **(i)** add a status to §2 for *"every state but END-TO-END"*, or
+**(ii)** leave the rows understated until Step 4 closes them.
+
+## Work that is ready and is NOT Step-4-blocked
+
+`V5-PROM-001`. Two rows are recorded as promotion candidates whose blockers are already resolved:
+
+* **`SEC-04`** — *"untouched. §7.8 held it on the F-J-01 blind spot, which SEC-R1's closure now
+  resolves, so it is a **consequential promotion candidate**… **not** promoted here. Assigned to
+  the next checkpoint"* (`:1806`). Its class is **Security / authorization**, which does **not**
+  require `VERIFIED END-TO-END` — **so Step 4 does not gate it.**
+* **`ENV-6`** — named alongside it: *"It does not promote `SEC-04`, `ENV-6`, `SEC-09` or
+  `I-MIG-03`"* (`:2998`).
+
+Promotion is a **protected-register edit**, so it needs your authorization — but it needs nothing
+else. This is the shortest path to movement on the board.
+
+---
+
+# `MILESTONE 7` (continued) · the two deliverables I owed
+
+My first pass on this milestone established that Step 4 is undefined, but did **not** produce §4's
+evidence matrix or §5's source-cited dependency map. Both are below.
+
+## §4 · SEC-R2 / SEC-R3 evidence matrix
+
+`§2.1` class for both: **AI / safety input** — *"all five. A safety input is never closed on source
+review"*.
+
+| element | `SEC-R2` / F-J-17 | `SEC-R3` / F-J-07 |
+|---|---|---|
+| FIXED IN CODE | ✅ migration **126** | ✅ migration **127** |
+| FIXED ON QA | ✅ ledger **127** | ✅ ledger **127** |
+| VERIFIED LIVE | ✅ **FJ17 8/8** | ✅ **FJ07 10/10** |
+| VERIFIED IN CI | ✅ Dart class invariant | ✅ j03 inversion + Dart |
+| **VERIFIED END-TO-END** | ❌ **absent** | ❌ **absent** |
+| row reads | **4 of 5 present** | **4 of 5 present** |
+
+### The exact assertion that remains unverified
+
+`§2.1` defines the missing element precisely: *"The full chain runs — **UI → state → service →
+authorization → API/function → database → persistence → response → UI state** — with the correct
+**failure** behaviour, and the regression suite is green."*
+
+So for each row the unverified assertion is the **whole chain including its failure leg** — for
+`SEC-R2`, that a PAR-Q submission classifies, persists, reads back and renders, *and* that the UI
+behaves correctly when the classifier throws; for `SEC-R3`, the same for a typed rule-accumulator
+append. **None of the four present elements covers that**: the live rungs are SQL suites, and the
+CI rungs are source/class invariants.
+
+### The test and environment needed — and this is the useful finding
+
+**The capability already exists in this repository.** Six `integration_test/` probes sign in and
+traverse the real chain, and two of them are CI jobs:
+
+* `uix1_booking_e2e_test.dart` — *"UIX-1 / M-03 — VERIFIED END-TO-END runner"*
+* `wrk01_progression_live_test.dart` — the I-WRK-01 live progression job
+
+So the shape of a valid Step 4 rung is **already established and running**. What SEC-R2/R3 need is
+a probe of the same kind for the PAR-Q and accumulator chains, driven on a real target against
+**QA**, with a signed-in identity and a real write.
+
+**Equally important: the existing `EC-04` runner is NOT that, and must not be mistaken for it.**
+Its own header states the limit: *"the probe overrides `clientDetailProvider` with an in-memory
+profile. **NOTHING IS SIGNED IN, no backend is written**, and no real client's risk is asserted."*
+It verifies that *"NOT ASSESSED"* fits its pill at real font and dpr — the rendering half only.
+
+### Is the proposed verification authorized?
+
+**No, on two counts, and they are separate:**
+
+1. **Step 4 is not authorized to begin** (`registry:1802`) — and, per `V5-GOV-006`, it is not even
+   defined, so the authorization cannot be requested until the definition exists.
+2. **The probe requires a QA write.** A signed-in run that persists a PAR-Q assessment writes to
+   QA. That needs its own authorization, independent of Step 4, and the QA target must be
+   confirmed as `eyqtldjqpgpljlqvpowh` — which `expected_applied.json`'s `environments.qa.ref`
+   does, from a tracked file.
+
+**Dependent tasks:** `V5-SECR-001` → `V5-W3B-001` (Wave 3B-1). And structurally, *"no safety
+finding in this programme can reach `VERIFIED_CLOSED` before Step 4 runs"* — so the whole
+**AI / safety input** class waits on it, not only these two rows.
+
+## §5 · Source-cited dependency map
+
+Link types: **[T]** technical prerequisite · **[S]** explicit sequencing rule · **[A]** owner
+authorization · **[G]** release gate · **[D]** unresolved decision.
+
+### Chain 1 — the Wave 2 spine
+
+```
+V5-GOV-006  define Step 4                     [D] named once, never defined (registry:1802)
+     │ [A]
+V5-GOV-005  rule I-MIG-03's authority          [D] "escalated as an authority question, not decided" (:2049)
+     │ [A]
+V5-W2A-001  Wave 2A — I-MIG-03 enforcement     [T] "CI-verified in records mode, enforcement deferred to 2A" (:2049)
+     │ [S]  "2A → live re-verification → 2B's assertions promoted" (WAVES:215-216)
+V5-W2B-001  Wave 2B — the class guard          [G] gated; "must be written against the pre-2A tree first"
+     │ [A]
+   SEC-09                                      [A] "SEC-09 closes when I-MIG-03 reaches VERIFIED_CLOSED" (:2049)
+     │                                             FG-1's 5/5 ruled "necessary but not sufficient" (:229)
+V5-W3B-001  Wave 3B-1                          [T] "Depends on CON-03 … and on SEC-R2" (WAVES)
+```
+
+### Chain 2 — the Step 4 spine, in parallel
+
+```
+V5-GOV-006  define Step 4                     [D]
+     │ [A]  authorize Step 4
+V5-SECR-001  SEC-R2 · SEC-R3 · UIX-1 · M-03    [A] "not authorized to begin"; and [A] a QA write
+     │ [T]
+V5-W3B-001  Wave 3B-1
+```
+
+### Chain 3 — CON-03, which is neither
+
+```
+V5-CON-003  dietary_restrictions type          [G] "prod type unknown"; Gate 9B forbids reading production
+     │ [T]
+V5-W3B-001  Wave 3B-1
+```
+
+**`V5-W3B-001` is the join**: it needs Chain 1's `SEC-R2` evidence **and** Chain 3's `CON-03`
+ruling. Neither chain alone releases it.
+
+### Not on any chain — and therefore the shortest path
+
+```
+V5-PROM-001  promote SEC-04 · ENV-6            [A] protected-register edit, and NOTHING else
+```
+`SEC-04`'s class is **Security / authorization**, which does **not** require `VERIFIED END-TO-END`
+— so **Step 4 does not gate it**, and its substantive blocker (the F-J-01 blind spot) is recorded
+as resolved by SEC-R1's closure.
