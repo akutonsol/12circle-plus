@@ -307,7 +307,13 @@ if (unseen > 0) {
 }
 console.log(
   failures === 0
-    ? `\nPASS  no unknown relation or column outside the ${allowedRel.size + allowedCol.size}-entry known-violations allowlist\n`
+    // The scope rides ON the verdict line, not only above it. This is the line
+    // that gets grepped and quoted into evidence ledgers, and quoted alone a
+    // bare PASS reads as "every write key was checked", which is false for the
+    // `unseen` sites. Keeping the caveat adjacent is not enough when the
+    // quotable line travels without its context.
+    ? `\nPASS  no unknown relation or column outside the ${allowedRel.size + allowedCol.size}-entry known-violations allowlist`
+      + ` — scope: ${writeSites.inlineLiteral - writeSites.hasSpread} of ${writeSites.total} write sites fully analysed, ${unseen} NOT (see COVERAGE)\n`
     : `\nFAIL  ${failures} contract violation(s)\n`,
 );
 process.exit(failures === 0 ? 0 : 1);

@@ -1756,6 +1756,86 @@ section('policy.maxConcurrentTasks bounds concurrent implementer leases');
     'the reimplementation trap, written down');
 }
 
+// ── the coverage report must be honest, consistent, and non-semantic ──────
+//
+// Driven by running the guard, not by matching its source: an earlier
+// syntactic assertion here broke on a harmless refactor while the behaviour
+// was unchanged.
+section('contract-guard coverage reporting');
+{
+  const RUN = path.join(ROOT, 'supabase', 'tests', 'contract', 'run.mjs');
+  const exec = (...args) => spawnSync(process.execPath, [RUN, ...args],
+    { encoding: 'utf8', cwd: ROOT });
+
+  const a = exec();
+  const b = exec();
+  const covLine = (o) => (o.match(/write sites .*/) ?? [''])[0];
+  check('the coverage figures are deterministic across runs',
+    covLine(a.stdout) === covLine(b.stdout) && covLine(a.stdout) !== '',
+    covLine(a.stdout) || '(no COVERAGE line)');
+
+  const m = /write sites (\d+): (\d+) fully analysed, (\d+) with a spread[^,]*, (\d+) opaque/
+    .exec(a.stdout ?? '');
+  const unseenM = /(\d+) write site\(s\) contribute/.exec(a.stdout ?? '');
+  check('the parts sum to the total',
+    !!m && Number(m[2]) + Number(m[3]) + Number(m[4]) === Number(m[1]),
+    m ? `${m[2]}+${m[3]}+${m[4]} = ${m[1]}` : 'no COVERAGE line');
+  check('the unseen total equals spread + opaque',
+    !!m && !!unseenM
+      && Number(m[3]) + Number(m[4]) === Number(unseenM[1]),
+    m && unseenM ? `${m[3]}+${m[4]} = ${unseenM[1]}` : 'missing line');
+
+  // --list-unseen must name exactly as many sites as it claims. A count that
+  // disagrees with its own list is the shape of defect this guard is about.
+  const listed = (exec('--list-unseen').stdout ?? '')
+    .split('\n').filter((l) => /^ {4}(opaque|spread) /.test(l)).length;
+  check('--list-unseen names exactly the number of sites it reports',
+    !!unseenM && listed === Number(unseenM[1]),
+    `listed=${listed} reported=${unseenM ? unseenM[1] : '?'}`);
+
+  // The quotable verdict line must carry its own scope. A bare PASS grepped
+  // into an evidence ledger would read as "every write key was checked".
+  const pass = (a.stdout.match(/^PASS.*/m) ?? [''])[0];
+  check('the PASS line itself states what was NOT analysed',
+    /scope: \d+ of \d+ write sites fully analysed, \d+ NOT/.test(pass),
+    pass.slice(0, 96) || '(no PASS line)');
+  check('…and the caveat sentence is present above it',
+    /A PASS below does not mean every write key was checked/.test(a.stdout),
+    'the lesson, stated in words rather than implied by a number');
+
+  // Reporting must not have become a pass/fail signal. Verified against the
+  // pre-change runner by equivalence: clean 0/0, inline violation 1/1.
+  check('a clean tree still exits 0 with coverage reporting in place',
+    a.status === 0, `exit=${a.status}`);
+  check('the COVERAGE lines never themselves read as a failure',
+    !/COVERAGE[^\n]*FAIL/.test(a.stdout),
+    'an unseen site is a coverage limit, not a violation');
+}
+
+// ── the coverage decision brief must stay a request, not a decision ───────
+{
+  const brief = fs.readFileSync(path.join(ROOT, 'docs',
+    'V5_CONTRACT_COVERAGE_DECISION_BRIEF.md'), 'utf8').replace(/\s+/g, ' ');
+  check('the brief declares itself an owner-input request',
+    /OWNER INPUT REQUESTED/.test(brief)
+      && /Nothing here is decided/.test(brief),
+    'a recommendation must never read as consent');
+  check('…and states no option was implemented',
+    /no option has been implemented/.test(brief),
+    'the recommendation is A-now/B-later, not a change');
+  check('it does not claim the 31 sites are defective',
+    /No claim is made that any of the 31 sites contains a defect/.test(brief)
+      && /unverified, which is not the same as wrong/.test(brief),
+    'unverified is not broken — the distinction the whole brief turns on');
+  check('it records that pass/fail semantics were proven unchanged',
+    /clean tree `0`\/`0`, planted inline violation `1`\/`1`/.test(brief),
+    'equivalence against the pre-change runner, not an assurance');
+  check('it grounds sensitivity in the governing documents, not opinion',
+    /SECURITY_LEDGER_PHI\.md/.test(brief)
+      && /QA_CLOSURE_STANDARD\.md` §2\.1/.test(brief),
+    'PHI and billing classes are cited, not asserted');
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {
