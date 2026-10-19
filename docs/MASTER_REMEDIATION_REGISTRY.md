@@ -901,7 +901,7 @@ produces meal plans and grocery lists receives **no subject context whatsoever**
 ---
 
 ### EDGE-1 · `notify-coach-email` has no authentication and injects unescaped attacker HTML
-`E-01` · **P0** · `READY_TO_REMEDIATE` (as deletion) / `BLOCKED_DECISION` (as fix) · Wave 5
+`E-01` · **P0** · `REMEDIATED` *(source-level only — see §7.26)* · **REMAINS OPEN — deployed status UNVERIFIED, no closure state claimed** · Wave 5
 
 No auth of any kind; the platform default `verify_jwt = true` is satisfied by the
 **published anon key**. Any internet caller can enumerate the coach roster size, cause an
@@ -910,6 +910,10 @@ interpolated **raw** into a 12 Circle–branded HTML template. A branded phishin
 delivered from the platform's own sender to every coach, repeatable at will. **The
 function has no caller in the codebase.** Recommended: delete it (D-4 in Workstream D).
 Not deployed to QA; **UNVERIFIABLE** whether it is deployed to production.
+
+**Additive note, 2026-10-19 — nothing above rewritten.** **`PD-A13` is answered: option (a), delete.** The source half is complete at `0572cef` — the 71-line function and its `[functions.notify-coach-email]` declaration, removed together because `.github/scripts/check-edge-function-config.sh` fails in **both** directions (its `phantom` check rejects a declared function whose directory is absent). The guard now reports 19 functions, all declaring a JWT posture. The former `BLOCKED_DECISION` **(as fix)** arm is **moot** — option (b) was not chosen.
+
+**This finding is NOT closed, and source deletion is not evidence that a deployed endpoint is gone.** Committed configuration reaches an environment only via `supabase functions deploy`, so the QA/production position above is **unchanged**: still not deployed to QA, still **UNVERIFIABLE** for production. Retiring any deployed instance needs separately authorized operations access and has **not** been attempted. No closure class has ever been ruled for `E-01`; whichever class applies, `QA_CLOSURE_STANDARD.md` §2.1 is explicit that *"`VERIFIED_CLOSED` requires every state its class demands. There are no partial closures"* — and none is claimed here. See §7.26.
 
 ---
 
@@ -3575,3 +3579,36 @@ No production request, QA write, migration, schema/RLS change, deployment, secre
 gate change, force-push, or merge was performed for these rulings. PR #1 remains draft and unmerged.
 Autonomous provider invocation, credentials, and trusted worker identity remain unestablished; this
 ruling does not claim continuous autonomous execution.
+
+---
+
+### 7.26 `PD-A13` answered and `E-01`’s source half removed — 2026-10-19 · owner ruling + source deletion
+
+One owner ruling and one deletion. **No migration, schema, RLS, policy, grant, role, credential, secret or CI change; production not contacted; no QA read and no QA write; no deployment and no function-retirement command.** No status **count** was moved and **nothing is promoted to** `VERIFIED_CLOSED`.
+
+#### The ruling
+
+- **`PD-A13` = option (a)**, product owner, 2026-10-19, owner column **engineering**. Delete the orphaned `notify-coach-email` Edge Function; do **not** harden it; option (b) not implemented. Recorded in [`decision-log.md`](decision-log.md) and the register row marked `ANSWERED`, per `MASTER_PRODUCT_DECISIONS.md` §2 steps 1 and 2.
+- The ruling is scoped to **source-level deletion only**. It does not authorize deployment, production or QA access, or a live endpoint probe, and it does not retire a deployed instance.
+
+#### What changed in source — `0572cef`
+
+`supabase/functions/notify-coach-email/index.ts` (71 lines) and the 7-line `[functions.notify-coach-email]` block in `supabase/config.toml`. **2 files, 0 insertions, 78 deletions.** Both were required together: the E-09 guard `.github/scripts/check-edge-function-config.sh` fails in **both** directions, so a declared function with no directory breaks CI exactly as an undeclared directory does.
+
+Retained deliberately: `supabase/config.toml:35`, the header comment naming EDGE-1 and EDGE-2 — it explains why declaring `verify_jwt` is **not** a mitigation, and **EDGE-2 is still open and still needs that explanation**. The 27 remaining `notify-coach-email` references in `docs/` are historical workstream evidence and governance records and were left untouched, per §3 and §10.5 on preserving historical records.
+
+Verification run at the commit: `check:functions` 5/5 OK (19 functions); `check:prod-refs` OK; `check:migrations` OK (182 migrations, contiguous 000-181); `git diff --check` clean.
+
+#### §2 step-by-step disposition
+
+| Step | Disposition |
+|---|---|
+| 1 · decision log | **Done** — dated row in [`decision-log.md`](decision-log.md) under "Notable engineering calls", with the security rationale and the rebuild trade-off |
+| 2 · register row | **Done** — amendment block added additively; `PD-A13` row marked `ANSWERED` 2026-10-19 · option (a) · owner engineering. The row’s original **Proceed? = "No"** cell is **preserved unedited**, as `PD-A23`’s was |
+| 3 · registry status | **Done, and deliberately narrow** — `E-01`’s **(as fix)** `BLOCKED_DECISION` arm is moot and its **(as deletion)** arm’s source half is `REMEDIATED`. The finding **remains open**. §2 step 3 as literally written ("move every finding it blocked from `BLOCKED_DECISION` to `READY_TO_REMEDIATE`") does **not** fit: `E-01` was already `READY_TO_REMEDIATE` as deletion, and promoting it would misstate a finding whose live evidence is absent |
+| 4 · progress board | **Done** — Wave 5 row annotated, decision board moved to **Answered: 6 / Open: 70** (A:23), and a change-log entry added |
+| 5 · supersession | **No-op, verified not assumed** — this answer reverses no earlier `decision-log.md` entry. That file holds no prior record of `notify-coach-email`, and its *"Superseded / revised"* section remains empty, which is correct |
+
+#### Open question this subsection deliberately surfaces
+
+The `REMEDIATED` **status text** moved; the **status counts** in [`REMEDIATION_PROGRESS.md`](REMEDIATION_PROGRESS.md) §3 did **not**. That is the same choice §7.16 made, and §3 records the consequence in its own words: the `READY_TO_REMEDIATE` figure *"had been carrying `UIX-1` since §7.16 moved its status text to `REMEDIATED` without moving the count"*. The count composition is not enumerable from the document, so moving it here would be a guess rather than a correction. **Flagged for the owner rather than repeated silently:** whether `READY_TO_REMEDIATE` (177) and `REMEDIATED` (4) should move by one for `E-01`.
