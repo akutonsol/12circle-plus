@@ -86,8 +86,12 @@ void main() {
         .where((f) => f.path.endsWith('.sql'))
         .toList()
       ..sort((a, b) => a.path.compareTo(b.path));
+    // `OR REPLACE` optional, matching the completeness sweep below. If that
+    // sweep ever surfaces a plain `CREATE VIEW admin_foo`, this must be able to
+    // read it — otherwise the new view fails with a misleading "no definition
+    // anywhere" instead of its real posture.
     final start = RegExp(
-        'CREATE\\s+OR\\s+REPLACE\\s+VIEW\\s+(?:public\\.)?$view\\b',
+        'CREATE\\s+(?:OR\\s+REPLACE\\s+)?VIEW\\s+(?:public\\.)?$view\\b',
         caseSensitive: false);
     // A new statement begins at column 0 with one of these keywords.
     final nextStatement = RegExp(
@@ -106,6 +110,24 @@ void main() {
     }
     return found;
   }
+
+  /// SQL with `--` line comments and `/* */` blocks removed.
+  ///
+  /// The predicate checks below MUST run against code, not prose. These
+  /// migrations are heavily commented and several of them describe their own
+  /// gate in words — `174:55` and `180:196` both contain the literal text
+  /// `Gated admin_can('…','…')`. Testing the raw body therefore admits a proven
+  /// false negative: delete the real `WHERE public.admin_can(...)`, leave a
+  /// comment mentioning it, and a raw-text check still passes. That was
+  /// demonstrated against `admin_release_status`'s real body — raw match `true`,
+  /// comment-stripped match `false` — so the strip is what makes the assertion
+  /// mean anything.
+  ///
+  /// It also removes a false POSITIVE: a comment warning "never use
+  /// security_invoker = on" no longer trips the negative assertion.
+  String codeOf(String body) => body
+      .replaceAll(RegExp(r'/\*[\s\S]*?\*/'), '')
+      .replaceAll(RegExp(r'--[^\n]*'), '');
 
   group('Admin views keep the gate their RLS bypass depends on', () {
     test('the migration directory is readable and non-trivial', () {
@@ -136,22 +158,26 @@ void main() {
                 'allowed, but the new definition must be re-read by a human: '
                 'CREATE OR REPLACE replaces the whole body, gate included.');
 
+        // Predicates are asserted against CODE, never prose — see codeOf().
+        final code = codeOf(def.body);
+
         expect(RegExp(r'security_invoker\s*=\s*off', caseSensitive: false)
-            .hasMatch(def.body), isTrue,
+            .hasMatch(code), isTrue,
             reason: '$view (${def.file}) no longer declares security_invoker = off.');
 
         expect(RegExp(r'security_invoker\s*=\s*on', caseSensitive: false)
-            .hasMatch(def.body), isFalse,
+            .hasMatch(code), isFalse,
             reason: '$view (${def.file}) declares security_invoker = on. The Admin '
                 'layer aggregates across users, so per-row RLS makes it return an '
                 'empty result rather than a denial — a silent wrong answer.');
 
-        expect(RegExp(r'admin_can\s*\(', caseSensitive: false).hasMatch(def.body),
+        expect(RegExp(r'admin_can\s*\(', caseSensitive: false).hasMatch(code),
             isTrue,
             reason: '$view (${def.file}) bypasses RLS and carries NO admin_can '
-                'predicate. With security_invoker = off and no gate, any '
-                'authenticated caller reads the whole base table. This is the '
-                'regression this guard exists to catch.');
+                'predicate IN CODE — a comment that merely mentions one does not '
+                'count. With security_invoker = off and no gate, any authenticated '
+                'caller reads the whole base table. This is the regression this '
+                'guard exists to catch.');
       });
     }
 
@@ -169,6 +195,27 @@ void main() {
           reason: 'the gate on the final line was not captured');
     });
 
+    test('a gate mentioned only in a comment does not satisfy the check', () {
+      // Regression test for a proven false negative in this guard's first
+      // version, which matched the raw body. Delete the real predicate, leave a
+      // comment naming it, and the raw check still passed — so the assertion
+      // was satisfiable by prose. codeOf() is what closes that.
+      final def = lastDefinitionOf('admin_release_status');
+      expect(def, isNotNull);
+
+      final masked = def!.body.replaceAll(
+          RegExp(r'WHERE\s+public\.admin_can\([^)]*\)\s*;?', caseSensitive: false),
+          "-- gate was here: admin_can('System','view')\n;");
+
+      final gate = RegExp(r'admin_can\s*\(', caseSensitive: false);
+      expect(gate.hasMatch(masked), isTrue,
+          reason: 'premise: the comment does mention admin_can, so a raw-text '
+              'check would pass. If this is false the probe is inert.');
+      expect(gate.hasMatch(codeOf(masked)), isFalse,
+          reason: 'codeOf() must strip the comment so the gate check fails. If '
+              'this passes, the guard is once again satisfiable by prose.');
+    });
+
     test('no Admin view is missing from this guard', () {
       // If a new security_invoker = off Admin view is added, it must be listed
       // above rather than silently unguarded.
@@ -179,7 +226,10 @@ void main() {
           .whereType<File>()
           .where((f) => f.path.endsWith('.sql'))) {
         for (final m in RegExp(
-                r'CREATE\s+OR\s+REPLACE\s+VIEW\s+(?:public\.)?(admin_[a-z_]+)',
+                // `OR REPLACE` optional: every Admin view uses it today, but a
+                // plain `CREATE VIEW admin_foo` would otherwise be invisible to
+                // this sweep, and so silently unguarded.
+                r'CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\s+(?:public\.)?(admin_[a-z_]+)',
                 caseSensitive: false)
             .allMatches(f.readAsStringSync())) {
           discovered.add(m.group(1)!.toLowerCase());
