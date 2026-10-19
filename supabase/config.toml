@@ -118,13 +118,6 @@ verify_jwt = true
 [functions.send-invite-email]
 verify_jwt = true
 
-[functions.notify-coach-email]
-verify_jwt = true
-# EDGE-1 (P0, Wave 5, D-4): reads no Authorization header, so the anon key is
-# sufficient to reach it, and it interpolates caller-controlled `client_name` /
-# `client_email` raw into a branded HTML email sent to every coach. It has no
-# caller in the codebase. `verify_jwt = true` does not mitigate this.
-
 [functions.send-checkin-reminder]
 verify_jwt = true
 # EDGE-2 (P0, Wave 5, D-5): reads no Authorization header despite its own header
