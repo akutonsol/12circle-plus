@@ -20,6 +20,40 @@ about the difference.
 
 ---
 
+## 1a · What the guard proves, and what it does not
+
+**It proves,** for the 143 write sites whose payload is an inline literal, plus every
+`.from('relation')` and every `.select('a, b, c')` **within its two scan roots** —
+`apps/mobile/lib` and `supabase/functions` (`run.mjs:37`):
+
+- the relation exists in the schema derived from `supabase/migrations`;
+- every selected column exists;
+- every payload key written at that call site exists;
+- every embedded resource resolves through a real foreign key to the public schema.
+
+A violation in any of those fails the build. That has been verified by mutation: an inline
+`.upsert({'zzz_bad_inline_col': 1})` produces
+*"column `user_profiles.zzz_bad_inline_col` is referenced but does not exist"* and exit 1.
+
+**It does not prove** anything about the column keys of the other 31 sites. Specifically:
+
+- it does **not** resolve a payload assembled in a helper and spread in (`..._data.toSupabase()`);
+- it does **not** resolve a payload passed by identifier (`.insert(payload)`) — there key
+  extraction never engages at all, and the site is skipped silently;
+- it therefore performs **no dataflow analysis of any kind**, and none is claimed. A green run is
+  evidence about 143 sites, not 174.
+- it is a **static** check against migration-derived schema. It says nothing about RLS, about
+  whether a write is authorized, or about whether a failure is surfaced to the user — CON-03 is
+  precisely a case where a type mismatch was swallowed by `catch (_) {}`.
+- it says nothing about code **outside its two scan roots**. `run.mjs:37` sets
+  `ROOTS = ['apps/mobile/lib', 'supabase/functions']`, and its own comment records that
+  `apps/api/src` was a third root until the NestJS retirement (V5 §55). Anything added outside
+  those two paths is unscanned, and the 174 denominator would not grow to include it — so **174
+  is the number of write sites the guard can see, not the number the product contains.**
+  (This correction came out of verifying the brief: an earlier draft said the roots were
+  `apps/` broadly, which overstated them. It is also one reason my first standalone count
+  reported 81 — it walked all of `apps/`, including the vendored plugin tree.)
+
 ## 2 · Current coverage, measured
 
 `npm run test:contract` now prints, deterministically across runs:
@@ -81,6 +115,19 @@ while blind to them. That is now stated on the verdict line itself.
 **No claim is made that any of the 31 sites contains a defect.** They are unverified, which is
 not the same as wrong.
 
+### 4a · Intersection with gated code
+
+| area | intersects? | consequence |
+|---|---|---|
+| **CON-03** | **Yes, directly.** `intake_flow_screen.dart:171` and `:280` are the `toSupabasePartial()` / `toSupabase()` sites | CON-03 is `BLOCKED_OWNER` on `CON-03-TYPE`. Resolving these keys statically now would check them against a column type that the pending decision may change, so **Option B should not touch them before `CON-03-TYPE` is answered** |
+| **Billing** | **Yes.** `stripe-webhook/index.ts:71` upsert and `:190` update on `subscriptions` | `QA_CLOSURE_STANDARD.md` §2.1 puts billing in the heaviest evidence class. Reading these is safe; **changing them is not in scope here** and would need its own authorization |
+| **Wave 3B / SEC-R3** | **No.** | This work touches no failure-reporting call site, no `AppFailure` wiring, and no service-layer sweep |
+| **SEC-R2 / SEC-04** | **No.** | Static only; no QA probe, no live write, no migration |
+| **RLS / policies / roles** | **No.** | The guard reads schema; it changes nothing and asserts nothing about authorization |
+
+**So Option B is partially gated:** its highest-value targets are the two CON-03 sites, and those
+are behind `CON-03-TYPE`. The remaining 29 are not gated, but they are also the lower-value half.
+
 ---
 
 ## 5 · Options
@@ -130,7 +177,17 @@ Let the live contract suites catch column mismatches at execution time rather th
 
 ---
 
-## 7 · Owner input requested
+## 7 · The minimum owner decision needed before any implementation
+
+**One answer unblocks this: `COVERAGE-OPT` — A, B, C or D.** Nothing else is required to begin,
+and nothing may begin without it.
+
+Two answers are needed only if that answer is **B**: whether B runs before or after
+`CON-03-TYPE` (because B's best targets are the CON-03 serializers), and whether an unresolved
+PHI or billing site should **fail** rather than report. If the answer is A, C or D, those two
+questions fall away.
+
+### Owner input requested
 
 ```
 COVERAGE-OPT   : Option __    (A accept · B narrow resolution · C full dataflow · D runtime only)

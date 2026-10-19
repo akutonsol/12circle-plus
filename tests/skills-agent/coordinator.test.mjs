@@ -1836,6 +1836,45 @@ section('contract-guard coverage reporting');
     'PHI and billing classes are cited, not asserted');
 }
 
+// ── the brief must answer the owner's questions, in their terms ───────────
+{
+  const brief = fs.readFileSync(path.join(ROOT, 'docs',
+    'V5_CONTRACT_COVERAGE_DECISION_BRIEF.md'), 'utf8');
+  const flat = brief.replace(/\s+/g, ' ');
+
+  check('the brief states what the guard PROVES and what it does not',
+    /## 1a · What the guard proves, and what it does not/.test(brief)
+      && /\*\*It proves,\*\*/.test(brief) && /\*\*It does not prove\*\*/.test(brief),
+    'the two halves stated separately, not left to inference');
+  check('…and disclaims dataflow analysis in so many words',
+    /performs \*\*no dataflow analysis of any kind\*\*, and none is claimed/.test(brief),
+    'a green run is evidence about 143 sites, not 174');
+  check('the gated-code intersection is named per area',
+    /### 4a · Intersection with gated code/.test(brief)
+      && /CON-03/.test(flat) && /Billing/.test(flat)
+      && /Wave 3B \/ SEC-R3/.test(flat) && /RLS \/ policies \/ roles/.test(flat),
+    'CON-03 and billing intersect; SEC-R2/R3/SEC-04 and RLS do not');
+  check('a single minimum owner decision is named',
+    /One answer unblocks this: `COVERAGE-OPT` — A, B, C or D/.test(brief),
+    'and the two follow-ups apply only if the answer is B');
+
+  // The scan roots are load-bearing: the denominator is what the guard CAN see,
+  // not what the product contains. An earlier draft overstated them as `apps/`.
+  const runner = fs.readFileSync(path.join(ROOT, 'supabase', 'tests',
+    'contract', 'run.mjs'), 'utf8');
+  const rootsM = /const ROOTS = \[([^\]]+)\]/.exec(runner);
+  const roots = rootsM ? [...rootsM[1].matchAll(/'([^']+)'/g)].map((m) => m[1]) : [];
+  check('the guard still has exactly the two scan roots the brief names',
+    roots.length === 2 && roots.includes('apps/mobile/lib')
+      && roots.includes('supabase/functions'),
+    `ROOTS = [${roots.join(', ')}]`);
+  check('…and the brief names them exactly, not as a broader `apps/`',
+    /`apps\/mobile\/lib` and `supabase\/functions` \(`run\.mjs:37`\)/.test(brief)
+      && /174 is the number of write sites the guard can see, not the number the product contains/
+        .test(flat),
+    'the correction that came out of verifying the brief');
+}
+
 console.log(`\n${'='.repeat(74)}`);
 console.log(`Skills-Agent coordinator: ${passed}/${passed + failures.length} passed`);
 if (failures.length) {
