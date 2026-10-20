@@ -41,6 +41,10 @@
         "182": {
           "reason": "QAX-SEC-06 certification half: scopes the exercise_certifications definer view and the exercise_certification(uuid) definer RPC to exercise_readable(id) OR is_content_editor(). Authored and locally replay-verified; NOT applied to QA.",
           "gate": "Owner approval of the Option A access trade-off (content managers retain cross-owner private/draft certification visibility), then a QA apply window."
+        },
+        "183": {
+          "reason": "Restores the empty-selection guard that migration 119 added to materialize_program_week and migration 124 discarded when it replaced that body with a wrapper over the pre-119 materialize_program_week_engine. The guard is placed in the engine, where the INSERT into program_workouts actually happens, and uses 119's exact exception message. Locally replay-verified: pre-fix the call persists 4 zero-exercise program days and reports sessions_created=4 with no error; post-fix it raises P0001 with 119's message and persists 0 rows. NOT applied to QA.",
+          "gate": "Review of the guard's placement in the engine rather than the 124 wrapper, plus a decision on the separate canonicalizer/validator defect that currently makes any NON-empty materialization fail with 23514 and blocks this migration's positive control (PD-A01). Then a QA apply window."
         }
       }
     }
