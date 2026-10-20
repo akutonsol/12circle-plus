@@ -131,6 +131,104 @@ export function migrationFiles(dir = MIGRATIONS_DIR) {
  * *body* merely mentions the words "search_path" (122 does, in a comment) must
  * not be read as pinning anything.
  */
+/**
+ * SQL with comments and single-quoted literals removed, so a security property
+ * is decided by CODE and never by prose.
+ *
+ * MEASURED, not hypothetical. Before this existed, every one of this guard's
+ * three properties could be satisfied by text that executes nothing:
+ *
+ *   auth-wrapper      `-- authorization is handled by public.can_act_for(p)`  -> true
+ *   auth-wrapper      `/* was: public.is_active_coach_of(p) *\/`              -> true
+ *   auth-wrapper      `RAISE NOTICE 'checked via require_content_editor()'`   -> true
+ *   security-definer  `-- intentionally no longer SECURITY DEFINER`           -> true
+ *   search-path-pin   `-- dropped the SET search_path = public, pg_temp pin`  -> true
+ *
+ * That direction matters: a false POSITIVE on a property makes `analyse()`
+ * believe the property is still present, so the strip is never recorded and the
+ * regression passes. A migration that deletes a real predicate and leaves a
+ * "was: ..." comment beside it — the house comment style in this tree, see
+ * 123:120 — would have gone undetected. That is precisely the F-J-01 class this
+ * guard exists to catch.
+ *
+ * One pass, because order matters in both directions: a `--` inside a literal
+ * is not a comment, and a `'` inside a comment does not open a literal. Doubled
+ * `''` is an escaped quote and does not close the literal. Dollar-quoted inner
+ * strings are left alone — the body has already been cut at its own tag, and a
+ * nested tag carries no `'` to confuse this.
+ *
+ * Replacement preserves newlines so reported line positions do not shift.
+ */
+export function sqlCode(sql) {
+  let out = '';
+  let i = 0;
+  const n = sql.length;
+  while (i < n) {
+    const c = sql[i];
+    const next = sql[i + 1];
+    if (c === '-' && next === '-') {                 // line comment
+      while (i < n && sql[i] !== '\n') i += 1;
+      continue;
+    }
+    if (c === '/' && next === '*') {                 // block comment
+      i += 2;
+      while (i < n && !(sql[i] === '*' && sql[i + 1] === '/')) {
+        if (sql[i] === '\n') out += '\n';
+        i += 1;
+      }
+      i += 2;
+      continue;
+    }
+    if (c === "'") {                                 // single-quoted literal
+      i += 1;
+      while (i < n) {
+        if (sql[i] === "'" && sql[i + 1] === "'") { i += 2; continue; }
+        if (sql[i] === "'") { i += 1; break; }
+        if (sql[i] === '\n') out += '\n';
+        i += 1;
+      }
+      out += "''";                                   // keep it a syntactic literal
+      continue;
+    }
+    if (c === '"') {                                 // quoted IDENTIFIER
+      // Identifiers are code, not data, so they pass through verbatim. They
+      // must still be consumed as a unit: this tree has identifiers that
+      // contain an apostrophe — `"Coach: read an ACTIVE client's photos"`,
+      // `"Child's Pose"` — and reading that quote as a literal opener would
+      // swallow the code after it.
+      out += c;
+      i += 1;
+      while (i < n) {
+        if (sql[i] === '"' && sql[i + 1] === '"') { out += '""'; i += 2; continue; }
+        out += sql[i];
+        if (sql[i] === '"') { i += 1; break; }
+        i += 1;
+      }
+      continue;
+    }
+    const dq = c === '$' ? /^\$[a-z_]*\$/i.exec(sql.slice(i)) : null;
+    if (dq) {                                        // dollar-quoted literal
+      // 44 of these exist in supabase/migrations: `$q$`, `$j$`, `$f$`, `$ddl$`.
+      // A dollar-quoted block is a string, so it is stripped like one. Without
+      // this, an apostrophe inside such a block — `$q$ it''s dynamic $q$` —
+      // opens a phantom literal that swallows the rest of the body. That
+      // direction is loud rather than silent (the predicate goes missing, a
+      // strip is recorded, the guard fails), but a false alarm in an enforcing
+      // guard teaches people to override it, so it is closed here.
+      const tag = dq[0];
+      const end = sql.indexOf(tag, i + tag.length);
+      const inner = end === -1 ? sql.slice(i + tag.length) : sql.slice(i + tag.length, end);
+      for (const ch of inner) if (ch === '\n') out += '\n';
+      out += tag + tag;                              // keep it a syntactic literal
+      i = end === -1 ? n : end + tag.length;
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
 export function parseDefinitions(sql) {
   const out = [];
   const re = /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+(?:public\.)?([a-z0-9_]+)\s*\(/gi;
@@ -148,15 +246,22 @@ export function parseDefinitions(sql) {
     const close = afterOpen.indexOf(tag);
     const body = close === -1 ? afterOpen : afterOpen.slice(0, close);
 
+    // Properties are decided on CODE, never on prose. `header`/`body` stay raw
+    // for reporting; `headerCode`/`code` are what any security test must read.
+    const headerCode = sqlCode(header);
+    const code = sqlCode(body);
+
     out.push({
       name,
       header,
       body,
+      headerCode,
+      code,
       properties: {
         'auth-wrapper': AUTH_PREDICATES.some((p) =>
-          new RegExp(`\\b(?:public\\.)?${p}\\s*\\(`, 'i').test(body)),
-        'search-path-pin': /\bSET\s+search_path\s*=/i.test(header),
-        'security-definer': /\bSECURITY\s+DEFINER\b/i.test(header),
+          new RegExp(`\\b(?:public\\.)?${p}\\s*\\(`, 'i').test(code)),
+        'search-path-pin': /\bSET\s+search_path\s*=/i.test(headerCode),
+        'security-definer': /\bSECURITY\s+DEFINER\b/i.test(headerCode),
       },
     });
   }
@@ -247,7 +352,7 @@ export function analyse(dir = MIGRATIONS_DIR) {
         wrappers.set(def.name, {
           migration: num,
           predicates: AUTH_PREDICATES.filter((p) =>
-            new RegExp(`\\b(?:public\\.)?${p}\\s*\\(`, 'i').test(def.body)),
+            new RegExp(`\\b(?:public\\.)?${p}\\s*\\(`, 'i').test(def.code)),
         });
       } else if (wrappers.has(def.name)) {
         wrappers.delete(def.name);   // the wrapper is gone as of this migration
@@ -313,12 +418,12 @@ export function engineWrapperClass({ establishedIn = '116', dir = MIGRATIONS_DIR
   for (const file of migrationFiles(dir)) {
     const num = numberOf(file);
     for (const def of parseDefinitions(readFileSync(join(dir, file), 'utf8'))) {
-      const callsOwnEngine = new RegExp(`\\b(?:public\\.)?${def.name}_engine\\s*\\(`, 'i').test(def.body);
+      const callsOwnEngine = new RegExp(`\\b(?:public\\.)?${def.name}_engine\\s*\\(`, 'i').test(def.code);
       if (callsOwnEngine && def.properties['auth-wrapper'] && !members.has(def.name)) {
         members.set(def.name, {
           establishedBy: num,
           predicates: AUTH_PREDICATES.filter((p) =>
-            new RegExp(`\\b(?:public\\.)?${p}\\s*\\(`, 'i').test(def.body)),
+            new RegExp(`\\b(?:public\\.)?${p}\\s*\\(`, 'i').test(def.code)),
         });
       }
     }
@@ -571,6 +676,112 @@ $$;`);
     currentFj01
       ? `still open: ${currentFj01.establishedBy} → ${currentFj01.strippedBy}`
       : 'no open authorization-wrapper strip');
+
+
+  // ── prose cannot satisfy a property ────────────────────────────────────────
+  //
+  // Each case below was MEASURED to return `true` before sqlCode() existed, by
+  // importing this module's own parseDefinitions. A false positive on a property
+  // makes analyse() believe it is still present, so the strip is never recorded
+  // and the regression passes silently — the F-J-01 class this guard is for.
+  {
+    const prose = [
+      ['auth-wrapper satisfied by a line comment', 'auth-wrapper',
+       `CREATE OR REPLACE FUNCTION public.p1(p uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  -- authorization is handled by public.can_act_for(p) in the wrapper
+  PERFORM 1;
+END; $$;`],
+      ['auth-wrapper satisfied by a block comment', 'auth-wrapper',
+       `CREATE OR REPLACE FUNCTION public.p2(p uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  /* was: public.is_active_coach_of(p) */
+  PERFORM 1;
+END; $$;`],
+      ['auth-wrapper satisfied by a string literal', 'auth-wrapper',
+       `CREATE OR REPLACE FUNCTION public.p3(p uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  RAISE NOTICE 'checked via require_content_editor()';
+END; $$;`],
+      ['security-definer satisfied by a header comment', 'security-definer',
+       `CREATE OR REPLACE FUNCTION public.p4() RETURNS void
+LANGUAGE plpgsql
+-- intentionally no longer SECURITY DEFINER; the caller is trusted
+AS $$ BEGIN END; $$;`],
+      ['search-path-pin satisfied by a header comment', 'search-path-pin',
+       `CREATE OR REPLACE FUNCTION public.p5() RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER
+-- dropped the SET search_path = public, pg_temp pin deliberately
+AS $$ BEGIN END; $$;`],
+    ];
+    for (const [label, property, sql] of prose) {
+      const def = parseDefinitions(sql)[0];
+      t(`prose does NOT satisfy: ${label}`,
+        Boolean(def) && def.properties[property] === false,
+        def ? `${property}=${def.properties[property]}` : 'no definition parsed');
+    }
+
+    // The converse: real code still satisfies each property. Without this the
+    // five above could pass by breaking detection outright.
+    const real = parseDefinitions(
+      `CREATE OR REPLACE FUNCTION public.p6(p uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  IF NOT public.can_act_for(p) THEN RAISE EXCEPTION 'denied'; END IF;
+END; $$;`)[0];
+    t('real code still satisfies all three properties',
+      Boolean(real) && real.properties['auth-wrapper']
+        && real.properties['search-path-pin'] && real.properties['security-definer'],
+      real ? JSON.stringify(real.properties) : 'no definition parsed');
+
+    // A `--` inside a literal is not a comment, and a quote inside a comment
+    // does not open a literal. Both would corrupt a two-pass stripper.
+    const tricky = sqlCode("SELECT 'a--b', 1; -- it's fine\nSELECT 2;");
+    t('a -- inside a literal does not start a comment, and a quote in a comment is inert',
+      tricky.includes('SELECT 2;') && !tricky.includes('a--b'),
+      JSON.stringify(tricky));
+
+    // ── SQL forms that actually occur in supabase/migrations ──────────────
+    //
+    // Both of these were verified present in this tree before being closed:
+    // 44 nested dollar-quoted blocks (`$q$`, `$j$`, `$f$`, `$ddl$`), and
+    // identifiers carrying an apostrophe — `"Coach: read an ACTIVE client's
+    // photos"`, `"Child's Pose"`. Each would have opened a phantom literal
+    // that swallowed the rest of the body, losing a REAL predicate. The
+    // failure was loud rather than silent (a strip gets recorded and the guard
+    // fails), but a false alarm in an enforcing guard teaches overrides.
+    const forms = parseDefinitions(
+      `CREATE OR REPLACE FUNCTION public.form1(p uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  EXECUTE format($q$ SELECT 'it''s dynamic $q$);
+  DROP POLICY IF EXISTS "Coach: read an ACTIVE client's photos" ON storage.objects;
+  IF NOT public.can_act_for(p) THEN RAISE EXCEPTION 'denied'; END IF;
+END; $$;`)[0];
+    t('a nested dollar quote and an apostrophe-bearing identifier do not hide a real predicate',
+      Boolean(forms) && forms.properties['auth-wrapper'] === true,
+      forms ? `auth-wrapper=${forms.properties['auth-wrapper']}` : 'no definition parsed');
+
+    // A dollar-quoted block IS a string, so a predicate named only inside one
+    // is prose for this purpose — it is not a call in this function's body.
+    const dynOnly = parseDefinitions(
+      `CREATE OR REPLACE FUNCTION public.form2(p uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  EXECUTE format($q$ SELECT public.can_act_for($1) $q$);
+END; $$;`)[0];
+    t('a predicate only inside a dollar-quoted string does NOT satisfy the property',
+      Boolean(dynOnly) && dynOnly.properties['auth-wrapper'] === false,
+      dynOnly ? `auth-wrapper=${dynOnly.properties['auth-wrapper']}` : 'no definition parsed');
+
+    // Doubled quotes are an escape, not a close.
+    t("doubled '' does not terminate a literal early",
+      sqlCode("SELECT 'it''s -- not a comment'; SELECT 9;").includes('SELECT 9;'),
+      JSON.stringify(sqlCode("SELECT 'it''s -- not a comment'; SELECT 9;")));
+  }
 
   console.log(`\n  self-test: ${failures === 0 ? 'ALL PASS' : `${failures} FAILED`}\n`);
   return failures;
