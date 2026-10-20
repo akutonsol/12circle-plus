@@ -37,7 +37,12 @@
       "name": "12Circle QA",
       "applied_through": "181",
       "excluded": [],
-      "pending": {}
+      "pending": {
+        "182": {
+          "reason": "QAX-SEC-06 certification half: scopes the exercise_certifications definer view and the exercise_certification(uuid) definer RPC to exercise_readable(id) OR is_content_editor(). Authored and locally replay-verified; NOT applied to QA.",
+          "gate": "Owner approval of the Option A access trade-off (content managers retain cross-owner private/draft certification visibility), then a QA apply window."
+        }
+      }
     }
   }
 }

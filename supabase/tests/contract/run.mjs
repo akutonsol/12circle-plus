@@ -305,6 +305,22 @@ if (unseen > 0) {
     + 'A PASS below does not mean every write key was checked.',
   );
 }
+// A RATCHET on the blind spot. `unseen` was computed and PRINTED but never
+// asserted, so a new opaque write site degraded this guard's coverage while CI
+// stayed green -- the same defect class `supabase/tests/security/run.mjs` records
+// at V5 SS205: "a guard that reports without failing is not a guard". The ceiling is
+// the count at the time it was introduced; it may only go DOWN unless somebody
+// raises it deliberately, with a reason.
+const UNSEEN_CEILING = Number(process.env.CONTRACT_UNSEEN_CEILING ?? 31);
+if (unseen > UNSEEN_CEILING) {
+  failures++;
+  console.log(
+    `  FAIL   COVERAGE regressed: ${unseen} unseen write site(s) exceeds the ceiling of ${UNSEEN_CEILING}.`
+    + ' Give the new write site literal column keys so this guard can read them, or'
+    + ' raise CONTRACT_UNSEEN_CEILING deliberately with a recorded reason.'
+    + ' Run with --list-unseen to see exactly which sites are unseen.',
+  );
+}
 console.log(
   failures === 0
     // The scope rides ON the verdict line, not only above it. This is the line
