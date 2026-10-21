@@ -1263,11 +1263,18 @@ section('16 · CON-03 authority (PD-A22 route b)');
   const coord = fs.readFileSync(path.join(ROOT, 'scripts',
     'skills-agent-coordinator.mjs'), 'utf8');
 
+  // THE ARITY IS DELIBERATELY NOT PINNED. These were written as
+  // `declaredBlockers(task)` and `eligible(task, state)`. Both later gained an
+  // optional `decisions` argument for the decision gate, and the assertions then
+  // failed while the property they assert still held — the veto never moved. A
+  // meta-test that breaks when a signature grows is asserting the spelling, not
+  // the property. These now tolerate extra arguments and still fail if the veto
+  // is removed, weakened, or lifted out of `eligible()`.
   check('eligible() vetoes any task that declares a blocker',
-    /if \(declaredBlockers\(task\)\.length > 0\) return false;/.test(coord),
+    /if \(declaredBlockers\(task[^)]*\)\.length > 0\) return false;/.test(coord),
     'the only protection that survives a fresh clone');
   check('…and the veto sits inside eligible(), not somewhere bypassable',
-    /function eligible\(task, state\)[\s\S]{0,220}?declaredBlockers\(task\)\.length > 0/
+    /function eligible\(task, state[^)]*\)[\s\S]{0,260}?declaredBlockers\(task[^)]*\)\.length > 0/
       .test(coord),
     'claim/status/event all route through eligible()');
   check('declaredBlockers treats a non-array blockers field as empty',
