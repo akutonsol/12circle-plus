@@ -1,0 +1,88 @@
+{
+  "_": [
+    "Decision states for gating queue eligibility. This file is NOT a governance",
+    "register and does not record decisions: MASTER_PRODUCT_DECISIONS.md,",
+    "decision-log.md and docs/adr/ are authoritative. This mirrors their state so",
+    "scripts/skills-agent-coordinator.mjs can REFUSE to schedule work whose owner",
+    "decision is unresolved, instead of relying on a human to remember.",
+    "",
+    "A blocker entry carrying `decision: \"<id>\"` is cleared ONLY when that id's",
+    "state here is `implementation_authorized`. Every other state, and an id that",
+    "is absent, keeps the veto -- fail-closed, because a typo must not authorize.",
+    "",
+    "States, in order. Each is a separate act; none implies the next:",
+    "  proposed                an answer has been put to the owner, nothing more",
+    "  conflict_checked        checked against protected decisions; result recorded",
+    "  accepted                the owner accepted it, verbatim, with provenance",
+    "  recorded                written into the authoritative register(s)",
+    "  implementation_authorized   the ONLY state that unblocks a gated task",
+    "  implementation_verified     the change landed and passed its gates",
+    "  promoted                the finding reached its formal closure class",
+    "",
+    "`record` names where the authoritative text lives, or null while it has no",
+    "home. `owner` and `answeredAt` stay null until the owner actually supplies",
+    "them -- never inferred, never defaulted to today's date."
+  ],
+  "decisions": {
+    "GOV-AUTH-1": {
+      "question": "Who is the decision authority, when does a direction become effective, and how are source conflicts resolved?",
+      "state": "proposed",
+      "proposedAnswer": "Julia as product owner is the decision authority; a protected governance decision is effective only once recorded through MASTER_PRODUCT_DECISIONS.md section 2 with owner attribution, scope, status and auditable evidence; process amendments need explicit approval and must be labelled as such; on conflict preserve state and request owner resolution",
+      "owner": null,
+      "answeredAt": null,
+      "record": null,
+      "source": "owner direction in conversation, 2026-10-21; recorded verbatim at docs/V5_OWNER_AUTHORITY_DIRECTION_2026-10-21.md section 1",
+      "note": "CONTENT SUPPLIED BY THE OWNER, RECORDING ACT NOT PERFORMED. owner and answeredAt stay null because the direction's own sentence 2 makes effectiveness depend on being recorded through the approved procedure, and all four files that procedure touches are protected roots that refuse tool writes. This entry keeps the gate CLOSED until that recording exists. Do not set this to implementation_authorized on the strength of the conversation alone.",
+      "blocks": ["V5-GOV-012", "V5-GOV-013", "V5-GOV-016", "V5-ADR-001", "V5-VAL-001"],
+      "blocksNote": "These are gated on the authority rule being EFFECTIVE, not merely stated. Each also needs its own substantive approval."
+    },
+    "OD-QAX-2": {
+      "question": "May a coach assign plans or programs to a `pending` client?",
+      "state": "proposed",
+      "proposedAnswer": "Option A - an active coach_client_relationships row is required",
+      "owner": null,
+      "answeredAt": null,
+      "record": null,
+      "source": "docs/QA_AUTONOMOUS_EXHAUSTION_FINAL_REPORT.md:179",
+      "conflictCheck": {
+        "performed": true,
+        "at": "2026-10-20",
+        "result": "no conflict found; migration 113's consent model and its table COMMENT affirmatively support requiring an active relationship",
+        "artifact": "scratchpad sprint-2026-10-20/DECISION_RECONCILIATION_OD14_ODQAX2.md",
+        "caveat": "not comprehensive: CR-1 (no ANSWERED mechanism for OD-*) and CR-2 ('ten N-05 decisions' does not resolve) are open"
+      },
+      "blocks": ["QAX-SEC-01"],
+      "openQuestions": ["Q-A1 direction/identity", "Q-A2 status domain", "Q-A3 error semantics", "Q-A4 the policy path too", "Q-A5 fixtures"]
+    },
+    "OD-14": {
+      "question": "Programme creation authority; is is_coach_profile sufficient or is an active coach_client_relationships row required; and what happens to existing non-conforming rows?",
+      "state": "proposed",
+      "proposedAnswer": "only an active-relationship coach may create; an active row is required; existing non-conforming rows are quarantined pending review, not mutated",
+      "owner": null,
+      "answeredAt": null,
+      "record": null,
+      "source": "docs/F21_BLAST_RADIUS.md:181",
+      "conflictCheck": {
+        "performed": true,
+        "at": "2026-10-20",
+        "result": "no conflict found; ADR-W1-001 is partial overlap only - it names none of the six QAX-SEC-03 tables and lists SEC-PHI-9/10 out of scope",
+        "artifact": "scratchpad sprint-2026-10-20/DECISION_RECONCILIATION_OD14_ODQAX2.md",
+        "caveat": "CR-4 (does Q1 bind programme creation? is coach_video_responses in scope?) and CR-5 (which quarantine option, who reviews) change the migration's shape"
+      },
+      "blocks": ["QAX-SEC-03", "F-21"],
+      "blocksDisputed": {
+        "id": "QAX-SEC-03",
+        "note": "DO NOT RELY ON THIS ENTRY. Three sources attribute QAX-SEC-03's decision dependency differently and the conflict is unresolved (B-04).",
+        "attributions": {
+          "docs/MASTER_REMEDIATION_REGISTRY.md:3406": "Owner? = no",
+          "docs/QA_AUTONOMOUS_EXHAUSTION_FINAL_REPORT.md:671": "OD-QAX-2 covers the 'SEC-01/03 fix shape'",
+          "this ledger": "OD-14 blocks it"
+        },
+        "provenance": "This OD-14 attribution was authored by the agent, not transcribed from a register. Its only basis is subject-matter similarity in docs/F21_BLAST_RADIUS.md section 6. It is the least supported of the three.",
+        "action": "owner rules which source governs; this entry may need correcting rather than ruling on",
+        "effect": "none on the gate - OD-14 remains proposed, so the veto stands either way"
+      },
+      "openQuestions": ["Q-B1", "Q-B2", "Q-B3", "Q-B4 quarantine contract", "Q-B5 reviewer authority"]
+    }
+  }
+}
