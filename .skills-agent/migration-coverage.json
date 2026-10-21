@@ -1,14 +1,14 @@
 {
   "summary": {
-    "authored": 182,
-    "range": "000–181",
+    "authored": 184,
+    "range": "000–183",
     "planAssignedRange": "123-131",
     "planFloor": 132,
     "qaRef": "eyqtldjqpgpljlqvpowh",
     "appliedThrough": 181,
     "preProgramme": 123,
     "preAssigned": 9,
-    "outsideByRule": 50,
+    "outsideByRule": 52,
     "unexplained": 0,
     "contiguous": true,
     "allDeclared": true
@@ -1285,6 +1285,20 @@
     {
       "migration": "181",
       "file": "supabase/migrations/181_admin_activity_role_split.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "182",
+      "file": "supabase/migrations/182_scope_exercise_certifications.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "183",
+      "file": "supabase/migrations/183_restore_materialize_program_week_empty_selection_guard.sql",
       "inManifest": true,
       "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
       "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"

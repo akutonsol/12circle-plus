@@ -1215,8 +1215,14 @@ section('16 · CON-03 authority (PD-A22 route b)');
   // so the memo cannot keep claiming "pending" after the fact.
   const pd = R('docs', 'MASTER_PRODUCT_DECISIONS.md');
   const answered = [...pd.matchAll(/\*\*`(PD-A\d+)` is `ANSWERED`\*\*/g)].map((m) => m[1]);
-  check('exactly PD-A05 and PD-A23 are ANSWERED — no more, no fewer',
-    answered.length === 2 && answered.includes('PD-A05') && answered.includes('PD-A23'),
+  // This is a tripwire, and it has fired once already: PD-A13 was ANSWERED on
+  // 2026-10-19 (option (a), delete) and recorded through all five of §2's steps in
+  // commit 08e27f7 — decision-log.md:43, the register row, registry §7.26 and the
+  // progress board. The assertion is updated to that reality rather than relaxed,
+  // so it fires again on a FOURTH answer. Do not widen it to a count check.
+  check('exactly PD-A05, PD-A23 and PD-A13 are ANSWERED — no more, no fewer',
+    answered.length === 3 && answered.includes('PD-A05') && answered.includes('PD-A23')
+      && answered.includes('PD-A13'),
     `ANSWERED: ${answered.join(', ') || 'none found'}`);
   check('decision-log.md still records no CON-03 / dietary answer',
     !/dietar|CON-03/i.test(R('docs', 'decision-log.md')),

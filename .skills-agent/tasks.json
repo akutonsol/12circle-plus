@@ -254,7 +254,7 @@
       "wave": "7",
       "sources": [
         "docs/V5_DESIGN_AUTHORITY_REQUEST.md",
-        "931218b:docs/design/admin-dashboard/COMPONENTS.md",
+        "docs/design/admin-dashboard/COMPONENT-SPECS.md",
         "docs/MASTER_PRODUCT_DECISIONS.md"
       ],
       "verification": [
