@@ -20366,3 +20366,596 @@ inventory rather than contradicting it.
 
 **No protected register was touched. `QA_CLOSURE_STANDARD.md` has no commit against it in this
 campaign. Production was not contacted.**
+
+---
+
+## §222 · CON-03 forward-migration design (Milestone 14)
+
+Deliverable: `V5_CON03_FORWARD_MIGRATION_DESIGN.md` — a **design proposal**, deliberately not a
+file under `supabase/migrations/`. PD-A22's `Proceed? = "**Yes** — via (b)"` authorizes designing
+a migration that converges from either starting type without inspecting production. It authorizes
+nothing else, and nothing was executed anywhere.
+
+### §222.1 · CON-03 is one column, not three
+
+`140:209-216` notes that `medical_conditions`, `injury_locations` and `dietary_restrictions` are
+all modelled `List<String>` over `TEXT`. True about the modelling, and it reads as a three-column
+problem. It is not. Comparing **both** serializers for each:
+
+| column | `toSupabasePartial` | `toSupabase` | consistent? |
+|---|---|---|---|
+| `medical_conditions` | `join(',')` `:202` | `join(',')` `:243` | yes |
+| `injury_locations` | `join(',')` `:204` | `join(',')` `:245` | yes |
+| `dietary_restrictions` | `toList()` `:213` | `join(',')` `:252` | **NO** |
+
+Only one column has the serializer disagreement; the siblings round-trip correctly through
+`_splitList`. Any remediation touching all three is wider than the finding.
+
+Probable origin, visible at `:184`: `activities.toList()` — and `activities` is the column the QA
+probe confirmed *is* `text[]`. The comment at `:212`, "Live column is text[] — send a real array",
+is true of `activities` and false of `dietary_restrictions`. The pattern was copied with its
+justification attached.
+
+### §222.2 · The delimiter was never ambiguous — and the read path already converges
+
+I expected to report the delimiter as an open question blocking the conversion. Code answers it:
+`:168-170` branches on `is List` and otherwise calls `_splitList`, which is `''`/null → `[]`, else
+`raw.split(',')` — **no trim, no empty-filtering**. So the conversion expression is determined, and
+**the client read path needs no change under either target.** Only the write side must be made to agree.
+
+The `col = ''` guard in the `text → text[]` expression is load-bearing, because `013:15` declares
+the column `TEXT NOT NULL DEFAULT ''` and so empty string is the common stored value. It is written
+so that whether `string_to_array('', ',')` yields `{}` or `{''}` **cannot matter** — an unverifiable
+detail must not be load-bearing.
+
+### §222.3 · The recommendation inverts
+
+The registry **recommends** `text[]`. The evidence found here prices that option honestly:
+
+- **Zero** `ALTER COLUMN … TYPE` statements exist in all 182 migrations (swept with a positive
+  control: 44 files use `text[]`, so the corpus was genuinely read). It would be the first.
+- `141:69` — the **live** `get_client_assessment()` — declares the output column
+  `dietary_restrictions text`. 141's own header records that a `RETURNS TABLE` signature is
+  validated at **execution** time, yielding `42804` on *every call*, and that a return type cannot
+  be changed by `CREATE OR REPLACE`. So `text[]` **reintroduces exactly the defect 141 was written
+  to repair** and requires a third drop/recreate plus re-grants.
+- It leaves the two sibling columns on the opposite convention in the same table.
+
+`text` achieves CON-03's stated "one serializer, one type" with a one-line change at `:213` and no
+DDL at all. Recommended on that basis. **The target remains the owner's decision and was not made
+here** — `MASTER_PRODUCT_DECISIONS.md` contains no decision naming a target, and `:6` still says
+"Nothing in this document is decided."
+
+### §222.4 · A version flag is not a capability check
+
+I reported before this milestone that a safe ephemeral harness "does exist" and its binaries were
+"functional", because `initdb --version` and `pg_ctl --version` both returned `18.6`. They resolve
+to `/opt/homebrew/opt/libpq/bin` — the **client** keg. `initdb` fails with *program "postgres" is
+needed by initdb but was not found*. There is no `postgresql@*` keg, no `postgres` binary under
+Cellar or on PATH, and the docker daemon is down. **Offline behavioural verification is
+unavailable on this runner**, and §5 of the design records that rather than implying coverage.
+
+`negative-control.sh` could not detect this either: `find_pg` tested `-x pg_ctl && -x initdb &&
+-n psql`, all of which pass here, then died inside `initdb`. Hardened to require the `postgres`
+server binary next to `initdb` or on PATH, with a message naming the client-only case. **Verified
+as a pair on this runner**: the old guard reached `say "  postgres: initdb (PostgreSQL) 18.6"` and
+continued; the new one dies naming the cause. That reassuring version string is precisely what
+misled me.
+
+### §222.5 · A guard I described as weaker than it is
+
+I had recorded `assert_no_credentials` as *guarding/unsetting* nine credential variables. It does
+not unset anything — it **refuses to run** if any is set, because "a set variable means the job
+scope has widened". `QA_URL`, `QA_SERVICE` and `QA_ANON` are set in this shell, so the harness
+would refuse here regardless of the missing server. Fail-closed is strictly stronger than
+sanitising; the stronger behaviour is what is implemented, and **I did not work around it.** The
+test that asserted the unset behaviour was asserting something false and now asserts the real guarantee.
+
+`coordinator.test.mjs` **123 → 156**.
+
+**No migration file created. No QA write, live probe, or schema change. No target invented. No
+protected register or closure standard mutated. Production `nxdbooufqzkpslkcogxc` not contacted.**
+
+---
+
+## §223 · CON-03 canonical storage contract (Milestone 15)
+
+Deliverable: `V5_CON03_STORAGE_CONTRACT_DECISION_MEMO.md`. **The decision is PENDING and was
+never requested of any owner** — no authorized route to the product owner exists in this
+workflow. `MASTER_PRODUCT_DECISIONS.md` was **not** modified; its §2 mechanism ("update this
+document's row to `ANSWERED` with the date and the owner") belongs to the owner taking the
+decision, not to the party proposing one.
+
+### §223.1 · §0.2's "already answered" path does not apply
+
+`MASTER_PRODUCT_DECISIONS.md` §0.2 is the sanctioned route for a question that governing
+documents already answer — *"Each is a finding, not a decision."* It was the first thing worth
+testing. `product-bible.md`, `decision-log.md` and `WORKOUT_DOMAIN_CONTRACT.md` contain **no
+occurrence of "dietary"** at all. So CON-03's target is a genuine open decision, not a finding.
+
+### §223.2 · The repository is split nine ways, and Milestone 14 under-read it
+
+Milestone 14 framed the `text[]` belief as one comment copied from the `activities` pattern.
+That account is **incomplete**. Two further artifacts assume an array:
+
+- `supabase/seeds/test_accounts.sql:156` inserts **`ARRAY[]::text[]`** into the column. A
+  committed seed, not a comment — and against a `text` column it fails outright. It has never
+  surfaced because the seed is referenced nowhere in `.github/`, `supabase/scripts/`,
+  `scripts/`, `package.json` or `Makefile`: the same latency `141`'s header describes, *"it
+  survived because the suite had never been executed"*. The same file uses `ARRAY[]`
+  **correctly** at `:120-121` for genuine `text[]` columns, so the idiom was understood and
+  this one column is the outlier.
+- `client_detail_screen.dart:773` documents "JSON arrays".
+
+Eight artifacts favour `text` (`013:15`, `APPLY_TO_REMOTE:32`, `140:138`, `141:69`,
+`intake_data.dart:252`, `:170`, the QA probe, both sibling columns); five favour `text[]`. The
+cost analysis is unchanged, but the recommendation can no longer be presented as merely
+correcting a stray comment.
+
+### §223.3 · `APPLY_TO_REMOTE.sql` — the out-of-band channel, found and correctly bounded
+
+The registry reasons that an in-code `text[]` comment implies an out-of-band production change.
+`supabase/APPLY_TO_REMOTE.sql` **is** that channel, committed — *"PASTE THIS ENTIRE FILE INTO
+THE SUPABASE DASHBOARD SQL EDITOR AND RUN IT"* — and `:32` declares `dietary_restrictions TEXT
+NOT NULL DEFAULT ''`. Milestone 14 never found this file.
+
+It is **evidence about the committed channel, not about production's type**: `ADD COLUMN IF NOT
+EXISTS … TEXT` is a no-op against an existing column of any type, so running it against a
+`text[]` column would leave it `text[]`. Labelled as inference, with that limit stated.
+**Production was not inspected. Q-6 is unchanged.**
+
+### §223.4 · The comma question, answered from the value domain rather than asserted
+
+Milestone 14 asserted `join(',')` was lossy "in general". The brief was right to press it. The
+domain is a **closed set of nine literals** at `intake_flow_screen.dart:5734-5737` — none
+contains a comma, and `'Other'` is itself a chip, not a text field. The lone `TextField` on that
+page writes `foodAllergies`, a separate unsplit scalar, which is why its comma-bearing hint is
+harmless. `_toggle` makes duplicates unreachable; order is selection order.
+
+So **Option A round-trips losslessly today — as a property of the closed set, not of the
+encoding.** It holds only while the domain stays closed, and the dead `'Other'` chip invites a
+free-text field that would break it silently. Option A therefore requires the domain to be
+*constrained*, not merely the serializer changed. That is decision `CON-03-COMMA`, not an
+engineering default.
+
+Secondary product gap: the app carries **two** restriction vocabularies — intake's nine chips
+and the meal-plan screen's six (`QA_WORKSTREAM_E…:845-846`), differing in spelling and
+membership. Which is canonical is a product question repository evidence cannot settle, and
+Workstream E's planned fix makes them collide. Filed as `CON-03-VOCAB`.
+
+### §223.5 · Two corrections to my own artifacts
+
+`WAVES:300-301` states **two different parallelisms in adjacent clauses**: the prose says "the
+sites inside **3B-2 and 3B-4** touch disjoint service files", the spine says
+`3B-0 → 3B-1 → {3B-2 ∥ 3B-3} → 3B-4 → 3B-5`, and the `:558` diagram (`3B-2/3 → 3B-4`) agrees
+with the spine. `V5_CON03_AUTHORITY_DETERMINATION.md:109` and the Milestone 14 design both
+cited the **outlier** prose. Corrected in place, struck through rather than deleted, in both.
+The inconsistency is a sequencing-authority question and is **reported, not resolved**. Both
+statements are now pinned by tests, so it cannot be "fixed" in one place and leave the
+correction wrong.
+
+Also corrected: Milestone 14 priced Option B's `42804` without saying who breaks.
+`get_client_assessment()` has **no application call site**; its only exerciser is
+`supabase/tests/security/d09-assessment-access.mjs`. Real, but confined to the live security
+suite — which lowers Option B's cost relative to how that section read.
+
+### §223.6 · A guard that proved nothing, again
+
+Extracting CI's ENV-4 guard with too small a `sed` window produced a script containing only
+`set -euo pipefail` and comments. It exited 0. Had that been reported, it would have been the
+sixth control in this programme to pass by measuring nothing. Re-bounded to the real 52-line
+body, which runs its own self-test and prints *"OK — app_env.dart carries no baked-in
+project"*.
+
+`coordinator.test.mjs` **156 → 179**. Five static guards green, inventory PASS, migration
+coverage PASS, `git diff --check` clean. No Dart or SQL changed, so Flutter runs are not
+applicable.
+
+**No migration file created. No product-code change. No QA write, live probe, schema, RLS or
+policy change. No SEC-R2/SEC-R3 promotion. No C1 widening. §7.10/§7.18 untouched. Production
+`nxdbooufqzkpslkcogxc` not contacted. The decision remains PENDING.**
+
+---
+
+## §224 · CON-03 decision state and the CI confirmation (Milestone 16)
+
+### §224.1 · CI is terminal and green, on the exact SHA
+
+Milestone 15 reported run `38413431946` as `queued` and explicitly declined to call it green.
+It is now terminal:
+
+| | |
+|---|---|
+| run | **`38413431946`** · workflow `CI` · event **`pull_request`** |
+| head SHA | `daeca225c91e5622e215cd26fbf58de18d3b34c3` — matches HEAD exactly |
+| status / conclusion | **`completed`** / **`success`** |
+| jobs | **7 of 7 `success`** — Flutter · EC-04 · Static guards · Negative control · Live QA suites · I-WRK-01 · UIX-1 |
+
+The sibling `push` run `38413424352` is `cancelled`: the expected `concurrency.group` behaviour
+keyed on `github.head_ref || github.ref_name`, not a failure and not evidence of anything. No
+commit was made to obtain a run, and CI was neither polled in a loop nor reconfigured.
+
+**Incidental confirmation:** the *Negative control* job is green on a commit that contains
+Milestone 14's hardened `find_pg`. That guard now has evidence from both sides — it dies
+correctly on this client-only machine, and it does **not** false-positive on a runner that has
+a real `postgres` server.
+
+### §224.2 · All three decisions remain PENDING — verified, not restated
+
+`MASTER_PRODUCT_DECISIONS.md` carries exactly **two** `ANSWERED` amendments, `PD-A05`
+(2026-08-27) and `PD-A23` (2026-08-28), and still states "Nothing in this document is decided."
+`decision-log.md` — §2's standing record for a decision actually taken — contains **no** CON-03
+or dietary entry. The latest commits touching either authority are `840c007` and `527438a`.
+
+**This workflow has no authorized route to the product owner, and no owner was contacted.**
+`CON-03-TYPE`, `CON-03-COMMA` and `CON-03-ROLLOUT` stay open with their Milestone 15 wording
+and options unchanged. I did not act as the owner, approve my own recommendation, or close a
+decision by editing a document. A test now asserts that exactly `PD-A05` and `PD-A23` are
+`ANSWERED`, so the memo cannot keep claiming "pending" past the point an owner answers.
+
+### §224.3 · The vocabularies, verified from source rather than from a report
+
+Milestone 15 cited `QA_WORKSTREAM_E…:845-846` — a report — for the meal-plan vocabulary. Read
+from source, the report is accurate and the picture is sharper. `meal_plan_screen.dart:27`
+declares six values; `intake_flow_screen.dart:5734-5737` declares nine. These are the **only
+two** definitions — no shared constant, no third, anywhere in `apps/mobile/lib`, `supabase` or
+`apps/api`.
+
+- **Only three are spelled identically:** `Vegetarian`, `Vegan`, `Halal`.
+- **Two differ only by a hyphen:** `Gluten Free`/`Gluten-Free`, `Dairy Free`/`Dairy-Free`.
+  Milestone 15 named only the first.
+- **Intake only:** `Keto`, `Paleo`, `Kosher`, `Other`. **Meal plan only:** `Nut-Free`.
+
+**The divergence is one of scope, not spelling.** `Nut-Free` is an *allergen*, and intake keeps
+allergens in the separate free-text `food_allergies` column. The meal-plan screen therefore
+merges an allergen into "restrictions" — precisely what Workstream E's own fix #2 forbids
+(*"Send allergies as a distinct, emphatic constraint — not merged into 'restrictions'"*).
+
+Harmless today and about to stop being so: `meal_plan_screen.dart:24`'s `_restrictions` is a
+transient local list with no database write, so the clash is display-only until Workstream E's
+fix #1 loads the profile column into that screen. Filed as `CON-03-VOCAB`; **not** resolved
+here, and it must not be resolved by a schema or serializer change.
+
+### §224.4 · Nothing enforces the closed domain
+
+The brief cautioned against assuming a closed UI guarantees a permanently closed domain. It
+does not, and the evidence is stronger than "it might change": there is **no `CHECK` constraint
+and no enum on `dietary_restrictions` in any of the 182 migrations**, and no shared constant
+defines the vocabulary. The closure is one widget's hard-coded list, enforced nowhere. A
+free-text value — which the unusable `'Other'` chip invites — would be accepted silently and
+without any database-level objection.
+
+That is what makes `CON-03-COMMA` a real decision rather than a formality, and why Option A
+requires the domain to be *pinned*, not merely the serializer changed.
+
+### §224.5 · Readiness
+
+**Nothing is startable.** CON-03's target is undecided, and `WAVES:287-288` makes 3B-1 depend
+on CON-03 **and** SEC-R2. SEC-R2 and SEC-R3 were each re-read: four of five states present,
+**VERIFIED END-TO-END absent**, both **NOT promoted**, §2.1 requiring all five for an
+AI/safety-input finding and Step 4 unauthorized. **So resolving the storage contract would not
+make the downstream sequence startable** — SEC-R2 blocks 3B-1 independently, 3B-4 sits behind
+3B-1, and SEC-R3 behind 3B-4.
+
+`coordinator.test.mjs` **179 → 190**.
+
+**No migration created or executed. No serializer, deserializer, SQL function, seed, schema,
+RLS or policy change. No QA write, live probe or production operation. No credential accessed.
+No SEC-R2/SEC-R3 promotion or evidence-count change. No C1 widening. §7.10/§7.18 untouched.
+Production `nxdbooufqzkpslkcogxc` not contacted. The decisions remain PENDING.**
+
+---
+
+## §225 · Autonomous execution checkpoint (Milestone 17)
+
+### §225.1 · The queue's only real protection did not travel
+
+`blockers` was a declared field on 16 of 19 tasks that **the coordinator never read**. Every
+blocked task was held back solely by a hand-set status in `.skills-agent/state.json` — and
+that file is **gitignored** (`.gitignore:40`), while `loadState`'s `??=` (`:115`) defaults any
+unknown task to `READY`. So on a fresh clone, which is CI's situation and any new runner's,
+all 16 read as runnable.
+
+Measured on a fresh state, with the veto removed **in place**:
+
+| | eligible |
+|---|---|
+| fresh clone, no veto | **12** |
+| fresh clone, veto | **1** — `V5-AUTO-001`, read-only, no deps, no blockers |
+
+The eleven it newly blocks include `V5-PROM-001`/`V5-PROM-002` (finding promotions),
+`V5-GOV-002` (protected-register edits), `V5-GOV-006` (defining Step 4) and `V5-CON-003`
+(writing the migration on an undecided contract) — each forbidden by the programme's own
+boundaries. A fresh worker could have claimed any of them.
+
+The rule is schema-respecting: a blocker is `{kind, what, evidence, action}` with no
+`resolved` flag, so its presence *is* its unresolvedness. **No new task state was invented.**
+Verified by mutation — removing the veto makes `--self-test` exit **1**, the fixed version
+exits **0** — with two companion assertions proving an empty and an absent `blockers` array
+both stay eligible, so the veto is not vetoing everything.
+
+`validate` now also reports blocker/status drift (a blocker declared while `READY`/
+`RETRY_WAIT`), warning rather than throwing because the status field is operator-owned.
+Positive control: re-setting `V5-W3B-001` to `READY` reports exactly 1; a fresh state reports
+all 16.
+
+**A measurement error worth recording.** My first attempt reported "0 eligible without the
+veto", which is impossible — removing a veto cannot reduce eligibility. `ROOT` derives from
+the script's own location (`:16`), so a scratchpad copy read a nonexistent `tasks.json` and
+saw zero tasks. The number was real and measured nothing, the same class of error as a `tail`
+pipeline's exit code. Redone in place.
+
+**Schema gap, reported not invented:** blocker kind `architecture` has no corresponding status
+in `{BLOCKED_OWNER, BLOCKED_EXTERNAL, BLOCKED_GOVERNANCE}`.
+
+### §225.2 · 3B-0 is complete, and no `AppFailure` wiring is authorized
+
+`WAVES:280-283` describes 3B-0 as "An `AppFailure` type and one `reportFailure()` sink; **wire
+the five sanctioned swallow categories to it**", which reads as though wiring were in scope
+and outstanding — `AppFailure` has zero call sites. The registry settles it:
+
+**`ERR-1` / `EC-01` is `VERIFIED_CLOSED` (2026-08-27)**, closure class **RELEASE /
+ENVIRONMENT** by owner ruling, so §2.1 requires `FIXED IN CODE · VERIFIED IN CI` and nothing
+more. Both are present and named: `580932f` for the sink, run **#33** (`33043897947`) for the
+post-fix half, run **#34** (`33081949579`) step 7 for the pre-fix half, with `EC-23` closing
+as an alias.
+
+**Its closure evidence is the sink existing, compiling, and being exercised by the EC-23
+guard — not the wiring of any call site.** So 3B-0 is done, the wiring belongs to a later
+phase, and the standing restriction against wiring `AppFailure`/`reportFailure()` before its
+authorized wave is correct and unaffected. No wiring was performed.
+
+### §225.3 · Every other named concern re-verified as blocked
+
+| concern | state, from source | blocker |
+|---|---|---|
+| `CON-03-TYPE` | **PENDING** | owner; no governing document answers it |
+| `CON-03-COMMA` | **PENDING** | owner; and **no `CHECK`/enum constrains the column** in any of 182 migrations |
+| `CON-03-ROLLOUT` | **PENDING** | owner |
+| `CON-03-VOCAB` | **PENDING** | owner; a separate product question |
+| `SEC-R2` | 4 of 5 states; **END-TO-END absent**; NOT promoted | fifth rung + Step 4 unauthorized |
+| `SEC-R3` | 4 of 5 states; **END-TO-END absent**; NOT promoted | same |
+| `SEC-04` | **Deliberately NOT promoted** | open regression `F-J-01`: needs migration 124 + the I-MIG-03 class guard + a **live 403 probe**, all Wave 2. The probe needs QA authorization (absent); enforcement is owner-blocked at `V5-GOV-005` |
+| 3B-1 | not startable | `WAVES:287-288` — depends on CON-03 **and** SEC-R2 |
+| 3B-2…3B-5 | not startable | behind 3B-1 |
+| §7.10 / §7.18 | **conflict preserved, not resolved** | owner |
+
+`ERR-2` is `EC-02`, which this programme is instructed not to reconcile. 177 findings sit at
+`READY_TO_REMEDIATE`, essentially the whole remainder, in gated waves or on the restricted
+list — so the absence of further startable implementation work is a property of the gates, not
+of effort.
+
+### §225.4 · Autonomous execution: still a scheduler, not a team
+
+Unchanged and not overstated. The coordinator schedules, leases, verifies identity separation
+and now refuses blocked work. It **does not launch workers**: there is no provider invocation
+path, no trusted worker identity (`SKILLS_AGENT_ID` is self-asserted), and `V5-AUTO-002`
+remains `BLOCKED_EXTERNAL` on "no agent invocation mechanism" and "no credential". **Autonomous
+execution is NOT operational.** This milestone made the scheduler safer, which is the opposite
+of making it autonomous.
+
+`coordinator.test.mjs` **190 → 204**.
+
+**No migration created or executed. No serializer, SQL function, seed, schema, RLS or policy
+change. No QA write, live probe or production operation. No credential accessed. No finding
+promoted and no evidence count changed. No C1 widening. Production `nxdbooufqzkpslkcogxc` not
+contacted. PR #1 open, draft, unmerged.**
+
+---
+
+## §226 · CI-gated integration and three unenforced fields (Milestone 18)
+
+### §226.1 · The integration completed through the normal gate
+
+Milestone 17's three held commits were released by the pre-push guard itself, without
+override, once `9d8cf13`'s run reached terminal green. `ALLOW_PUSH_OVER_CI=1` was never used
+and CI concurrency was never altered.
+
+| SHA | `pull_request` run | result |
+|---|---|---|
+| `04e4604` | `38415078848` | `completed` / `success` |
+| `9d8cf13` | `38417690039` | `completed` / `success` — 7 of 7 jobs |
+| `3a8d2b7` | `38419228862` | `completed` / `success` — 7 of 7 jobs |
+
+Each paired `push` run is `cancelled` by `concurrency.group`, which is the designed behaviour
+and is not evidence of anything.
+
+### §226.2 · `paths` was the second declared field nothing read
+
+`blockers` (§225.1) turned out not to be unique. `paths` is validated as an array at `:92` and
+was then **never consulted**. Demonstrated: two tasks both declaring
+`lib/shared/thing.dart` were handed to `w1` and `w2` and **both held live leases**. A lease
+protected a *task* from double-claim; nothing protected a *file*.
+
+This is not hypothetical for this queue. It carries **27 overlapping path pairs**, and **nine
+tasks contend on `docs/MASTER_REMEDIATION_REGISTRY.md`** — the protected register. Two workers
+could have edited it concurrently.
+
+An implementer lease now reserves its declared paths, prefix-aware because the queue mixes
+directories and files: `.skills-agent/` conflicts with `.skills-agent/tasks.json`, while
+`docs/A.md` and `docs/B.md` do not. Verified at command level including the legs that prove it
+is neither over-blocking nor deadlocking — the queue routes **around** a conflict (the second
+worker takes a non-conflicting task rather than getting nothing), siblings in one directory stay
+independently claimable, an expired lease releases its paths, and a verifier may still claim a
+contended task.
+
+**The change had a real blast radius and the suite caught it.** Two existing tests failed,
+because the `T()` helper gave *every* test task `paths: ['x']` — harmless while the field was
+unread, but it made all default tasks mutually conflicting. Those tests concern dependency
+scheduling and independent advancement, never file contention, so the helper now assigns one
+path per task and a test wanting contention passes `paths` explicitly. The failures were
+correct; they were fixed in the helper, not by weakening the rule.
+
+### §226.3 · `maxConcurrentTasks` was the third
+
+With `policy.maxConcurrentTasks: 3`, six workers took six live leases. Now enforced over
+implementer leases only — a verification lease is review, not edit, and is already serialised
+by the independent-verifier rules. An unset or non-positive value means *no limit*, preserving
+prior behaviour rather than silently tightening it. An expired lease frees a slot, so the bound
+is not a dead end.
+
+### §226.4 · The rest of the audit, judged rather than mechanically "fixed"
+
+Most declared fields are documentation: **4 of 10 task fields and 1 of 6 policy keys** are read
+by the coordinator. Each remaining one was judged on its merits:
+
+- `independentVerifierRequired` — redundant. The behaviour is **unconditionally** enforced in
+  code, so the key documents an always-on rule.
+- `verification` — holds shell command strings. Auto-running them would execute arbitrary data
+  as code. **Deliberately left alone.**
+- `runnerIndependent`, `sources`, `risk`, `wave`, `workstream` — consumed by
+  `skills-agent-inventory-check.mjs`, not dead.
+- `doNotInferTaskCompletionFromLocalGreen` — an instruction to humans, not mechanizable.
+
+Real-queue eligibility on a fresh state is **unchanged** at `V5-AUTO-001` after both new rules,
+so no authorized work was newly blocked.
+
+### §226.5 · Autonomous capability, answered question by question
+
+| question | answer |
+|---|---|
+| provider invocation mechanism | **none.** `V5-AUTO-002` is `BLOCKED_EXTERNAL` on "no agent invocation mechanism" and "no credential" |
+| can workers be launched and observed | **no** |
+| is worker identity authenticated | **no** — `SKILLS_AGENT_ID` is self-asserted. With a key, trust records `attested`, but the code states the limit: while runner and worker share a process tree this is **a contract, not an enforced boundary** |
+| authorization enforced across delegated work | **yes, now** — declared blockers veto eligibility (§225.1) |
+| file ownership enforced | **yes, now** — §226.2 |
+| failed / interrupted / duplicated / retried state | **yes** — expired-lease recovery, fail-closed stale-lock reclaim, bounded `maxRetries`, single-claim leases |
+| execution and evidence auditable | **yes** — `history[]`, plus evidence references that must resolve and now must match the task's declared kind |
+| can a blocked task be executed on a fresh clone | **no, now** — verified through the real `claim` command with no `state.json` present |
+
+`policy.requireAttestedIdentity` stays **false**, and deliberately: no runner exists to mint
+tokens, so enabling it would refuse all verification. Flipping it would manufacture a security
+appearance while breaking the system. **The minimum step to real trusted identity is a runner
+process that mints identity tokens and holds `SKILLS_AGENT_ATTESTATION_KEY` where the worker
+cannot read it** — an infrastructure and credential-custody change that is not authorized here.
+
+**Autonomous execution remains NOT operational.** This milestone again made the scheduler
+safer, which is not the same thing.
+
+### §226.6 · Everything else re-verified as still blocked
+
+No owner response has arrived: `MASTER_PRODUCT_DECISIONS.md` still carries exactly two
+`ANSWERED` amendments (`PD-A05`, `PD-A23`) and `decision-log.md` still has no CON-03 entry, with
+no commits to either authority since `527438a`. `CON-03-TYPE`/`-COMMA`/`-ROLLOUT`/`-VOCAB` remain
+pending; the intake and meal-plan vocabularies were **not** merged and the restriction/allergen
+distinction is preserved. `SEC-R2` and `SEC-R3` remain four of five states with END-TO-END
+absent and **not promoted**; `SEC-04` remains not promoted on `F-J-01`'s live-probe requirement;
+3B-1 remains gated on CON-03 **and** SEC-R2; the §7.10/§7.18 conflict is preserved.
+
+`coordinator.test.mjs` **215 → 238**.
+
+**No migration created or executed. No serializer, SQL function, seed, schema, RLS, policy or
+role change. No QA write, live probe or production operation. No credential accessed or
+provisioned. No finding promoted and no evidence count changed. No C1 widening. No guard
+bypassed, no force-push, no history rewrite. Production `nxdbooufqzkpslkcogxc` not contacted.
+PR #1 open, draft, unmerged.**
+
+---
+
+## §227 · The guards that had never been tested, and the one that was blind
+
+Post-Milestone-18 continuation. The queue was fully blocked, so rather than stop on that, the
+question became whether any *existing* control was weaker than its green tick implied. Four CI
+guards carry **no self-test of their own** — `:65` migration hygiene, `:115` ENV-3 static,
+`:222` schema contract, `:237` edge-function JWT posture — and only `:62` had ever been
+mutation-verified. All four were tested by planting a real violation and reverting it.
+
+### §227.1 · Three are genuinely effective
+
+| guard | planted violation | result |
+|---|---|---|
+| `:237` E-09 | a second function set `verify_jwt = false` | exit **1** — *"unexpected verify_jwt = false on: stripe-webhook, ai-coach"* |
+| `:65` ENV-1 | an untracked file in `supabase/migrations` | exit **1** — *"is not clean"* |
+| `:115` ENV-3 | `qa.applied_through` 181 → 175 | exit **1** — *"1 problem(s) in the declaration"* |
+
+Each returned to exit **0** after revert, with a clean tree. `:115` also confirms the QA ref
+`eyqtldjqpgpljlqvpowh` from a tracked source, which is the pre-condition every QA operation is
+supposed to satisfy.
+
+A first attempt at `:115` dropped a **prose note** from `expected_applied.json` and the guard
+correctly did not fire. That exit 0 proved nothing about the guard — it proved the mutation was
+invalid. Recorded because an invalid mutation reads exactly like an effective guard.
+
+### §227.2 · `:222` passes while blind to 31 of 174 write sites
+
+The schema contract guard's own contract reads: *"every `.insert/.update/.upsert({...})` key
+names a real column."* It reads keys only at **brace depth 1** of the payload. Paired mutation:
+
+- **inline** `.upsert({'zzz_bad_inline_col': 1})` → **FAIL**, correctly:
+  *"column `user_profiles.zzz_bad_inline_col` is referenced but does not exist"*
+- **helper** — the same key added to `toSupabase()`, which is spread in at
+  `intake_flow_screen.dart:281` as `.upsert({'id': uid, ..._data.toSupabase()})` → **PASS**, blind
+
+`.insert(payload)` is worse than partial: `body` is the identifier, there is no `{`, `brace`
+never reaches 1, and the site is skipped **in silence**.
+
+**This is not bookkeeping.** `toSupabase()` and `toSupabasePartial()` are the two serializers
+**CON-03** is about, so the guard whose job is "every upsert key names a real column" cannot see
+the functions that finding concerns. A green `:222` was never evidence about them.
+
+The guard now prints its own coverage beside its verdict:
+
+```
+COVERAGE  write sites 174: 143 fully analysed, 11 with a spread (literal keys only),
+                           20 opaque (payload by variable)
+COVERAGE  31 write site(s) contribute column keys this guard CANNOT see.
+          A PASS below does not mean every write key was checked.
+```
+
+**Reported, deliberately not failed.** Thirty-one of 174 sites are in this shape today and
+failing them would break CI on pre-existing code. Resolving a payload across function
+boundaries needs dataflow analysis; it is **not attempted and not disguised as done**. The
+counts are computed, and a test asserts they are *not* hard-coded — a literal would go stale the
+moment a call site is added, which is the precise failure mode this change exists to prevent.
+
+**A correction to my own measurement.** An earlier grep put the blind spot at 19 sites. That was
+Dart-only; the scanner also reads `.ts`, and its own count of **31** is authoritative.
+
+This is the **seventh** control in this programme found to pass while measuring less than it
+appeared to. The preceding six are recorded at §213.2, §221.3, §224.6 and in the
+`negative-control.sh` guard note.
+
+### §227.3 · Everything else re-verified as blocked
+
+Queue: 19 tasks, 16 declaring unresolved blockers (11 owner, 3 governance, 2 external); the
+three blocker-free tasks are `VERIFIED`; **eligible: none**. All four coordinator safeguards
+present. `MASTER_PRODUCT_DECISIONS.md` still carries exactly two `ANSWERED` amendments and
+`decision-log.md` still has no CON-03 entry, so **all four CON-03 decisions remain pending**;
+no storage type was chosen and no serializer or migration was touched. SEC-R2 and SEC-R3 both
+still read *"VERIFIED END-TO-END is absent"* and are unpromoted; SEC-04 unchanged; 3B-1 still
+gated on CON-03 **and** SEC-R2; the §7.10/§7.18 conflict preserved. `workstream/12c-plus-website`
+remains remote-only and was never fetched.
+
+`coordinator.test.mjs` **238 → 244**. Disk re-checked before any expensive operation: **8.8 GiB
+free, 95 % used** — above the ~1.5 GiB floor, so nothing was deleted and no validation weakened.
+
+**No application code, schema, migration, RLS, policy, QA fixture or status change. No QA write,
+live probe or production operation. No credential accessed. No finding promoted. No guard
+weakened to make anything pass. PR #1 open, draft, unmerged.**
+
+### §227.4 · The 31 sites, named — and both CON-03 writes are among them
+
+`--list-unseen` (opt-in; CI output unchanged) names what the counts cover. It must be produced
+**inside** the guard's scanning loop, where the table is already resolved. A standalone
+re-implementation of that walk reported **81** rather than 31, because without the `.from(...)`
+window it also matched Dart's own `Map.update(k, fn, ifAbsent:)` and `List.insert(i, x)` and the
+vendored plugin tree under `linux/flutter/ephemeral/.plugin_symlinks/`. **The guard's 31 is
+authoritative; my reimplementation was wrong by 2.6×.** Recorded because the next person to
+re-derive this number will hit the same trap.
+
+The list confirms the §227.2 claim exactly — **both CON-03 write sites are invisible**:
+
+```
+opaque  user_profiles  update  intake_flow_screen.dart:171  (_data.toSupabasePartial(_step)
+spread  user_profiles  upsert  intake_flow_screen.dart:280  ({'id': uid, ..._data.toSupabase()}
+```
+
+`:171` is the per-step save whose swallowed failure *is* CON-03; `:280` is the final save. Also
+unseen, and worth the owner's attention when the dataflow question is funded: both
+`subscriptions` writes in `supabase/functions/stripe-webhook/index.ts` (`:71` upsert, `:190`
+update — **billing**), `daily_scores` (`score_service.dart:85`), `messages`
+(`messaging_service.dart:165`), and four `coach_packages` writes.
+
+**No site in this list was modified.** Changing any of them would be unauthorized application
+work, and the two `user_profiles` entries are CON-03 itself, which remains blocked on
+`CON-03-TYPE`.

@@ -116,6 +116,29 @@ const schema = deriveSchema();
 const foreignKeys = deriveForeignKeys();
 const relations = new Set([...schema.keys(), ...VIEWS]);
 const found = { missingRelation: new Map(), missingColumn: new Map() };
+// Write-site COVERAGE, not a pass/fail signal. The key check below reads keys
+// only at brace depth 1 of the payload, so `.insert(payload)` yields NO keys --
+// `body` is the identifier, there is no `{`, brace never reaches 1, and the site
+// is skipped in silence. A spread (`{...row, 'user_id': uid}`) is worse: the
+// literal keys ARE checked, so the site looks covered while the spread's keys are
+// not. Verified by paired mutation: an inline bad key FAILS correctly, the same
+// bad key added to `toSupabase()` -- spread in at intake_flow_screen.dart:281 as
+// `.upsert({'id': uid, ..._data.toSupabase()})` -- PASSES. Those two serializers
+// are the subject of CON-03, so this blind spot covers the very functions the
+// finding is about. Reported rather than failed: 19 of 145 sites are in this
+// shape today, and failing them would break CI on pre-existing code. Resolving a
+// payload across functions needs dataflow analysis and is not attempted here.
+const writeSites = { total: 0, inlineLiteral: 0, opaquePayload: 0, hasSpread: 0 };
+// `--list-unseen` names the sites behind the COVERAGE counts, so the blind spot
+// can be audited instead of merely feared. It must come from HERE, inside the
+// scanning loop where the table is already resolved: a standalone
+// re-implementation of this walk over-counted 31 as 81, because it matched
+// Dart's own `Map.update(k, fn, ifAbsent:)` and `List.insert(i, x)` and the
+// vendored plugin tree under `linux/flutter/ephemeral/.plugin_symlinks/`. The
+// `.from(...)` window above excludes all of that; a reimplementation did not.
+// Opt-in, so CI output stays stable.
+const LIST_UNSEEN = process.argv.includes('--list-unseen');
+const unseenSites = [];
 const unresolvableEmbed = new Map();
 const detail = [];
 
@@ -178,6 +201,21 @@ for (const path of ROOTS.flatMap((r) => sources(r))) {
       const end = closing(s, open);
       if (end > 0) {
         const body = s.slice(open, end);
+        writeSites.total++;
+        const opaque = !body.includes('{');
+        const spread = !opaque && body.includes('...');
+        if (opaque) writeSites.opaquePayload++;
+        else {
+          writeSites.inlineLiteral++;
+          if (spread) writeSites.hasSpread++;
+        }
+        if (LIST_UNSEEN && (opaque || spread)) {
+          unseenSites.push({
+            shape: opaque ? 'opaque' : 'spread', table, op: wm[1],
+            at: `${path}:${line}`,
+            payload: body.trim().replace(/\s+/g, ' ').slice(0, 46),
+          });
+        }
         // A key is a column only at brace depth 1 of the payload object; a key
         // deeper than that belongs to a nested jsonb value, not to the table.
         let brace = 0;
@@ -249,9 +287,49 @@ for (const [k, sites] of unresolvableEmbed) {
   sites.forEach((x) => console.log(`           at ${x}`));
 }
 
+const unseen = writeSites.opaquePayload + writeSites.hasSpread;
+console.log(
+  `  COVERAGE  write sites ${writeSites.total}: ${writeSites.inlineLiteral - writeSites.hasSpread} fully analysed, `
+  + `${writeSites.hasSpread} with a spread (literal keys only), ${writeSites.opaquePayload} opaque (payload by variable)`,
+);
+if (LIST_UNSEEN && unseenSites.length) {
+  console.log('\n  Sites whose column keys this guard cannot see:');
+  for (const u of unseenSites.sort((a, b) => a.table.localeCompare(b.table))) {
+    console.log(`    ${u.shape.padEnd(6)} ${u.table.padEnd(24)} ${u.op.padEnd(6)} ${u.at}  ${u.payload}`);
+  }
+  console.log('');
+}
+if (unseen > 0) {
+  console.log(
+    `  COVERAGE  ${unseen} write site(s) contribute column keys this guard CANNOT see. `
+    + 'A PASS below does not mean every write key was checked.',
+  );
+}
+// A RATCHET on the blind spot. `unseen` was computed and PRINTED but never
+// asserted, so a new opaque write site degraded this guard's coverage while CI
+// stayed green -- the same defect class `supabase/tests/security/run.mjs` records
+// at V5 SS205: "a guard that reports without failing is not a guard". The ceiling is
+// the count at the time it was introduced; it may only go DOWN unless somebody
+// raises it deliberately, with a reason.
+const UNSEEN_CEILING = Number(process.env.CONTRACT_UNSEEN_CEILING ?? 31);
+if (unseen > UNSEEN_CEILING) {
+  failures++;
+  console.log(
+    `  FAIL   COVERAGE regressed: ${unseen} unseen write site(s) exceeds the ceiling of ${UNSEEN_CEILING}.`
+    + ' Give the new write site literal column keys so this guard can read them, or'
+    + ' raise CONTRACT_UNSEEN_CEILING deliberately with a recorded reason.'
+    + ' Run with --list-unseen to see exactly which sites are unseen.',
+  );
+}
 console.log(
   failures === 0
-    ? `\nPASS  no unknown relation or column outside the ${allowedRel.size + allowedCol.size}-entry known-violations allowlist\n`
+    // The scope rides ON the verdict line, not only above it. This is the line
+    // that gets grepped and quoted into evidence ledgers, and quoted alone a
+    // bare PASS reads as "every write key was checked", which is false for the
+    // `unseen` sites. Keeping the caveat adjacent is not enough when the
+    // quotable line travels without its context.
+    ? `\nPASS  no unknown relation or column outside the ${allowedRel.size + allowedCol.size}-entry known-violations allowlist`
+      + ` — scope: ${writeSites.inlineLiteral - writeSites.hasSpread} of ${writeSites.total} write sites fully analysed, ${unseen} NOT (see COVERAGE)\n`
     : `\nFAIL  ${failures} contract violation(s)\n`,
 );
 process.exit(failures === 0 ? 0 : 1);

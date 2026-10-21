@@ -616,7 +616,9 @@ was not contacted.**
 ---
 
 ### ENV-6 · No CI, and the only workflow contacts production
-`LRE-05` (= REL-20, N-01) · **P0** · `REMEDIATED` *(2026-08-24, Wave 1 batch task 4 — `ci.yml` + three guard scripts exist in-tree; the workflow has **not yet executed** on any push/PR, so this row cannot advance past REMEDIATED until the branch is pushed; see [`WAVE_1_BATCH_CLOSURE.md`](WAVE_1_BATCH_CLOSURE.md))* · Wave 1
+`LRE-05` (= REL-20, N-01) · **P0** · **`VERIFIED_CLOSED`** *(2026-10-12 — owner ruling §7.25 Ruling A, interpretation A: the row's criterion *"closes at the first PR"* applied literally. Evidence: PR #1, head `822cabf1`, CI run **`38334189040`** (`pull_request`), conclusion `success`, **7 of 7 jobs** `success`. Closed under the **Release / environment** ladder in `QA_CLOSURE_STANDARD.md` §2.1 — *"FIXED IN CODE · **VERIFIED IN CI** — an environment guard that is not mechanized is not a guard"* — both states present: `ci.yml` and the guard scripts are in-tree, and they execute in CI.)* · Wave 1
+
+> **Historical, 2026-08-24 — superseded, retained as the record of that checkpoint.** At Wave 1 batch task 4 this row read `REMEDIATED`, on the grounds that *"`ci.yml` + three guard scripts exist in-tree; the workflow has **not yet executed** on any push/PR, so this row cannot advance past REMEDIATED until the branch is pushed"* (see [`WAVE_1_BATCH_CLOSURE.md`](WAVE_1_BATCH_CLOSURE.md)). **That statement was true then and is not true now**: the workflow has executed on both `push` and `pull_request` many times. The sentence is kept here as history, not as a current claim. The **Business impact** field below likewise describes the state *at filing* — *"has never run in CI"* — and is similarly historical.
 
 | Field | Value |
 |---|---|
@@ -899,7 +901,7 @@ produces meal plans and grocery lists receives **no subject context whatsoever**
 ---
 
 ### EDGE-1 · `notify-coach-email` has no authentication and injects unescaped attacker HTML
-`E-01` · **P0** · `READY_TO_REMEDIATE` (as deletion) / `BLOCKED_DECISION` (as fix) · Wave 5
+`E-01` · **P0** · `REMEDIATED` *(source-level only — see §7.26)* · **REMAINS OPEN — deployed status UNVERIFIED, no closure state claimed** · Wave 5
 
 No auth of any kind; the platform default `verify_jwt = true` is satisfied by the
 **published anon key**. Any internet caller can enumerate the coach roster size, cause an
@@ -908,6 +910,10 @@ interpolated **raw** into a 12 Circle–branded HTML template. A branded phishin
 delivered from the platform's own sender to every coach, repeatable at will. **The
 function has no caller in the codebase.** Recommended: delete it (D-4 in Workstream D).
 Not deployed to QA; **UNVERIFIABLE** whether it is deployed to production.
+
+**Additive note, 2026-10-19 — nothing above rewritten.** **`PD-A13` is answered: option (a), delete.** The source half is complete at `0572cef` — the 71-line function and its `[functions.notify-coach-email]` declaration, removed together because `.github/scripts/check-edge-function-config.sh` fails in **both** directions (its `phantom` check rejects a declared function whose directory is absent). The guard now reports 19 functions, all declaring a JWT posture. The former `BLOCKED_DECISION` **(as fix)** arm is **moot** — option (b) was not chosen.
+
+**This finding is NOT closed, and source deletion is not evidence that a deployed endpoint is gone.** Committed configuration reaches an environment only via `supabase functions deploy`, so the QA/production position above is **unchanged**: still not deployed to QA, still **UNVERIFIABLE** for production. Retiring any deployed instance needs separately authorized operations access and has **not** been attempted. No closure class has ever been ruled for `E-01`; whichever class applies, `QA_CLOSURE_STANDARD.md` §2.1 is explicit that *"`VERIFIED_CLOSED` requires every state its class demands. There are no partial closures"* — and none is claimed here. See §7.26.
 
 ---
 
@@ -3505,3 +3511,106 @@ The six `spec_*` files (133 tests) import nothing from `lib/`: the known copy-of
 [`RELEASE_GATES.md`](RELEASE_GATES.md) ·
 [`QA_CLOSURE_STANDARD.md`](QA_CLOSURE_STANDARD.md) ·
 [`REMEDIATION_PROGRESS.md`](REMEDIATION_PROGRESS.md)
+
+### 7.25 ENV-6 owner ruling and Step 4 approach — 2026-10-12 · governance + CI evidence
+
+This is an additive owner ruling. Historical checkpoint entries above are retained as historical
+records; this section records the current decision and resulting classification. It does not
+authorize production activity, alter Gate 9B, or amend the closure standard.
+
+#### Ruling A — ENV-6: interpretation A adopted
+
+**Owner ruling, 2026-10-12:** apply the criterion literally as written: **“push-triggered runs
+proven; the row's own retest names a PR run — closes at the first PR.”** The criterion contains no
+product-PR qualifier. PR #1 therefore satisfies the “first PR” condition, provided the PR-triggered
+CI evidence is green.
+
+**Evidence checked before ruling:**
+- PR #1 is open, draft, unmerged, and targets `reconcile/12circle-integrated`; its head is
+  `822cabf197519063488b426c9c30e5fa2f3c7f7e`.
+- GitHub's PR-triggered workflow-run lookup for that exact head returns CI run
+  `38334189040` (run 307), conclusion `success`.
+- The run's seven jobs are all `success`: Flutter analyze/test/QA web build; EC-04; Static guards;
+  Live QA suites; Negative control; I-WRK-01; and UIX-1.
+- The registry's existing ENV-6 criterion at §6 / the prior retest note says “closes at the first
+  PR”; the owner ruling chooses the literal reading and does not add a new criterion.
+
+**Disposition:** ENV-6 is **VERIFIED_CLOSED as of 2026-10-12**, under the
+**Release / environment** ladder in `QA_CLOSURE_STANDARD.md` §2.1 (FIXED IN CODE and VERIFIED IN
+CI). The ruling accepts PR #1 as the qualifying PR; it does not claim that every product finding
+is verified, nor does it authorize a merge. The old Wave 1 checkpoint at §6 remains an historical
+record of the status at that checkpoint.
+
+#### Ruling C — per-row acceptance route selected; no blanket Step 4 authorization
+
+**Owner ruling, 2026-10-12:** choose **C1**. For a finding whose closure class requires
+`VERIFIED END-TO-END`, use a **row-specific owner ruling** that names the finding, the exact
+`QA_CLOSURE_STANDARD.md` §2.1 rung, the applicable evidence and CI run, and the scope of the
+acceptance. This follows the limited precedent recorded in §7.13 and §7.18. A green CI run alone
+does not make the owner-acceptance decision, and an acceptance for one row does not extend to
+another row.
+
+**Limits:** C1 is an acceptance method, not blanket authorization to begin a programme-wide Step 4
+phase. It does not itself promote SEC-R2, SEC-R3, or any other finding; each needs its own complete
+evidence and explicit row-specific acceptance before status changes. No production work is included,
+and Gate 9B remains closed.
+
+#### Authority conflict retained — registry §7.10 / §7.25 and QA closure standard
+
+The statement at registry §7.10 that “no safety finding in this programme can reach
+`VERIFIED_CLOSED` before Step 4 runs” is in tension with the per-row precedent in §7.18, where
+`UIX-1` / `M-03` reached `VERIFIED_CLOSED` while the programme-wide Step 4 remained unauthorized.
+**This ruling does not silently amend or strike §7.10's statement.** The conflict is recorded for
+explicit reconciliation. C1 is limited to the per-row acceptance mechanism evidenced by §7.13 and
+§7.18; it does not establish general authority to waive a required state.
+
+#### SEC-04 — no promotion
+
+SEC-04 remains **OPEN**. Migration 124, the running I-MIG-03 class guard, and the d04 §8 live 403
+probe are recorded as satisfying the three named technical requirements; F-J-01 is recorded
+`VERIFIED_CLOSED`. However, neither `QA_CLOSURE_STANDARD.md` §2 nor §3 step 12 expressly defines
+whether `OPEN → VERIFIED_CLOSED` is a permitted direct transition or whether an intermediate
+classification is required. This ruling does not decide that unresolved transition rule. **No
+SEC-04 status promotion is authorized or performed by this entry.**
+
+#### Safety and scope record
+
+No production request, QA write, migration, schema/RLS change, deployment, secret change, release
+gate change, force-push, or merge was performed for these rulings. PR #1 remains draft and unmerged.
+Autonomous provider invocation, credentials, and trusted worker identity remain unestablished; this
+ruling does not claim continuous autonomous execution.
+
+---
+
+### 7.26 `PD-A13` answered and `E-01`’s source half removed — 2026-10-19 · owner ruling + source deletion
+
+One owner ruling and one deletion. **No migration, schema, RLS, policy, grant, role, credential, secret or CI change; production not contacted; no QA read and no QA write; no deployment and no function-retirement command.** No status **count** was moved and **nothing is promoted to** `VERIFIED_CLOSED`.
+
+#### The ruling
+
+- **`PD-A13` = option (a)**, product owner, 2026-10-19, owner column **engineering**. Delete the orphaned `notify-coach-email` Edge Function; do **not** harden it; option (b) not implemented. Recorded in [`decision-log.md`](decision-log.md) and the register row marked `ANSWERED`, per `MASTER_PRODUCT_DECISIONS.md` §2 steps 1 and 2.
+- The ruling is scoped to **source-level deletion only**. It does not authorize deployment, production or QA access, or a live endpoint probe, and it does not retire a deployed instance.
+
+#### What changed in source — `0572cef`
+
+`supabase/functions/notify-coach-email/index.ts` (71 lines) and the 7-line `[functions.notify-coach-email]` block in `supabase/config.toml`. **2 files, 0 insertions, 78 deletions.** Both were required together: the E-09 guard `.github/scripts/check-edge-function-config.sh` fails in **both** directions, so a declared function with no directory breaks CI exactly as an undeclared directory does.
+
+Retained deliberately: `supabase/config.toml:35`, the header comment naming EDGE-1 and EDGE-2 — it explains why declaring `verify_jwt` is **not** a mitigation, and **EDGE-2 is still open and still needs that explanation**. The 27 remaining `notify-coach-email` references in `docs/` are historical workstream evidence and governance records and were left untouched, per §3 and §10.5 on preserving historical records.
+
+Verification run at the commit: `check:functions` 5/5 OK (19 functions); `check:prod-refs` OK; `check:migrations` OK (182 migrations, contiguous 000-181); `git diff --check` clean.
+
+#### §2 step-by-step disposition
+
+| Step | Disposition |
+|---|---|
+| 1 · decision log | **Done** — dated row in [`decision-log.md`](decision-log.md) under "Notable engineering calls", with the security rationale and the rebuild trade-off |
+| 2 · register row | **Done** — amendment block added additively; `PD-A13` row marked `ANSWERED` 2026-10-19 · option (a) · owner engineering. The row’s original **Proceed? = "No"** cell is **preserved unedited**, as `PD-A23`’s was |
+| 3 · registry status | **Done, and deliberately narrow** — `E-01`’s **(as fix)** `BLOCKED_DECISION` arm is moot and its **(as deletion)** arm’s source half is `REMEDIATED`. The finding **remains open**. §2 step 3 as literally written ("move every finding it blocked from `BLOCKED_DECISION` to `READY_TO_REMEDIATE`") does **not** fit: `E-01` was already `READY_TO_REMEDIATE` as deletion, and promoting it would misstate a finding whose live evidence is absent |
+| 4 · progress board | **Done** — Wave 5 row annotated, decision board moved to **Answered: 6 / Open: 70** (A:23), and a change-log entry added |
+| 5 · supersession | **No-op, verified not assumed** — this answer reverses no earlier `decision-log.md` entry. That file holds no prior record of `notify-coach-email`, and its *"Superseded / revised"* section remains empty, which is correct |
+
+#### Open question this subsection deliberately surfaces
+
+The `REMEDIATED` **status text** moved; the **status counts** in [`REMEDIATION_PROGRESS.md`](REMEDIATION_PROGRESS.md) §3 did **not**. That is the same choice §7.16 made, and §3 records the consequence in its own words: the `READY_TO_REMEDIATE` figure *"had been carrying `UIX-1` since §7.16 moved its status text to `REMEDIATED` without moving the count"*. The count composition is not enumerable from the document, so moving it here would be a guess rather than a correction. **Flagged for the owner rather than repeated silently:** which status count, if any, should move for `E-01` — and this paragraph deliberately names **no** bucket for it.
+
+*Correction, 2026-10-19 — this paragraph originally named `READY_TO_REMEDIATE` (177) and `REMEDIATED` (4) as the buckets at issue. That was **not established and is withdrawn.** The verified facts are these. **`PD-A13` option (a) is answered** and the source half is complete at `0572cef`. `E-01`’s pre-ruling status line read `READY_TO_REMEDIATE` **(as deletion)** / `BLOCKED_DECISION` **(as fix)**, so it was a **split row**: ready in its mechanical half, decision-gated in the other. §3’s `BLOCKED_DECISION` note accounts for rows of exactly that shape — *"31 have a mechanical half that is **not** blocked"* — while §3’s table is single-bucket and sums to the canonical 319, so `E-01` occupies exactly one bucket. **Which one cannot be established from these documents:** no bucket’s membership is enumerated anywhere, and only **43 of 319** findings carry an explicit status label at all — the `VERIFIED_CLOSED` note in [`REMEDIATION_PROGRESS.md`](REMEDIATION_PROGRESS.md) §3 makes the same point about the §7 P1 register having *"no per-row status field"*. Replacing one unproven bucket assignment with another would repeat the original error, so neither is asserted here. What needs no count to express it, and is stated on the row itself: **`E-01` remains open pending resolution of its deployed status**, which is still not deployed to QA and still UNVERIFIABLE for production.*

@@ -24,6 +24,17 @@
 > `PD-A05` and `PD-A23` remains undecided. Rationale recorded in
 > [`decision-log.md`](decision-log.md), per §2 below.
 
+> **Amendment, 2026-10-19 — additive, nothing above rewritten.** A third row is now
+> qualified: **`PD-A13` is `ANSWERED`** by the product owner on 2026-10-19 (option
+> **(a)** — delete the orphaned `notify-coach-email` Edge Function rather than harden it).
+> It is an **engineering-owned** decision; the first amendment's statement that no
+> clinical, business, monetization or PAR-Q policy has been chosen is **unchanged and
+> still true**. Every row other than `PD-A05`, `PD-A23` and `PD-A13` remains undecided.
+> Rationale recorded in [`decision-log.md`](decision-log.md), per §2 below. The answer
+> authorizes **source-level deletion only** — it retires no deployed instance and does
+> **not** close `E-01`, which stays open pending the live evidence its closure class
+> demands (`QA_CLOSURE_STANDARD.md` §2.1). Registry record: §7.26.
+
 ---
 
 ## 0. How to read this
@@ -124,7 +135,7 @@ recorded rationale rather than an implementer's choice.*
 | **PD-A10** | **Two parallel AI nutrition backends.** `ai_nutrition/` posts to the NestJS API (well-tested: controller, service, e2e, secret-hygiene specs); `ai_coach/` posts to the `ai-coach` Edge Function with `mode:'nutrition'` (untested). **Both ship in the client.** Until this is answered `API_BASE_URL` cannot be set meaningfully and QA tests whichever path it happens to open | `E-NUT-06`, EB-6, `ENV-8` | (a) NestJS canonical, delete the Edge path; (b) Edge canonical, delete the API; (c) keep both with a documented split | **(a)** — it is the only layer in the repository that already implements the full four-outcome error contract, and it is the only AI surface with tests. But it is **blocked on PD-A17** (the API runs nowhere) | **No** | Julia + engineering | 1/5 |
 | **PD-A11** | **`ai-coach`'s `target_client_id`.** The client sends it on two coach-facing paths; the function destructures only `{message, mode}`, so **a coach asking to analyse a client receives an analysis of the coach.** Fails closed — but produces confidently wrong clinical-sounding output attributed to the wrong person | `F-J-18`, `F-J-19`, `E-11`, `E-CHK-07`, `EC-17` | (a) delete the parameter and the two coach-facing methods; (b) implement delegation behind `is_active_coach_of(target)` | **(a) for beta.** **(b) must not ship without the gate, or it becomes a P0** | **No** | Julia | 5 |
 | **PD-A12** | **`enrich-exercise`.** Dead on arrival — it calls `seed_exercise` under the caller's JWT and 116 correctly revoked it. Every call spends a full Sonnet generation and then fails at the write | `E-03` | (a) retire in favour of `enrich-exercise-content`; (b) rewrite to write as service role | **(a).** `seed_exercise` writes the shared exercise library from caller-supplied `jsonb` and arguably should never be client-callable. **Do not simply re-allowlist it** | **No** | engineering | 5 |
-| **PD-A13** | **`notify-coach-email`.** No authentication; the anon key satisfies the gate; `client_name` interpolated **raw** into a branded HTML template. **It has no caller in the codebase** | EDGE-1 | (a) delete; (b) service-role bearer + HTML escaping + rate limit, and find it a caller | **(a).** Deleting an orphaned mass-email endpoint that accepts attacker HTML is strictly better than hardening it | **No** — but deletion is minutes of work | Julia | 5 |
+| **PD-A13** ✅ **`ANSWERED` 2026-10-19 · option (a) · owner: engineering** *(record: [`decision-log.md`](decision-log.md); registry §7.26 — **source-level deletion only;** `E-01` not closed)* | **`notify-coach-email`.** No authentication; the anon key satisfies the gate; `client_name` interpolated **raw** into a branded HTML template. **It has no caller in the codebase** | EDGE-1 | (a) delete; (b) service-role bearer + HTML escaping + rate limit, and find it a caller | **(a).** Deleting an orphaned mass-email endpoint that accepts attacker HTML is strictly better than hardening it | **No** — but deletion is minutes of work | Julia | 5 |
 | **PD-A14** | **`send-checkin-reminder`.** No auth, no idempotency; N invocations produce N emails and N notifications per client | EDGE-2 | (a) service-role bearer check against a **non-empty** key + per-client-per-week idempotency key; (b) move the sweep into a `SECURITY DEFINER` SQL function invoked by cron, with **no HTTP surface at all** | **(b).** It removes the attack surface entirely rather than guarding it | **No** | Julia | 5 |
 | **PD-A15** | **Redirect-URL allowlist.** `successUrl`/`cancelUrl`/`returnUrl` are taken from the request body and handed to Stripe — an open redirect with a trusted intermediary, with `{CHECKOUT_SESSION_ID}` appended to the attacker's URL | `E-07`, `K-21` | (a) allowlist of `APP_URL` origins; (b) accept caller-controlled redirects | **(a).** There is no product reason for (b) | **No** — but the answer is not in doubt | engineering | 6 |
 | **PD-A16** | **`send-invite-email` authorization.** Any signed-in account — including a brand-new self-registered client — sends a branded 12 Circle invite to any address, with an unvalidated token and `reply_to` set to their own email | `E-15` | (a) require `role='coach'`, verify the token resolves to an invite owned by the caller, rate-limit per sender; (b) accept | **(a)** | **No** | Julia | 5 |

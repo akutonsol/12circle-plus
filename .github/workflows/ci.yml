@@ -19,7 +19,25 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Keyed on the BRANCH NAME, not github.ref, because the two are not the same
+  # across events: a push gives `refs/heads/feat/x` while that branch's open PR
+  # gives `refs/pull/N/merge`. With github.ref the two landed in DIFFERENT
+  # concurrency groups, so cancel-in-progress never deduped them and both ran.
+  #
+  # Observed, not theorised: commit 4c699dd started run 38287567637 (push) at
+  # 17:56:32 and run 38287573997 (pull_request) at 17:56:35. Both executed the
+  # live security suite against the SAME QA project, raced on shared fixtures,
+  # and both failed with what read as authorization holes — "coach CAN open a
+  # pending invite — status=409", "a pending invite grants the coach no data
+  # access — rows=1". Neither was real; they were two runners interleaving.
+  #
+  # `github.head_ref` is the source branch on a pull_request and empty
+  # otherwise; `github.ref_name` is the branch on a push. They agree, so both
+  # events share one group and the later run cancels the earlier.
+  #
+  # This only ever bit a branch with an OPEN PR, which is why the long-running
+  # reconcile branch never saw it.
+  group: ci-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
@@ -161,6 +179,31 @@ jobs:
           # appears for a component whose design input (D2-3) is still pending,
           # so an invented design cannot become indistinguishable from a ratified one.
           node supabase/scripts/check-component-spec-authority.mjs
+
+      - name: Skills-Agent coordinator — lifecycle and independence guards
+        run: |
+          set -euo pipefail
+          # The coordinator enforces that a worker cannot certify its own
+          # implementation. That guard was added after demonstrating the
+          # opposite: one identity claimed, implemented, flipped
+          # SKILLS_AGENT_ROLE=verifier, and verified its own task. A guard with
+          # no standing check decays, and this programme has repeatedly found
+          # exactly that — so the suite runs here, not only on a laptop.
+          #
+          # It drives the real script as a subprocess in disposable temp
+          # sandboxes; it touches no QA project, no credential and no network.
+          node scripts/skills-agent-coordinator.mjs --self-test
+          # Inventory evidence: a cited source must RESOLVE. Added after the
+          # queue was found declaring an authority that does not exist
+          # (V5_WORKSTREAM_REGISTRY) and after a task was verified against a
+          # commit that did not contain its deliverable.
+          node scripts/skills-agent-inventory-check.mjs
+          # Migration <-> wave-plan coverage, reproducible from tracked files.
+          # Replaced a wrong finding ("51 migrations beyond the plan") that came
+          # from matching the pre-assignment table with a narrow regex; the
+          # plan's own final row assigns 132+ "at wave entry, never before".
+          node scripts/check-migration-wave-coverage.mjs --check
+          node tests/skills-agent/coordinator.test.mjs
 
       - name: Function posture (definer search_path, anon EXECUTE)
         run: |

@@ -1,0 +1,1307 @@
+{
+  "summary": {
+    "authored": 184,
+    "range": "000–183",
+    "planAssignedRange": "123-131",
+    "planFloor": 132,
+    "qaRef": "eyqtldjqpgpljlqvpowh",
+    "appliedThrough": 181,
+    "preProgramme": 123,
+    "preAssigned": 9,
+    "outsideByRule": 52,
+    "unexplained": 0,
+    "contiguous": true,
+    "allDeclared": true
+  },
+  "problems": [],
+  "rows": [
+    {
+      "migration": "000",
+      "file": "supabase/migrations/000_baseline_preexisting_tables.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "001",
+      "file": "supabase/migrations/001_full_ecosystem.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "002",
+      "file": "supabase/migrations/002_ecosystem_additions.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "003",
+      "file": "supabase/migrations/003_fk_and_rls_fixes.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "004",
+      "file": "supabase/migrations/004_notifications_and_triggers.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "005",
+      "file": "supabase/migrations/005_custom_exercises.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "006",
+      "file": "supabase/migrations/006_nutrition_logs.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "007",
+      "file": "supabase/migrations/007_add_coaching_mode.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "008",
+      "file": "supabase/migrations/008_onboarding_resume.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "009",
+      "file": "supabase/migrations/009_activate_client_relationships.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "010",
+      "file": "supabase/migrations/010_profile_columns.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "011",
+      "file": "supabase/migrations/011_coaching_calls.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "012",
+      "file": "supabase/migrations/012_nutrition_logs.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "013",
+      "file": "supabase/migrations/013_health_assessment.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "014",
+      "file": "supabase/migrations/014_fix_nutrition_logs_columns.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "015",
+      "file": "supabase/migrations/015_user_profiles_rls.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "016",
+      "file": "supabase/migrations/016_community_groups.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "017",
+      "file": "supabase/migrations/017_action_items.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "018",
+      "file": "supabase/migrations/018_coach_notes_and_goals.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "019",
+      "file": "supabase/migrations/019_admin_dashboard.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "020",
+      "file": "supabase/migrations/020_vendor_portal.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "021",
+      "file": "supabase/migrations/021_event_sessions.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "022",
+      "file": "supabase/migrations/022_payments.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "023",
+      "file": "supabase/migrations/023_coach_plans.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "024",
+      "file": "supabase/migrations/024_client_plan.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "025",
+      "file": "supabase/migrations/025_coach_relationships.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "026",
+      "file": "supabase/migrations/026_coach_client_event_notifications.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "027",
+      "file": "supabase/migrations/027_coach_packages_and_schedule.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "028",
+      "file": "supabase/migrations/028_package_payments.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "029",
+      "file": "supabase/migrations/029_progress_photos_storage_rls.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "030",
+      "file": "supabase/migrations/030_schedule_day_times.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "031",
+      "file": "supabase/migrations/031_classes_seed_and_price.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "032",
+      "file": "supabase/migrations/032_reassign_sarah_demo_to_julia.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "033",
+      "file": "supabase/migrations/033_womens_health.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "034",
+      "file": "supabase/migrations/034_nutrition_water_target.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "035",
+      "file": "supabase/migrations/035_scoring_engine.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "036",
+      "file": "supabase/migrations/036_client_plan_and_coach_media.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "037",
+      "file": "supabase/migrations/037_realtime_tables.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "038",
+      "file": "supabase/migrations/038_stripe_connect_billing.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "039",
+      "file": "supabase/migrations/039_platform_settings.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "040",
+      "file": "supabase/migrations/040_invite_client_source.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "041",
+      "file": "supabase/migrations/041_marketplace_ranking.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "042",
+      "file": "supabase/migrations/042_billing_polish.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "043",
+      "file": "supabase/migrations/043_avatars_bucket.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "044",
+      "file": "supabase/migrations/044_oauth_profile_names.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "045",
+      "file": "supabase/migrations/045_coach_rating_rollup.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "046",
+      "file": "supabase/migrations/046_marketplace_package_pricing.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "047",
+      "file": "supabase/migrations/047_self_guided_plan_generator.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "048",
+      "file": "supabase/migrations/048_plan_generator_supersede.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "049",
+      "file": "supabase/migrations/049_workout_complete_and_pr_notifications.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "050",
+      "file": "supabase/migrations/050_admin_exercise_moderation.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "051",
+      "file": "supabase/migrations/051_set_log_upsert.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "052",
+      "file": "supabase/migrations/052_unique_program_day_titles.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "053",
+      "file": "supabase/migrations/053_workout_idle_seconds.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "054",
+      "file": "supabase/migrations/054_score_penalty.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "055",
+      "file": "supabase/migrations/055_exercise_metadata.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "056",
+      "file": "supabase/migrations/056_pr_respects_flag.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "057",
+      "file": "supabase/migrations/057_exercise_master_schema.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "058",
+      "file": "supabase/migrations/058_exercise_normalized_schema.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "059",
+      "file": "supabase/migrations/059_sync_exercise_relations.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "060",
+      "file": "supabase/migrations/060_exercise_coaching_content.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "061",
+      "file": "supabase/migrations/061_exercise_media_bucket.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "062",
+      "file": "supabase/migrations/062_exercise_slug_and_publish.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "063",
+      "file": "supabase/migrations/063_seed_exercise_engine.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "064",
+      "file": "supabase/migrations/064_seed_exercises_batch1.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "065",
+      "file": "supabase/migrations/065_seed_engine_humanize.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "066",
+      "file": "supabase/migrations/066_seed_exercises_batch2.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "067",
+      "file": "supabase/migrations/067_seed_exercises_batch3.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "068",
+      "file": "supabase/migrations/068_seed_exercises_batch4.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "069",
+      "file": "supabase/migrations/069_seed_exercises_batch5.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "070",
+      "file": "supabase/migrations/070_enrich_exercises_batch1.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "071",
+      "file": "supabase/migrations/071_backfill_exercise_slugs.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "072",
+      "file": "supabase/migrations/072_update_exercise_media.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "073",
+      "file": "supabase/migrations/073_seed_exercises_batch6.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "074",
+      "file": "supabase/migrations/074_ai_coaching_layer.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "075",
+      "file": "supabase/migrations/075_ai_memory_autocapture.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "076",
+      "file": "supabase/migrations/076_ai_coaching_cron.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "077",
+      "file": "supabase/migrations/077_plan_generator_focus_bias.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "078",
+      "file": "supabase/migrations/078_ai_pattern_learning.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "079",
+      "file": "supabase/migrations/079_nutrition_autoadjust_and_coach_signals.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "080",
+      "file": "supabase/migrations/080_accountability_timing.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "081",
+      "file": "supabase/migrations/081_intake_activities.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "082",
+      "file": "supabase/migrations/082_exercise_videos.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "083",
+      "file": "supabase/migrations/083_exercise_content_pipeline.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "084",
+      "file": "supabase/migrations/084_exercise_certification.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "085",
+      "file": "supabase/migrations/085_movement_intelligence_engine.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "086",
+      "file": "supabase/migrations/086_certification_projected.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "087",
+      "file": "supabase/migrations/087_mie_programming_intelligence.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "088",
+      "file": "supabase/migrations/088_mie_rules_and_warmup.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "089",
+      "file": "supabase/migrations/089_mie_decision_intelligence.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "090",
+      "file": "supabase/migrations/090_mie_knowledge_enrichment.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "091",
+      "file": "supabase/migrations/091_mie_attribute_review.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "092",
+      "file": "supabase/migrations/092_die_explanations.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "093",
+      "file": "supabase/migrations/093_program_intelligence.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "094",
+      "file": "supabase/migrations/094_continuous_coaching_engine.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "095",
+      "file": "supabase/migrations/095_predictive_intelligence.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "096",
+      "file": "supabase/migrations/096_communication_engine.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "097",
+      "file": "supabase/migrations/097_coach_exercise_media.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "098",
+      "file": "supabase/migrations/098_coaching_packs.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "099",
+      "file": "supabase/migrations/099_coach_voice.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "100",
+      "file": "supabase/migrations/100_rls_harden_client_data.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "101",
+      "file": "supabase/migrations/101_public_profiles_view.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "102",
+      "file": "supabase/migrations/102_restrict_user_profiles.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "103",
+      "file": "supabase/migrations/103_workout_session_determinism.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "104",
+      "file": "supabase/migrations/104_workout_set_completion.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "105",
+      "file": "supabase/migrations/105_workout_session_warmup.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "106",
+      "file": "supabase/migrations/106_workout_set_identity.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "107",
+      "file": "supabase/migrations/107_workout_session_cursor.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "108",
+      "file": "supabase/migrations/108_workout_session_started_at_authority.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "109",
+      "file": "supabase/migrations/109_auth_user_profile_trigger.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "110",
+      "file": "supabase/migrations/110_profile_demo_flag.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "111",
+      "file": "supabase/migrations/111_replay_corrections.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "112",
+      "file": "supabase/migrations/112_view_grants_read_only.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "113",
+      "file": "supabase/migrations/113_rls_coach_client_relationships.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "114",
+      "file": "supabase/migrations/114_rls_weekly_checkins.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "115",
+      "file": "supabase/migrations/115_profile_privilege_boundary.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "116",
+      "file": "supabase/migrations/116_rpc_execution_security.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "117",
+      "file": "supabase/migrations/117_rls_intelligence_substrate.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "118",
+      "file": "supabase/migrations/118_security_sweep.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "119",
+      "file": "supabase/migrations/119_workout_prescription_contract.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "120",
+      "file": "supabase/migrations/120_workout_set_identity_authority.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "121",
+      "file": "supabase/migrations/121_restore_unique_plan_day_titles.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "122",
+      "file": "supabase/migrations/122_repin_function_search_path.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-PROGRAMME history (< 123, before the plan's first assigned row)",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "123",
+      "file": "supabase/migrations/123_forward_in_place_corrections.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-ASSIGNED to wave 1",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "124",
+      "file": "supabase/migrations/124_wave_2a_security_regressions.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-ASSIGNED to wave 2",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "125",
+      "file": "supabase/migrations/125_scope_decision_trace_reads.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-ASSIGNED to wave 2",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "126",
+      "file": "supabase/migrations/126_parq_risk_flag_typed_append.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-ASSIGNED to wave 2",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "127",
+      "file": "supabase/migrations/127_typed_rule_accumulator_appends.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-ASSIGNED to wave 2",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "128",
+      "file": "supabase/migrations/128_scope_decision_trace_reads_option_a.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-ASSIGNED to wave 2",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "129",
+      "file": "supabase/migrations/129_notification_contract_and_pr_timing.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-ASSIGNED to wave 3A",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "130",
+      "file": "supabase/migrations/130_private_storage_buckets.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-ASSIGNED to wave 3A",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "131",
+      "file": "supabase/migrations/131_identity_constraints.sql",
+      "inManifest": true,
+      "planCoverage": "PRE-ASSIGNED to wave 3A",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "132",
+      "file": "supabase/migrations/132_team_membership_lifecycle.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "133",
+      "file": "supabase/migrations/133_team_membership_consent_origination.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "134",
+      "file": "supabase/migrations/134_search_path_pin_canonical_form.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "135",
+      "file": "supabase/migrations/135_event_attendee_profile_boundary.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "136",
+      "file": "supabase/migrations/136_uniform_active_relationship_predicate.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "137",
+      "file": "supabase/migrations/137_disambiguate_is_active_coach_of_overload.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "138",
+      "file": "supabase/migrations/138_event_registration_integrity.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "139",
+      "file": "supabase/migrations/139_registration_trigger_grant_posture.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "140",
+      "file": "supabase/migrations/140_assessment_access.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "141",
+      "file": "supabase/migrations/141_assessment_access_sleep_hours_type.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "142",
+      "file": "supabase/migrations/142_p2_audit_event_population.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "143",
+      "file": "supabase/migrations/143_p2_audit_incident_population.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "144",
+      "file": "supabase/migrations/144_p2_control_evidence_population.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "145",
+      "file": "supabase/migrations/145_p2_observability_population.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "146",
+      "file": "supabase/migrations/146_p2_identity_mapping_and_read_path.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "147",
+      "file": "supabase/migrations/147_p2_admin_role_audit_emission.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "148",
+      "file": "supabase/migrations/148_p2_grant_posture_and_write_guards.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "149",
+      "file": "supabase/migrations/149_p2_observability_writer_of_record.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "150",
+      "file": "supabase/migrations/150_p2_a6_delta_capture.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "151",
+      "file": "supabase/migrations/151_p2_b1_b4_emitters.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "152",
+      "file": "supabase/migrations/152_p2_audit_read_and_severance_events.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "153",
+      "file": "supabase/migrations/153_admin_graded_authorization.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "154",
+      "file": "supabase/migrations/154_governance_policy_registry.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "155",
+      "file": "supabase/migrations/155_seed_admin_capability_matrix.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "156",
+      "file": "supabase/migrations/156_admin_surface_authorization.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "157",
+      "file": "supabase/migrations/157_admin_integration_connections_view.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "158",
+      "file": "supabase/migrations/158_admin_view_write_grants_revoked.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "159",
+      "file": "supabase/migrations/159_admin_security_events_view.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "160",
+      "file": "supabase/migrations/160_admin_users_and_incidents_views.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "161",
+      "file": "supabase/migrations/161_admin_update_user_name.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "162",
+      "file": "supabase/migrations/162_admin_update_user_name_fix.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "163",
+      "file": "supabase/migrations/163_admin_ai_guardian_registry_read.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "164",
+      "file": "supabase/migrations/164_admin_incident_write_path.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "165",
+      "file": "supabase/migrations/165_admin_content_write_paths.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "166",
+      "file": "supabase/migrations/166_admin_area_overviews.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "167",
+      "file": "supabase/migrations/167_admin_guardian_policy_authoring.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "168",
+      "file": "supabase/migrations/168_governance_registry_grant_tightening.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "169",
+      "file": "supabase/migrations/169_guardian_state.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "170",
+      "file": "supabase/migrations/170_community_moderation.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "171",
+      "file": "supabase/migrations/171_admin_revenue_overview.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "172",
+      "file": "supabase/migrations/172_admin_metric_surfaces.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "173",
+      "file": "supabase/migrations/173_release_status_registry.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "174",
+      "file": "supabase/migrations/174_admin_release_status_authorized_shape.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "175",
+      "file": "supabase/migrations/175_weekly_feedback_subject_integrity.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "176",
+      "file": "supabase/migrations/176_admin_activity_sessions_and_windows.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "177",
+      "file": "supabase/migrations/177_approval_matrix_unknown_mode.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "178",
+      "file": "supabase/migrations/178_admin_revenue_by_stream.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "179",
+      "file": "supabase/migrations/179_admin_coach_clients_served.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "180",
+      "file": "supabase/migrations/180_subscription_cancellation_contract.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "181",
+      "file": "supabase/migrations/181_admin_activity_role_split.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "182",
+      "file": "supabase/migrations/182_scope_exercise_certifications.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "183",
+      "file": "supabase/migrations/183_restore_materialize_program_week_empty_selection_guard.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    }
+  ]
+}

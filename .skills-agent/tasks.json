@@ -1,0 +1,1965 @@
+{
+  "version": 1,
+  "policy": {
+    "queueAuthority": "docs/MASTER_REMEDIATION_WAVES.md + docs/RELEASE_GATES.md + docs/MASTER_REMEDIATION_REGISTRY.md + docs/MASTER_PRODUCT_DECISIONS.md + docs/QA_CLOSURE_STANDARD.md",
+    "queueAuthorityNote": "CORRECTED TWICE. fd86823 seeded 'V5_WORKSTREAM_REGISTRY_AND_MASTER_REMEDIATION_WAVES'; no such registry has ever been committed in any branch or history. Milestone 3 replaced it with three documents, which was still INCOMPLETE: it omitted the authority for owner decisions and for closure evidence. All five documents above declare themselves 'Wave 0 deliverable', state their own scope, and cross-reference each other as companions -- MASTER_REMEDIATION_REGISTRY names all four others. They are a closed, self-declaring set, so naming five rather than three changes no governed decision. Whether a V5_WORKSTREAM_REGISTRY was ever INTENDED remains an open owner question: evidence of absence does not establish intent.",
+    "doNotInferTaskCompletionFromLocalGreen": true,
+    "independentVerifierRequired": true,
+    "requireAttestedIdentity": false,
+    "requireAttestedIdentityNote": "Left false deliberately. No runner exists to mint identity tokens, so enabling it would block all verification. Turn it on when a runner holds SKILLS_AGENT_ATTESTATION_KEY out of worker reach.",
+    "maxConcurrentTasks": 3,
+    "inventoryScopeNote": "SCOPE CORRECTED, Milestone 6. The earlier ten tasks modelled only the autonomous-team infrastructure and the governance blockers -- ZERO product remediation work. The registry's board carries ~177 READY_TO_REMEDIATE rows (canonical total 319 = 37+48+24+177+4+29), none of which were represented. The five tasks added below are the WAVE-LEVEL product work at the current frontier, each traced to the wave plan or the registry. This is still NOT a per-row enumeration of the 177: the registry states that the P1-P3 register carries no per-row status field and its movement is not mechanically countable, so a per-row queue cannot be derived without inventing statuses.",
+    "authorityScope": {
+      "workstream sequencing": "docs/MASTER_REMEDIATION_WAVES.md \u2014 'The dependency-aware execution plan'",
+      "release gates": "docs/RELEASE_GATES.md \u2014 'Gate 0 through Gate 9'",
+      "remediation scope and finding status": "docs/MASTER_REMEDIATION_REGISTRY.md \u2014 'The canonical finding ledger for the whole programme'",
+      "owner decisions": "docs/MASTER_PRODUCT_DECISIONS.md \u2014 'Every unresolved decision extracted from workstreams A-N, deduplicated and owned'",
+      "closure evidence": "docs/QA_CLOSURE_STANDARD.md \u2014 \"What 'closed' means, and what it does not\"; 'Governs every status change in MASTER_REMEDIATION_REGISTRY.md'"
+    }
+  },
+  "tasks": [
+    {
+      "id": "V5-AUTO-001",
+      "summary": "Inspect and document the existing Skills-Agent runner entrypoint and persistence boundary",
+      "role": "architect",
+      "dependsOn": [],
+      "paths": [
+        ".claude/",
+        ".skills-agent/",
+        ".github/",
+        "docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"
+      ],
+      "acceptance": [
+        "Identify actual agent launch command, runner lifecycle, durable workspace, and available credentials without printing secrets",
+        "Cite concrete repository paths and current commit evidence",
+        "Do not modify protected registers, secrets, production configuration, or release gates"
+      ],
+      "maxRetries": 2,
+      "risk": "read-only",
+      "workstream": "autonomous-team",
+      "wave": "n/a",
+      "sources": [
+        "docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"
+      ],
+      "verification": [
+        "node scripts/skills-agent-coordinator.mjs --self-test"
+      ],
+      "evidenceRequired": [
+        "commit: containing the written finding"
+      ],
+      "runnerIndependent": true
+    },
+    {
+      "id": "V5-AUTO-002",
+      "summary": "Implement a provider-specific runner adapter once a real agent invocation mechanism and credential exist",
+      "role": "implementer",
+      "dependsOn": [
+        "V5-AUTO-001"
+      ],
+      "paths": [
+        ".skills-agent/",
+        "scripts/skills-agent-coordinator.mjs",
+        "tests/skills-agent/"
+      ],
+      "acceptance": [
+        "Invoke real agents through a documented provider interface; never simulate a worker",
+        "Receive role and identity from the runner, not from worker-set environment variables",
+        "Pass a bounded task envelope and return a structured result with evidence references"
+      ],
+      "maxRetries": 2,
+      "risk": "bounded-code-change",
+      "workstream": "autonomous-team",
+      "wave": "n/a",
+      "sources": [
+        "docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"
+      ],
+      "verification": [
+        "node tests/skills-agent/coordinator.test.mjs"
+      ],
+      "evidenceRequired": [
+        "a real agent invocation, not a subprocess stand-in"
+      ],
+      "runnerIndependent": false,
+      "blockers": [
+        {
+          "kind": "external",
+          "what": "no agent invocation mechanism",
+          "evidence": "no claude binary on PATH, /usr/local/bin, /opt/homebrew/bin, ~/.claude/local, ~/.local/bin, /Applications or any nvm bin",
+          "action": "provide a supported agent entrypoint"
+        },
+        {
+          "kind": "external",
+          "what": "no credential",
+          "evidence": "ANTHROPIC_API_KEY, CLAUDE_API_KEY, CLAUDE_CODE_OAUTH_TOKEN all unset; ~/.claude/.credentials.json absent",
+          "action": "provision a credential; must not be guessed"
+        }
+      ]
+    },
+    {
+      "id": "V5-AUTO-003",
+      "summary": "Reconcile the live V5 workstream inventory into a dependency-complete queue",
+      "role": "integrator",
+      "dependsOn": [
+        "V5-AUTO-001"
+      ],
+      "paths": [
+        ".skills-agent/tasks.json",
+        "tests/skills-agent/",
+        "docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"
+      ],
+      "acceptance": [
+        "Every task cites an authoritative source document that exists in this checkout",
+        "The graph is acyclic, every dependency resolves, and blocked tasks are not made eligible by removing dependencies",
+        "Source-of-truth conflicts are recorded, not silently resolved"
+      ],
+      "maxRetries": 2,
+      "risk": "inventory-and-planning",
+      "workstream": "autonomous-team",
+      "wave": "n/a",
+      "sources": [
+        "docs/MASTER_REMEDIATION_WAVES.md",
+        "docs/RELEASE_GATES.md",
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "verification": [
+        "node scripts/skills-agent-coordinator.mjs validate",
+        "node tests/skills-agent/coordinator.test.mjs"
+      ],
+      "evidenceRequired": [
+        "commit: containing the reconciled queue and its tests"
+      ],
+      "runnerIndependent": true
+    },
+    {
+      "id": "V5-REC-002",
+      "summary": "Record the two source-of-truth conflicts found during reconciliation and request the authorized resolution for each",
+      "role": "integrator",
+      "dependsOn": [
+        "V5-AUTO-003"
+      ],
+      "paths": [
+        "docs/V5_REGISTER_RECONCILIATION_REQUEST.md"
+      ],
+      "acceptance": [
+        "State the missing V5_WORKSTREAM_REGISTRY authority and what should replace it",
+        "CORRECTED by Milestone 4: the plan does not stop at 131. Its table assigns 123-131 and its final row reads \"132+ | 4+ | Assigned at wave entry, never before\", so migrations >= 132 are outside pre-assignment BY RULE. There is no migration discrepancy to reconcile; state that finding and its evidence instead",
+        "Request, do not perform, any edit to a protected register or to the authoritative wave plan"
+      ],
+      "maxRetries": 2,
+      "risk": "documentation-request",
+      "workstream": "governance",
+      "wave": "0",
+      "sources": [
+        "docs/MASTER_REMEDIATION_WAVES.md",
+        "supabase/expected_applied.json"
+      ],
+      "verification": [
+        "node supabase/scripts/check-migration-manifest.mjs"
+      ],
+      "evidenceRequired": [
+        "commit: containing the recorded conflicts"
+      ],
+      "runnerIndependent": true
+    },
+    {
+      "id": "V5-GOV-001",
+      "summary": "Obtain the governance ruling on QA_CLOSURE_STANDARD.md \u00a72.1 so FG-3's positive legs can be assessed for closure",
+      "role": "owner-decision",
+      "dependsOn": [],
+      "paths": [
+        "docs/QA_CLOSURE_STANDARD.md",
+        "docs/V5_FG3_DECISION_REQUEST.md"
+      ],
+      "acceptance": [
+        "A recorded ruling: approve, reject, or amend the proposed scoping of the pre-fix-failure clause to denial evidence",
+        "No edit to QA_CLOSURE_STANDARD.md without that ruling"
+      ],
+      "maxRetries": 0,
+      "risk": "governance-decision",
+      "workstream": "security-evidence",
+      "wave": "2",
+      "sources": [
+        "docs/V5_FG3_DECISION_REQUEST.md",
+        "docs/QA_CLOSURE_STANDARD.md"
+      ],
+      "verification": [
+        "node supabase/tests/security/d23-fg3-positive-legs.mjs"
+      ],
+      "evidenceRequired": [
+        "a recorded governance ruling"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "governance",
+          "what": "\u00a72.1's pre-fix-failure clause cannot be satisfied by a positive leg where the fix ADDED a guard",
+          "evidence": "docs/QA_CLOSURE_STANDARD.md line 43; evidence complete at d23 37/37",
+          "action": "rule on the decision record"
+        }
+      ]
+    },
+    {
+      "id": "V5-GOV-002",
+      "summary": "Authorize the three FG-header wording edits in MASTER_REMEDIATION_REGISTRY.md",
+      "role": "owner-decision",
+      "dependsOn": [],
+      "paths": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/V5_REGISTER_RECONCILIATION_REQUEST.md"
+      ],
+      "acceptance": [
+        "Authorize or decline each of the three edits individually",
+        "The register is not edited without that authorization"
+      ],
+      "maxRetries": 0,
+      "risk": "protected-register-edit",
+      "workstream": "governance",
+      "wave": "2",
+      "sources": [
+        "docs/V5_REGISTER_RECONCILIATION_REQUEST.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md"
+      ],
+      "verification": [
+        "none \u2014 this is a decision, not an implementation"
+      ],
+      "evidenceRequired": [
+        "explicit owner authorization to edit a protected register"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "edits to a protected register require explicit authorization",
+          "evidence": "headers at :1603 and :1836 state 'NOT implemented' while the wiring runs in CI (step conclusion success)",
+          "action": "authorize edits 1, 2, 3 individually or in any subset"
+        }
+      ]
+    },
+    {
+      "id": "V5-GOV-003",
+      "summary": "Supply the missing design authority for radio, date range, toast and inline error (D2-3)",
+      "role": "owner-decision",
+      "dependsOn": [],
+      "paths": [
+        "docs/V5_DESIGN_AUTHORITY_REQUEST.md",
+        "docs/design/admin-dashboard/COMPONENT-SPECS.md"
+      ],
+      "acceptance": [
+        "Per component: supply the behaviour, rule it redundant or out of V1 scope, name an existing pattern that governs it, or defer",
+        "No component anatomy, interaction state, validation or accessibility behaviour is invented"
+      ],
+      "maxRetries": 0,
+      "risk": "design-authority-decision",
+      "workstream": "design",
+      "wave": "7",
+      "sources": [
+        "docs/V5_DESIGN_AUTHORITY_REQUEST.md",
+        "docs/design/admin-dashboard/COMPONENT-SPECS.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md"
+      ],
+      "verification": [
+        "node supabase/scripts/check-component-spec-authority.mjs"
+      ],
+      "evidenceRequired": [
+        "a recorded design ruling per component"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "the four components are named in COMPONENTS.md but depicted in no approved screen; their behaviour is routed to page files that do not contain them",
+          "evidence": "tokens supply colour/radius/size only",
+          "action": "decide per component"
+        }
+      ]
+    },
+    {
+      "id": "V5-GOV-004",
+      "summary": "Rule whether the audit row's before/after field list is a sufficient specification or a designed diff treatment is required (D2-4)",
+      "role": "owner-decision",
+      "dependsOn": [],
+      "paths": [
+        "docs/V5_DESIGN_AUTHORITY_REQUEST.md"
+      ],
+      "acceptance": [
+        "An explicit ruling: the field list is the specification, or a diff design is required",
+        "The field list is not treated as a designed diff by default"
+      ],
+      "maxRetries": 0,
+      "risk": "design-authority-decision",
+      "workstream": "design",
+      "wave": "7",
+      "sources": [
+        "docs/V5_DESIGN_AUTHORITY_REQUEST.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md"
+      ],
+      "verification": [
+        "none \u2014 this is a decision, not an implementation"
+      ],
+      "evidenceRequired": [
+        "a recorded design ruling"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "COMPONENTS.md names 'audit row with before/after diff'; the screens show the field list once, in a table cell, and draw no diff",
+          "evidence": "docs/V5_DESIGN_AUTHORITY_REQUEST.md",
+          "action": "rule D2-4a or D2-4b"
+        }
+      ]
+    },
+    {
+      "id": "V5-GOV-005",
+      "summary": "Resolve I-MIG-03's authority question and Wave 2A enforcement, which together gate SEC-09",
+      "role": "owner-decision",
+      "dependsOn": [],
+      "paths": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "acceptance": [
+        "I-MIG-03's escalated authority question is ruled",
+        "Wave 2A enforcement is authorized or deferred explicitly",
+        "SEC-09 is not promoted while its recorded gate is unmet"
+      ],
+      "maxRetries": 0,
+      "risk": "governance-decision",
+      "workstream": "security-evidence",
+      "wave": "2A",
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md"
+      ],
+      "verification": [
+        "node supabase/tests/security/migration-durability-guard.mjs"
+      ],
+      "evidenceRequired": [
+        "a recorded ruling on I-MIG-03"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "SEC-09 closes only when I-MIG-03 reaches VERIFIED_CLOSED; the owner ruled FG-1's 5/5 necessary but NOT sufficient",
+          "evidence": "MASTER_REMEDIATION_REGISTRY.md :1721, :2049, :229",
+          "action": "rule the I-MIG-03 authority question and Wave 2A enforcement"
+        },
+        {
+          "kind": "architecture",
+          "what": "I-MIG-03 runs in records mode; enforcement is deferred to Wave 2A",
+          "evidence": "registry :2049",
+          "action": "authorize Wave 2A"
+        }
+      ]
+    },
+    {
+      "id": "V5-INF-001",
+      "summary": "Restore Helix hosted CI so PR #1 and PR #2 can report real check results",
+      "role": "owner-decision",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "Helix Actions billing is resolved so jobs reach step 1",
+        "Both PRs re-run and their terminal results are recorded",
+        "Repository visibility, branch protection and merge state are unchanged"
+      ],
+      "maxRetries": 0,
+      "risk": "external-infrastructure",
+      "workstream": "design-system",
+      "wave": "n/a",
+      "sources": [
+        "docs/V5_HELIX_CI_UNBLOCK_REQUEST.md"
+      ],
+      "verification": [
+        "the hosted run's own job conclusions"
+      ],
+      "evidenceRequired": [
+        "a hosted Helix run that reaches step 1"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "external",
+          "what": "GitHub Actions billing on the akutonsol User account",
+          "evidence": "run 38184333945, job 'Theme contract (12circle)', steps=0, sole failure annotation is the billing message",
+          "action": "resolve at https://github.com/settings/billing"
+        }
+      ]
+    },
+    {
+      "id": "V5-W2A-001",
+      "summary": "Wave 2A \u2014 promote I-MIG-03 from records mode to enforcement",
+      "role": "implementer",
+      "dependsOn": [
+        "V5-GOV-005"
+      ],
+      "paths": [
+        "supabase/tests/security/migration-durability-guard.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "acceptance": [
+        "I-MIG-03 enforces rather than records, with KNOWN_OPEN empty",
+        "No authorization wrapper, search_path pin or security trigger can be dropped by a redefinition without CI failing",
+        "SEC-09's recorded gate is satisfied only if the owner rules it so"
+      ],
+      "maxRetries": 2,
+      "risk": "security-guard-promotion",
+      "workstream": "security",
+      "wave": "2A",
+      "sources": [
+        "docs/MASTER_REMEDIATION_WAVES.md",
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "verification": [
+        "node supabase/tests/security/migration-durability-guard.mjs"
+      ],
+      "evidenceRequired": [
+        "commit: plus a CI run showing the guard enforcing"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "I-MIG-03's authority question is escalated, not decided, and enforcement is deferred to 2A",
+          "evidence": "MASTER_REMEDIATION_REGISTRY.md: 'CI-verified in records mode, enforcement deferred to 2A'",
+          "action": "rule the I-MIG-03 authority question (V5-GOV-005)"
+        }
+      ]
+    },
+    {
+      "id": "V5-W2B-001",
+      "summary": "Wave 2 task 2B \u2014 the class guard, promoted from recording the posture to enforcing it",
+      "role": "implementer",
+      "dependsOn": [
+        "V5-W2A-001"
+      ],
+      "paths": [
+        "supabase/tests/security/"
+      ],
+      "acceptance": [
+        "The guard is written against the pre-2A tree first, as the plan requires",
+        "Assertions are promoted to enforcement only after 2A's live re-verification"
+      ],
+      "maxRetries": 2,
+      "risk": "gated-implementation",
+      "workstream": "security",
+      "wave": "2B",
+      "sources": [
+        "docs/MASTER_REMEDIATION_WAVES.md"
+      ],
+      "verification": [
+        "the guard's own self-test"
+      ],
+      "evidenceRequired": [
+        "commit: plus CI"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "governance",
+          "what": "Wave 2 task 2B is gated and sequenced after 2A",
+          "evidence": "MASTER_REMEDIATION_WAVES.md: '2A -> live re-verification -> 2B's assertions promoted'",
+          "action": "authorize 2B after 2A completes"
+        }
+      ]
+    },
+    {
+      "id": "V5-SECR-001",
+      "summary": "SEC-R2 and SEC-R3 \u2014 supply the VERIFIED END-TO-END rung their AI / safety input class demands",
+      "role": "implementer",
+      "dependsOn": [
+        "V5-GOV-006"
+      ],
+      "paths": [
+        "supabase/tests/ai/"
+      ],
+      "acceptance": [
+        "A CI e2e probe supplies the full chain INCLUDING the failure leg, as \u00a72.1 requires",
+        "An owner ruling establishes that the evidence satisfies the rung for these rows, citing \u00a72.1's class row and \u00a73 step 12 -- the \u00a77.13 / \u00a77.18 pattern",
+        "Neither row is promoted on four of five, and no waiver is substituted for the fifth state"
+      ],
+      "maxRetries": 2,
+      "risk": "end-to-end-verification",
+      "workstream": "ai-safety",
+      "wave": "3B",
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/QA_CLOSURE_STANDARD.md",
+        "docs/REMEDIATION_PROGRESS.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "docs/V5_CLOSURE_CANDIDATES_AND_STEP4_PROPOSAL.md"
+      ],
+      "verification": [
+        "supabase/tests/ai/fj17-parq-risk-contract.sql",
+        "supabase/tests/ai/fj07-rule-accumulator-contract.sql"
+      ],
+      "evidenceRequired": [
+        "an end-to-end run covering the full chain"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "the fifth rung is unevidenced for these two rows. CORRECTION: UIX-1 and M-03 were previously listed here and are NOT blocked -- \u00a77.18 records them VERIFIED_CLOSED on VERIFIED END-TO-END at CI run #49 (2026-08-28). The lines saying otherwise (:2727, :2739) are a dated earlier checkpoint that \u00a77.18 supersedes",
+          "evidence": "registry \u00a77.18 at :2940 and :1060 'M-03 VERIFIED_CLOSED 2026-08-28'; both rows' own evidence rows still read '4 of 5 present' with END-TO-END absent",
+          "action": "choose route C1 (a per-row ruling on the \u00a77.13 pattern, twice exercised) or C2 (define Step 4 as a phase) -- see V5-GOV-006"
+        }
+      ]
+    },
+    {
+      "id": "V5-CON-003",
+      "summary": "CON-03 \u2014 write the forward migration converging from either dietary_restrictions type (route b, already authorized)",
+      "role": "implementer",
+      "dependsOn": [],
+      "paths": [
+        "apps/mobile/lib/"
+      ],
+      "acceptance": [
+        "One serializer, one type",
+        "The forward migration converges from EITHER `text` or `text[]` without inspecting production, per PD-A22 option (b)",
+        "No production inspection is attempted; PD-A22 option (a) remains outstanding for the ROLLOUT plan only"
+      ],
+      "maxRetries": 2,
+      "risk": "data-contract",
+      "workstream": "contract-truth",
+      "wave": "3B",
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "docs/V5_CON03_AUTHORITY_DETERMINATION.md"
+      ],
+      "verification": [
+        "npm run test:contract"
+      ],
+      "evidenceRequired": [
+        "commit: plus the contract suite"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "CORRECTED 2026-10-13 (Milestone 17). The previous text read 'What remains is unwritten migration work, not a blocked decision' and 'no owner ruling needed'. That was written before the target representation was examined, and it is WRONG. PD-A22's Proceed? ('Yes -- via (b)') authorizes DESIGNING a migration that converges from either starting type without inspecting production -- it names no target. CON-03-TYPE (text vs text[]) is an undecided owner decision, and the migration cannot be written without it. Milestones 15 and 16 verified that no governing document answers it: product-bible.md, decision-log.md and WORKOUT_DOMAIN_CONTRACT.md contain no occurrence of 'dietary', so MASTER_PRODUCT_DECISIONS.md section 0.2's 'already answered by governing documents' path does not apply. CON-03-COMMA and CON-03-ROLLOUT are open alongside it, and CON-03-VOCAB is a separate product question.",
+          "evidence": "docs/V5_CON03_STORAGE_CONTRACT_DECISION_MEMO.md sections 2, 5 and 8 (response sheet); MASTER_PRODUCT_DECISIONS.md:6 ('Nothing in this document is decided') with only PD-A05 and PD-A23 carrying ANSWERED amendments; decision-log.md has no CON-03 entry; no CHECK constraint or enum on dietary_restrictions in any of the 182 migrations",
+          "action": "owner answers CON-03-TYPE on the memo's section 8 response sheet (with CON-03-COMMA and CON-03-ROLLOUT); implementation is fully specified by memo section 7 once it lands"
+        }
+      ]
+    },
+    {
+      "id": "V5-W3B-001",
+      "summary": "Wave 3B-1 \u2014 safety inputs: Edge Functions refuse rather than degrade on a PostgREST error",
+      "role": "implementer",
+      "dependsOn": [
+        "V5-CON-003",
+        "V5-SECR-001"
+      ],
+      "paths": [
+        "supabase/functions/"
+      ],
+      "acceptance": [
+        "Every PostgREST destructure checks `error` and refuses rather than degrading",
+        "risk_level ?? 'low' becomes 'not assessed' at all four sites",
+        "Onboarding stops marking itself complete on a failed save"
+      ],
+      "maxRetries": 2,
+      "risk": "behaviour-change",
+      "workstream": "error-contract",
+      "wave": "3B",
+      "sources": [
+        "docs/MASTER_REMEDIATION_WAVES.md"
+      ],
+      "verification": [
+        "npm run test:contract",
+        "node supabase/tests/security/run.mjs"
+      ],
+      "evidenceRequired": [
+        "commit: plus CI"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "architecture",
+          "what": "3B-1 depends on CON-03 and SEC-R2. CORRECTED: CON-03 is NOT decision-blocked -- its route is authorized (PD-A22 option b) and merely unwritten. SEC-R2 is the binding constraint: its row still reads '4 of 5 present' with VERIFIED END-TO-END absent, and an independent audit records the same.",
+          "evidence": "MASTER_REMEDIATION_WAVES.md:287 'Depends on CON-03 ... and on SEC-R2'; WAVE_3B_WRK07_EC11_EC05_AUDIT.md:96; V5_CON03_AUTHORITY_DETERMINATION.md",
+          "action": "write CON-03's migration (authorized), and resolve SEC-R2 via a live probe plus its per-row C1 ruling"
+        }
+      ]
+    },
+    {
+      "id": "V5-GOV-006",
+      "summary": "Choose how the VERIFIED END-TO-END rung is authorized: a per-row ruling (the exercised \u00a77.13/\u00a77.18 route) or a defined Step 4 phase",
+      "role": "owner-decision",
+      "dependsOn": [],
+      "paths": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/QA_CLOSURE_STANDARD.md"
+      ],
+      "acceptance": [
+        "Route C1 or C2 is chosen",
+        "If C1: the ruling names the rows, cites \u00a72.1's class row and \u00a73 step 12, and is confined to those rows as \u00a77.13's pattern requires",
+        "If C2: Step 4's entry criteria, approver, scope, and recording mechanism are stated",
+        "Either way, Gate 9B is not opened and no release gate changes"
+      ],
+      "maxRetries": 0,
+      "risk": "governance-definition",
+      "workstream": "governance",
+      "wave": "n/a",
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/QA_CLOSURE_STANDARD.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "docs/V5_CLOSURE_CANDIDATES_AND_STEP4_PROPOSAL.md"
+      ],
+      "verification": [
+        "none -- this is a governance definition, not an implementation"
+      ],
+      "evidenceRequired": [
+        "a recorded definition and approval authority for Step 4"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "Step 4 is named once in all of docs/ and never defined -- BUT the rung has been satisfied twice without it, by a per-row owner ruling plus a CI job (\u00a77.13 EC-01, \u00a77.18 UIX-1/M-03). So the question is which route applies, not merely 'define the phase'. A conflict is also recorded: :1805's 'no safety finding can reach VERIFIED_CLOSED before Step 4 runs' is inconsistent with \u00a77.18's outcome",
+          "evidence": "registry:1802 names Step 4 once; \u00a77.13 'explicitly confined to EC-01'; \u00a77.18 'extends \u00a77.13's standard to this rung for this row'",
+          "action": "choose C1 or C2, and resolve the :1805 conflict"
+        }
+      ]
+    },
+    {
+      "id": "V5-GOV-007",
+      "summary": "Rule the status-vocabulary gap: how to record a row holding every state but VERIFIED END-TO-END",
+      "role": "owner-decision",
+      "dependsOn": [],
+      "paths": [
+        "docs/QA_CLOSURE_STANDARD.md",
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "acceptance": [
+        "Either (i) a status is added to \u00a72 for 'every state but END-TO-END', or (ii) the rows stay understated until Step 4 closes them",
+        "No sixth status is invented without this ruling",
+        "The rows are not moved to REMEDIATED or RETEST_REQUIRED, both of which the registry records as FALSE for them"
+      ],
+      "maxRetries": 0,
+      "risk": "governance-decision",
+      "workstream": "governance",
+      "wave": "n/a",
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/QA_CLOSURE_STANDARD.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md"
+      ],
+      "verification": [
+        "none -- this is a governance decision"
+      ],
+      "evidenceRequired": [
+        "a recorded ruling, (i) or (ii)"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "\u00a72's status table has no term for four-of-five. REMEDIATED means 'not yet retested' and RETEST_REQUIRED means 'live assertion outstanding'; the registry records BOTH as false for these rows, and inventing a sixth status is a governance decision",
+          "evidence": "MASTER_REMEDIATION_REGISTRY.md:1815-1828 'The rows therefore stay at READY_TO_REMEDIATE -- an understatement ... The owner is asked to choose: (i) add a status to \u00a72 ... or (ii) leave the rows understated until Step 4 closes them'",
+          "action": "rule (i) or (ii)"
+        }
+      ]
+    },
+    {
+      "id": "V5-PROM-001",
+      "summary": "SEC-04 \u2014 reclassify out of OPEN on its satisfied evidence, once the ladder transition is ruled",
+      "role": "owner-decision",
+      "dependsOn": [],
+      "paths": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "acceptance": [
+        "All three requirements named in the row's missing-evidence clause are confirmed present",
+        "The owner rules which state SEC-04 may move to from OPEN",
+        "No promotion to VERIFIED_CLOSED unless \u00a72's ladder permits OPEN to reach it directly"
+      ],
+      "maxRetries": 0,
+      "risk": "protected-register-edit",
+      "workstream": "security",
+      "wave": "2",
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/QA_CLOSURE_STANDARD.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "docs/V5_CLOSURE_CANDIDATES_AND_STEP4_PROPOSAL.md"
+      ],
+      "verification": [
+        "node supabase/tests/security/run.mjs"
+      ],
+      "evidenceRequired": [
+        "owner authorization to edit the protected register, plus the class-state evidence per row"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "the three requirements its own clause names are MET -- migration 124 present, the I-MIG-03 class guard exists and runs in CI, and d04's live 403 probe covers materialize_program_week -- but the row sits at OPEN, defined as 'Suspected; needs a probe or a decision before it can be classified'",
+          "evidence": "registry:1585 names the three; :1681-1686 records the owner ruling for reading B ('I-MIG-03 class guard', not its closure); :360 F-J-01 VERIFIED_CLOSED; :1719 records SEC-04 as OPEN",
+          "action": "rule which state SEC-04 may move to from OPEN, then authorize the protected-register edit"
+        }
+      ]
+    },
+    {
+      "id": "V5-PROM-002",
+      "summary": "ENV-6 \u2014 promote from REMEDIATED; its stated criterion 'closes at the first PR' is satisfied",
+      "role": "owner-decision",
+      "dependsOn": [],
+      "paths": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "acceptance": [
+        "The owner accepts, or rejects, PR #1 as satisfying the row's 'first PR' criterion",
+        "If accepted, ENV-6 is promoted from REMEDIATED in the protected register",
+        "No other row is promoted alongside it"
+      ],
+      "maxRetries": 0,
+      "risk": "protected-register-edit",
+      "workstream": "environment",
+      "wave": "1",
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/QA_CLOSURE_STANDARD.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "docs/V5_CLOSURE_CANDIDATES_AND_STEP4_PROPOSAL.md"
+      ],
+      "verification": [
+        "the PR's own pull_request CI run conclusions"
+      ],
+      "evidenceRequired": [
+        "owner authorization to edit the protected register"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "the criterion is a single mechanically checkable condition and it is MET: 15 pull_request CI runs recorded, 9 successful, and PR #1 is the repository's only and first pull request. What remains is a READING -- the criterion says 'the first PR' without qualifying whether an infrastructure PR counts",
+          "evidence": "registry:1594 'ENV-6 (push-triggered runs proven; the row's own retest names a PR run -- closes at the first PR)'; :1523 ENV-6 REMEDIATED; gh: PR #1 created 2026-10-12T17:45:05Z, run 38330259334 all seven jobs green",
+          "action": "rule whether PR #1 satisfies 'the first PR', then authorize the protected-register edit"
+        }
+      ]
+    },
+    {
+      "id": "V5-SEC-ODQ2",
+      "role": "implementer",
+      "summary": "Add the active-relationship guard to assign_nutrition_plan (QAX-SEC-01) once OD-QAX-2 is authorized",
+      "dependsOn": [],
+      "paths": [
+        "supabase/migrations/",
+        "supabase/expected_applied.json",
+        "supabase/tests/qa_exhaustion/"
+      ],
+      "acceptance": [
+        "Guard placed INSIDE the definer function, before the supersede UPDATE",
+        "Unrelated caller refused with 42501 and the victim active plan is unchanged",
+        "A coach-created pending row does not authorize; cancelled does not authorize",
+        "An active coach still assigns successfully (positive control)",
+        "search_path, grants and COMMENT preserved per the Function Replacement Rule"
+      ],
+      "verification": [
+        "node supabase/scripts/check-function-posture.mjs",
+        "npm run check:guards",
+        "node supabase/scripts/check-migration-manifest.mjs"
+      ],
+      "evidenceRequired": [
+        "commit: the migration and its atomic pending declaration",
+        "replay probe output for all six cases"
+      ],
+      "maxRetries": 2,
+      "risk": "authorization-change",
+      "workstream": "security",
+      "wave": "n/a",
+      "sources": [
+        "docs/QA_AUTONOMOUS_EXHAUSTION_FINAL_REPORT.md",
+        "supabase/migrations/131_identity_constraints.sql"
+      ],
+      "runnerIndependent": false,
+      "blockers": [
+        {
+          "kind": "owner",
+          "decision": "OD-QAX-2",
+          "what": "may a coach assign to a pending client - Option A or a narrowed B",
+          "evidence": "docs/QA_AUTONOMOUS_EXHAUSTION_FINAL_REPORT.md:179",
+          "action": "owner answers OD-QAX-2 and it reaches implementation_authorized"
+        }
+      ]
+    },
+    {
+      "id": "V5-SEC-OD14",
+      "role": "implementer",
+      "summary": "Tighten the six QAX-SEC-03 coach write arms and handle non-conforming rows, once OD-14 is authorized",
+      "dependsOn": [],
+      "paths": [
+        "supabase/migrations/",
+        "supabase/expected_applied.json",
+        "apps/mobile/test/unit/rls_policy_shape_guard_test.dart"
+      ],
+      "acceptance": [
+        "All six policies tightened by ALTER POLICY, both coaching_calls policies accounted for",
+        "coach_video_responses treated explicitly as in or out of scope per CR-4",
+        "Existing non-conforming rows identified without mutation, per the chosen quarantine option",
+        "SEC-G1 and SEC-G2 made ALTER-aware and baselines lowered to the re-derived targets IN THE SAME CHANGE"
+      ],
+      "verification": [
+        "cd apps/mobile && flutter test test/unit/rls_policy_shape_guard_test.dart",
+        "npm run check:guards",
+        "node supabase/scripts/check-migration-manifest.mjs"
+      ],
+      "evidenceRequired": [
+        "commit: migration + guard update together",
+        "re-derived SEC-G1/SEC-G2 counts recorded"
+      ],
+      "maxRetries": 2,
+      "risk": "authorization-change",
+      "workstream": "security",
+      "wave": "n/a",
+      "sources": [
+        "docs/F21_BLAST_RADIUS.md",
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "runnerIndependent": false,
+      "blockers": [
+        {
+          "kind": "owner",
+          "decision": "OD-14",
+          "what": "programme creation authority, the active-relationship requirement, and treatment of existing rows",
+          "evidence": "docs/F21_BLAST_RADIUS.md:181",
+          "action": "owner answers all three OD-14 questions and it reaches implementation_authorized"
+        }
+      ]
+    },
+    {
+      "id": "V5-EVD-SEC02",
+      "role": "integrator",
+      "summary": "Apply the QAX-SEC-02 evidence-registration proposal (Evidence-cell annotation plus a new registry section)",
+      "dependsOn": [],
+      "paths": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "acceptance": [
+        "Evidence cell cites 136 to 137, SEC-PHI-9 in d10, CI run 38334189040 at 822cabf, REVOKE-G1 plus REVOKE-G3",
+        "A new section records the two-id identity and why ancestor CI is admissible here",
+        "QAX-SEC-02 remains OPEN - no status change and no closure claim"
+      ],
+      "verification": [
+        "git diff --check",
+        "grep -c \"QAX-SEC-02\" docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "evidenceRequired": [
+        "commit: the registry annotation only"
+      ],
+      "maxRetries": 1,
+      "risk": "register-edit",
+      "workstream": "security",
+      "wave": "n/a",
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "supabase/tests/security/d10-p1-profile-and-status-boundaries.mjs"
+      ],
+      "runnerIndependent": true,
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "edits to a protected register require explicit authorization",
+          "evidence": "docs/MASTER_PRODUCT_DECISIONS.md:280 five-step process",
+          "action": "owner authorizes the registry annotation"
+        }
+      ]
+    },
+    {
+      "id": "V5-EVD-SEC08",
+      "role": "implementer",
+      "summary": "Register a standing live lifecycle probe proving a non-active coach_team_members row fails is_team_lead_of and may_notify",
+      "dependsOn": [],
+      "paths": [
+        "supabase/tests/security/"
+      ],
+      "acceptance": [
+        "One case per ADR status: invited, active, suspended, revoked",
+        "Both helpers asserted independently so one cannot mask the other",
+        "No-membership negative control denies and does not error",
+        "PHI control per D1(iii): the roster view exposes only its non-PHI columns"
+      ],
+      "verification": [
+        "node supabase/scripts/check-function-posture.mjs"
+      ],
+      "evidenceRequired": [
+        "a live run id for the new probe"
+      ],
+      "maxRetries": 2,
+      "risk": "qa-write",
+      "workstream": "security",
+      "wave": "n/a",
+      "sources": [
+        "docs/adr/ADR-W1-001-team-membership-lifecycle.md",
+        "supabase/migrations/132_team_membership_lifecycle.sql"
+      ],
+      "runnerIndependent": false,
+      "blockers": [
+        {
+          "kind": "external",
+          "what": "invited to active has no acceptance step, so a fixture cannot reach active through a product path and must be seeded as service_role",
+          "evidence": "docs/adr/ADR-W1-001-team-membership-lifecycle.md:42",
+          "action": "QA write authorization"
+        },
+        {
+          "kind": "governance",
+          "what": "QA_CLOSURE_STANDARD step 7 - apply or probe only when the wave authorizes it",
+          "evidence": "docs/QA_CLOSURE_STANDARD.md:82",
+          "action": "wave authorization"
+        }
+      ]
+    },
+    {
+      "id": "V5-VER-STATIC",
+      "role": "architect",
+      "summary": "Re-verify the offline guard and checker suite at the current HEAD and record exact exit codes",
+      "dependsOn": [],
+      "paths": [
+        "docs/QA_CLOSURE_STANDARD.md"
+      ],
+      "acceptance": [
+        "Each command run from the repository root with its exit code observed, not inferred",
+        "Report distinguishes local static results from CI and from live evidence"
+      ],
+      "verification": [
+        "node supabase/tests/security/migration-durability-guard.mjs --self-test",
+        "npm run check:guards",
+        "node supabase/scripts/check-migration-manifest.mjs",
+        "node supabase/scripts/check-function-posture.mjs",
+        "npm run test:contract",
+        "node scripts/skills-agent-coordinator.mjs --self-test"
+      ],
+      "evidenceRequired": [
+        "the command table with observed exit codes"
+      ],
+      "maxRetries": 1,
+      "risk": "read-only",
+      "workstream": "security",
+      "wave": "n/a",
+      "sources": [
+        "docs/QA_CLOSURE_STANDARD.md"
+      ],
+      "runnerIndependent": true
+    },
+    {
+      "id": "V5-GRD-001",
+      "role": "implementer",
+      "workstream": "guard",
+      "wave": "n/a",
+      "risk": "comment-only",
+      "summary": "Correct the guard header's summary claim, which is broader than the code it describes",
+      "dependsOn": [],
+      "paths": [
+        "scripts/guard-protected-paths.mjs"
+      ],
+      "acceptance": [
+        "The header states the plausibility carve-outs (empty, multi-line, >4096) that the operating-model doc already states",
+        "The header states that a destination embedded after non-protected leading text is not seen",
+        "No runtime behaviour changes: the six-case corpus and all probes return identical verdicts",
+        "The content-bearing-key limitation and the Bash limitation remain stated"
+      ],
+      "verification": [
+        "node --check scripts/guard-protected-paths.mjs",
+        "npm run guard:selftest",
+        "git diff --stat -- scripts/guard-protected-paths.mjs"
+      ],
+      "evidenceRequired": [
+        "before/after verdict table over the probe corpus proving behaviour is unchanged"
+      ],
+      "maxRetries": 2,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/V5_INDEPENDENT_REVIEW_PACKAGE_2026-10-21.md",
+        "docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "V5-GRD-002",
+      "role": "implementer",
+      "workstream": "guard",
+      "wave": "n/a",
+      "risk": "test-only",
+      "summary": "Give the protected-path guard a --self-test so its regression corpus is durable rather than ad-hoc",
+      "dependsOn": [
+        "V5-GRD-001"
+      ],
+      "paths": [
+        "scripts/guard-protected-paths.mjs",
+        "package.json"
+      ],
+      "acceptance": [
+        "All six formerly-permitted payload shapes are asserted DENIED",
+        "Realistic spellings (./, absolute, .. traversal, double slash, trailing space, unknown key) asserted DENIED",
+        "False-positive cases (content quoting or equalling a protected path) asserted ALLOWED",
+        "Fail-closed on absent, malformed, missing-key and non-array config asserted DENIED",
+        "The test runs offline, needs no secrets, and uses a temp dir it removes",
+        "Exits non-zero on any failed assertion"
+      ],
+      "verification": [
+        "npm run guard:selftest",
+        "npm run flow:selftest",
+        "npm run check:guards"
+      ],
+      "evidenceRequired": [
+        "exact command, exit status and assertion count"
+      ],
+      "maxRetries": 2,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/V5_INDEPENDENT_REVIEW_PACKAGE_2026-10-21.md"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "V5-GRD-003",
+      "role": "implementer",
+      "workstream": "guard",
+      "wave": "n/a",
+      "risk": "guard-hardening",
+      "summary": "Treat an empty `protected` array as malformed so the guard cannot silently protect nothing",
+      "dependsOn": [
+        "V5-GRD-002"
+      ],
+      "paths": [
+        "scripts/guard-protected-paths.mjs"
+      ],
+      "acceptance": [
+        "An empty `protected` array denies rather than allows, the one fail-open shape the review found",
+        "The documented exception mechanism (removing one root, or `exceptions`) still works",
+        "Asserted by the --self-test",
+        "Disclosed as a behaviour change, revertible by one condition"
+      ],
+      "verification": [
+        "npm run guard:selftest",
+        "npm run check:guards"
+      ],
+      "evidenceRequired": [
+        "before/after verdict for the empty-array config"
+      ],
+      "maxRetries": 2,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/V5_INDEPENDENT_REVIEW_PACKAGE_2026-10-21.md"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "V5-GRD-VER",
+      "role": "integrator",
+      "workstream": "guard",
+      "wave": "n/a",
+      "risk": "verification",
+      "summary": "Independently verify V5-GRD-001..003 against the artifacts, not against the implementer conclusion",
+      "dependsOn": [
+        "V5-GRD-003"
+      ],
+      "paths": [],
+      "acceptance": [
+        "The diff is read and confirmed in scope",
+        "The six-case corpus is re-run from outside the self-test",
+        "The self-test is confirmed to fail when an assertion is broken (it is not inert)",
+        "Protected roots hashed identical before and after"
+      ],
+      "verification": [
+        "npm run guard:selftest",
+        "npm run flow:selftest",
+        "npm run check:guards",
+        "node supabase/scripts/check-migration-manifest.mjs"
+      ],
+      "evidenceRequired": [
+        "independent re-run output, and proof the self-test is not inert"
+      ],
+      "maxRetries": 1,
+      "runnerIndependent": true,
+      "sources": [
+        ".skills-agent/tasks.json"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "V5-GOV-008",
+      "role": "architect",
+      "workstream": "governance",
+      "wave": "n/a",
+      "risk": "analysis-only",
+      "summary": "State CR-1 precisely: MASTER_PRODUCT_DECISIONS.md has 26 PD-A* rows and zero OD-* rows, so no OD-* id can be marked ANSWERED there",
+      "dependsOn": [],
+      "paths": [
+        "docs/V5_AUTONOMOUS_PHASE_2026-10-21_FINDINGS.md"
+      ],
+      "acceptance": [
+        "The answered-decision mechanism is quoted from the register, including its documented procedure",
+        "The absence of OD-* rows is measured, not asserted",
+        "The required human action is the smallest actionable one",
+        "No protected register is edited"
+      ],
+      "verification": [
+        "grep counts reproduced in the finding",
+        "git status --porcelain -- docs/MASTER_PRODUCT_DECISIONS.md is empty"
+      ],
+      "evidenceRequired": [
+        "measured row counts and the register line that defines the procedure"
+      ],
+      "maxRetries": 1,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        ".skills-agent/decisions.json"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "V5-GOV-009",
+      "role": "owner-decision",
+      "workstream": "governance",
+      "wave": "n/a",
+      "risk": "source-of-truth-conflict",
+      "summary": "QAX-SEC-03 is Owner?=no in registry 7.23 but OD-14 in the decision ledger claims to block it",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "Conflict stated with both citations",
+        "Not resolved by inference",
+        "Smallest owner action identified"
+      ],
+      "verification": [
+        "both citations re-read at the stated lines"
+      ],
+      "evidenceRequired": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md 7.23 row and .skills-agent/decisions.json OD-14.blocks"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        ".skills-agent/decisions.json"
+      ],
+      "blockers": [
+        {
+          "kind": "governance",
+          "what": "whether QAX-SEC-03 requires OD-14 or is implementable without an owner decision",
+          "evidence": "registry 7.23 Owner?=no vs OD-14.blocks=[QAX-SEC-03,F-21]",
+          "action": "owner states which source governs; do not reconcile these documents silently"
+        }
+      ]
+    },
+    {
+      "id": "V5-BASH-001",
+      "role": "architect",
+      "workstream": "guard",
+      "wave": "n/a",
+      "risk": "analysis-only",
+      "summary": "Map the Bash write exposure and propose a bounded remediation with rollback, without changing shell permissions now",
+      "dependsOn": [],
+      "paths": [
+        "docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"
+      ],
+      "acceptance": [
+        "Exposure demonstrated, not asserted",
+        "Mitigation options listed with their cost to legitimate autonomous work",
+        "No permissions.deny rule added and no shell access disabled under this task",
+        "Recorded as a proposal, clearly separate from an approved decision"
+      ],
+      "verification": [
+        "npm run check:guards",
+        "git diff -- .claude/settings.json shows no permissions change"
+      ],
+      "evidenceRequired": [
+        "the demonstration, and the proposal text"
+      ],
+      "maxRetries": 1,
+      "runnerIndependent": true,
+      "sources": [
+        "scripts/guard-protected-paths.mjs",
+        "docs/AUTONOMOUS_TEAM_OPERATING_MODEL.md"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "V5-MIG-VER",
+      "role": "architect",
+      "workstream": "security",
+      "wave": "n/a",
+      "risk": "read-only",
+      "summary": "Verify migration 182/183 manifest expectations, bucket completeness and 183 integrity since its commit",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "Every authored version above the frontier is declared in exactly one bucket",
+        "Every pending declaration has a file",
+        "183 is byte-identical to the commit that introduced it",
+        "No migration is applied and no manifest is edited"
+      ],
+      "verification": [
+        "node supabase/scripts/check-migration-manifest.mjs",
+        "npm run check:migrations",
+        "git diff HEAD -- supabase/migrations/"
+      ],
+      "evidenceRequired": [
+        "frontier, pending set, and the 183 blob id"
+      ],
+      "maxRetries": 1,
+      "runnerIndependent": true,
+      "sources": [
+        "supabase/expected_applied.json"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "V5-COORD-001",
+      "role": "implementer",
+      "workstream": "coordinator",
+      "wave": "n/a",
+      "risk": "cli-addition",
+      "summary": "validate flags a blocker-vetoed task sitting in READY but the CLI offers no way to record its blocked status",
+      "dependsOn": [],
+      "paths": [
+        "scripts/skills-agent-coordinator.mjs"
+      ],
+      "acceptance": [
+        "A task whose declared blocker vetoes it can be moved to its BLOCKED_* status without a lease",
+        "The command refuses a task that has no unresolved declared blocker, so it cannot be used to park runnable work",
+        "validate stops reporting drift for a task so recorded",
+        "Asserted by the existing --self-test"
+      ],
+      "verification": [
+        "npm run flow:selftest",
+        "npm run flow:validate",
+        "npm run flow"
+      ],
+      "evidenceRequired": [
+        "before/after flow:validate output for V5-GOV-009"
+      ],
+      "maxRetries": 2,
+      "runnerIndependent": true,
+      "sources": [
+        "scripts/skills-agent-coordinator.mjs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "V5-EVD-MAP",
+      "role": "architect",
+      "workstream": "security",
+      "wave": "n/a",
+      "risk": "read-only",
+      "summary": "Map QAX-SEC-01/02/03/08 to their landed remediations and separate code defects from registration gaps",
+      "dependsOn": [],
+      "paths": [
+        "docs/V5_AUTONOMOUS_PHASE_2026-10-21_FINDINGS.md"
+      ],
+      "acceptance": [
+        "Each finding classified as code defect, registration gap, or governance block, with a migration citation or its absence measured",
+        "QAX-SEC-02 traced to migration 136 and owner decision D3",
+        "QAX-SEC-08 traced to migrations 132/133 and owner decision D1(i)-(iii)",
+        "QAX-SEC-01 and QAX-SEC-03 confirmed to have NO authored migration",
+        "No finding status changed and no protected register edited"
+      ],
+      "verification": [
+        "grep of each cited migration header",
+        "git status --porcelain -- docs/MASTER_REMEDIATION_REGISTRY.md is empty"
+      ],
+      "evidenceRequired": [
+        "artifact: findings document section 11 with migration and line citations"
+      ],
+      "maxRetries": 1,
+      "runnerIndependent": true,
+      "sources": [
+        "supabase/migrations/136_uniform_active_relationship_predicate.sql",
+        "docs/V5_SECURITY_FOUNDATION_WAVE1_AUTHORIZATION.md",
+        "docs/MASTER_REMEDIATION_REGISTRY.md"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "V5-SEC-PLAN",
+      "role": "architect",
+      "workstream": "security",
+      "wave": "n/a",
+      "risk": "read-only",
+      "summary": "Prepare implementation plans and regression criteria for QAX-SEC-01 and QAX-SEC-03 without implementing them",
+      "dependsOn": [],
+      "paths": [
+        "docs/V5_AUTONOMOUS_PHASE_2026-10-21_FINDINGS.md"
+      ],
+      "acceptance": [
+        "Each plan names its mechanism and the migration that supplies the pattern",
+        "Regression criteria include a positive control and the Function Replacement Rule constraints",
+        "Migration numbers are explicitly NOT pre-assigned, per waves section 0.2",
+        "No migration authored and no manifest edited"
+      ],
+      "verification": [
+        "git status --porcelain -- supabase/ is empty"
+      ],
+      "evidenceRequired": [
+        "artifact: findings document section 11 implementation plan subsection"
+      ],
+      "maxRetries": 1,
+      "runnerIndependent": true,
+      "sources": [
+        "supabase/migrations/100_rls_harden_client_data.sql",
+        "supabase/migrations/113_rls_coach_client_relationships.sql",
+        "docs/QA_CLOSURE_STANDARD.md"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "V5-GOV-010",
+      "role": "owner-decision",
+      "workstream": "governance",
+      "wave": "n/a",
+      "risk": "authority-selection",
+      "summary": "CR-1: select the authoritative home for OD-* decision answers (option A, B or C)",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "Request compares all three options on seven dimensions with measured evidence",
+        "A recommendation is offered but no option is selected on the owner behalf",
+        "Scope question (74 vs 11 vs 2 ids) stated"
+      ],
+      "verification": [
+        "findings document section 9 re-read against its cited lines"
+      ],
+      "evidenceRequired": [
+        "artifact: findings document section 9"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "docs/adr/ADR-W1-001-team-membership-lifecycle.md",
+        "docs/V5_PROGRAMME_DEFINITION.md"
+      ],
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "which document is the authoritative home for an OD-* answer, and whether it covers 74, 11 or 2 ids",
+          "evidence": "findings document section 9: three homes already exist, three of four unprotected, 0 OD-* rows in the declared register",
+          "action": "owner selects option A, B or C and supplies CR-3 date and owner; all three require a protected-file change"
+        }
+      ]
+    },
+    {
+      "id": "V5-GOV-011",
+      "role": "owner-decision",
+      "workstream": "governance",
+      "wave": "n/a",
+      "risk": "standing-instruction-ambiguity",
+      "summary": "CR-2: the standing instruction names ten N-05 decisions; the repository records one closed finding",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "Instruction and evidence quoted exactly",
+        "What cannot be reconciled stated",
+        "Minimum clarification requested",
+        "Nothing modified to resolve it"
+      ],
+      "verification": [
+        "findings document section 10 re-read against its cited lines"
+      ],
+      "evidenceRequired": [
+        "artifact: findings document section 10"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/QA_WORKSTREAM_N_TEST_COVERAGE_REPORT.md"
+      ],
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "what the ten N-05 decisions refers to, and what relationship to migrations 113-122 was intended",
+          "evidence": "N-05 is an alias of LRE-02, a single P0 VERIFIED_CLOSED 2026-08-26 test-harness finding; no set of ten exists; no 113-122 link documented",
+          "action": "owner lists the ten ids, names the document holding them, or withdraws the word ten"
+        }
+      ]
+    },
+    {
+      "id": "V5-GRD-004",
+      "role": "implementer",
+      "workstream": "guard",
+      "wave": "n/a",
+      "risk": "widens-protection",
+      "summary": "Protect the two unprotected documents that applied migrations cite as owner authority",
+      "dependsOn": [],
+      "paths": [
+        "scripts/protected-paths.json",
+        "scripts/guard-protected-paths.mjs"
+      ],
+      "acceptance": [
+        "V5_SECURITY_FOUNDATION_WAVE1_AUTHORIZATION.md and V5_PROGRAMME_DEFINITION.md added to protected roots",
+        "EXPECTED_ROOTS in the self-test amended in the same change or the suite fails",
+        "guard:selftest passes with the widened set",
+        "No existing root removed"
+      ],
+      "verification": [
+        "npm run guard:selftest",
+        "npm run check:guards"
+      ],
+      "evidenceRequired": [
+        "before/after guard verdict for each newly protected document"
+      ],
+      "maxRetries": 2,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/V5_AUTONOMOUS_PHASE_2026-10-21_FINDINGS.md"
+      ],
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "widening the protected set changes what the guard refuses, including for legitimate editors of V5_PROGRAMME_DEFINITION.md which is a large living document",
+          "evidence": "findings document section 13: D1 and D3 verbatim rulings are cited by applied migrations 132/133/136 and sit in unprotected files",
+          "action": "owner authorizes adding these roots, or rules that the duplicate copies be consolidated instead"
+        }
+      ]
+    },
+    {
+      "id": "V5-GRD-005",
+      "role": "implementer",
+      "workstream": "guard",
+      "wave": "n/a",
+      "risk": "test-only",
+      "summary": "Assert the hook wiring: a renamed or moved guard silently disables interception (exit 1 is not a deny)",
+      "dependsOn": [],
+      "paths": [
+        "scripts/guard-protected-paths.mjs"
+      ],
+      "acceptance": [
+        "The self-test reads .claude/settings.json and asserts a PreToolUse hook exists",
+        "It asserts the hook command references a file that EXISTS",
+        "It asserts the referenced file is THIS script, not merely some file",
+        "It fails if the hooks block is absent, so removing the wiring is caught",
+        "Measured premise: node on a missing script exits 1, and only exit 2 denies, so a broken command fails OPEN"
+      ],
+      "verification": [
+        "npm run guard:selftest",
+        "mutation: point the hook at a nonexistent path in a temp copy and confirm the suite fails"
+      ],
+      "evidenceRequired": [
+        "exit code of node on a missing script; before/after assertion count"
+      ],
+      "maxRetries": 2,
+      "runnerIndependent": true,
+      "sources": [
+        ".claude/settings.json",
+        "scripts/guard-protected-paths.mjs"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "V5-COORD-002",
+      "role": "implementer",
+      "workstream": "coordinator",
+      "wave": "n/a",
+      "risk": "reporting-accuracy",
+      "summary": "A fresh clone reports every task READY; blocker-vetoed tasks must report their derived blocked status",
+      "dependsOn": [],
+      "paths": [
+        "scripts/skills-agent-coordinator.mjs"
+      ],
+      "acceptance": [
+        "A task with an unresolved declared blocker and no state entry reports a derived BLOCKED_* status, not READY",
+        "The derived status is marked as derived so it is not confused with a recorded one",
+        "validate stops reporting drift for a task whose only problem was the missing state entry",
+        "A recorded status always wins over a derived one",
+        "Asserted by the existing --self-test",
+        "No new persistence mechanism is introduced"
+      ],
+      "verification": [
+        "npm run flow:selftest",
+        "npm run flow:validate",
+        "fresh-clone simulation with state.json absent"
+      ],
+      "evidenceRequired": [
+        "fresh-clone counts before and after"
+      ],
+      "maxRetries": 2,
+      "runnerIndependent": true,
+      "sources": [
+        ".gitignore",
+        "docs/V5_AUTONOMOUS_PHASE_2026-10-21_FINDINGS.md"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "V5-COORD-003",
+      "role": "owner-decision",
+      "workstream": "coordinator",
+      "wave": "n/a",
+      "risk": "persistence-architecture",
+      "summary": "Completed task status is not recoverable from the repository because state.json is gitignored",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "Options stated with cost and risk",
+        "No persistence architecture added without authorization"
+      ],
+      "verification": [
+        "fresh-clone simulation evidence"
+      ],
+      "evidenceRequired": [
+        "artifact: findings doc workstream F section"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        ".gitignore",
+        "docs/V5_AUTONOMOUS_PHASE_2026-10-21_FINDINGS.md"
+      ],
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "how completion status should survive a clone: commit state.json, record completion evidence in tasks.json, derive from git history, or accept the loss",
+          "evidence": "fresh clone shows 9 tasks eligible that are VERIFIED in this checkout, including V5-GRD-001 and V5-EVD-MAP; a new environment could redo completed work",
+          "action": "owner chooses a persistence option; each changes what is committed and reviewed"
+        }
+      ]
+    },
+    {
+      "id": "V5-GOV-012",
+      "role": "owner-decision",
+      "workstream": "governance",
+      "wave": "n/a",
+      "risk": "authority-amendment",
+      "summary": "B-01: docs/adr/ as the OD-* home conflicts with MASTER_PRODUCT_DECISIONS.md section 2 step 1, which names decision-log.md the standing record",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "The conflict is stated with both quotations",
+        "The minimum additive amendment is drafted but NOT applied",
+        "No protected file modified"
+      ],
+      "verification": [
+        "git status --porcelain -- docs/MASTER_PRODUCT_DECISIONS.md is empty"
+      ],
+      "evidenceRequired": [
+        "artifact: docs/V5_GOVERNANCE_FORMALIZATION_B01_B04_2026-10-21.md sections 1 and 2"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "docs/decision-log.md",
+        "docs/adr/ADR-W1-001-team-membership-lifecycle.md"
+      ],
+      "blockers": [
+        {
+          "kind": "governance",
+          "what": "adopting docs/adr/ as the OD-* home amends section 2 of a protected file, and no rule defines who may approve such an amendment",
+          "evidence": "section 2 step 1 names decision-log.md the standing record; 0 OD-* rows exist so step 2 cannot be executed; D1 and D3 bypassed the procedure entirely while PD-A05/A23/A13 followed it",
+          "action": "owner authorizes the additive amendment drafted in section 2.1, and establishes the approval rule the repository lacks"
+        }
+      ]
+    },
+    {
+      "id": "V5-GOV-013",
+      "role": "owner-decision",
+      "workstream": "governance",
+      "wave": "n/a",
+      "risk": "field-semantics",
+      "summary": "B-04: the registry Owner? field has no documented meaning, and three sources attribute QAX-SEC-03 differently",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "All three attributions cited",
+        "A rule is proposed but not adopted",
+        "QAX-SEC-03 stays blocked",
+        "The agent-authored ledger attribution is disclosed as such"
+      ],
+      "verification": [
+        "npm run flow:validate shows authorized: []",
+        "V5-GOV-009 remains BLOCKED_GOVERNANCE"
+      ],
+      "evidenceRequired": [
+        "artifact: docs/V5_GOVERNANCE_FORMALIZATION_B01_B04_2026-10-21.md section 5"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        "docs/QA_AUTONOMOUS_EXHAUSTION_FINAL_REPORT.md"
+      ],
+      "blockers": [
+        {
+          "kind": "governance",
+          "what": "what Owner? means, whether no permits implementation, and which source governs when registry and ledger disagree",
+          "evidence": "the string Owner? appears only as two table headers and is never described in prose; three sources attribute QAX-SEC-03 to no, to OD-QAX-2, and to OD-14",
+          "action": "owner adopts a rule by additive amendment to the registry table preamble; recording it may itself depend on B-01"
+        }
+      ]
+    },
+    {
+      "id": "V5-GOV-014",
+      "role": "architect",
+      "workstream": "governance",
+      "wave": "n/a",
+      "risk": "read-only",
+      "summary": "Map the exercised approval precedent and isolate the irreducible approval-authority gap",
+      "dependsOn": [],
+      "paths": [
+        "docs/V5_GOVERNANCE_AUTHORITY_PROPOSAL_2026-10-21.md"
+      ],
+      "acceptance": [
+        "The five documented steps are mapped to the files commit 08e27f7 actually touched",
+        "Named owner vs role label vs undefined approving act are distinguished by direct evidence",
+        "All four section-2 files are shown to be protected roots",
+        "No approver, role, credential or signing scheme is invented",
+        "No protected file modified"
+      ],
+      "verification": [
+        "git show --stat 08e27f7",
+        "guard verdict for each of the four section-2 files",
+        "git status --porcelain on protected roots is empty"
+      ],
+      "evidenceRequired": [
+        "artifact: docs/V5_GOVERNANCE_AUTHORITY_PROPOSAL_2026-10-21.md sections 1 and 2"
+      ],
+      "maxRetries": 1,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "08e27f7:docs/decision-log.md",
+        "docs/decision-log.md"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "V5-GOV-015",
+      "role": "owner-decision",
+      "workstream": "governance",
+      "wave": "n/a",
+      "risk": "root-authority",
+      "summary": "No rule establishes who may approve a decision, or that a conversational direction is effective",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "The gap is stated as an identity claim that code cannot settle",
+        "A three-sentence minimum request is drafted"
+      ],
+      "verification": [
+        "searched all four governance authorities for an approver rule: zero results"
+      ],
+      "evidenceRequired": [
+        "artifact: proposal section 1.4 and 2.1"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/MASTER_PRODUCT_DECISIONS.md"
+      ],
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "who holds the product-owner role, whether directions in this channel are authoritative, who may approve a process amendment, and how source conflicts resolve",
+          "evidence": "the label product owner is used 4 times and never defined; Julia is named in 38 Owner cells and never equated with it; the approving act leaves no artifact",
+          "action": "owner supplies the three sentences in proposal section 2.1; this cannot be derived from the repository and must not be synthesised"
+        }
+      ]
+    },
+    {
+      "id": "V5-GOV-016",
+      "role": "owner-decision",
+      "workstream": "governance",
+      "wave": "n/a",
+      "risk": "scope-confirmation",
+      "summary": "Initial OD-* migration scope: the 11 registry-designated ids, or the 11 plus OD-14",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "Both scopes compared on traceability, blocked work, consistency and cost",
+        "OD-14 not silently added",
+        "Recommendation stated as a request"
+      ],
+      "verification": [
+        "OD-14 absent from the registry Owner? column: measured 0 occurrences"
+      ],
+      "evidenceRequired": [
+        "artifact: proposal section 4.2"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/MASTER_REMEDIATION_REGISTRY.md",
+        ".skills-agent/tasks.json"
+      ],
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "does the initial migration cover 11 identifiers or 12 including OD-14",
+          "evidence": "OD-14 appears 0 times in the registry Owner? column yet blocks V5-SEC-OD14 and governs F-21; under scope A an answer to OD-14 would have nowhere to live",
+          "action": "owner confirms 11 or 12; the direction said eleven and the difference is material"
+        }
+      ]
+    },
+    {
+      "id": "V5-ADR-001",
+      "role": "implementer",
+      "workstream": "governance",
+      "wave": "n/a",
+      "risk": "protected-edit",
+      "summary": "Add Resolves: OD-QAX-9 to ADR-W1-001 to close the formal link without changing any ruling",
+      "dependsOn": [],
+      "paths": [
+        "docs/adr/ADR-W1-001-team-membership-lifecycle.md"
+      ],
+      "acceptance": [
+        "Only a Resolves line is added; no ruling text altered",
+        "OD-QAX-9 subject matches D1(i)-(iii) subject, verified against the identifier definition",
+        "The OPEN claim at V5_DECISION_RESOLUTION_2026-09-27.md:78 is reconciled or recorded as superseded, not deleted",
+        "D1(iv) remains recorded as unanswered"
+      ],
+      "verification": [
+        "proposed check-decision-provenance V1 and V7",
+        "npm run guard:selftest"
+      ],
+      "evidenceRequired": [
+        "before/after diff of the ADR header only"
+      ],
+      "maxRetries": 1,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/adr/ADR-W1-001-team-membership-lifecycle.md",
+        "docs/QA_AUTONOMOUS_EXHAUSTION_FINAL_REPORT.md"
+      ],
+      "blockers": [
+        {
+          "kind": "governance",
+          "what": "docs/adr/ is a protected root and the Resolves convention is not yet approved",
+          "evidence": "ADR-W1-001 contains 0 occurrences of OD-QAX-9 while recording its answer verbatim; migrations 132/133 cite it and are applied",
+          "action": "approve the B-01 amendment, then authorize this single-line protected edit"
+        }
+      ]
+    },
+    {
+      "id": "V5-VAL-001",
+      "role": "implementer",
+      "workstream": "governance",
+      "wave": "n/a",
+      "risk": "test-only",
+      "summary": "Implement check-decision-provenance.mjs (V1-V13) and its eleven mutation-tested fixtures",
+      "dependsOn": [],
+      "paths": [
+        "supabase/scripts/check-decision-provenance.mjs"
+      ],
+      "acceptance": [
+        "V1-V6 structural, V7-V12 authorization, V13 meta, each separately reported",
+        "Eleven fixture cases, each mutation-tested so deleting the rule fails the suite",
+        "The script states that it cannot verify substantive authority from status alone",
+        "Offline, deterministic, no secrets"
+      ],
+      "verification": [
+        "the new suite",
+        "npm run check:guards"
+      ],
+      "evidenceRequired": [
+        "assertion count and the mutation matrix"
+      ],
+      "maxRetries": 2,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/V5_GOVERNANCE_AUTHORITY_PROPOSAL_2026-10-21.md"
+      ],
+      "blockers": [
+        {
+          "kind": "governance",
+          "what": "the ADR schema it validates is not approved, so every fixture would fail by construction",
+          "evidence": "no record uses Resolves: today; a red suite asserting an unapproved schema is worse than none",
+          "action": "approve the B-01 amendment and its schema, then implement"
+        }
+      ]
+    },
+    {
+      "id": "V5-GOV-017",
+      "role": "owner-decision",
+      "workstream": "governance",
+      "wave": "n/a",
+      "risk": "process-amendment",
+      "summary": "Record the owner authority direction through section 2 as a labelled process amendment",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "The amendment is labelled THIS IS A PROCESS AMENDMENT in its own heading",
+        "It carries owner attribution, decision scope, status and auditable evidence",
+        "It is not bundled with any decision it enables",
+        "The verbatim direction remains citable as the evidence artifact",
+        "No OD-* question is answered by it"
+      ],
+      "verification": [
+        "the four section-2 files show the amendment",
+        "npm run flow:validate"
+      ],
+      "evidenceRequired": [
+        "artifact: docs/V5_OWNER_AUTHORITY_DIRECTION_2026-10-21.md section 4"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/V5_OWNER_AUTHORITY_DIRECTION_2026-10-21.md",
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "tests/skills-agent/coordinator.test.mjs"
+      ],
+      "blockers": [
+        {
+          "kind": "owner",
+          "decision": "GOV-AUTH-1",
+          "what": "approve the exact amendment text, and enable the recording: either the owner performs the four protected edits, or authorizes a narrow protected-path exception",
+          "evidence": "all four section-2 files refuse tool writes (exit 2) and scripts/protected-paths.json exceptions is empty; the direction itself makes effectiveness depend on being recorded",
+          "action": "owner approves section 4 text and states which recording path to use"
+        }
+      ]
+    },
+    {
+      "id": "V5-PROD-001",
+      "role": "implementer",
+      "workstream": "product",
+      "wave": "n/a",
+      "risk": "user-visible",
+      "summary": "A member cannot reach meal logging: /log-meal, /food-search and /nutrition-overview have no navigation affordance anywhere",
+      "dependsOn": [],
+      "paths": [
+        "apps/mobile/lib/features/ai_nutrition/",
+        "apps/mobile/lib/features/nutrition/",
+        "apps/mobile/test/unit/"
+      ],
+      "acceptance": [
+        "Each of /log-meal, /food-search and /nutrition-overview is reachable from a navigable affordance a member can actually tap",
+        "tool/orphan_route_sweep.dart reports all three as navigated, not ORPHAN",
+        "The affordance is placed per the nutrition journey, not bolted onto an unrelated screen",
+        "A widget test drives the affordance and asserts the destination renders",
+        "No existing route is removed and no approved surface is restructured"
+      ],
+      "verification": [
+        "dart run tool/orphan_route_sweep.dart",
+        "flutter test test/unit/route_preservation_guard_test.dart",
+        "flutter test test/unit/orphan_route_guard_test.dart"
+      ],
+      "evidenceRequired": [
+        "orphan sweep before/after showing ORPHANED 7 -> 4",
+        "the widget test output"
+      ],
+      "maxRetries": 2,
+      "risk_note": "touches an existing screen to add an affordance; the governing rule in FINAL_SCREEN_INVENTORY.json classifies an unimplemented anchor as an IMPLEMENTATION gap, and the six Admin routes were added by an ordinary feature commit, so no separate authorization is required",
+      "runnerIndependent": true,
+      "sources": [
+        "apps/mobile/tool/orphan_route_sweep.dart",
+        "docs/FINAL_SCREEN_INVENTORY.json",
+        "apps/mobile/lib/core/router/app_router.dart"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "V5-PROD-005",
+      "role": "owner-decision",
+      "workstream": "product",
+      "wave": "n/a",
+      "risk": "measurement",
+      "summary": "Product completeness cannot be measured: design/manifest.json is absent, so FIT interaction coverage is not re-derivable",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "The manifest is present in the checkout, or its absence is recorded as accepted",
+        "dart run tool/fit_backlog.dart --gaps runs and produces a number",
+        "The three conflicting coverage figures are reconciled against that derivation, not against each other"
+      ],
+      "verification": [
+        "dart run tool/fit_backlog.dart <manifest> --gaps"
+      ],
+      "evidenceRequired": [
+        "the derived coverage output"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        "apps/mobile/tool/fit_backlog.dart",
+        "apps/mobile/tool/fit_coverage.dart",
+        "docs/FIT_INTERACTION_COVERAGE.md"
+      ],
+      "blockers": [
+        {
+          "kind": "external",
+          "what": "DECIDED 2026-10-21 (findings section 16): interaction coverage is demoted to an optional secondary diagnostic. The manifest is a design-board export storing HTML-escaped Figma labels, so coverage is implemented-intersect-designed and is UNDEFINED without the design side - it cannot be derived from code. Progress is now measured by six repository-derivable metrics instead, four of them guard-ratcheted. This task is no longer a blocker on measurement; it is an optional follow-up if the board is recovered.",
+          "evidence": "tool/fit_backlog.dart defaults to design/manifest.json and exits \"manifest not found\"; the file is absent from HEAD and from 931218b; three documents state three different coverage figures (287 present, 360 present, and differing per-anchor counts) and none can be re-derived",
+          "action": "owner supplies design/manifest.json, or names the branch or artifact that holds it"
+        }
+      ]
+    },
+    {
+      "id": "V5-PROD-006",
+      "role": "owner-decision",
+      "workstream": "product",
+      "wave": "n/a",
+      "risk": "product-question",
+      "summary": "/onboarding is reachable only by redirect — nothing navigates to it, so a new member may never see it",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "The owner states whether onboarding is intended to be redirect-only",
+        "The answer is recorded before any affordance is added or the route retired"
+      ],
+      "verification": [
+        "dart run tool/orphan_route_sweep.dart"
+      ],
+      "evidenceRequired": [
+        "the recorded answer"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        "apps/mobile/lib/core/router/app_router.dart",
+        "apps/mobile/tool/orphan_route_sweep.dart"
+      ],
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "is /onboarding deliberately redirect-only, or should a member be able to reach it",
+          "evidence": "app_router.dart:202 lists /onboarding among isAuthRoute so the redirect permits it, but no push or go call targets it anywhere in lib/, so the orphan sweep reports it ORPHAN",
+          "action": "owner states the intended entry path for onboarding"
+        }
+      ]
+    },
+    {
+      "id": "V5-PROD-007",
+      "role": "owner-decision",
+      "workstream": "product",
+      "wave": "n/a",
+      "risk": "product-question",
+      "summary": "The seven orphan routes are already governed by a shrinking allowlist; what remains is a retirement decision, not an implementation gap",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "Each of the seven is ruled RETIRE or WIRE UP, with the reason recorded",
+        "A retirement updates orphan_route_guard_test.dart and route_preservation_guard_test.dart in the same change",
+        "No affordance is added to a redirect stub",
+        "FIT-019 and FIT-006 are noted as locked anchors, and OD-31 as already pending for /onboarding"
+      ],
+      "verification": [
+        "dart run tool/orphan_route_sweep.dart",
+        "flutter test test/unit/orphan_route_guard_test.dart"
+      ],
+      "evidenceRequired": [
+        "apps/mobile/test/unit/orphan_route_guard_test.dart"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        "apps/mobile/test/unit/orphan_route_guard_test.dart",
+        "apps/mobile/lib/core/router/app_router.dart",
+        "apps/mobile/lib/features/nutrition/presentation/log_meal_screen.dart"
+      ],
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "for each of /coach, /coach-business, /food-search, /log-meal, /nutrition-overview, /onboarding, /pods: retire the route, or build the surface behind it",
+          "evidence": "orphan_route_guard_test.dart:39-48 pins all seven with a reason each and is a bidirectional shrinking allowlist. /coach is a duplicate alias of /train (both build TrainHubScreen). /log-meal and /food-search are 23-line redirect stubs. /nutrition-overview builds NutritionScreen, which home_org.dart:25 already renders as an embedded widget. FIT-019 and FIT-006 are locked anchors; OD-31 is already pending for /onboarding.",
+          "action": "owner rules per route; retiring is a route-table change the preservation guard will surface"
+        }
+      ]
+    }
+  ]
+}

@@ -98,6 +98,17 @@ find_pg() {
   [[ -z "$PGCTL" ]] && { PGCTL="$(command -v pg_ctl || true)"; INITDB="$(command -v initdb || true)"; }
   [[ -x "$PGCTL" && -x "$INITDB" && -n "$PSQL" ]] \
     || die2 "PostgreSQL server binaries (initdb/pg_ctl) or psql are not available on this runner."
+  # initdb/pg_ctl are WRAPPERS. Homebrew's libpq keg (and some distro client
+  # packages) ship both, and `--version` answers from them, while the `postgres`
+  # server they exec is absent -- so the check above passes and initdb then dies
+  # with 'program "postgres" is needed by initdb but was not found'. The message
+  # above describes that runner correctly; it just could not detect it. Require
+  # the server binary itself, next to initdb or on PATH.
+  local pgbin; pgbin="$(dirname "$INITDB")"
+  [[ -x "$pgbin/postgres" ]] || command -v postgres >/dev/null 2>&1 \
+    || die2 "PostgreSQL server binaries (initdb/pg_ctl) or psql are not available on this runner: \
+'$INITDB' exists but the 'postgres' server binary it needs is not in '$pgbin' or on PATH \
+(a client-only install, e.g. Homebrew libpq). Install a full postgresql server package."
   say "  postgres: $("$INITDB" --version)"
 }
 

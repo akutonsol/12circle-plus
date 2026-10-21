@@ -124,6 +124,180 @@ select pg_temp.try_write('POS-10', $q$insert into storage.objects(bucket_id,name
 reset role; :KEEP
 rollback to savepoint p; release savepoint p; :RESTORE
 
+-- ── QAX-SEC-06 certification extension (added 2026-10-19) ─────────────────────
+-- QAX-SEC-06 above probes the `exercises` view. `exercise_certifications` is a
+-- SECOND unpredicated definer view and it reads `custom_exercises` DIRECTLY
+-- (086:33), not through `exercises` — so fixsim/QAX-SEC-06.sql cannot close it.
+-- The same rows are also returned by the allowlisted SECURITY DEFINER RPC
+-- `exercise_certification(p_id)` (084:76-79, no authorization check), which is
+-- live in the app at custom_exercise_service.dart:366.
+
+-- Path 1 — direct read: a non-owner must not see another coach's private draft.
+savepoint p; select pg_temp.as_user('11111111-1111-1111-1111-111111111111'); set local role authenticated;
+insert into qax_out select 'QAX-SEC-06.cert-view', count(*)=0,
+  'non-owner sees other coach''s private draft via exercise_certifications: '||count(*)
+  from public.exercise_certifications where id='99999999-0000-0000-0000-000000000009';
+reset role; release savepoint p;
+
+-- Path 2 — the definer RPC with an id belonging to another owner. `to_jsonb(c)`
+-- over no rows yields NULL, so NULL is the secure outcome.
+savepoint p; select pg_temp.as_user('11111111-1111-1111-1111-111111111111'); set local role authenticated;
+insert into qax_out select 'QAX-SEC-06.cert-rpc',
+  public.exercise_certification('99999999-0000-0000-0000-000000000009') is null,
+  'exercise_certification(other owner''s private draft) returned: '
+    ||coalesce(left((public.exercise_certification('99999999-0000-0000-0000-000000000009'))::text,60),'NULL');
+reset role; release savepoint p;
+
+-- Path 3 — certification_summary(). This probe tests migration 116's OWN stated
+-- premise, not a preference: 116:463 allowlists it under "E: admin /
+-- content-editor, each self-guarding". 086:100-122 carries no guard, so a
+-- non-editor reaching it contradicts that classification. The aggregate exposes
+-- counts only, never a row; whether library-wide totals should stay library-wide
+-- is a product question (see POS-06C) and is NOT asserted here.
+savepoint p; select pg_temp.as_user('11111111-1111-1111-1111-111111111111'); set local role authenticated;
+do $$ declare t bigint; begin
+  select total into t from public.certification_summary();
+  execute 'reset role';
+  insert into qax_out values ('QAX-SEC-06.cert-summary', false,
+    '116 classes this self-guarding; a non-editor got total='||t);
+exception when insufficient_privilege then
+            insert into qax_out values ('QAX-SEC-06.cert-summary', true, 'non-editor denied (42501)');
+          when others then
+            insert into qax_out values ('QAX-SEC-06.cert-summary', true, 'non-editor refused: '||sqlstate);
+end $$;
+reset role; release savepoint p;
+
+-- Path 4 — anon. GRANT-LEVEL evidence in the replay only: 084:72 and 086:92 both
+-- granted anon, and 112:47 revoked it across every view. This asserts the revoke
+-- is what the replay reproduces. It is NOT runtime evidence about QA, where the
+-- standing anon check is supabase/tests/security/d06-sweep-posture.mjs:41-46.
+savepoint p; select set_config('request.jwt.claims','{}',true);
+do $$ declare n int; begin
+  execute 'set local role anon';
+  execute 'select count(*) from public.exercise_certifications' into n;
+  execute 'reset role';
+  insert into qax_out values ('QAX-SEC-06.cert-anon', n=0, 'anon read rows: '||n);
+exception when insufficient_privilege then
+            insert into qax_out values ('QAX-SEC-06.cert-anon', true, 'anon denied (42501)');
+          when others then
+            insert into qax_out values ('QAX-SEC-06.cert-anon', true, 'anon refused: '||sqlstate);
+end $$;
+reset role; release savepoint p;
+
+-- Path 5 — RESISTANCE TO THE 112 GRANT SWEEP. 112:35-51 sweeps every view in
+-- public: REVOKE ALL from PUBLIC/anon/authenticated, then GRANT SELECT to
+-- authenticated. A fix that merely withholds that grant is undone the next time
+-- such a sweep runs, so this probe re-grants SELECT exactly as 112 would and then
+-- re-reads a stranger's private draft. Pre-fix it fails like cert-view; under a
+-- body-predicate fix the re-grant is irrelevant and it passes. DDL, so the
+-- result is stashed and the savepoint rolled back.
+savepoint p; grant select on public.exercise_certifications to authenticated;
+select pg_temp.as_user('11111111-1111-1111-1111-111111111111'); set local role authenticated;
+insert into qax_out select 'QAX-SEC-06.cert-sweep', count(*)=0,
+  'after a 112-style re-grant, non-owner sees other coach''s private draft: '||count(*)
+  from public.exercise_certifications where id='99999999-0000-0000-0000-000000000009';
+reset role; :KEEP
+rollback to savepoint p; release savepoint p; :RESTORE
+
+-- ── GAP A · the content_manager arm ──────────────────────────────────────────
+-- POS-06C covers the ADMIN arm. Option A's predicate admits `is_content_editor()`
+-- = admin OR content_manager (083:88-89), and the non-admin editor is the arm that
+-- keeps certification_summary() library-wide. It was untested. Three-way
+-- distinction: an ordinary caller is DENIED (QAX-SEC-06.cert-summary), the admin
+-- passes (POS-06C), and the content_manager must pass with the SAME total.
+-- The library count is stashed as postgres first: a content_manager is not an
+-- admin, so custom_exercises RLS (005:49-62, 050:12) does not let them count it.
+savepoint p;
+drop table if exists pg_temp.qax_lib;
+create temp table qax_lib as select count(*)::bigint as n from public.custom_exercises;
+grant select on qax_lib to authenticated;
+select pg_temp.as_user('8888888c-0000-0000-0000-00000000000c'); set local role authenticated;
+do $$ declare t bigint; w bigint; begin
+  select total into t from public.certification_summary();
+  select n into w from qax_lib;
+  execute 'reset role';
+  insert into qax_out values ('POS-06E', t = w,
+    'content_manager summary total='||t||' vs full library='||w);
+exception when others then
+  execute 'reset role';
+  insert into qax_out values ('POS-06E', false, 'content_manager summary refused: '||sqlstate);
+end $$;
+reset role; :KEEP
+rollback to savepoint p; release savepoint p; :RESTORE
+
+-- The deliberate CONSEQUENCE of that arm, made explicit and testable rather than
+-- left implicit: under Option A a content_manager CAN read another coach's private
+-- draft. That is the price of keeping 117's aggregation library-wide, and the owner
+-- should see it asserted. Pre-fix this also passes (nothing is scoped yet), so it
+-- is a POSITIVE control, not a defect probe.
+savepoint p; select pg_temp.as_user('8888888c-0000-0000-0000-00000000000c'); set local role authenticated;
+insert into qax_out select 'POS-06F', count(*)=1,
+  'content_manager sees the cross-owner private draft (intended under Option A): '||count(*)
+  from public.exercise_certifications where id='99999999-0000-0000-0000-000000000009';
+reset role; release savepoint p;
+
+-- ── GAP B · build_workout's candidate pool — NOT CLOSED, and why ───────────
+-- `build_workout` (127:27) sources candidates from
+--   `from exercises e join exercise_intelligence ei on ei.exercise_id = e.id`
+-- with no WHERE, so that join IS the candidate pool. It CANNOT be reproduced from
+-- a caller's privilege level, and the first version of this probe was wrong to try:
+--   * `build_workout` is SECURITY DEFINER (pg_proc.prosecdef = t), so it evaluates
+--     that join with OWNER rights;
+--   * `exercise_intelligence`'s only read policy is `intel read staff only ::
+--     is_content_editor()`.
+-- Measured inside the fixture transaction: as owner the substrate is 2 rows and
+-- the join is 2; as an ordinary member both are 0. A caller-level count therefore
+-- measures RLS, not the engine's pool, and reporting it as the pool would have been
+-- a manufactured result.
+--
+-- What this probe asserts instead is the real invariant it CAN see, which is worth
+-- guarding on its own: an ordinary member cannot read the intelligence substrate
+-- directly. The definer-level pool needs one of two prerequisites that are outside
+-- this task: a valid `build_workout(p_context)` payload (shape not established
+-- here, and not invented), or a SECURITY DEFINER test wrapper -- a new database
+-- object. Documented in the report rather than faked.
+savepoint p; select pg_temp.as_user('11111111-1111-1111-1111-111111111111'); set local role authenticated;
+insert into qax_out select 'ENG-SUBSTRATE-01', count(*) = 0,
+  'ordinary member reads intelligence substrate directly (staff-only per 117): '||count(*)
+  from public.exercise_intelligence;
+reset role; release savepoint p;
+
+-- ── ENG-POOL-01 · build_workout's candidate selection, measured properly ─────
+-- An earlier attempt counted `exercises JOIN exercise_intelligence` AS THE CALLER
+-- and got 0 — wrong, because build_workout is SECURITY DEFINER (prosecdef = t) and
+-- `exercise_intelligence`'s only read policy is `intel read staff only ::
+-- is_content_editor()`. A caller-level count measures RLS, not the engine's pool.
+-- This probe calls the function itself, so the join is evaluated with the owner
+-- rights the engine really uses.
+--
+-- The p_context payload is NOT invented. It is the one an existing test already
+-- uses: supabase/tests/security/d04-rpc-execution.mjs:153 passes
+-- `{ size: 4, focus: 'push' }` and asserts build_workout "still runs for a member".
+-- (fj07-rule-accumulator-contract.sql:54 uses `{recovery, size}` for its own case.)
+-- build_workout is declared STABLE and writes nothing, so a plain savepoint is
+-- sufficient; `generate_workout` is the wrapper that records a trace.
+--
+-- THIS PROBE IS NOT ABOUT MIGRATION 182. It is evidence for the SEPARATE
+-- `exercises`-view fix. The assertion is only that the pool is non-vacuous; the
+-- count is reported in the detail so two runs can be compared without ever
+-- coupling the two changes:
+--     run.sh                      -> no predicate on `exercises`
+--     run.sh --mutate QAX-SEC-06  -> the proposed `exercises` predicate
+-- The fixture substrate is 2 intelligence rows: one global+approved, one another
+-- coach's private draft.
+savepoint p; select pg_temp.as_user('11111111-1111-1111-1111-111111111111'); set local role authenticated;
+do $$ declare j jsonb; n int; begin
+  j := public.build_workout(jsonb_build_object('size', 4, 'focus', 'push'));
+  n := coalesce(jsonb_array_length(j->'selected'), 0);
+  execute 'reset role';
+  insert into qax_out values ('ENG-POOL-01', n > 0,
+    'build_workout selected '||n||' candidate(s) for an ordinary member');
+exception when others then
+  execute 'reset role';
+  insert into qax_out values ('ENG-POOL-01', false, 'build_workout raised '||sqlstate);
+end $$;
+reset role; release savepoint p;
+
 -- POSITIVE CONTROLS: the legitimate path must keep working (before AND after any fix).
 savepoint p; select pg_temp.as_user('44444444-0000-0000-0000-000000000004'); set local role authenticated;
 do $$ begin
@@ -134,8 +308,32 @@ insert into qax_out select 'POS-02', count(*)=1, 'active coach sees '||count(*)|
 select pg_temp.try_write('POS-03', $q$insert into public.client_habits(client_id,coach_id,name) values ('22222222-2222-2222-2222-222222222222','44444444-0000-0000-0000-000000000004','qax')$q$);
 select pg_temp.try_write('POS-04', $q$insert into public.messages(conversation_id,sender_id,content) values ('55555555-5555-5555-5555-000000000001','44444444-0000-0000-0000-000000000004','qax legit')$q$);
 insert into qax_out select 'POS-06', count(*)=1, 'owner sees own draft via view: '||count(*) from public.exercises where name='qax private draft';
+insert into qax_out select 'POS-06A', count(*)=1, 'owner still sees own private draft via exercise_certifications: '||count(*)
+  from public.exercise_certifications where id='99999999-0000-0000-0000-000000000009';
+insert into qax_out select 'POS-06D', count(*)=1, 'owner''s own RPC call still returns a row: '||count(*)
+  from (select 1 where public.exercise_certification('99999999-0000-0000-0000-000000000009') is not null) z;
 reset role; :KEEP
 rollback to savepoint p; release savepoint p; :RESTORE
+-- POS-06B / POS-06C: the legitimate certification paths must survive any fix.
+savepoint p; select pg_temp.as_user('11111111-1111-1111-1111-111111111111'); set local role authenticated;
+insert into qax_out select 'POS-06B', count(*)=1, 'ordinary caller still sees the approved-global row: '||count(*)
+  from public.exercise_certifications where id='99999999-0000-0000-0000-00000000000a';
+reset role; release savepoint p;
+-- POS-06C pins certification_summary()'s LIBRARY-WIDE semantics for an entitled
+-- caller, so a fix that silently narrows them to the caller's own rows fails here
+-- rather than passing quietly. Admin reads every custom_exercises row (050:12).
+savepoint p; select pg_temp.as_user('88888888-0000-0000-0000-000000000008'); set local role authenticated;
+do $$ declare t bigint; w bigint; begin
+  select total into t from public.certification_summary();
+  select count(*) into w from public.custom_exercises;
+  execute 'reset role';
+  insert into qax_out values ('POS-06C', t=w,
+    'admin summary total='||t||' vs full library='||w);
+exception when others then
+  insert into qax_out values ('POS-06C', false, 'admin summary failed: '||sqlstate);
+end $$;
+reset role; release savepoint p;
+
 -- try_write marks ALLOWED as not-ok; for POS-03/04 ALLOWED is the correct outcome.
 update qax_out set ok = not ok where id in ('POS-03','POS-04','POS-10');
 

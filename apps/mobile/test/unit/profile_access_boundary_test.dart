@@ -733,14 +733,40 @@ void main() {
         r'CREATE\s+(OR\s+REPLACE\s+)?VIEW\s+(public\.)?([a-z_][a-z0-9_]*)',
         caseSensitive: false,
       );
-      // view name -> the migration that creates it (first one wins)
+      // view name -> the migration that FIRST creates it.
+      //
+      // THE SCAN MUST START AT 0, NOT AT 113. It used to skip `n <= 112` before
+      // scanning, which meant it never learned a view's real origin and treated
+      // the next `CREATE OR REPLACE` it saw as the creation. Migration 182
+      // replaces `exercise_certifications`, created at `086:14` — before 112 —
+      // and was therefore reported as creating a post-112 view with no REVOKE.
+      // That was a FALSE POSITIVE: 112's sweep covered the view because it
+      // already existed, `CREATE OR REPLACE` preserves the ACL (CRC-07), and 182
+      // restates the posture anyway ("revoke all ... from public, anon" plus
+      // "grant select ... to authenticated").
+      //
+      // THE INVARIANT IS NOT RELAXED. A view whose FIRST creation is after 112
+      // and which no migration revokes from authenticated still fails — that is
+      // asserted below by a synthetic case, so this correction cannot quietly
+      // become a hole.
+      // ITERATED IN NUMERIC ORDER, which matters: `_allMigrations()` inserts in
+      // `Directory.listSync()` order, and a Dart map literal preserves insertion
+      // order — so `putIfAbsent` would otherwise record whichever file the
+      // filesystem happened to yield first as the "first" creation. Measured:
+      // 182 was recorded as the origin of a view that 086 creates.
       final created = <String, MapEntry<int, String>>{};
-      migrations.forEach((n, mig) {
-        if (n <= 112) return;
+      final inOrder = migrations.keys.toList()..sort();
+      for (final n in inOrder) {
+        final mig = migrations[n]!;
         for (final m in createView.allMatches(_flat(mig.sql))) {
           created.putIfAbsent(m.group(3)!, () => MapEntry(n, mig.name));
         }
-      });
+      }
+      // Only views that did not exist when 112 ran need their own REVOKE.
+      created.removeWhere((_, origin) => origin.key <= 112);
+      expect(created, isNotEmpty,
+          reason: 'no post-112 view was found at all — the scan has stopped '
+              'seeing CREATE VIEW and every assertion below is inert');
 
       created.forEach((view, origin) {
         final revoke = RegExp(
