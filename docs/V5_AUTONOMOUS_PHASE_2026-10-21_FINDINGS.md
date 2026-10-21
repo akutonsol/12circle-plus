@@ -539,3 +539,76 @@ duplication §9 is about.
 Both gates are recorded in `expected_applied.json` and neither was altered. **No offline check is
 missing for these two.** What is missing is live evidence, which is prohibited here: the closure
 ladder's *FIXED ON QA* and *VERIFIED LIVE* rungs cannot be reached from this environment at all.
+
+---
+
+## 16 · Decision — the progress metric. **The manifest is demoted; derivable metrics replace it.**
+
+Taken as lead architect on 2026-10-21 at the owner's explicit instruction to decide this item.
+It governs measurement only. It changes no finding status, no decision state, and no protected file.
+
+### What was established first
+
+**`design/manifest.json` cannot be reconstructed from this repository, and not for want of effort.**
+It is a **design-board export**: `fit_coverage.dart:98` records that it stores interaction labels
+**HTML-escaped** — `Cycle &amp; wellbeing`, `Smaller &lt; larger` — i.e. text lifted from Figma
+frames, with `route`, `interactions[]` and `hasBottomNav` per anchor.
+
+Interaction coverage is therefore `implemented ∩ designed`. Without the **designed** side the metric
+is not merely hard to compute, it is **undefined**. My earlier offer to *"derive a fresh baseline from
+code"* was wrong and is withdrawn: code yields what exists, never what is owed.
+
+The file is in no branch, and no generator for it is in the repository either.
+
+### The 287-vs-360 discrepancy is resolved, mechanically
+
+It was never a source-of-truth conflict, so no owner ruling is needed:
+
+* `FINAL_SCREEN_INVENTORY.json` (2026-09-24) records **287 / 600** — the per-anchor sweep, which
+  `fit_backlog.dart:5` describes as *"generated ad hoc, one file per anchor… Each was found by hand."*
+* `FIT_INTERACTION_COVERAGE.md` (same day) records **360 / 600** — produced by the successor tool,
+  which searches a **broader file set** per anchor: `_subSurfaces` overrides (`:150`) plus
+  `app_shell.dart` when the manifest marks `hasBottomNav` (`:23`, `:282`).
+
+Two scopes, both legitimate, measuring different file sets. **360 is the better figure** because its
+file set is correct; 287 is the narrower earlier sweep. Both are now historical either way.
+
+### The decision
+
+1. **Interaction coverage is no longer the programme's progress metric.** It is demoted to an
+   optional secondary diagnostic, to be restored only if the board becomes available.
+2. **`FINAL_SCREEN_INVENTORY.json`'s 110-anchor table is frozen as a historical record**, explicitly
+   **not re-derivable**. Nothing should compute against it again, and a future phase that cites
+   "263 missing interactions" or any similar figure is citing a number nobody can reproduce.
+3. **Progress is measured from here on by what the repository can derive**, each already backed by a
+   tool or a guard in the tree:
+
+   | Metric | Today | Derived by |
+   |---|---|---|
+   | routes registered | **97** | `app_router.dart`, ratcheted by `route_preservation_guard_test` |
+   | routes unreachable | **7** | `tool/orphan_route_sweep.dart`, pinned bidirectionally by `orphan_route_guard_test` |
+   | screen classes | **191** | source scan |
+   | Flutter tests passing | **2,040** | CI, run `472dab69` |
+   | migrations authored / frontier | **184 / 181** | `expected_applied.json`, `check-migration-wave-coverage` |
+   | CI | all 7 jobs green | GitHub Actions |
+
+   Every one is reproducible by command, and four of the six already fail a guard when they regress.
+
+### Why this rather than waiting for the manifest
+
+The metric was not merely unavailable — it was **unreliable while it existed**. `fit_coverage.dart`'s
+own header records three defects it had to fix: it counted **comments** (so *writing down that
+something was deliberately not implemented made the metric report it as implemented*), it resolved a
+route to a **redirect stub**, and it failed on **HTML-escaped** labels. A metric with three
+false-positive defects, an input nobody holds, and two incompatible published figures is not a
+foundation for deciding what to build.
+
+**The cost of not deciding was demonstrated the same day.** Lacking a measurement, this agent
+substituted a tool's raw output for a roadmap and produced four product tasks whose premise dissolved
+on inspection — one of them asserting that a member could not reach meal logging, which they can.
+
+### What remains open, deliberately
+
+If the Figma board is recovered, regenerating the manifest and restoring interaction coverage as a
+**secondary** diagnostic is worth doing. It should never again be the primary gate. `V5-PROD-005` is
+reclassified from an external blocker to that optional follow-up.

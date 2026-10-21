@@ -1883,7 +1883,7 @@
       "blockers": [
         {
           "kind": "external",
-          "what": "design/manifest.json is in no branch of this repository, so the interaction-coverage generator cannot run and product progress cannot be measured",
+          "what": "DECIDED 2026-10-21 (findings section 16): interaction coverage is demoted to an optional secondary diagnostic. The manifest is a design-board export storing HTML-escaped Figma labels, so coverage is implemented-intersect-designed and is UNDEFINED without the design side - it cannot be derived from code. Progress is now measured by six repository-derivable metrics instead, four of them guard-ratcheted. This task is no longer a blocker on measurement; it is an optional follow-up if the board is recovered.",
           "evidence": "tool/fit_backlog.dart defaults to design/manifest.json and exits \"manifest not found\"; the file is absent from HEAD and from 931218b; three documents state three different coverage figures (287 present, 360 present, and differing per-anchor counts) and none can be re-derived",
           "action": "owner supplies design/manifest.json, or names the branch or artifact that holds it"
         }
