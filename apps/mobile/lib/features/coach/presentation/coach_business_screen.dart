@@ -63,9 +63,32 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     if (uid == null) return;
     try {
       final profileData = await _db.from('user_profiles').select('*').eq('id', uid).maybeSingle();
-      final teamData = await _db.from('coach_team_members')
-          .select('*, user_profiles!coach_team_members_member_id_fkey(first_name, last_name, email, avatar_url)')
+      // Wave 1 (migration 132): a team lead no longer reads `user_profiles`, so
+      // the embedded resource above this line used to return nothing. D1(iii)
+      // limits a lead to the minimum-necessary columns, which are served by
+      // `team_member_profiles` — and a PostgREST embed cannot traverse a view,
+      // so this is a two-step read. The rows are re-shaped under the same
+      // `user_profiles` key the team tab already renders.
+      final memberships = await _db.from('coach_team_members')
+          .select()
           .eq('coach_id', uid);
+      final memberIds = List<Map<String, dynamic>>.from(memberships as List)
+          .map((m) => m['member_id'] as String?)
+          .whereType<String>()
+          .toList();
+      final rosterProfiles = memberIds.isEmpty
+          ? const <Map<String, dynamic>>[]
+          : List<Map<String, dynamic>>.from(await _db
+              .from('team_member_profiles')
+              .select('id, first_name, last_name, email, avatar_url')
+              .inFilter('id', memberIds) as List);
+      final profileById = {
+        for (final r in rosterProfiles) r['id'] as String: r,
+      };
+      final teamData = [
+        for (final m in List<Map<String, dynamic>>.from(memberships as List))
+          {...m, 'user_profiles': profileById[m['member_id'] as String?] ?? const {}},
+      ];
       final reviewData = await _db
           .from('coach_reviews')
           .select('*, public_profiles!client_id(first_name, last_name, avatar_url)')
@@ -81,6 +104,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
         _specialties = List<String>.from(p['specialties'] as List? ?? []);
         _certifications = List<String>.from(p['certifications'] as List? ?? []);
       }
+      if (!mounted) return;
       setState(() {
         _profile = p;
         _team = List<Map<String, dynamic>>.from(team as List);
@@ -88,6 +112,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
         _loading = false;
       });
     } catch (_) {
+      if (!mounted) return;
       setState(() => _loading = false);
     }
   }
@@ -109,7 +134,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
         content: Text('Profile updated!'), backgroundColor: Color(0xFF6FFBBE)));
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Could not save profile: $e'),
+        content: Text('Could not save profile.'),
         backgroundColor: const Color(0xFFFFB4AB)));
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -138,7 +163,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
         content: Text('Photo added'), backgroundColor: Color(0xFF6FFBBE)));
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Could not upload photo: $e'),
+        content: Text('Could not upload photo.'),
         backgroundColor: const Color(0xFFFFB4AB)));
     }
   }
@@ -159,7 +184,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       if (mounted) {
         setState(() => _certifications = prev);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('$failMsg: $e'), backgroundColor: const Color(0xFFFFB4AB)));
+          content: Text(failMsg), backgroundColor: const Color(0xFFFFB4AB)));
       }
     }
   }
@@ -181,6 +206,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       appBar: AppBar(
         backgroundColor: _card, elevation: 0,
         leading: IconButton(icon: const Icon(Icons.arrow_back_ios_new_rounded, color: _wht, size: 20),
+        tooltip: 'Back',
           onPressed: () => Navigator.pop(context)),
         title: const Text('Business Profile', style: TextStyle(color: _wht, fontSize: 17, fontWeight: FontWeight.w700)),
         actions: [

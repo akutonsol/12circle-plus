@@ -45,9 +45,75 @@ class ScanResult {
       );
 }
 
+/// FIT-020 · the scan result's portion control — `Smaller` / `As shown` /
+/// `Larger`.
+///
+/// ── WHY THESE ARE RELATIVE AND NOT THREE FIXED MULTIPLIERS ─────────────────
+/// The anchor gives three words and no numbers. "Smaller" means *smaller than
+/// what the scan estimated*, which is a relative operation; inventing absolute
+/// values (0.75×, 1.5×) would be deciding, on the owner's behalf, how much food
+/// a client just ate — and that number goes into their day's calories and to
+/// their coach.
+///
+/// So the step is taken from the control this screen ALREADY ships: a slider
+/// over 0.25–3.0 with 11 divisions. One division is
+/// `(3.0 - 0.25) / 11 = 0.25`. The granularity is the product's own, not a
+/// figure chosen here.
+///
+/// `As shown` returns to 1.0 — the scan's own estimate, which is the one value
+/// in this control that is not a judgement.
+const scanPortionMin = 0.25;
+const scanPortionMax = 3.0;
+const scanPortionDivisions = 11;
+
+/// One slider division: the granularity the shipped control already defines.
+const scanPortionStep =
+    (scanPortionMax - scanPortionMin) / scanPortionDivisions;
+
+/// `Smaller` — one step down, never below the control's own floor.
+double portionSmaller(double current) =>
+    ((current - scanPortionStep).clamp(scanPortionMin, scanPortionMax)).toDouble();
+
+/// `Larger` — one step up, never above the ceiling.
+double portionLarger(double current) =>
+    ((current + scanPortionStep).clamp(scanPortionMin, scanPortionMax)).toDouble();
+
+/// `As shown` — the scan's own estimate.
+const portionAsShown = 1.0;
+
+/// FIT-020's save label: `Save to lunch`.
+///
+/// The meal type is the chip the client selected on the sheet, so the word is
+/// real data rather than the anchor's example. Lower-cased to match the way the
+/// design writes it in a sentence.
+String scanSaveLabel(String mealType) {
+  final m = mealType.trim();
+  if (m.isEmpty) return 'Save';
+  return 'Save to ${m.replaceAll('_', ' ').toLowerCase()}';
+}
+
 class AiScanView extends StatefulWidget {
   final void Function(ScanResult result) onAccept;
-  const AiScanView({super.key, required this.onAccept});
+  /// The meal chip currently selected on the sheet — FIT-020 names the save
+  /// button after it.
+  final String mealType;
+  /// FIT-020 declares "Search instead": leave the scan and go to the search
+  /// tab. Null hides the control rather than drawing one that does nothing.
+  final VoidCallback? onSearchInstead;
+  /// Visible for testing. The result state is only reachable by running a real
+  /// scan — a camera, an upload and a model call — so the wiring below it
+  /// (FIT-020's three portion words, the save label, "Search instead") could
+  /// not otherwise be asserted at all. Same seam as
+  /// `WorkoutCompleteDialog.submit`.
+  final ScanResult? initialResult;
+
+  const AiScanView({
+    super.key,
+    required this.onAccept,
+    this.mealType = 'lunch',
+    this.onSearchInstead,
+    this.initialResult,
+  });
 
   @override
   State<AiScanView> createState() => _AiScanViewState();
@@ -102,7 +168,7 @@ class _AiScanViewState extends State<AiScanView> {
       if (!mounted) return;
       setState(() => _stage = _ScanStage.idle);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Couldn't estimate that. Try again.\n$e"), backgroundColor: _redChip));
+        SnackBar(content: Text("Couldn't estimate that. Try again."), backgroundColor: _redChip));
     }
   }
 
@@ -110,6 +176,7 @@ class _AiScanViewState extends State<AiScanView> {
     try {
       final file = await _picker.pickImage(source: source, imageQuality: 80);
       if (file == null) return;
+      if (!mounted) return;
       setState(() {
         _image = file;
         _stage = _ScanStage.scanning;
@@ -118,7 +185,7 @@ class _AiScanViewState extends State<AiScanView> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Couldn't access camera/gallery: $e")),
+          SnackBar(content: Text("Couldn't access the camera or gallery.")),
         );
       }
     }
@@ -145,7 +212,7 @@ class _AiScanViewState extends State<AiScanView> {
       if (!mounted) return;
       setState(() => _stage = _ScanStage.idle);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Couldn't analyze that photo. Try again or add manually.\n$e"),
+        SnackBar(content: Text("Couldn't analyze that photo. Try again or add manually."),
           backgroundColor: _redChip));
     }
   }
@@ -156,6 +223,17 @@ class _AiScanViewState extends State<AiScanView> {
       _result = null;
       _stage = _ScanStage.idle;
     });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final seed = widget.initialResult;
+    if (seed != null) {
+      _result = seed;
+      _portion = portionAsShown;
+      _stage = _ScanStage.result;
+    }
   }
 
   @override
@@ -479,6 +557,28 @@ class _AiScanViewState extends State<AiScanView> {
                   Text('${_portion.toStringAsFixed(2)}×',
                     style: const TextStyle(color: _brand, fontSize: 13, fontWeight: FontWeight.w700)),
                 ]),
+                // FIT-020's three declared portion controls. The slider stays
+                // below them: the anchor does not draw it, but removing a
+                // finer control would take capability away, and a locked
+                // screen not drawing something is not the design saying to
+                // delete it (the OD-15 / OD-17 rule).
+                Row(children: [
+                  Expanded(child: _PortionChoice(
+                    label: 'Smaller',
+                    selected: false,
+                    onTap: () => setState(() => _portion = portionSmaller(_portion)))),
+                  const SizedBox(width: 8),
+                  Expanded(child: _PortionChoice(
+                    label: 'As shown',
+                    selected: (_portion - portionAsShown).abs() < 0.001,
+                    onTap: () => setState(() => _portion = portionAsShown))),
+                  const SizedBox(width: 8),
+                  Expanded(child: _PortionChoice(
+                    label: 'Larger',
+                    selected: false,
+                    onTap: () => setState(() => _portion = portionLarger(_portion)))),
+                ]),
+                const SizedBox(height: 4),
                 SliderTheme(
                   data: SliderTheme.of(context).copyWith(
                     activeTrackColor: _brand, inactiveTrackColor: _brand.withValues(alpha: 0.2),
@@ -556,9 +656,10 @@ class _AiScanViewState extends State<AiScanView> {
                       ],
                     ),
                     alignment: Alignment.center,
-                    child: const Text(
-                      'Log This Meal',
-                      style: TextStyle(
+                    // FIT-020 names this after the meal being saved to.
+                    child: Text(
+                      scanSaveLabel(widget.mealType),
+                      style: const TextStyle(
                         color: _white,
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
@@ -569,10 +670,81 @@ class _AiScanViewState extends State<AiScanView> {
               ),
             ],
           ),
+          // FIT-020 · "Search instead" — leave the scan and look the food up
+          // by name. Null hides it rather than drawing a control that does
+          // nothing.
+          if (widget.onSearchInstead != null) ...[
+            const SizedBox(height: 10),
+            Semantics(
+              button: true,
+              child: GestureDetector(
+                onTap: widget.onSearchInstead,
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 44),
+                  alignment: Alignment.center,
+                  child: Text('Search instead',
+                    style: TextStyle(
+                      color: _muted.withValues(alpha: 0.8),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600)),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
+}
+
+/// One of FIT-020's three portion words.
+///
+/// `As shown` is a state — the scan's own estimate — so it reports `selected`.
+/// `Smaller` and `Larger` are steps, not states: they move the portion and
+/// report nothing about where it ended up, because "smaller" is not a place.
+class _PortionChoice extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _PortionChoice({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        selected: selected,
+        label: label,
+        excludeSemantics: true,
+        // `excludeSemantics` drops the child's actions with its labels — F-9.
+        onTap: onTap,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 44),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: selected
+                  ? _brand.withValues(alpha: 0.18)
+                  : Colors.white.withValues(alpha: 0.04),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: selected
+                    ? _brand
+                    : Colors.white.withValues(alpha: 0.10)),
+            ),
+            child: Text(label,
+              style: TextStyle(
+                color: selected ? _white : _muted,
+                fontSize: 13,
+                fontWeight: FontWeight.w700)),
+          ),
+        ),
+      );
 }
 
 class _MacroChip extends StatelessWidget {

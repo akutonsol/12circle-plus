@@ -130,17 +130,20 @@ CREATE POLICY "coaches read client measurements"
   USING (true);
 
 -- ── 13. nutrition_logs: RLS + policies ───────────────────────────────────────
-ALTER TABLE nutrition_logs ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "users manage own nutrition logs" ON nutrition_logs;
-CREATE POLICY "users manage own nutrition logs"
-  ON nutrition_logs FOR ALL TO authenticated
-  USING (user_id = auth.uid());
-
-DROP POLICY IF EXISTS "coaches read client nutrition logs" ON nutrition_logs;
-CREATE POLICY "coaches read client nutrition logs"
-  ON nutrition_logs FOR SELECT TO authenticated
-  USING (true);
+-- STAGE B.3 (B2-3): nutrition_logs is created by migration 006, i.e. AFTER this
+-- file, so on a clean replay these statements aborted 003 outright. Guarded with
+-- the same `undefined_table` idiom this file already uses for workout_logs in
+-- section 16. On a clean replay the block no-ops here and migration 111
+-- re-asserts the policies once the table exists.
+DO $$ BEGIN
+  EXECUTE 'ALTER TABLE nutrition_logs ENABLE ROW LEVEL SECURITY';
+  EXECUTE 'DROP POLICY IF EXISTS "users manage own nutrition logs" ON nutrition_logs';
+  EXECUTE 'CREATE POLICY "users manage own nutrition logs" ON nutrition_logs FOR ALL TO authenticated USING (user_id = auth.uid())';
+  EXECUTE 'DROP POLICY IF EXISTS "coaches read client nutrition logs" ON nutrition_logs';
+  EXECUTE 'CREATE POLICY "coaches read client nutrition logs" ON nutrition_logs FOR SELECT TO authenticated USING (true)';
+EXCEPTION WHEN undefined_table THEN
+  RAISE NOTICE '003: nutrition_logs not present yet -- policies deferred to migration 111';
+END $$;
 
 -- ── 14. progress_photo_logs: RLS + policies ───────────────────────────────────
 ALTER TABLE progress_photo_logs ENABLE ROW LEVEL SECURITY;
@@ -191,22 +194,19 @@ DO $$ BEGIN
 EXCEPTION WHEN undefined_table THEN NULL; END $$;
 
 -- ── 17. notifications: ensure recipient can read ──────────────────────────────
-ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "recipients read own notifications" ON notifications;
-CREATE POLICY "recipients read own notifications"
-  ON notifications FOR SELECT TO authenticated
-  USING (recipient_id = auth.uid());
-
-DROP POLICY IF EXISTS "system can insert notifications" ON notifications;
-CREATE POLICY "system can insert notifications"
-  ON notifications FOR INSERT TO authenticated
-  WITH CHECK (true);
-
-DROP POLICY IF EXISTS "recipients update own notifications" ON notifications;
-CREATE POLICY "recipients update own notifications"
-  ON notifications FOR UPDATE TO authenticated
-  USING (recipient_id = auth.uid());
+-- STAGE B.3 (B2-3): notifications is created by migration 004, i.e. AFTER this
+-- file. Same treatment as section 13 -- guarded here, re-asserted in 111.
+DO $$ BEGIN
+  EXECUTE 'ALTER TABLE notifications ENABLE ROW LEVEL SECURITY';
+  EXECUTE 'DROP POLICY IF EXISTS "recipients read own notifications" ON notifications';
+  EXECUTE 'CREATE POLICY "recipients read own notifications" ON notifications FOR SELECT TO authenticated USING (recipient_id = auth.uid())';
+  EXECUTE 'DROP POLICY IF EXISTS "system can insert notifications" ON notifications';
+  EXECUTE 'CREATE POLICY "system can insert notifications" ON notifications FOR INSERT TO authenticated WITH CHECK (true)';
+  EXECUTE 'DROP POLICY IF EXISTS "recipients update own notifications" ON notifications';
+  EXECUTE 'CREATE POLICY "recipients update own notifications" ON notifications FOR UPDATE TO authenticated USING (recipient_id = auth.uid())';
+EXCEPTION WHEN undefined_table THEN
+  RAISE NOTICE '003: notifications not present yet -- policies deferred to migration 111';
+END $$;
 
 -- ── 18. user_profiles: ensure marketplace coaches are readable ────────────────
 DO $$ BEGIN

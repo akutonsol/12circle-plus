@@ -10,6 +10,10 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // flutter_local_notifications 18.x declares, in its AAR metadata, that the
+        // consuming app MUST enable core library desugaring. Without it the build
+        // fails at :app:checkDebugAarMetadata before any code is compiled.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -42,4 +46,9 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Required by the `isCoreLibraryDesugaringEnabled` flag above.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

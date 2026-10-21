@@ -84,6 +84,7 @@ class _CoachMarketplaceScreenState extends ConsumerState<CoachMarketplaceScreen>
         backgroundColor: Colors.transparent, elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: _wht, size: 20),
+          tooltip: 'Back',
           onPressed: () => Navigator.pop(context)),
         title: const Text('Find a Coach',
           style: TextStyle(color: _wht, fontSize: 17, fontWeight: FontWeight.w700)),
@@ -146,7 +147,11 @@ class _CoachMarketplaceScreenState extends ConsumerState<CoachMarketplaceScreen>
         Expanded(
           child: coachesAsync.when(
             loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
-            error: (e, _) => Center(child: Text('Error: $e', style: const TextStyle(color: _mut))),
+            // ERR-2: `Could not load [noun]` is the pattern this repository
+            // renders in fifteen places.
+            error: (e, _) => const Center(
+                child: Text('Could not load coaches',
+                    style: TextStyle(color: _mut))),
             data: (coaches) {
               var filtered = coaches.where((c) {
                 final name = '${c['first_name'] ?? ''} ${c['last_name'] ?? ''}'.toLowerCase();

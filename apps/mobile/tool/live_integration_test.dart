@@ -1,8 +1,11 @@
 // 12 Circle Fitness — Live integration smoke test
-// Runs against the real Supabase dev instance as the seeded test accounts.
+// Runs against the 12 Circle QA project as the seeded test accounts. The
+// target comes from QA_URL / QA_ANON and is verified before anything runs --
+// see tool/qa_target.dart. It used to be a hardcoded production constant.
 // Validates schema presence, RLS, and CRUD round-trips for the built modules
 // (Modules 1–14). Maps each check to a QA spec ID.
 //
+//   export QA_URL=... QA_ANON=...
 //   dart run tool/live_integration_test.dart
 //
 // NOTE: service-layer logic (12 Circle Score awarding, in-app notifications)
@@ -12,9 +15,14 @@
 import 'dart:convert';
 import 'dart:io';
 
-const _url = 'https://nxdbooufqzkpslkcogxc.supabase.co';
-const _anon =
-    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im54ZGJvb3VmcXprcHNsa2NvZ3hjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwMjA4NzksImV4cCI6MjA5NjU5Njg3OX0.D0rl8hxQmDjqknsDCPRuKK1uyIYruSMjycHmNTI-xcE';
+import 'qa_target.dart';
+
+// ENV-5: the target is resolved from QA_URL / QA_ANON and positively verified
+// as the QA project before a single request goes out. There is no default --
+// this file used to hardcode the PRODUCTION ref and key right here.
+final QaTarget _target = resolveQaTarget();
+String get _url => _target.url;
+String get _anon => _target.anonKey;
 
 const _clientEmail = 'test@12circle.app';
 const _clientPass = 'Test1234!';
@@ -90,7 +98,7 @@ Future<void> main() async {
   final coach = await _signIn(_coachEmail, _coachPass);
   coach == null
       ? _no('AUTH-002', 'coach sign-in failed')
-      : _ok('AUTH-002', 'coach signed in (${coach!.uid.substring(0, 8)})');
+      : _ok('AUTH-002', 'coach signed in (${coach.uid.substring(0, 8)})');
   if (client == null) {
     print('\nCannot continue without client session.');
     _summary();
@@ -362,10 +370,10 @@ Future<void> main() async {
   print('\nCOACH NOTES (Module 29)');
   if (coach != null) {
     final note = await _req('POST', '/rest/v1/coach_notes',
-        token: coach!.token,
+        token: coach.token,
         extraHeaders: {'Prefer': 'return=representation'},
         jsonBody: {
-          'coach_id': coach!.uid, 'client_id': uid,
+          'coach_id': coach.uid, 'client_id': uid,
           'body': '__itest private note', 'tag': 'general',
         });
     if (note.code >= 200 && note.code < 300 && note.body is List && (note.body as List).isNotEmpty) {
@@ -377,7 +385,7 @@ Future<void> main() async {
       (leak.code == 200 && leak.body is List && (leak.body as List).isEmpty)
           ? _ok('NOTE-SEC', 'client cannot read coach notes about themselves (RLS)')
           : _no('NOTE-SEC', 'PRIVACY LEAK: client read ${leak.body is List ? (leak.body as List).length : '?'} notes');
-      await _req('DELETE', '/rest/v1/coach_notes', token: coach!.token, query: {'id': 'eq.$nId'});
+      await _req('DELETE', '/rest/v1/coach_notes', token: coach.token, query: {'id': 'eq.$nId'});
     } else {
       _no('NOTE-001', 'coach note create failed (HTTP ${note.code}) ${note.body}');
     }
@@ -387,10 +395,10 @@ Future<void> main() async {
   print('\nPROGRAM BUILDER (Module 31)');
   if (coach != null) {
     final prog = await _req('POST', '/rest/v1/workout_programs',
-        token: coach!.token,
+        token: coach.token,
         extraHeaders: {'Prefer': 'return=representation'},
         jsonBody: {
-          'coach_id': coach!.uid,
+          'coach_id': coach.uid,
           'name': '__itest program',
           'goal': 'test',
           'difficulty': 'intermediate',
@@ -401,7 +409,7 @@ Future<void> main() async {
       _ok('PRG-001', 'coach created program');
       // PRG-002: add a workout with a jsonb exercises array.
       final wkt = await _req('POST', '/rest/v1/program_workouts',
-          token: coach!.token,
+          token: coach.token,
           extraHeaders: {'Prefer': 'return=representation'},
           jsonBody: {
             'program_id': pid,
@@ -409,15 +417,27 @@ Future<void> main() async {
             'day_of_week': 'Monday',
             'title': 'Upper Push',
             'estimated_minutes': 45,
+            // Canonical prescription contract — see
+            // docs/WORKOUT_DOMAIN_CONTRACT.md §3. This probe used to write
+            // `reps` as a String and `rest` instead of `rest_seconds`, i.e. it
+            // asserted the round trip using a shape the client cannot read.
             'exercises': [
-              {'name': 'Bench Press', 'sets': 3, 'reps': '10', 'rest': 60}
+              {
+                'exercise_instance_id': 'probe-bench-press',
+                'name': 'Bench Press',
+                'position': 0,
+                'sets': 3,
+                'reps': 10,
+                'weight_kg': null,
+                'rest_seconds': 60,
+              }
             ],
             'sort_order': 0,
           });
       final wktOk = wkt.code >= 200 && wkt.code < 300;
       // PRG-003: read it back and confirm the exercises round-tripped.
       final read = await _req('GET', '/rest/v1/program_workouts',
-          token: coach!.token,
+          token: coach.token,
           query: {'program_id': 'eq.$pid', 'select': 'title,exercises'});
       final readOk = read.code == 200 &&
           read.body is List &&
@@ -431,7 +451,7 @@ Future<void> main() async {
           : _no('PRG-003', 'workout read-back failed (HTTP ${read.code})');
       // Cleanup (workouts cascade on program delete).
       await _req('DELETE', '/rest/v1/workout_programs',
-          token: coach!.token, query: {'id': 'eq.$pid'});
+          token: coach.token, query: {'id': 'eq.$pid'});
     } else {
       _no('PRG-001', 'program create failed (HTTP ${prog.code}) ${prog.body}');
     }
@@ -442,9 +462,9 @@ Future<void> main() async {
   if (coach != null) {
     // CMP-001: coach can read their active roster.
     final roster = await _req('GET', '/rest/v1/coach_client_relationships',
-        token: coach!.token,
+        token: coach.token,
         query: {
-          'coach_id': 'eq.${coach!.uid}',
+          'coach_id': 'eq.${coach.uid}',
           'status': 'eq.active',
           'select': 'client_id'
         });
@@ -462,7 +482,7 @@ Future<void> main() async {
       String? bad;
       for (final entry in sources.entries) {
         final r = await _req('GET', '/rest/v1/${entry.key}',
-            token: coach!.token, query: {'select': entry.value, 'limit': '1'});
+            token: coach.token, query: {'select': entry.value, 'limit': '1'});
         if (r.code != 200) {
           allOk = false;
           bad = '${entry.key} (HTTP ${r.code})';
@@ -592,7 +612,7 @@ Future<void> main() async {
   print('\nADMIN DASHBOARD (Module 25)');
   if (coach != null) {
     final stats = await _req('POST', '/rest/v1/rpc/admin_platform_stats',
-        token: coach!.token, jsonBody: {});
+        token: coach.token, jsonBody: {});
     // A coach (non-admin) must be denied: PostgREST surfaces the RAISE as 4xx.
     if (stats.code == 401 || stats.code == 403 ||
         (stats.code >= 400 && '${stats.body}'.toLowerCase().contains('not authorized'))) {

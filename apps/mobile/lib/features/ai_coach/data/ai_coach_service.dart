@@ -177,8 +177,26 @@ class AICoachService {
     } catch (_) { return []; }
   }
 
-  Future<void> deleteMemory(String id) async {
-    try { await _db.from('ai_memories').delete().eq('id', id); } catch (_) {}
+  /// Remove one remembered fact. Returns whether it was actually removed.
+  ///
+  /// This returned `void` and ended in `catch (_) {}`, so a failed delete was
+  /// indistinguishable from a successful one. That matters more here than in
+  /// most places: these rows are health facts — `kind` includes `injury`, and
+  /// `ai-coach` captures them automatically from what the member types — and
+  /// this is the only control a member has over them. A silent failure meant
+  /// the chip reappeared after the refresh with no explanation, which reads as
+  /// a glitch rather than "your deletion did not happen".
+  ///
+  /// `addMemory` beside it already returns `bool`; this now matches it.
+  ///
+  /// Authorization is the database's: migration 074 puts `"own ai data"` on
+  /// `ai_memories` `FOR ALL ... USING (user_id = auth.uid())`, so the missing
+  /// `user_id` predicate here cannot delete another member's row.
+  Future<bool> deleteMemory(String id) async {
+    try {
+      await _db.from('ai_memories').delete().eq('id', id);
+      return true;
+    } catch (_) { return false; }
   }
 
   Future<List<Map<String, dynamic>>> getConversationHistory({int limit = 20}) async {

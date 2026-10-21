@@ -22,7 +22,15 @@ const cryptoProvider = Stripe.createSubtleCryptoProvider();
 
 const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-function subStatusFields(sub: Stripe.Subscription) {
+// `canceled_at` is optional here and set only on the deleted event (Q11). Typed
+// explicitly so adding it below is a checked assignment rather than a widening cast.
+function subStatusFields(sub: Stripe.Subscription): {
+  status: string;
+  stripe_price_id: string | null;
+  current_period_end: string | null;
+  cancel_at_period_end: boolean;
+  canceled_at?: string;
+} {
   return {
     status: sub.status,
     stripe_price_id: sub.items.data[0]?.price?.id ?? null,
@@ -127,13 +135,28 @@ Deno.serve(async (req: Request) => {
           }
           const sessions = Number(meta.sessions ?? 0);
           if (sessions > 0 && meta.coach_id) {
-            await db.from('client_session_credits').insert({
+            // I-PAY-01. Stripe delivers at least once and retries every
+            // non-2xx, so a redelivery used to grant the sessions again — the
+            // one write in this handler without a conflict target, while
+            // payments, subscriptions, coach_client_relationships and
+            // event_registrations were all already idempotent.
+            //
+            // ignoreDuplicates (ON CONFLICT DO NOTHING) rather than a merge:
+            // this grant is money the client has already been given, and
+            // sessions_used may have advanced since. A redelivery must be a
+            // complete no-op, not a rewrite of a block that is being consumed.
+            //
+            // The conflict target is the unique index migration 131 adds on
+            // payment_id. It is only reachable when payment_id is present —
+            // Postgres treats NULLs as distinct — so a manual grant with no
+            // payment still inserts, and two of them do not collide.
+            await db.from('client_session_credits').upsert({
               client_id: meta.user_id,
               coach_id: meta.coach_id,
               package_id: meta.package_id || null,
               payment_id: meta.payment_id || null,
               sessions_total: sessions,
-            });
+            }, { onConflict: 'payment_id', ignoreDuplicates: true });
           }
         }
         break;
@@ -143,7 +166,27 @@ Deno.serve(async (req: Request) => {
       case 'customer.subscription.deleted': {
         const sub = event.data.object as Stripe.Subscription;
         const fields = subStatusFields(sub);
-        if (event.type === 'customer.subscription.deleted') fields.status = 'canceled';
+        if (event.type === 'customer.subscription.deleted') {
+          fields.status = 'canceled';
+          // OWNER DECISION Q11 · the authorized writer for the cancellation EVENT.
+          //
+          // Churn is defined as cancellations recorded WITHIN a month over the
+          // subscriptions active when it began, so it needs the moment of departure and
+          // not merely the resulting state. This handler is the system-of-record path for
+          // that moment — it already writes `status = 'canceled'` here — so the timestamp
+          // is written in the SAME update rather than inferred later by a trigger, which
+          // would record when we noticed instead of when it happened.
+          //
+          // STRIPE'S OWN `canceled_at` IS PREFERRED, and the fallback is named rather than
+          // silent: when Stripe omits it we record the moment this event was handled,
+          // which is a real moment of the same event and the closest authoritative value
+          // available. Neither is derived from `updated_at` or `current_period_end` — the
+          // inference the ruling forbids, since one moves on any write and the other is a
+          // billing boundary rather than a departure.
+          fields.canceled_at = sub.canceled_at
+            ? new Date(sub.canceled_at * 1000).toISOString()
+            : new Date().toISOString();
+        }
         await db.from('subscriptions')
           .update(fields)
           .eq('stripe_subscription_id', sub.id);

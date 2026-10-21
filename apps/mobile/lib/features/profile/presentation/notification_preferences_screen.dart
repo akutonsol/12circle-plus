@@ -59,7 +59,7 @@ class _NotificationPreferencesScreenState
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Failed to save: $e'),
+          content: Text('Failed to save.'),
           backgroundColor: _err, behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 4)));
       }
@@ -83,6 +83,7 @@ class _NotificationPreferencesScreenState
           child: SizedBox(height: 56, child: Row(children: [
             IconButton(
               icon: const Icon(Icons.arrow_back_ios_new, color: _pri, size: 20),
+              tooltip: 'Back',
               onPressed: () => Navigator.of(context).pop()),
             const Expanded(child: Center(child: Text('NOTIFICATIONS',
               style: TextStyle(color: _pri, fontSize: 16,

@@ -17,6 +17,59 @@ const _out   = Color(0xFF968E99);
 const _outV  = Color(0xFF4B444F);
 const _err   = Color(0xFFFFB4AB);
 
+/// The `user_profiles` update the Personal Info screen sends (extracted so the
+/// correction contract is testable without a backend — QAX-COR-01).
+@visibleForTesting
+Map<String, dynamic> buildPersonalInfoPayload({
+  required String firstName,
+  required String lastName,
+  required String? gender,
+  required DateTime? dateOfBirth,
+  required String phone,
+  required bool isCoach,
+  required String height,
+  required String weight,
+  required String goalWeight,
+  required String? fitnessGoal,
+  required String? activityLevel,
+  required int trainingDays,
+  required String? trainingLocation,
+  required String? nutritionGoal,
+}) {
+  // A cleared field is sent as null so the stored value is actually removed;
+  // omitting it would keep the old value while the screen reports success.
+  String? orNull(String v) => v.trim().isEmpty ? null : v.trim();
+  double? number(String v, String label) {
+    final t = v.trim();
+    if (t.isEmpty) return null;
+    final n = double.tryParse(t);
+    // Never coerce unreadable input to 0 — that writes a false measurement.
+    if (n == null) throw FormatException('Enter a valid number for $label.');
+    return n;
+  }
+
+  final payload = <String, dynamic>{
+    'first_name': firstName.trim(),
+    'last_name':  lastName.trim(),
+    'gender':     gender,
+    'phone':      orNull(phone),
+  };
+  // The date picker cannot produce "no date", so an unset DOB stays untouched.
+  if (dateOfBirth != null) payload['date_of_birth'] = dateOfBirth.toIso8601String().split('T')[0];
+  // Client-only fitness fields — not written for coaches.
+  if (!isCoach) {
+    payload['height_cm']      = number(height, 'height');
+    payload['weight_kg']      = number(weight, 'weight');
+    payload['weight_goal_kg'] = number(goalWeight, 'goal weight');
+    if (fitnessGoal != null)      payload['fitness_goal']            = fitnessGoal;
+    if (activityLevel != null)    payload['activity_level']          = activityLevel;
+    payload['training_days_per_week'] = trainingDays;
+    if (trainingLocation != null) payload['training_location']       = trainingLocation;
+    if (nutritionGoal != null)    payload['nutrition_goal']          = nutritionGoal;
+  }
+  return payload;
+}
+
 class PersonalInfoScreen extends ConsumerStatefulWidget {
   const PersonalInfoScreen({super.key});
   @override
@@ -142,7 +195,7 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Could not upload photo: $e'),
+          content: Text('Could not upload photo.'),
           backgroundColor: _err, behavior: SnackBarBehavior.floating));
       }
     } finally {
@@ -161,24 +214,15 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
     try {
       final uid = Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) throw Exception('Not logged in');
-      final payload = <String, dynamic>{
-        'first_name': _fnCtrl.text.trim(),
-        'last_name':  _lnCtrl.text.trim(),
-      };
-      if (_gender != null) payload['gender'] = _gender;
-      if (_dob != null) payload['date_of_birth'] = _dob!.toIso8601String().split('T')[0];
-      if (_phoneCtrl.text.trim().isNotEmpty)  payload['phone']          = _phoneCtrl.text.trim();
-      // Client-only fitness fields — not written for coaches.
-      if (!_isCoach) {
-        if (_heightCtrl.text.trim().isNotEmpty) payload['height_cm']      = double.tryParse(_heightCtrl.text) ?? 0;
-        if (_weightCtrl.text.trim().isNotEmpty) payload['weight_kg']      = double.tryParse(_weightCtrl.text) ?? 0;
-        if (_goalCtrl.text.trim().isNotEmpty)   payload['weight_goal_kg'] = double.tryParse(_goalCtrl.text) ?? 0;
-        if (_fitnessGoal != null)      payload['fitness_goal']            = _fitnessGoal;
-        if (_activityLevel != null)    payload['activity_level']          = _activityLevel;
-        payload['training_days_per_week'] = _trainingDays;
-        if (_trainingLocation != null) payload['training_location']       = _trainingLocation;
-        if (_nutritionGoal != null)    payload['nutrition_goal']          = _nutritionGoal;
-      }
+      final payload = buildPersonalInfoPayload(
+        firstName: _fnCtrl.text, lastName: _lnCtrl.text,
+        gender: _gender, dateOfBirth: _dob, phone: _phoneCtrl.text,
+        isCoach: _isCoach,
+        height: _heightCtrl.text, weight: _weightCtrl.text, goalWeight: _goalCtrl.text,
+        fitnessGoal: _fitnessGoal, activityLevel: _activityLevel,
+        trainingDays: _trainingDays, trainingLocation: _trainingLocation,
+        nutritionGoal: _nutritionGoal,
+      );
 
       await Supabase.instance.client
           .from('user_profiles')
@@ -191,10 +235,19 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
           backgroundColor: _tert, behavior: SnackBarBehavior.floating));
         Navigator.of(context).pop();
       }
+    } on FormatException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.message),
+          backgroundColor: _err, behavior: SnackBarBehavior.floating));
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Error: $e'),
+          // ERR-2: this screen edits name, gender and DATE OF BIRTH. A raw
+          // database error rendered here is the SEC-PHI-2 shape on a screen
+          // holding personal data.
+          content: const Text('Failed to save. Please try again.'),
           backgroundColor: _err, behavior: SnackBarBehavior.floating));
       }
     } finally {
@@ -225,6 +278,7 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
           child: SizedBox(height: 56, child: Row(children: [
             IconButton(
               icon: const Icon(Icons.arrow_back_ios_new, color: _pri, size: 20),
+              tooltip: 'Back',
               onPressed: () => Navigator.of(context).pop()),
             const Expanded(child: Center(child: Text('PERSONAL INFO',
               style: TextStyle(color: _pri, fontSize: 16,

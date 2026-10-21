@@ -12,7 +12,7 @@
 -- ═══════════════════════════════════════════════════════════════════════════
 
 create table if not exists intelligence_attribute_reviews (
-  exercise_id    uuid not null references exercises(id) on delete cascade,
+  exercise_id    uuid not null references custom_exercises(id) on delete cascade,
   attribute      text not null,                 -- e.g. joint_stress | fatigue | coaching
   status         text not null,                 -- approved | rejected | needs_edit
   value_override jsonb,                          -- reviewer-corrected value (optional)
@@ -102,7 +102,7 @@ language sql stable security definer as $$
     (select count(*)::int from jsonb_each_text(coalesce(ei.attribute_confidence, '{}'::jsonb)) a
        where (a.value)::int < 90)
   from exercise_intelligence ei
-  join exercises e on e.id = ei.exercise_id
+  join custom_exercises e on e.id = ei.exercise_id
   where ei.status in ('ai_generated','under_review')
   order by ei.confidence asc nulls first
   limit greatest(1, least(p_limit, 100));

@@ -118,7 +118,6 @@ class _ExerciseDatabaseScreenState extends ConsumerState<ExerciseDatabaseScreen>
     final isStaff = role == 'coach' || role == 'admin';
 
     return AppScaffold(
-      navIndex: 2,
       showBackButton: true,
       body: Stack(children: [
         Positioned.fill(

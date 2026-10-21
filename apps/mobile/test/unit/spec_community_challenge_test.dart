@@ -190,20 +190,30 @@ void main() {
   });
 
   group('MSG-002 Coach sends image → image displayed', () {
-    test('message with imageUrl metadata renders as image', () {
+    // chat-media is PRIVATE (migration 130 / DEC-3A-10): the row carries the
+    // storage object path under `media_path`, and the screen signs it at
+    // render time. A URL is never stored.
+    test('message with media_path metadata is an image message', () {
       final msg = {
         'content':  '[photo]',
-        'metadata': {'image_url': 'https://cdn.example.com/chat/photo.jpg'},
+        'metadata': {
+          'type': 'image',
+          'media_path': 'messages/7d3f6e8a-1b2c-4d5e-8f90-123456789abc/'
+              '3a1b2c3d-4e5f-4a6b-9c8d-0e1f2a3b4c5d/1757000000000.jpg',
+        },
       };
-      final imageUrl = (msg['metadata'] as Map?)?['image_url'] as String?;
-      expect(imageUrl, isNotNull);
-      expect(imageUrl, startsWith('https://'));
+      final path = (msg['metadata'] as Map?)?['media_path'] as String?;
+      expect(path, isNotNull);
+      expect(path, startsWith('messages/'));
+      expect(path, isNot(startsWith('http')), reason: 'a path, not a URL');
+      expect((msg['metadata'] as Map?)?['image_url'], isNull,
+          reason: 'the pre-130 public-URL key is retired');
     });
 
     test('message without metadata renders as text', () {
       final msg = {'content': 'Hello', 'metadata': null};
-      final imageUrl = (msg['metadata'] as Map?)?['image_url'] as String?;
-      expect(imageUrl, isNull);
+      final path = (msg['metadata'] as Map?)?['media_path'] as String?;
+      expect(path, isNull);
     });
   });
 

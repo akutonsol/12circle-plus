@@ -24,13 +24,17 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
   bool _isListening = false;
   bool _speechReady = false;
 
+  /// FIT-089 draws exactly these three chips. The screen shipped six, in a
+  /// different voice ("Analyze my breakfast", "Generate a 7-day meal plan").
+  ///
+  /// The three the board dropped are not capabilities that disappear — every
+  /// one of them is a sentence the user can still type, and the meal planner
+  /// and grocery list have their own routes in the overflow menu. What changes
+  /// is which three the screen offers first, and that is the board's call.
   final List<String> _quickPrompts = [
-    'Analyze my breakfast',
-    'Generate a 7-day meal plan',
-    'Create a grocery list',
-    'High protein meal ideas',
-    'Pre-workout nutrition tips',
-    'Help me hit my macros',
+    'Plan my week',
+    'Read my plate',
+    'Rest-day meals',
   ];
 
   @override
@@ -69,6 +73,7 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
     _messageController.clear();
     setState(() => _isLoading = true);
     await ref.read(aiNutritionNotifierProvider.notifier).sendMessage(message, image: image);
+    if (!mounted) return;
     setState(() => _isLoading = false);
     _scrollToBottom();
   }
@@ -114,8 +119,10 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
     }
     if (_isListening) {
       await _speech.stop();
+      if (!mounted) return;
       setState(() => _isListening = false);
     } else {
+      if (!mounted) return;
       setState(() => _isListening = true);
       await _speech.listen(
         onResult: (result) {
@@ -123,6 +130,7 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
           _messageController.selection = TextSelection.fromPosition(
             TextPosition(offset: _messageController.text.length));
           if (result.finalResult) {
+            if (!mounted) return;
             setState(() => _isListening = false);
           }
         },
@@ -143,6 +151,7 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
         backgroundColor: AppColors.bgDark,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: AppColors.white),
+          tooltip: 'Back',
           onPressed: () => context.pop()),
         title: Row(children: [
           Container(
@@ -161,6 +170,9 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
         ]),
         actions: [
           PopupMenuButton(
+            // FIT-089 names this. Without it the control falls back to
+            // MaterialLocalizations' generic "Show menu".
+            tooltip: 'More options',
             icon: const Icon(Icons.more_vert, color: AppColors.white),
             color: AppColors.surfaceDark,
             itemBuilder: (_) => [
@@ -219,7 +231,17 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
                       ])),
                   ]));
               }
-              return AiChatBubble(message: messages[index]);
+              final m = messages[index];
+              return AiChatBubble(
+                message: m,
+                // Only the turn the conversation is currently sitting on can
+                // be re-sent; an older failure is history.
+                onRetry: m.failed && index == messages.length - 1
+                    ? () => ref
+                        .read(aiNutritionNotifierProvider.notifier)
+                        .retryLastTurn()
+                    : null,
+              );
             })),
 
         // Quick prompts
@@ -250,9 +272,18 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
             color: AppColors.bgDarkSecondary,
             border: Border(top: BorderSide(color: AppColors.surfaceDarkElevated))),
           child: Row(children: [
-            // Photo button
-            GestureDetector(
+            // Photo button.
+            //
+            // F-22: it was unnamed. FIT-003 declares "Scan a meal" for exactly
+            // this — pick a photo and have it analysed — so the name is the
+            // package's own.
+            Semantics(
+              button: true,
+              label: 'Scan a meal',
+              enabled: !_isLoading,
+              child: GestureDetector(
               onTap: _isLoading ? null : _pickAndAnalyzePhoto,
+              behavior: HitTestBehavior.opaque,
               child: Container(
                 width: 40, height: 40,
                 decoration: BoxDecoration(
@@ -260,7 +291,7 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
                   shape: BoxShape.circle,
                   border: Border.all(color: AppColors.surfaceDarkElevated)),
                 child: Icon(Icons.camera_alt_outlined,
-                  color: _isLoading ? AppColors.textTertiary : AppColors.purple, size: 20))),
+                  color: _isLoading ? AppColors.textTertiary : AppColors.purple, size: 20)))),
             const SizedBox(width: 8),
 
             // Text field
@@ -279,7 +310,7 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
                   style: const TextStyle(color: AppColors.white),
                   maxLines: null,
                   decoration: InputDecoration(
-                    hintText: _isListening ? 'Listening...' : 'Ask your nutrition coach...',
+                    hintText: _isListening ? 'Listening...' : 'Ask about your nutrition',
                     hintStyle: TextStyle(
                       color: _isListening ? AppColors.purple : AppColors.textTertiary),
                     border: InputBorder.none,

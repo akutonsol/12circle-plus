@@ -1,15 +1,18 @@
+import '../config/app_env.dart';
 
+/// Client-safe backend constants for the environment this build targets.
+///
+/// Values live in [AppEnv] / `lib/core/config/app_env.dart` and are selected at
+/// build time via `--dart-define=APP_ENV=dev|qa|prod`. Nothing secret belongs
+/// here — the Anthropic key in particular is held only by the NestJS API.
 class AppConstants {
+  const AppConstants._();
 
-  static const String supabaseUrl = 'https://nxdbooufqzkpslkcogxc.supabase.co';
+  /// Supabase project URL for this build's environment.
+  static String get supabaseUrl => AppEnv.current.supabaseUrl;
 
-  static const String supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im54ZGJvb3VmcXprcHNsa2NvZ3hjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwMjA4NzksImV4cCI6MjA5NjU5Njg3OX0.D0rl8hxQmDjqknsDCPRuKK1uyIYruSMjycHmNTI-xcE';
+  /// Supabase publishable ("anon") key — client-safe, RLS-protected.
+  static String get supabaseAnonKey => AppEnv.current.supabaseAnonKey;
 
-  // Pass via: flutter run --dart-define=ANTHROPIC_API_KEY=sk-ant-...
-  static const String claudeApiKey = String.fromEnvironment(
-    'ANTHROPIC_API_KEY',
-    defaultValue: '',
-  );
-
+  /// Base URL of the 12 Circle NestJS API (AI endpoints live behind it).
 }
-

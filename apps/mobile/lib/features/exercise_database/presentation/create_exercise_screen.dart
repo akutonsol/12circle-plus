@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/custom_exercise_provider.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../workout/data/models/video_variant_model.dart';
+import '../../../core/widgets/named_icon_button.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 class _C {
@@ -508,6 +509,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     final picked = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
     if (picked != null) {
       final bytes = await picked.readAsBytes();
+      if (!mounted) return;
       setState(() {
         _imageBytes = bytes;
         _imageExt = _extOf(picked.name, 'jpg');
@@ -524,6 +526,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     final picked = await _picker.pickVideo(source: ImageSource.gallery);
     if (picked != null) {
       final bytes = await picked.readAsBytes();
+      if (!mounted) return;
       setState(() {
         _videoEntries[index].bytes = bytes;
         _videoEntries[index].ext = _extOf(picked.name, 'mp4');
@@ -651,6 +654,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
       _savedId = id;
     }
 
+    if (!mounted) return;
     setState(() => _saving = false);
     if (!mounted) return;
     if (id != null) {
@@ -720,7 +724,8 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
           color: _C.card,
           child: Column(children: [
             Row(children: [
-              GestureDetector(
+              NamedIconButton(
+                label: 'Back',
                 onTap: () => context.pop(),
                 child: const Icon(Icons.arrow_back_ios_new_rounded, color: _C.primary, size: 20)),
               const SizedBox(width: 14),
@@ -931,7 +936,7 @@ class _MediaTabState extends State<_MediaTab> {
       const Text('EXERCISE IMAGE', style: TextStyle(color: _C.mut, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
       const SizedBox(height: 10),
       GestureDetector(
-        onTap: () async { await s._pickImage(); setState(() {}); },
+        onTap: () async { await s._pickImage(); if (mounted) setState(() {}); },
         child: Container(
           height: 160,
           decoration: BoxDecoration(
@@ -1012,7 +1017,7 @@ class _MediaTabState extends State<_MediaTab> {
               const SizedBox(height: 8),
               // File upload
               GestureDetector(
-                onTap: () async { await s._pickVideo(i); setState(() {}); },
+                onTap: () async { await s._pickVideo(i); if (mounted) setState(() {}); },
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   decoration: BoxDecoration(

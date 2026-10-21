@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../features/nutrition/domain/nutrition_provider.dart';
 import '../domain/ai_nutrition_provider.dart';
+import '../domain/meal_plan.dart';
 
 class MealPlanScreen extends ConsumerStatefulWidget {
   const MealPlanScreen({super.key});
@@ -47,12 +48,13 @@ class _MealPlanScreenState extends ConsumerState<MealPlanScreen> {
       restrictions: _restrictions,
       days: _days,
     );
+    if (!mounted) return;
     setState(() => _isLoading = false);
   }
 
   @override
   Widget build(BuildContext context) {
-    final mealPlan = ref.watch(mealPlanNotifierProvider);
+    final outcome = mealPlanOutcome(ref.watch(mealPlanNotifierProvider));
     final goals    = ref.watch(nutritionGoalsProvider);
     goals.whenData(_loadGoalsOnce);
 
@@ -62,11 +64,12 @@ class _MealPlanScreenState extends ConsumerState<MealPlanScreen> {
         backgroundColor: AppColors.bgDark,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: AppColors.white),
+          tooltip: 'Back',
           onPressed: () => context.pop(),
         ),
         title: const Text('AI Meal Planner', style: TextStyle(color: AppColors.white)),
         actions: [
-          if (mealPlan != null)
+          if (canBuildGroceryList(outcome))
             TextButton(
               onPressed: () => context.push('/grocery-list'),
               child: const Text('Grocery List', style: TextStyle(color: AppColors.purple)),
@@ -164,7 +167,52 @@ class _MealPlanScreenState extends ConsumerState<MealPlanScreen> {
                     )
                   : const Text('Generate Meal Plan'),
             ),
-            if (mealPlan != null) ...[
+            // FIT-093. This branch did not exist: a failure arrived as the
+            // plan's text and was rendered under the heading below.
+            if (outcome is MealPlanFailed) ...[
+              const SizedBox(height: 32),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceDark,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AppColors.surfaceDarkElevated),
+                ),
+                child: Column(
+                  children: [
+                    const Icon(Icons.warning_amber_rounded,
+                        color: AppColors.textTertiary, size: 40),
+                    const SizedBox(height: 12),
+                    const Text(mealPlanFailedTitle,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            color: AppColors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 8),
+                    const Text(mealPlanFailedBody,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            color: AppColors.textTertiary, fontSize: 14)),
+                    const SizedBox(height: 16),
+                    OutlinedButton(
+                      onPressed: _isLoading ? null : _generatePlan,
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(double.infinity, 56),
+                        side: const BorderSide(color: AppColors.purple),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14)),
+                      ),
+                      child: const Text(mealPlanTryAgainLabel,
+                          style: TextStyle(color: AppColors.purple)),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 32),
+            ],
+            if (outcome is MealPlanReady) ...[
               const SizedBox(height: 32),
               const Text('Your Meal Plan', style: TextStyle(color: AppColors.white, fontSize: 18, fontWeight: FontWeight.w600)),
               const SizedBox(height: 16),
@@ -175,7 +223,7 @@ class _MealPlanScreenState extends ConsumerState<MealPlanScreen> {
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(color: AppColors.surfaceDarkElevated),
                 ),
-                child: Text(mealPlan, style: const TextStyle(color: AppColors.textSecondary, fontSize: 14, height: 1.6)),
+                child: Text(outcome.plan, style: const TextStyle(color: AppColors.textSecondary, fontSize: 14, height: 1.6)),
               ),
               const SizedBox(height: 16),
               OutlinedButton(
@@ -185,7 +233,15 @@ class _MealPlanScreenState extends ConsumerState<MealPlanScreen> {
                   side: const BorderSide(color: AppColors.purple),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 ),
-                child: const Text('Generate Grocery List', style: TextStyle(color: AppColors.purple)),
+                // FIT-092 names this. It said "Generate Grocery List".
+                child: const Text(mealPlanToGroceryLabel, style: TextStyle(color: AppColors.purple)),
+              ),
+              const SizedBox(height: 12),
+              // FIT-092's third control, which had no equivalent at all.
+              TextButton(
+                onPressed: _isLoading ? null : _generatePlan,
+                child: const Text(mealPlanRebuildLabel,
+                    style: TextStyle(color: AppColors.textTertiary)),
               ),
               const SizedBox(height: 32),
             ],

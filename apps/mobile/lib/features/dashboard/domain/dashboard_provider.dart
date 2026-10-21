@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../data/dashboard_service.dart';
+import '../../auth/domain/auth_provider.dart';
 
 final dashboardServiceProvider = Provider<DashboardService>((ref) => DashboardService());
 
@@ -14,6 +15,8 @@ final stepsProvider = StateProvider<int>((ref) => 6240);
 
 // ── Streak (consecutive active days from daily_scores) ────────────────────────
 final streakProvider = FutureProvider<int>((ref) async {
+  // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
+  ref.watch(currentUserProvider);
   final uid = Supabase.instance.client.auth.currentUser?.id;
   if (uid == null) return 0;
   try {

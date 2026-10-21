@@ -26,6 +26,11 @@ Rules:
   means push harder.
 - Pick 4-7 exercises, ordered big→small. Use supersets where sensible (same
   superset_group letter, e.g. "A"). Prescribe realistic sets/reps/rest/tempo.
+- "sets" and "reps" MUST be whole numbers. Never a range ("8-12"), never a
+  string, never text. If you would write a range, pick the single number you
+  actually mean.
+- Do NOT prescribe a load. Weight is the deterministic engine's decision, not
+  yours.
 
 Respond with ONLY JSON — no prose, no fences:
 {
@@ -55,7 +60,15 @@ Deno.serve(async (req: Request) => {
     const uid = user.id;
 
     const [{ data: profile }, { data: aiProfile }, { data: todayInsight }, memRes, libRes, fbRes] = await Promise.all([
-      db.from('user_profiles').select('fitness_goal, goal, equipment, experience_level, training_location, has_injuries, injury_locations').eq('id', uid).maybeSingle(),
+      // DAT-2 / I-INT-02. `user_profiles` has neither `goal` nor `equipment`
+      // (000 baseline + every ADD COLUMN since; the authoritative goal column is
+      // `fitness_goal`, 000, and 001's `user_profiles` block is a shadow
+      // `CREATE TABLE IF NOT EXISTS` that never executes). PostgREST resolves
+      // the whole select before reading, so ONE phantom column 400'd the entire
+      // request and `{ data: null }` came back without throwing — taking
+      // `experience_level`, `training_location`, `has_injuries` and
+      // `injury_locations` (013) down with it, whoever the member actually was.
+      db.from('user_profiles').select('fitness_goal, experience_level, training_location, has_injuries, injury_locations').eq('id', uid).maybeSingle(),
       db.from('ai_profiles').select('goals, preferences').eq('user_id', uid).maybeSingle(),
       db.from('ai_insights').select('data').eq('user_id', uid).eq('type', 'daily_insight').order('for_date', { ascending: false }).limit(1).maybeSingle(),
       db.from('ai_memories').select('kind, content').eq('user_id', uid),
@@ -78,9 +91,16 @@ Deno.serve(async (req: Request) => {
         (e.contraindications?.length ? ' | avoid: ' + e.contraindications.join(',') : '')}]`).join('\n');
 
     const ctx = {
-      goal: profile?.fitness_goal ?? profile?.goal ?? 'general',
+      goal: profile?.fitness_goal ?? 'general',
       experience: profile?.experience_level ?? 'intermediate',
-      equipment: profile?.equipment ?? 'Bodyweight',
+      // The user's available equipment is declared on `ai_profiles.preferences`
+      // (074_ai_coaching_layer.sql:13 — "{favorite_exercises,
+      // disliked_exercises, available_equipment, training_days}"), which this
+      // handler already fetches in the same Promise.all. Read it there rather
+      // than from a `user_profiles.equipment` column that has never existed.
+      // The `?? 'Bodyweight'` default is UNCHANGED: whether a missing input may
+      // be defaulted at all is ERR-2 / rule S, blocked on Q-5.
+      equipment: (aiProfile?.preferences?.available_equipment as string | undefined) ?? 'Bodyweight',
       location: profile?.training_location ?? 'gym',
       duration_minutes: duration_minutes ?? 45,
       focus, intensity_delta: intensityDelta,
@@ -104,15 +124,59 @@ Deno.serve(async (req: Request) => {
     let out: Record<string, unknown>;
     try { out = JSON.parse(text); } catch { return json({ error: 'Could not read AI result', raw: text }, 502); }
 
-    // Normalize superset flags for the app's program_workout exercise shape.
-    const exercises = ((out.exercises as Db[]) ?? []).map((e) => ({
-      name: e.name, sets: e.sets ?? 3, reps: e.reps ?? 10, rest_seconds: e.rest_seconds ?? 90,
-      tempo: e.tempo ?? null, notes: e.notes ?? null,
-      superset_group: e.superset_group && e.superset_group !== 'null' ? e.superset_group : null,
-      is_superset: !!(e.superset_group && e.superset_group !== 'null'),
-    }));
+    // ── Canonical contract (docs/WORKOUT_DOMAIN_CONTRACT.md §3) ──────────────
+    //
+    // The model's output is untrusted text, so it is validated here rather than
+    // passed through. Previously `e.reps ?? 10` preserved whatever the model
+    // emitted — a string, a range — and the client's codec then failed on the
+    // whole workout. A model that cannot produce whole numbers is a failure to
+    // report, not a workout to half-build.
+    //
+    // Load is deliberately absent: AI explains, the engine decides. `weight_kg`
+    // is written as null, which the client renders as no prescribed load.
+    const whole = (v: unknown): number | null => {
+      if (typeof v === 'number' && Number.isInteger(v)) return v;
+      if (typeof v === 'string' && /^\d+$/.test(v.trim())) return parseInt(v.trim(), 10);
+      return null;
+    };
+    const rejected: string[] = [];
+    const exercises = ((out.exercises as Db[]) ?? []).flatMap((e, i) => {
+      const name = typeof e.name === 'string' ? e.name.trim() : '';
+      const sets = whole(e.sets);
+      const reps = whole(e.reps);
+      if (!name || sets === null || sets < 1 || reps === null || reps < 0) {
+        rejected.push(`#${i} ${name || '(unnamed)'}: sets=${JSON.stringify(e.sets)} reps=${JSON.stringify(e.reps)}`);
+        return [];
+      }
+      const group = e.superset_group && e.superset_group !== 'null' ? e.superset_group : null;
+      return [{
+        exercise_instance_id: `ai-${crypto.randomUUID()}`,
+        name, position: i, sets, reps,
+        weight_kg: null,
+        rest_seconds: whole(e.rest_seconds),
+        rpe: null,
+        tempo: typeof e.tempo === 'string' && e.tempo.trim() ? e.tempo.trim() : null,
+        duration_seconds: null,
+        notes: typeof e.notes === 'string' && e.notes.trim() ? e.notes.trim() : null,
+        superset_group: group,
+        is_superset: !!group,
+      }];
+    });
 
-    return json({ workout: { title: out.title ?? 'AI Workout', estimated_minutes: out.estimated_minutes ?? ctx.duration_minutes, exercises } });
+    if (exercises.length === 0) {
+      console.error('ai-generate-workout: no exercise satisfied the contract', rejected);
+      return json({ error: 'The generated workout was not usable', rejected }, 502);
+    }
+    if (rejected.length) console.warn('ai-generate-workout: dropped out-of-contract exercises', rejected);
+
+    return json({
+      workout: {
+        title: out.title ?? 'AI Workout',
+        estimated_minutes: whole(out.estimated_minutes) ?? ctx.duration_minutes,
+        contract_version: 2,
+        exercises,
+      },
+    });
   } catch (e) {
     console.error('ai-generate-workout error:', e);
     return json({ error: String(e) }, 500);

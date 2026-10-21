@@ -5,6 +5,7 @@ import '../data/models/food_model.dart';
 import '../domain/nutrition_provider.dart';
 import 'widgets/coach_insight_card.dart';
 import 'widgets/food_added_dialog.dart';
+import '../../../core/widgets/named_icon_button.dart';
 
 const _bg       = Color(0xFF030303);
 const _card     = Color(0xFF0E0B16);
@@ -294,10 +295,21 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
       if (!mounted) return;
       setState(() => _saving = false);
       widget.onLogged();
-      final parentContext = context;
-      Navigator.pop(parentContext);
+      // The context is captured as the NAVIGATOR's, not this sheet's. Popping
+      // deactivates the sheet's element, and `showDialog` against a deactivated
+      // context can raise "Looking up a deactivated widget's ancestor" — it
+      // usually appears to work only because the ancestor lookup resolves before
+      // the pop animation finishes, which is what makes it latent rather than
+      // visible. The NavigatorState's own context outlives the route it popped.
+      //
+      // Safe here specifically because `FoodAddedDialog.show` uses the context
+      // for nothing but `showDialog`'s Navigator/Overlay lookup: its builder is
+      // `(_) =>`, and the dialog takes plain values, so no inherited widget is
+      // read through it and the ancestor change cannot alter what renders.
+      final navigator = Navigator.of(context);
+      navigator.pop();
       FoodAddedDialog.show(
-        parentContext,
+        navigator.context,
         foodName: food.name,
         protein: (food.protein * servings).toInt(),
         carbs: (food.carbs * servings).toInt(),
@@ -307,7 +319,7 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
       if (!mounted) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Could not log meal: $e'),
+        content: Text('Could not log meal.'),
         backgroundColor: const Color(0xFFFFB4AB),
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 5)));
@@ -335,9 +347,16 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
               const Text("Log Meal", style: TextStyle(color: _white,
                 fontSize: 18, fontWeight: FontWeight.w700)),
               const Spacer(),
-              GestureDetector(
+              Semantics(
+                button: true,
+                label: 'Close',
+                child: GestureDetector(
                 onTap: () => Navigator.pop(context),
-                child: Icon(Icons.close, color: _muted.withValues(alpha: 0.5), size: 22)),
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                  alignment: Alignment.center,
+                  child: Icon(Icons.close, color: _muted.withValues(alpha: 0.5), size: 22)))),
             ])),
           const SizedBox(height: 12),
           // Meal type tabs
@@ -464,7 +483,9 @@ class _FoodDetail extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
       child: Column(children: [
         Row(children: [
-          GestureDetector(onTap: onBack,
+          NamedIconButton(
+            label: 'Back',
+            onTap: onBack,
             child: Icon(Icons.arrow_back, color: _muted.withValues(alpha: 0.6), size: 20)),
           const SizedBox(width: 10),
           Expanded(child: Text(food.name, style: const TextStyle(color: _white,

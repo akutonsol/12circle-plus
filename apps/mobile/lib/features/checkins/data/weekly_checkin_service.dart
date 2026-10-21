@@ -3,6 +3,7 @@ import 'models/checkin_model.dart';
 import '../../notifications/data/notification_service.dart';
 import '../../coach/data/score_service.dart';
 import '../../scoring/data/score_engine.dart';
+import '../domain/checkin_known.dart';
 
 class WeeklyCheckinService {
   final _supabase = Supabase.instance.client;
@@ -18,22 +19,24 @@ class WeeklyCheckinService {
     );
   }
 
+  /// The client's weekly check-in history.
+  ///
+  /// **F-15/F-16: the error propagates.** This ended `catch (e) { return []; }`,
+  /// so a failed read arrived as an empty list and FIT-023's history section
+  /// would have said the client had never checked in. Signed out is still an
+  /// empty list — that is a real answer, not a failure.
   Future<List<WeeklyCheckin>> getWeeklyCheckins({int limit = 10}) async {
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) return [];
-    try {
-      final data = await _supabase
-          .from('weekly_checkins')
-          .select()
-          .eq('user_id', userId)
-          .order('week_start_date', ascending: false)
-          .limit(limit);
-      return (data as List)
-          .map((row) => _fromRow(row as Map<String, dynamic>))
-          .toList();
-    } catch (e) {
-      return [];
-    }
+    final data = await _supabase
+        .from('weekly_checkins')
+        .select()
+        .eq('user_id', userId)
+        .order('week_start_date', ascending: false)
+        .limit(limit);
+    return (data as List)
+        .map((row) => _fromRow(row as Map<String, dynamic>))
+        .toList();
   }
 
   Future<WeeklyCheckin> getCurrentWeekCheckin() async {
@@ -61,6 +64,38 @@ class WeeklyCheckinService {
       responses: const [],
       overallScore: 0,
     );
+  }
+
+  /// Whether this week already has a submitted check-in — **honestly**.
+  ///
+  /// CON-01 (live). `getCurrentWeekCheckin()` above swallows with
+  /// `catch (_) {}` and then returns a `pending` row, so a failed read is
+  /// indistinguishable from "you have not checked in this week". The screen
+  /// branches on exactly that and opens the form, which is how a duplicate
+  /// gets written — the same defect the daily path had.
+  ///
+  /// `upsert(onConflict: 'user_id,week_start_date')` means a duplicate submit
+  /// overwrites rather than doubling the row, so this is not data corruption.
+  /// It is still the user being told something untrue about their own week.
+  Future<CheckinKnown> weekStatus() async {
+    final userId = _supabase.auth.currentUser?.id;
+    // Signed out is an answer, not a failure.
+    if (userId == null) return CheckinKnown.notDone;
+    final info = _weekInfo(DateTime.now());
+    try {
+      final data = await _supabase
+          .from('weekly_checkins')
+          .select('status')
+          .eq('user_id', userId)
+          .eq('week_start_date', info.weekStart.toIso8601String().split('T')[0])
+          .maybeSingle();
+      if (data == null) return CheckinKnown.notDone;
+      return data['status'] == 'submitted'
+          ? CheckinKnown.done
+          : CheckinKnown.notDone;
+    } catch (_) {
+      return CheckinKnown.unknown;
+    }
   }
 
   Future<bool> submitWeeklyCheckin({
@@ -156,8 +191,12 @@ class WeeklyCheckinService {
         'coach_name': coachName,
         'reviewed_at': DateTime.now().toIso8601String(),
       }).eq('id', checkinId).select('user_id').maybeSingle();
+      // A 0-row update is not a success (QAX-ERR-02): RLS filters the row out
+      // when the coaching relationship is no longer active, and no error is
+      // raised. Reporting "Feedback submitted!" then loses the review.
+      if (updated == null) return false;
       // Notify the client that their coach responded (CHK-003).
-      final clientId = updated?['user_id'] as String?;
+      final clientId = updated['user_id'] as String?;
       if (clientId != null) {
         await NotificationService().notifyUser(
           recipientId: clientId,

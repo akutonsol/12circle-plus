@@ -138,6 +138,12 @@ class _PostCardState extends ConsumerState<PostCard> {
               AppAnimations.hapticLight();
               ref.read(postNotifierProvider.notifier).toggleLike(widget.post.id);
             },
+            onReact: (type) {
+              AppAnimations.hapticLight();
+              ref
+                  .read(postNotifierProvider.notifier)
+                  .toggleReaction(widget.post.id, type);
+            },
             onComment: () => setState(() => _showComments = !_showComments),
             onShare: () => AppAnimations.hapticLight(),
           ),

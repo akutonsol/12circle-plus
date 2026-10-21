@@ -42,7 +42,7 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
     ),
     (
       q: 'How do I delete my account?',
-      a: 'Go to Profile → Settings → Account → Delete Account. All your data is permanently removed within 30 days. This action cannot be undone.',
+      a: 'Email privacy@12circle.app from the address on your account and we will delete it. Your data is permanently removed within 30 days and the deletion cannot be undone. Deleting your account from inside the app is not available yet.',
     ),
     (
       q: 'What is the AI Coach?',
@@ -119,6 +119,7 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
           children: [
             IconButton(
               icon: const Icon(Icons.arrow_back_ios_new, color: _pri, size: 20),
+              tooltip: 'Back',
               onPressed: () => Navigator.of(context).pop()),
             const Expanded(
               child: Center(

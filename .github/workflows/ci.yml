@@ -1,0 +1,829 @@
+name: CI
+
+# ENV-6 — until this file existed, every test in the repository protected only a
+# developer who remembered to run it. 763 executable tests, 188 live
+# authorization assertions, 32 live workout assertions and every static guard
+# were manual. The live security suite — written to fail against the
+# pre-remediation database, and the best test asset in the tree — had never run
+# in CI and did not run in any discovery workstream.
+#
+# PRODUCTION IS NEVER CONTACTED BY THIS WORKFLOW. The only job that touches a
+# real project is `live-qa`, which is pinned to the QA project, gated behind
+# repository secrets, and skipped entirely when they are absent. The
+# production-ref guard in `static-guards` is what keeps that true.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: '3.44.4'
+  NODE_VERSION: '20'
+
+jobs:
+  # ── Fast, no toolchain. Runs first so an environment-targeting mistake is
+  #    reported in seconds rather than after a ten-minute build.
+  static-guards:
+    name: Static guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Production-ref guard (ENV-5)
+        run: .github/scripts/check-production-refs.sh
+
+      - name: Migration hygiene (ENV-1 / Gate 0.7)
+        run: .github/scripts/check-migration-hygiene.sh
+
+      - name: Migration durability — I-MIG-03 class guard (records mode)
+        run: |
+          set -euo pipefail
+          # W2-2B. `CREATE OR REPLACE FUNCTION` keeps a function's ACL and owner
+          # and drops its `search_path` pin and its body — so an authorization
+          # wrapper an earlier migration established vanishes silently when a
+          # later migration reproduces that function from an older base. That is
+          # F-J-01, and it is why this class guard exists. Static: it reads
+          # committed migration source, needs no credentials, and contacts
+          # nothing. Node comes preinstalled on the runner image, so this step
+          # keeps the job's no-toolchain property.
+          echo "node $(node --version)"
+          echo
+
+          # The self-test first, and always fatal. If detection itself broke, a
+          # clean report would be indistinguishable from a clean tree — this
+          # asserts on synthetic fixtures that a dropped property IS flagged,
+          # that a carried-forward one is NOT, and that F-J-01 is still found in
+          # the real migration set with its exemption ignored.
+          node supabase/tests/security/migration-durability-guard.mjs --self-test
+          echo
+
+          # RECORDS MODE, and fail-closed everywhere it is not exempt: the guard
+          # exits 0 only while every open strip event is a KNOWN_OPEN entry that
+          # names its finding and its closing task. An unrecorded strip fails,
+          # and so does a KNOWN_OPEN entry that has outlived its defect — the
+          # stale-exemption trap, which is what stops records mode from decaying
+          # into a rubber stamp once 2A lands.
+          set +e
+          node supabase/tests/security/migration-durability-guard.mjs | tee /tmp/imig03.txt
+          rc=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$rc" -ne 0 ]; then
+            echo "::error title=I-MIG-03 durability violation::A migration dropped a security property that is not a recorded finding, or a KNOWN_OPEN exemption outlived its defect. Carry the property forward in a NEW migration - never by editing history. Full report in this step's log."
+            exit 1
+          fi
+
+          # Surface the known-open posture in the run summary, derived from the
+          # guard's own register rather than restated here, so this annotation
+          # cannot drift from what the guard actually found.
+          recorded=$(grep -c '\[RECORDED' /tmp/imig03.txt || true)
+          if [ "${recorded:-0}" -gt 0 ]; then
+            findings=$(grep -E '^[[:space:]]+finding:' /tmp/imig03.txt | sed 's/^[[:space:]]*finding:[[:space:]]*//' | paste -sd '; ' -)
+            echo "::notice title=I-MIG-03 records the posture::${recorded} known-open durability finding(s) DETECTED and deliberately not failing this build: ${findings}. Detected, not fixed - remediation is migration 124 (Wave 2 task 2A), and this guard is promoted to enforcing at that closure. This step passing does NOT close SEC-04 or I-MIG-03."
+          fi
+
+      - name: Migration state declaration — ENV-3 static contract
+        run: |
+          set -euo pipefail
+          # ENV-3, static half. Reconciles supabase/expected_applied.json against
+          # the authored migration tree: every authored migration is declared
+          # (applied below the frontier, or deliberately pending/excluded with a
+          # reason and a gate), and every declaration names a migration that
+          # exists. It opens no connection and needs no credential.
+          #
+          # It does NOT check the live ledger. The live half — comparing the
+          # declaration against supabase_migrations.schema_migrations — needs a
+          # QA database credential in CI (the FG-1/FG-2 blocker) and is what
+          # finally moves ENV-3 to VERIFIED_CLOSED. ENV-3 stays REMEDIATED.
+          #
+          # A committed-but-unapplied migration (123 today) is REPORTED here as
+          # pending and is not a failure. It is never written into
+          # schema_migrations to make a check green.
+          node supabase/scripts/check-migration-manifest.mjs
+
+      - name: Admin capability matrix + non-operational register
+        run: |
+          set -euo pipefail
+          # Both validators existed and NEITHER ran in CI (V5 §139.4). The matrix
+          # validator was written for the 85-cell recovery and then only ever
+          # invoked by hand; the register is new. A guard nobody runs is a guard
+          # that will be wrong the first time it matters.
+          #
+          # The matrix is the owner-approved authorization grid: 85 cells, 425
+          # grants, and D14 reads its live expectations straight from it, so a
+          # malformed matrix would silently weaken 425 live assertions.
+          #
+          # The register records which granted capabilities are AUTHORIZED AND NOT
+          # OFFERED (owner decision B-20). It is cross-checked against the matrix,
+          # so the two cannot drift apart unnoticed.
+          node supabase/scripts/validate-admin-capability-matrix.mjs
+          node supabase/scripts/validate-non-operational-register.mjs
+          # Proves the schema scanner can still SEE things it must see. Each case
+          # encodes a checker that once found nothing and reported success: the
+          # sed extractor that called a token-bearing table "clean", the RLS scan
+          # that assumed single spaces, and the parser that skipped a table whose
+          # identifiers are quoted (V5 §129.3, §139.3).
+          node supabase/scripts/schema-facts.mjs --self-test
+          # The Admin Tier-3 token layer is GENERATED from the approved design
+          # authority — admin.tokens.css at commit 931218b, which lives on
+          # design/12circle-plus-admin-dashboard and is NOT an ancestor of this
+          # branch. This re-derives it and fails if the committed Dart drifts from
+          # the published CSS, so 126 design values cannot be edited by hand into
+          # becoming the new truth. It needs the design ref, which this job has
+          # because its checkout uses fetch-depth: 0.
+          node supabase/scripts/gen-admin-tokens.mjs --check
+          # Every cited design artifact must be readable by whoever reads the doc.
+          # COMPONENT-SPECS cited admin.tokens.css for weeks while docs/design/brand/
+          # did not exist on this branch — true when written, unfollowable after, and
+          # nothing noticed (V5 §164.1). A citation that points off this branch must
+          # name the commit it points at.
+          node supabase/scripts/check-design-citations.mjs
+
+          # §218 · DESIGN-02's ratified boundary. The citation guard above proves
+          # every cited design path RESOLVES; nothing proved the ratified SET.
+          # D2-1a made 24 derived specifications authoritative and D2-2b left four
+          # components (radio, date range, toast, inline error) deliberately
+          # unspecified, because the approved screens do not depict them and
+          # COMPONENTS.md routes their behaviour to page files that lack them.
+          # A boundary held only in prose decays: this fails if a specification
+          # appears for a component whose design input (D2-3) is still pending,
+          # so an invented design cannot become indistinguishable from a ratified one.
+          node supabase/scripts/check-component-spec-authority.mjs
+
+      - name: Function posture (definer search_path, anon EXECUTE)
+        run: |
+          set -euo pipefail
+          # Two classes 118 and 122 each had to bulk-remediate, and which NOTHING in
+          # CI was checking (V5 §144.2). 122 states why the first recurs: "ACLs and
+          # ownership survive CREATE OR REPLACE; proconfig does NOT" — so 116, 119,
+          # 120 and 121 each silently dropped the search_path pin, twice requiring a
+          # sweep over every function in public. This fails the build instead.
+          #
+          # Its own negative controls run first, so a guard that can no longer
+          # detect its three failure cases fails loudly rather than passing green.
+          node supabase/scripts/check-function-posture.mjs --self-test
+          node supabase/scripts/check-function-posture.mjs
+
+      - name: Schema contract guard (relations, columns, embedded resources)
+        run: |
+          set -euo pipefail
+          # Moved here from `live-qa` by owner ruling 2026-08-28 (B-2), where it
+          # sat behind `if: steps.creds.outputs.present == 'true'`. The suite is
+          # offline — `run.mjs` opens no connection and reads no environment
+          # variable at all — so the credential gate protected nothing and only
+          # narrowed when the guard ran. `known-violations.json` is the
+          # both-directions record for I-WRK-01, I-INT-01, I-INT-02, I-COM-01,
+          # I-COM-03, I-CHK-01, I-LEG-03 and I-NUT-01; behind the old gate none
+          # of them was checked on a run without QA secrets, and nothing went
+          # red to say so. Node is preinstalled on the runner image, so this
+          # keeps the job's no-toolchain property.
+          npm run test:contract
+
+      - name: Edge Function JWT posture is declared (E-09)
+        run: .github/scripts/check-edge-function-config.sh
+
+      - name: No environment file names production as a default (ENV-4)
+        run: |
+          set -euo pipefail
+          # app_env.dart must carry no project at all. dart_defines/prod.json is
+          # the only place production configuration is allowed to live, and it
+          # only reaches a binary that was explicitly pointed at it.
+          #
+          # W1B-N7: the patterns match REAL credential material only. A real
+          # Supabase project host is 20 lowercase alphanumerics before
+          # .supabase.co; a real JWT is eyJ + 20+ token chars; a real Stripe
+          # publishable key is pk_(test|live)_ + 24+ alphanumerics. The file's
+          # documentation placeholders (YOUR_QA_REF.supabase.co, pk_test_...)
+          # match none of them — which is the point: comments are NOT excluded
+          # from the scan, so a real key pasted anywhere in the file, comments
+          # included, still fails. Residual coverage below these thresholds
+          # comes from the production-ref guard (any occurrence of the
+          # production ref, any file) and the QA-artifact allowlist scan (any
+          # project ref in the built bundle).
+          REAL='([a-z0-9]{20}\.supabase\.co|eyJ[A-Za-z0-9_-]{20,}|pk_(test|live)_[A-Za-z0-9]{24,})'
+
+          # Pattern self-test — the standing regression guard for W1B-N7.
+          # Real-shaped material must match; the placeholder shapes that caused
+          # the aac64b3 false positive must not. If either half breaks, the
+          # guard itself is wrong, and it says so before judging the file.
+          selftest_real='aaaaaaaaaaaaaaaaaaaa.supabase.co
+          eyJabcdefghijklmnopqrstuvwx
+          pk_test_abcdefghijklmnopqrstuvwxyz'
+          selftest_placeholder='https://YOUR_QA_REF.supabase.co
+          SUPABASE_ANON_KEY=YOUR_QA_PUBLISHABLE_KEY
+          pk_test_...'
+          while IFS= read -r s; do
+            [[ -z "${s// /}" ]] && continue
+            if ! grep -qE "$REAL" <<<"$s"; then
+              echo "GUARD SELF-TEST FAIL — real-shaped material not matched: $s"
+              exit 1
+            fi
+          done <<<"$selftest_real"
+          while IFS= read -r s; do
+            [[ -z "${s// /}" ]] && continue
+            if grep -qE "$REAL" <<<"$s"; then
+              echo "GUARD SELF-TEST FAIL — placeholder matched as real: $s"
+              exit 1
+            fi
+          done <<<"$selftest_placeholder"
+
+          if grep -qE "$REAL" apps/mobile/lib/core/config/app_env.dart; then
+            echo "FAIL — a project URL, JWT or Stripe key is baked into app_env.dart:"
+            grep -nE "$REAL" apps/mobile/lib/core/config/app_env.dart
+            echo "ENV-4: an omitted APP_ENV must resolve to an environment that"
+            echo "can reach nothing, which requires the default table to be empty."
+            exit 1
+          fi
+          echo "OK — app_env.dart carries no baked-in project (doc placeholders allowed; real material anywhere, comments included, is not)."
+
+  flutter:
+    name: Flutter — analyze, test, QA web build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - name: flutter analyze
+        # Errors fail the build; the tree's 171 pre-existing infos/warnings do
+        # not, so this gate is meaningful on day one rather than after a cleanup
+        # that has not been scheduled.
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: flutter test
+        # Includes the ENV-4 / ENV-5 environment ratchets, the REL-3 release
+        # route gate, the error-contract guards and the Phase 1/2 boundary tests.
+        run: flutter test
+
+      - name: Build the QA web bundle
+        # QA, explicitly. A bundle built with no defines would now fail to
+        # resolve an environment at all, which is the ENV-4 behaviour under test
+        # above; here we want a real artifact to scan.
+        run: flutter build web --dart-define-from-file=dart_defines/qa.json
+
+      - name: Scan the artifact for credential material
+        run: tool/check_web_build_secrets.sh build/web
+
+      - name: The QA artifact must name no project other than QA
+        run: |
+          set -euo pipefail
+          # Allowlist, not blocklist: extract every Supabase project ref the
+          # bundle contains and fail on any that is not the QA ref the bundle
+          # was built from. This catches production AND any other foreign
+          # project, and it keeps the production literal out of this file
+          # (ENV-5 guard). Fail closed if the QA ref cannot be derived.
+          QA_REF="$(grep -oE 'https://[a-z]{20}\.supabase\.co' dart_defines/qa.json \
+                    | head -1 | sed -E 's#https://([a-z]{20})\.supabase\.co#\1#')"
+          if [[ -z "$QA_REF" ]]; then
+            echo "FAIL — could not derive the QA project ref from dart_defines/qa.json."
+            exit 1
+          fi
+          foreign="$(grep -rhoaE '[a-z]{20}\.supabase\.co' build/web | sort -u \
+                     | grep -v "^${QA_REF}\.supabase\.co$" || true)"
+          if [[ -n "$foreign" ]]; then
+            echo "FAIL — the QA web build names a project other than QA:"
+            echo "$foreign"
+            exit 1
+          fi
+          echo "OK — the QA artifact names only the QA project (${QA_REF})."
+
+  # ── The live suites. EB-1 provisions the scoped QA service-role key that this
+  #    job needs; until then it SKIPS rather than fails, so ENV-6's always-on
+  #    half lands now instead of waiting on a credential.
+  #
+  #    It is pinned to the QA project two ways: the URL comes from a secret, and
+  #    supabase/tests/{security,ai}/lib.mjs refuse to run against production
+  #    regardless of what the secret contains.
+  # ── Synthetic pre-fix-equivalent evidence. Owner ruling 2026-08-25 (G-3
+  #    negative-control exception): where the guard was written after the defect
+  #    was already remediated and no defective tree is recoverable from history,
+  #    the VERIFIED IN CI rung may be satisfied by a negative control instead.
+  #
+  #    This job NEVER contacts QA or production. It has no environment, no
+  #    secrets and no connection string: it builds a runner-local PostgreSQL,
+  #    replays the committed migrations 000-121, reintroduces one declared defect
+  #    at a time, requires exactly the assertions that defect breaks to fail, then
+  #    restores by re-applying the committed migration and requires 20/20 again.
+  #    The harness refuses to start if any QA credential is present in its
+  #    environment, so a future widening of scope fails loudly.
+  #
+  #    It is NOT historical pre-fix evidence and must never be recorded as such.
+  #    The real QA BEFORE -> AFTER evidence is a separate rung (VERIFIED LIVE).
+  #
+  #    ONE step in this job is NOT of that class and must not be filed as if
+  #    it were: the EC-23 step below. Its defective tree IS recoverable from
+  #    history (the seven print() call sites live at fabf495 and every commit
+  #    before 580932f), so it is a genuine pre-fix / post-fix demonstration of
+  #    a guard, not a G-3 synthetic substitute. G-3 is not invoked for it.
+  negative-control:
+    name: Negative control — synthetic pre-fix-equivalent evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [static-guards]
+    steps:
+      # Full history: the UIX-1 harness below checks out the REAL pre-fix
+      # booking_screen.dart from f109f19.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Harness self-test (the parser must be able to fail)
+        run: supabase/scripts/negative-control.sh --self-test
+
+      - name: M-1, M-2, M-3 — mutate, require the declared FAIL set, restore, require 20/20
+        run: supabase/scripts/negative-control.sh
+
+      - name: Set up Flutter for WRK-02
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: WKT-204 — WRK-02/WKA-02 synthetic pre-fix-equivalent evidence
+        run: apps/mobile/tool/negative_control/wrk02_negative_control.sh
+
+      # ERR-1 / EC-23. The guard landed in the same commit that removed the
+      # defect, so no run has ever seen it fail. Reuses the Flutter set-up
+      # above; adds no job, no credential and no network access.
+      - name: EC-23 — ERR-1 failure-sink guard, pre-fix / post-fix evidence
+        run: apps/mobile/tool/negative_control/ec23_negative_control.sh
+
+      # UIX-1 / M-03. The embed guard landed in 527438a, the same commit that
+      # removed the defect, so run #43 met it only on the fixed tree and §2's
+      # pre-fix half was missing. This step supplies it from f109f19, a REAL
+      # recoverable defective tree — so this is genuine pre-fix evidence and
+      # G-3 is NOT invoked. Needs no credential, no network and no toolchain.
+      - name: UIX-1 — embed/FK contract guard, pre-fix / post-fix evidence
+        run: apps/mobile/tool/negative_control/uix1_negative_control.sh
+
+      # I-NUT-01 / Wave 3A task 3A-1. The column guard passes on the fixed tree,
+      # but the pre-fix tree carried nutrition_logs.protein_g/carbs_g/fat_g
+      # INSIDE known-violations.json, so on its own the guard never demonstrates
+      # the failure §2 requires. This step installs the pre-fix Edge Function
+      # against the POST-FIX allowlist and requires the three named failures.
+      # 2ad8c6c is a REAL recoverable defective tree, so this is genuine pre-fix
+      # evidence and G-3 is NOT invoked. Needs no credential, no network and no
+      # toolchain; reuses the fetch-depth: 0 checkout above.
+      - name: I-NUT-01 — nutrition column guard, pre-fix / post-fix evidence
+        run: supabase/tests/contract/nut01_negative_control.sh
+
+      # DAT-2 / I-INT-02, Wave 3A task 3A-4 — and the I-INT-01 half that shared
+      # the same `user_profiles.goal` allowlist entry. Same shape as the step
+      # above: the pre-fix Edge Function from c678102 is installed against the
+      # POST-FIX allowlist and both named failures are required. c678102 is a
+      # REAL recoverable defective tree, so G-3 is NOT invoked. Needs no
+      # credential, no network and no toolchain; reuses the fetch-depth: 0
+      # checkout above.
+      - name: I-INT-02 — profile column guard, pre-fix / post-fix evidence
+        run: supabase/tests/contract/int02_negative_control.sh
+
+      # I-COM-01 / DAT-4, Wave 3A task 3A-6. The event-registration guard
+      # (apps/mobile/test/unit/event_registration_contract_test.dart) landed in
+      # the same commit that removed the fabricating catch, so no run has ever
+      # seen it fail. This step supplies §2's pre-fix half from the
+      # implementation commit's own PARENT, which carries the real defect —
+      # G-3 is NOT invoked. Reuses the Flutter set-up above and the
+      # fetch-depth: 0 checkout; adds no job, no credential, no network.
+      - name: I-COM-01 — event registration guard, pre-fix / post-fix evidence
+        run: apps/mobile/tool/negative_control/icom01_negative_control.sh
+
+      # CRC-06 / I-G1…I-G5, Wave 3A task 3A-11. Same shape as the step above:
+      # identity_constraint_guard_test.dart landed in the same commit as
+      # migration 131 and the three writer changes, so no run has ever seen it
+      # fail. The pre-fix state this harness restores is REAL, not synthetic —
+      # the absent uniqueness it pins predates the task by many migrations —
+      # so G-3 is NOT invoked. Reuses the Flutter set-up above and the
+      # fetch-depth: 0 checkout; adds no job, no credential, no network.
+      # The harness has existed since 3A-11 but was never wired here, leaving
+      # it the only one of the seven negative controls CI does not execute.
+      - name: 3A-11 — identity constraint guards, pre-fix / post-fix evidence
+        run: apps/mobile/tool/negative_control/i3a11_negative_control.sh
+
+      # EC-03 / §192. The end-to-end rung's second arm landed in the same commit
+      # that closed the defect it describes — `_finish()` wrapping the whole save
+      # in `if (uid != null)`, so a null uid skipped it and the flow still showed
+      # IntakeCompletePage — so no run has ever seen it fail. This harness
+      # restores that wrapper, requires ONLY the session-lost arm to break (the
+      # failed-save arm covers a defect the original EC-03 fix already closed and
+      # must keep passing), and restores byte-identically. Reuses the Flutter
+      # set-up above; adds no job, no credential and no network access.
+      - name: EC-03 — intake false-completion, pre-fix / post-fix evidence
+        run: apps/mobile/tool/negative_control/ec03_negative_control.sh
+
+      # SEC-W1 / QAX-SEC-08's FOURTH RUNG, authorized by owner decision D-1 = Option 4
+      # (2026-10-11). The guard's 132 read is now lazy, so deleting the migration fails
+      # each 132-dependent assertion individually instead of producing one (setUpAll)
+      # failure with zero assertions executed — which is why the other three
+      # reconstruction options were rejected at §365. The harness also requires that D-3's
+      # property tests SURVIVE (they read 134) while D-3's coverage ratchet FIRES (the
+      # definer set really did change). Documented caveat, preserved by the
+      # authorization: the failures are I/O errors, so this proves the assertions execute
+      # and fail — not that each fails for the reason it states. Reuses the Flutter set-up
+      # above; adds no job, no credential and no network access.
+      - name: SEC-W1 — Wave 1 reversion, pre-fix / post-fix evidence (D-1)
+        run: apps/mobile/tool/negative_control/secw1_negative_control.sh
+
+      # SEC-G11 · F-J-12 / PD-A05 option (a) has no standing guard against a later
+      # migration replacing its RLS policy — migration 128 records that limitation in
+      # its own header, naming it "the exact mechanism that produced F-J-01". SEC-G11
+      # is the notice; this proves the notice fires. The probe is a THROWAWAY
+      # higher-numbered migration, never an edit to 128 or 125: §8 forbids rewriting an
+      # applied migration, and arriving as a later migration is how a real regression
+      # would arrive anyway — which also exercises the definer ratchet an in-place edit
+      # would bypass. Verdicts are read from `--reporter json` (§202), so the control
+      # cannot pass vacuously under CI's reporter.
+      - name: SEC-G11 — decision_traces read scope, widening detected (F-J-12)
+        run: apps/mobile/tool/negative_control/secg11_negative_control.sh
+
+  live-qa:
+    name: Live QA suites (security / AI / contract)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [static-guards]
+    environment: qa
+    # Published so the I-WRK-01 live probe can skip cleanly when EB-1's secrets
+    # are absent, exactly as the steps below already do. This exposes whether a
+    # credential EXISTS, never the credential: no secret leaves this job.
+    outputs:
+      creds: ${{ steps.creds.outputs.present }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Are the QA credentials provisioned?
+        id: creds
+        env:
+          QA_URL: ${{ secrets.QA_URL }}
+          QA_ANON: ${{ secrets.QA_ANON }}
+          QA_SERVICE: ${{ secrets.QA_SERVICE }}
+        run: |
+          if [[ -n "$QA_URL" && -n "$QA_ANON" && -n "$QA_SERVICE" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            # V5 §67: the suite count is DERIVED, not written here. This line
+            # used to read "397 live authorization assertions across 10 suites";
+            # d11/K-04 was registered afterwards and the number silently went
+            # stale. A count duplicated in prose outlives the thing it counts,
+            # so the only source of truth is run.mjs's own registration list.
+            n_suites=$(grep -cE "^[[:space:]]*\['" supabase/tests/security/run.mjs)
+            echo "::notice title=Live QA suites skipped::EB-1 has not provisioned QA_URL / QA_ANON / QA_SERVICE. All ${n_suites} live authorization suites registered in supabase/tests/security/run.mjs are NOT running — including K-04 (d11), which is the VERIFIED IN CI rung that finding's closure depends on."
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.creds.outputs.present == 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+        if: steps.creds.outputs.present == 'true'
+
+      - name: Confirm the target is QA and not production
+        if: steps.creds.outputs.present == 'true'
+        env:
+          QA_URL: ${{ secrets.QA_URL }}
+        run: |
+          set -euo pipefail
+          # Positive identification, before anything connects. A target is QA
+          # because its ref says so, never because the secret is called QA_URL.
+          # Allowlist only: an exact-host match on the QA project. Production —
+          # and every other project — fails this check identically, so the
+          # production literal has no business in this file (ENV-5 guard).
+          if [[ "$QA_URL" != "https://eyqtldjqpgpljlqvpowh.supabase.co" ]]; then
+            echo "FAIL — QA_URL is not exactly the 12 Circle QA project URL."
+            exit 1
+          fi
+          echo "OK — target is the 12 Circle QA project."
+
+      - name: Fixture identities (setup-identities.mjs → ids.json)
+        # W1B-N8. The suites read their four fixture UUIDs from
+        # supabase/tests/security/ids.json, which is generated, ignored and
+        # deliberately never committed — so an ephemeral CI checkout can never
+        # contain it, and without this step all six suites die at import with
+        # "ids.json missing". The script is idempotent: it creates the four
+        # p1-*@qa.12circle.test identities only if absent (repairs them
+        # otherwise), flags them is_demo, and seeds the victim's three
+        # P1-FIXTURE rows only if absent. This is the programme's one sanctioned
+        # standing QA write, authorized by the product owner 2026-08-25; it runs
+        # strictly after the exact-host QA confirmation above, and lib.mjs
+        # independently refuses a production URL. ids.json lives and dies with
+        # this runner's workspace.
+        if: steps.creds.outputs.present == 'true'
+        env:
+          QA_URL: ${{ secrets.QA_URL }}
+          QA_ANON: ${{ secrets.QA_ANON }}
+          QA_SERVICE: ${{ secrets.QA_SERVICE }}
+        run: node supabase/tests/security/setup-identities.mjs
+
+      - name: Live security suite
+        if: steps.creds.outputs.present == 'true'
+        env:
+          QA_URL: ${{ secrets.QA_URL }}
+          QA_ANON: ${{ secrets.QA_ANON }}
+          QA_SERVICE: ${{ secrets.QA_SERVICE }}
+        run: npm run test:security
+
+      - name: Live AI suite
+        if: steps.creds.outputs.present == 'true'
+        env:
+          QA_URL: ${{ secrets.QA_URL }}
+          QA_ANON: ${{ secrets.QA_ANON }}
+          QA_SERVICE: ${{ secrets.QA_SERVICE }}
+        run: npm run test:ai
+
+      # The schema-contract suite used to run here, credential-gated. It reads
+      # no environment variable and contacts nothing, so the gate bought
+      # nothing and cost coverage: absent QA secrets, the step skipped while
+      # this job stayed green, and the both-directions allowlist guard for
+      # eight findings silently did not run. Owner ruling 2026-08-28 (B-2)
+      # moved it to `static-guards`, where it is unconditional. It is NOT
+      # duplicated here. Evidence produced by the old placement stays valid as
+      # historical, conditional evidence and is not reinterpreted.
+      # ── Live SQL evidence: FG-1, FG-2 and the ENV-3 live ledger check.
+      #
+      #    One phase, one credential. These three are SQL-level assertions that
+      #    the REST secrets above cannot reach: supabase_migrations is not an
+      #    exposed PostgREST schema, and neither SQL suite is reachable over
+      #    REST at all. QA_DB_URL is therefore scoped to this single step and
+      #    to no other job.
+      #
+      #    Read-only by construction: every suite is one DO block that ends by
+      #    RAISEing its report, so the transaction always rolls back, and the
+      #    runner refuses to execute a suite that lost its RAISE. It applies no
+      #    migration, runs no db push or repair, and writes nothing to
+      #    schema_migrations.
+      #
+      #    The runner proves its target is QA by allowlist before connecting and
+      #    SKIPS cleanly when QA_DB_URL is absent, so this step is safe to land
+      #    before the secret exists (blocker EB-13).
+      - name: Live SQL evidence — FG-1, FG-2, ENV-3 ledger
+        if: steps.creds.outputs.present == 'true'
+        env:
+          QA_DB_URL: ${{ secrets.QA_DB_URL }}
+        run: supabase/scripts/live-evidence.sh
+
+  # ── I-WRK-01 · VERIFIED LIVE ────────────────────────────────────────────────
+  #
+  #    The one rung `I-WRK-01` still lacks. `QA_CLOSURE_STANDARD.md` §2.1 puts it
+  #    in the Data contract / schema class, whose fourth state is "VERIFIED LIVE
+  #    where a read path exists", and §2 defines that as "a real request against
+  #    QA [that] reproduces the correct behaviour, and the same probe demonstrably
+  #    failed before the fix". No existing job could supply it: `flutter` and
+  #    `negative-control` have a toolchain and no QA target, `live-qa` has the
+  #    target and no toolchain, and the offline contract suite reaches neither.
+  #
+  #    CREDENTIAL POSTURE — this job takes NO GitHub secret, and none is needed.
+  #    The QA URL and anon key are committed in `apps/mobile/dart_defines/qa.json`
+  #    (the anon key ships in every client binary by design; the artifact scanner
+  #    bans only service-role material). The fixture identity's password is
+  #    committed in `supabase/tests/security/lib.mjs`. `secrets.QA_*` stays scoped
+  #    to `live-qa` exactly as before — this job adds no `secrets.` reference at
+  #    all, and `QA_SERVICE` is deliberately not used for the fixture.
+  #
+  #    FIXTURE — F-1, owner-authorized 2026-08-27. Rows are written by the fixture
+  #    identity's own RLS grant, keyed by a run-unique exercise name so concurrent
+  #    runs cannot collide, and removed twice over: the probe's own teardown, and
+  #    the if:always() step below which re-checks and fails if anything remains.
+  #
+  #    `needs: live-qa` is an ORDERING dependency, not a credential one — it is
+  #    what guarantees `setup-identities.mjs` has created the fixture identity.
+  wrk01-live:
+    name: I-WRK-01 — live progression read path (pre-fix / post-fix)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [live-qa]
+    if: needs.live-qa.outputs.creds == 'true'
+    env:
+      PROBE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      # Full history: the pre-fix leg checks out the REAL parent 654b09c^.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      # Linux desktop is the smallest viable device target: apps/mobile/linux/
+      # is real scaffolding, so this needs no macOS runner, no emulator and no
+      # chromedriver. xvfb gives the GTK shell a display on a headless runner.
+      - name: Linux desktop toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev xvfb \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libsecret-1-dev
+
+      - name: flutter pub get
+        working-directory: apps/mobile
+        run: flutter pub get
+
+      # Post-fix leg, pre-fix leg, and the discrimination that keeps an
+      # infrastructure failure from being read as pre-fix evidence.
+      - name: I-WRK-01 — post-fix and pre-fix legs against one live QA fixture
+        run: xvfb-run -a apps/mobile/tool/negative_control/wrk01_live_probe.sh
+
+      # Layer B. Independent of Flutter, so it still runs if the probe crashed
+      # before its own teardown. Scoped to this run's fixture by exercise name —
+      # never a broad delete — and hard-fails if any row survives.
+      - name: Fixture cleanup and proof of removal
+        if: always()
+        run: |
+          set -euo pipefail
+          URL="$(jq -r .SUPABASE_URL apps/mobile/dart_defines/qa.json)"
+          ANON="$(jq -r .SUPABASE_ANON_KEY apps/mobile/dart_defines/qa.json)"
+          EX="WRK01-PROBE-${PROBE_RUN_ID}"
+          # Committed QA-only is_demo fixture identity (supabase/tests/security/lib.mjs).
+          TOKEN="$(curl -sS -X POST "$URL/auth/v1/token?grant_type=password" \
+            -H "apikey: $ANON" -H 'Content-Type: application/json' \
+            -d '{"email":"p1-victim@qa.12circle.test","password":"P1-Probe-Victim-2026!"}' \
+            | jq -r '.access_token // empty')"
+          if [[ -z "$TOKEN" ]]; then
+            echo "FAIL — cleanup could not authenticate as the fixture identity."
+            exit 1
+          fi
+          curl -sS -o /dev/null -X DELETE \
+            "$URL/rest/v1/workout_set_logs?exercise_name=eq.$EX" \
+            -H "apikey: $ANON" -H "Authorization: Bearer $TOKEN"
+          REMAIN="$(curl -sS "$URL/rest/v1/workout_set_logs?select=id&exercise_name=eq.$EX" \
+            -H "apikey: $ANON" -H "Authorization: Bearer $TOKEN" | jq 'length')"
+          echo "fixture $EX — rows remaining after cleanup: $REMAIN"
+          if [[ "$REMAIN" != "0" ]]; then
+            echo "FAIL — the probe left QA data behind."
+            exit 1
+          fi
+          echo "OK — no fixture rows remain."
+
+  # ── UIX-1 / M-03 · VERIFIED END-TO-END ──────────────────────────────────────
+  #
+  #  A SEPARATE JOB, DELIBERATELY. `wrk01-live` already carries the Flutter
+  #  toolchain, the Linux desktop target and this same credential gate, so
+  #  reusing it would be one step rather than a job. It is not reused because
+  #  registry §7.15 and §7.17 cite that job's NAME and CONCLUSION as I-WRK-01's
+  #  evidence: hanging a second finding's acceptance off it would let a UIX-1
+  #  regression turn I-WRK-01's evidence job red, and couple two findings'
+  #  provenance permanently. The pattern is reused; the job is not.
+  #
+  #  CREDENTIAL POSTURE — unchanged. Zero `secrets.*` here, exactly as
+  #  `wrk01-live`. The probe reads apps/mobile/dart_defines/qa.json (URL +
+  #  publishable anon key, RLS-protected per docs/qa-environments.md) and gates
+  #  on live-qa's `creds` output, which reports whether a credential EXISTS and
+  #  never its value. No service-role key: every fixture write is performed by a
+  #  committed QA-only is_demo identity under the RLS that already governs it.
+  # EC-04 — the risk badge's END-TO-END rung. QA_CLOSURE_STANDARD §2's
+  #  "Error contract / false success" class requires VERIFIED END-TO-END for any
+  #  user-facing success state, and SEC-G6 only supplies the static CI rung.
+  #
+  #  The accessibility guarantee — that a screen reader is TOLD the assessment is absent
+  #  — is asserted on the HOST in test/widget/ec04_risk_badge_semantics_test.dart, where
+  #  the semantics tree is readable, the test is debuggable and it runs on every push.
+  #  What only hardware can answer is whether "NOT ASSESSED" — longer than the "LOW RISK"
+  #  it replaced — still fits its pill at the real font and a real device pixel ratio.
+  #  The host harness renders in Ahem, where every glyph is a full em square, so it
+  #  cannot. A clipped badge would put the fix back where it started.
+  #
+  #  It touches NO backend and signs nothing in: the probe overrides
+  #  clientDetailProvider with an in-memory profile, so there is no fixture to retire and
+  #  this job needs no credential gate. It therefore does not depend on live-qa.
+  ec04-e2e:
+    name: EC-04 — risk badge end-to-end (real font, real dpr)
+    runs-on: ubuntu-latest
+    # 30, matching uix1-e2e. The job was CANCELLED at 25 minutes on 3b76981, and a
+    # cancelled job is not a pass. The cause was the probe overriding only one provider,
+    # so the screen's others made real network calls from inside a device test and the
+    # duration escalated 2m -> 8m -> past the limit. That is fixed at the source; this is
+    # headroom for a cold Linux desktop build, not a workaround for it.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Linux desktop toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev xvfb \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libsecret-1-dev
+
+      - name: flutter pub get
+        working-directory: apps/mobile
+        run: flutter pub get
+
+      # The harness refuses to report success unless the probe's markers appear, so a
+      # toolchain failure exits as INFRASTRUCTURE (2) and can never be read as evidence.
+      - name: EC-04 — drive the badge and measure it on real hardware
+        run: xvfb-run -a apps/mobile/tool/negative_control/ec04_risk_badge_e2e.sh
+
+  uix1-e2e:
+    name: UIX-1 — booking surface end-to-end (real route, real paywall)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [live-qa]
+    if: needs.live-qa.outputs.creds == 'true'
+    env:
+      PROBE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      # No fetch-depth: 0 — this probe reads no historical tree.
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Linux desktop toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev xvfb \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libsecret-1-dev
+
+      - name: flutter pub get
+        working-directory: apps/mobile
+        run: flutter pub get
+
+      # Seeds the fixture, drives /appointments through PaywallGate, asserts
+      # A1/A2/A3, and refuses to pass unless each assertion is observed.
+      - name: UIX-1 — end-to-end leg against the real booking surface
+        run: xvfb-run -a apps/mobile/tool/negative_control/uix1_booking_e2e.sh
+
+      # Layer B. Independent of Flutter, so it still runs if the probe crashed
+      # before its own teardown. The relationship is CANCELLED, never deleted —
+      # 113:306-308 keeps hard deletion with service_role, and this job holds no
+      # service-role key. Availability is scoped to this run's tag, never a broad
+      # delete. Hard-fails if any fixture state survives.
+      - name: Fixture retirement and proof of removal
+        if: always()
+        run: |
+          set -euo pipefail
+          URL="$(jq -r .SUPABASE_URL apps/mobile/dart_defines/qa.json)"
+          ANON="$(jq -r .SUPABASE_ANON_KEY apps/mobile/dart_defines/qa.json)"
+          # Committed QA-only is_demo fixture identities (supabase/tests/security/lib.mjs).
+          tok() {
+            curl -sS -X POST "$URL/auth/v1/token?grant_type=password" \
+              -H "apikey: $ANON" -H 'Content-Type: application/json' \
+              -d "{\"email\":\"$1\",\"password\":\"$2\"}" \
+              | jq -r '.access_token // empty'
+          }
+          CT="$(tok 'p1-coach@qa.12circle.test' 'P1-Probe-Coach-2026!')"
+          VT="$(tok 'p1-victim@qa.12circle.test' 'P1-Probe-Victim-2026!')"
+          if [[ -z "$CT" || -z "$VT" ]]; then
+            echo "FAIL — cleanup could not authenticate as the fixture identities."
+            exit 1
+          fi
+          CID="$(curl -sS "$URL/auth/v1/user" -H "apikey: $ANON" \
+                   -H "Authorization: Bearer $CT" | jq -r .id)"
+          VID="$(curl -sS "$URL/auth/v1/user" -H "apikey: $ANON" \
+                   -H "Authorization: Bearer $VT" | jq -r .id)"
+
+          # 1 · availability — removed by the coach that owns the rows.
+          curl -sS -o /dev/null -X DELETE \
+            "$URL/rest/v1/coach_availability?coach_id=eq.$CID&duration_minutes=gte.600&duration_minutes=lte.699" \
+            -H "apikey: $ANON" -H "Authorization: Bearer $CT"
+          SLOTS="$(curl -sS "$URL/rest/v1/coach_availability?select=id&coach_id=eq.$CID&duration_minutes=gte.600&duration_minutes=lte.699" \
+            -H "apikey: $ANON" -H "Authorization: Bearer $CT" | jq 'length')"
+
+          # 2 · the relationship is CANCELLED by the client, never hard-deleted.
+          curl -sS -o /dev/null -X PATCH \
+            "$URL/rest/v1/coach_client_relationships?client_id=eq.$VID&coach_id=eq.$CID&status=eq.active" \
+            -H "apikey: $ANON" -H "Authorization: Bearer $VT" \
+            -H 'Content-Type: application/json' -d '{"status":"cancelled"}'
+          ACTIVE="$(curl -sS "$URL/rest/v1/coach_client_relationships?select=id&client_id=eq.$VID&coach_id=eq.$CID&status=eq.active" \
+            -H "apikey: $ANON" -H "Authorization: Bearer $VT" | jq 'length')"
+
+          echo "fixture — run-tagged availability remaining: $SLOTS ; active relationships remaining: $ACTIVE"
+          if [[ "$SLOTS" != "0" || "$ACTIVE" != "0" ]]; then
+            echo "FAIL — the probe left QA fixture state behind."
+            exit 1
+          fi
+          echo "OK — no fixture availability remains and no active relationship remains."

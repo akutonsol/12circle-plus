@@ -1,4 +1,63 @@
 -- ============================================================
+-- REL-36 · SEED TARGET GUARD — do not remove.
+--
+-- Second half of the guard in test_accounts.sql. That file refuses to run
+-- against a database that already has users; by the time THIS file runs, that
+-- one has just created some, so "auth.users is empty" is no longer the right
+-- question. The right question is "are the only accounts here the ones the
+-- fixture just made?".
+--
+-- This file writes marketplace coaches, community members and 30 days of
+-- activity, and it inserts auth.users rows of its own. Run against a populated
+-- database it would attach fabricated coaching relationships and social content
+-- to real accounts.
+--
+-- Both pinned fixture ids must be present (proving test_accounts.sql ran in
+-- this same reset, guard and all), and nothing else may be.
+-- ============================================================
+DO $seed_guard$
+DECLARE
+  fixture_client CONSTANT uuid := '5470a95f-bcae-4e01-b2be-7c16964fa432';
+  fixture_coach  CONSTANT uuid := 'f626acd9-f76c-43ca-be4c-54d028ae09db';
+  total_users    bigint;
+  strangers      bigint;
+BEGIN
+  SELECT count(*) INTO total_users FROM auth.users;
+
+  IF NOT EXISTS (SELECT 1 FROM auth.users WHERE id = fixture_client)
+     OR NOT EXISTS (SELECT 1 FROM auth.users WHERE id = fixture_coach) THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'raise_exception',
+      MESSAGE = 'REFUSING TO SEED: the pinned test_accounts.sql fixtures are absent.',
+      DETAIL  = 'full_test_data.sql builds on the client and coach that '
+                'test_accounts.sql creates. Their absence means this is not a '
+                'freshly seeded QA database.',
+      HINT    = 'Run supabase/scripts/qa-db-reset.sh, which applies both seeds '
+                'in order against a verified QA project.';
+  END IF;
+
+  SELECT count(*) INTO strangers
+  FROM auth.users
+  WHERE id NOT IN (fixture_client, fixture_coach);
+
+  IF strangers > 0 THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'raise_exception',
+      MESSAGE = format(
+        'REFUSING TO SEED: %s account(s) here were not created by this fixture.',
+        strangers),
+      DETAIL  = 'This seed fabricates coaching relationships, marketplace '
+                'listings and community posts. Attaching them to real accounts '
+                'is not something that can be undone by re-running a seed.',
+      HINT    = 'Only ever seed a freshly reset QA database.';
+  END IF;
+
+  RAISE NOTICE 'REL-36 seed guard: % fixture account(s), no strangers, proceeding.',
+    total_users;
+END
+$seed_guard$;
+
+-- ============================================================
 -- 12 Circle Fitness — Comprehensive Test Data Seed
 -- Run in Supabase SQL Editor AFTER test_accounts.sql
 --
@@ -40,53 +99,70 @@ BEGIN
 
 -- Auth user rows for marketplace coaches (no real login needed,
 -- but required for the user_profiles FK to auth.users)
+--
+-- confirmation_token / recovery_token / email_change_token_new / email_change have
+-- NO column default, so a direct INSERT leaves them NULL. GoTrue scans them into
+-- non-nullable Go strings, and every LOGIN for such a user then fails with
+--     500 {"error_code":"unexpected_failure","msg":"Database error querying schema"}
+-- even with the right password. GoTrue's own signup path writes ''. Found in
+-- Stage B.4 by attempting a real login against the rebuilt QA project.
 INSERT INTO auth.users (
   instance_id, id, aud, role, email,
   encrypted_password, email_confirmed_at,
   raw_app_meta_data, raw_user_meta_data,
-  created_at, updated_at
+  created_at, updated_at,
+  confirmation_token, recovery_token, email_change_token_new, email_change
 ) VALUES
   ('00000000-0000-0000-0000-000000000000', v_coach_sarah,
    'authenticated', 'authenticated', 'sarah@marketplace.test',
    crypt('Fake1234!', gen_salt('bf')), NOW(),
-   '{"provider":"email","providers":["email"]}', '{}', NOW(), NOW()),
+   '{"provider":"email","providers":["email"]}', '{"role":"coach"}', NOW(), NOW(),
+   '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', v_coach_marcus,
    'authenticated', 'authenticated', 'marcus@marketplace.test',
    crypt('Fake1234!', gen_salt('bf')), NOW(),
-   '{"provider":"email","providers":["email"]}', '{}', NOW(), NOW()),
+   '{"provider":"email","providers":["email"]}', '{"role":"coach"}', NOW(), NOW(),
+   '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', v_coach_priya,
    'authenticated', 'authenticated', 'priya@marketplace.test',
    crypt('Fake1234!', gen_salt('bf')), NOW(),
-   '{"provider":"email","providers":["email"]}', '{}', NOW(), NOW()),
+   '{"provider":"email","providers":["email"]}', '{"role":"coach"}', NOW(), NOW(),
+   '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', v_coach_derek,
    'authenticated', 'authenticated', 'derek@marketplace.test',
    crypt('Fake1234!', gen_salt('bf')), NOW(),
-   '{"provider":"email","providers":["email"]}', '{}', NOW(), NOW()),
+   '{"provider":"email","providers":["email"]}', '{"role":"coach"}', NOW(), NOW(),
+   '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', v_coach_natasha,
    'authenticated', 'authenticated', 'natasha@marketplace.test',
    crypt('Fake1234!', gen_salt('bf')), NOW(),
-   '{"provider":"email","providers":["email"]}', '{}', NOW(), NOW())
+   '{"provider":"email","providers":["email"]}', '{"role":"coach"}', NOW(), NOW(),
+   '', '', '', '')
 ON CONFLICT (id) DO NOTHING;
 
--- Auth user rows for community clients
+-- Auth user rows for community clients (same NULL-token caveat as above)
 INSERT INTO auth.users (
   instance_id, id, aud, role, email,
   encrypted_password, email_confirmed_at,
   raw_app_meta_data, raw_user_meta_data,
-  created_at, updated_at
+  created_at, updated_at,
+  confirmation_token, recovery_token, email_change_token_new, email_change
 ) VALUES
   ('00000000-0000-0000-0000-000000000000', v_client_maria,
    'authenticated', 'authenticated', 'maria@community.test',
    crypt('Fake1234!', gen_salt('bf')), NOW(),
-   '{"provider":"email","providers":["email"]}', '{}', NOW(), NOW()),
+   '{"provider":"email","providers":["email"]}', '{"role":"client"}', NOW(), NOW(),
+   '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', v_client_james,
    'authenticated', 'authenticated', 'james@community.test',
    crypt('Fake1234!', gen_salt('bf')), NOW(),
-   '{"provider":"email","providers":["email"]}', '{}', NOW(), NOW()),
+   '{"provider":"email","providers":["email"]}', '{"role":"client"}', NOW(), NOW(),
+   '', '', '', ''),
   ('00000000-0000-0000-0000-000000000000', v_client_aisha,
    'authenticated', 'authenticated', 'aisha@community.test',
    crypt('Fake1234!', gen_salt('bf')), NOW(),
-   '{"provider":"email","providers":["email"]}', '{}', NOW(), NOW())
+   '{"provider":"email","providers":["email"]}', '{"role":"client"}', NOW(), NOW(),
+   '', '', '', '')
 ON CONFLICT (id) DO NOTHING;
 
 -- Marketplace coach profiles
@@ -136,8 +212,29 @@ INSERT INTO user_profiles (
    ARRAY['ACE-CPT','Lifestyle & Weight Management Coach','Intuitive Eating Counselor'],
    130.00, 8, 4.85, 51, true)
 ON CONFLICT (id) DO UPDATE SET
-  first_name = EXCLUDED.first_name, last_name = EXCLUDED.last_name,
-  bio = EXCLUDED.bio, specialties = EXCLUDED.specialties, rating_avg = EXCLUDED.rating_avg;
+  -- STAGE B.3 (B2-7): migration 109's on_auth_user_created trigger already
+  -- created these rows from the auth.users inserts above, as role='client'
+  -- first_name='User'. Any column omitted here keeps the trigger's value, which
+  -- is how a rebuilt QA ended up with zero coaches in the marketplace.
+  email             = EXCLUDED.email,
+  first_name        = EXCLUDED.first_name,
+  last_name         = EXCLUDED.last_name,
+  role              = EXCLUDED.role,
+  bio               = EXCLUDED.bio,
+  tagline           = EXCLUDED.tagline,
+  specialties       = EXCLUDED.specialties,
+  certifications    = EXCLUDED.certifications,
+  pricing_monthly   = EXCLUDED.pricing_monthly,
+  years_experience  = EXCLUDED.years_experience,
+  rating_avg        = EXCLUDED.rating_avg,
+  review_count      = EXCLUDED.review_count,
+  onboarding_complete = EXCLUDED.onboarding_complete;
+
+-- These five are demo fixtures and must stay out of community member discovery.
+-- Flagged explicitly (migration 110) instead of being inferred from the
+-- @marketplace.test address at query time -- the app no longer reads email.
+UPDATE user_profiles SET is_demo = true
+ WHERE id IN (v_coach_sarah, v_coach_marcus, v_coach_priya, v_coach_derek, v_coach_natasha);
 
 -- Community client profiles
 INSERT INTO user_profiles (
@@ -153,8 +250,19 @@ INSERT INTO user_profiles (
   (v_client_aisha, 'aisha@community.test', 'Aisha', 'Thompson', 'client',
    35, 168, 74.5, 70.0, 'general_fitness', 'intermediate', 'moderately_active', true)
 ON CONFLICT (id) DO UPDATE SET
-  first_name = EXCLUDED.first_name, last_name = EXCLUDED.last_name,
-  fitness_goal = EXCLUDED.fitness_goal;
+  -- STAGE B.3 (B2-7): full column list, same reason as the coach upsert above.
+  email             = EXCLUDED.email,
+  first_name        = EXCLUDED.first_name,
+  last_name         = EXCLUDED.last_name,
+  role              = EXCLUDED.role,
+  age               = EXCLUDED.age,
+  height_cm         = EXCLUDED.height_cm,
+  current_weight_kg = EXCLUDED.current_weight_kg,
+  goal_weight_kg    = EXCLUDED.goal_weight_kg,
+  fitness_goal      = EXCLUDED.fitness_goal,
+  fitness_level     = EXCLUDED.fitness_level,
+  activity_level    = EXCLUDED.activity_level,
+  onboarding_complete = EXCLUDED.onboarding_complete;
 
 -- ═══════════════════════════════════════════════════════════════
 -- SECTION 2: COACH REVIEWS (for test coach and marketplace coaches)

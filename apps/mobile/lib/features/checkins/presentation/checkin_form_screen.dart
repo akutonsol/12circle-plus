@@ -2,36 +2,34 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-class CheckinFormScreen extends ConsumerWidget {
+/// `/checkin-form` — a redirect, not a screen.
+///
+/// It used to render a near-empty page titled "Check-In Form" with a single
+/// button reading "Go to Daily Check-In". A client tapping a **pending**
+/// check-in card (`checkin_card.dart:25`) landed here and had to press again to
+/// reach the form they had already asked for.
+///
+/// `/daily-checkin` is the form. Two sibling routes — `/log-meal` and
+/// `/food-search` — already resolve this way, so this follows the pattern the
+/// router established rather than adding a third shape.
+class CheckinFormScreen extends ConsumerStatefulWidget {
   const CheckinFormScreen({super.key});
+  @override
+  ConsumerState<CheckinFormScreen> createState() => _CheckinFormScreenState();
+}
+
+class _CheckinFormScreenState extends ConsumerState<CheckinFormScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) context.go('/daily-checkin');
+    });
+  }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF030303),
-      body: SafeArea(
-        child: Column(children: [
-          Row(children: [
-            IconButton(
-              icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
-              onPressed: () => Navigator.of(context).canPop()
-                  ? Navigator.of(context).pop()
-                  : context.go('/activity')),
-            const Expanded(child: Center(child: Text("CHECK-IN",
-              style: TextStyle(color: Color(0xFFDDB7FF), fontSize: 16,
-                fontWeight: FontWeight.w800, letterSpacing: 2)))),
-            const SizedBox(width: 48),
-          ]),
-          Expanded(child: Center(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              const Text("Check-In Form",
-                style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: () => context.go('/daily-checkin'),
-                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFA855F7)),
-                child: const Text("Go to Daily Check-In")),
-            ]))),
-        ])));
-  }
+  Widget build(BuildContext context) => const Scaffold(
+        backgroundColor: Color(0xFF030303),
+        body: Center(child: CircularProgressIndicator(color: Color(0xFFA855F7))),
+      );
 }

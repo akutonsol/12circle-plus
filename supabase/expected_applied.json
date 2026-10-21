@@ -1,0 +1,43 @@
+{
+  "_": [
+    "ENV-3 · the declared migration state of each environment.",
+    "",
+    "This file is NOT a ledger. supabase_migrations.schema_migrations is the ledger",
+    "and the only authority on what IS applied. This file declares what SHOULD be",
+    "applied where, so CI has something true to compare the ledger against.",
+    "",
+    "The comparison is two-way, exactly as known-violations.json is: a version",
+    "applied without being declared here fails, and a version declared here without",
+    "being applied fails. The frontier can only move when reality and intent move",
+    "together.",
+    "",
+    "Semantics, and there are only four rules:",
+    "  applied_through  the frontier. Expected = every authored version <= this,",
+    "                   minus anything in `excluded`.",
+    "  excluded         authored versions AT OR BELOW the frontier that are",
+    "                   deliberately not applied here. Each needs a reason and the",
+    "                   gate that releases it.",
+    "  pending          authored versions ABOVE the frontier, deliberately not yet",
+    "                   applied. Each needs a reason and the gate that releases it.",
+    "  every authored version must appear in exactly one of those three states.",
+    "                   Silence is not a state -- an undeclared migration fails.",
+    "",
+    "Only QA is declared. Production's history is reconciled by RELEASE_GATES row",
+    "9B.2 (G-09), which owns dumping and reconciling its ledger and enumerates its",
+    "known divergences in 9B.3. Declaring a production frontier here before that",
+    "work exists would be inventing state this repository cannot yet stand behind.",
+    "",
+    "The live half of this contract -- comparing these declarations against the real",
+    "The live half of this contract -- comparing these declarations against the real schema_migrations -- IS implemented and runs in CI. Corrected 2026-10-12: the QA_DB_URL blocker this note recorded has LIFTED. The `Live SQL evidence` step of the live-qa job runs supabase/scripts/live-evidence.sh, which executes FG-1 (function search_path posture), FG-2a/FG-2b (the Phase 2 workout contract and generated plan day titles) and `ENV-3 . declared vs observed vs authored` against the real ledger. Observed green at CI run 38194730786 (c3f4ff1), with the frontier declared here (181) matching. ENV-3 itself is NOT pending promotion: MASTER_REMEDIATION_REGISTRY records it VERIFIED_CLOSED on 2026-08-25 (section 7.9), when the live evidence phase first executed against QA. The sentence this note replaced -- 'Until it runs, ENV-3 stays REMEDIATED' -- was stale in two ways at once: the live half does run, and ENV-3 had already closed.",
+    "CI, the same blocker as FG-1/FG-2. Until it runs, ENV-3 stays REMEDIATED."
+  ],
+  "environments": {
+    "qa": {
+      "ref": "eyqtldjqpgpljlqvpowh",
+      "name": "12Circle QA",
+      "applied_through": "181",
+      "excluded": [],
+      "pending": {}
+    }
+  }
+}

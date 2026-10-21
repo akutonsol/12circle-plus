@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../domain/auth_provider.dart';
+import '../../../core/errors/auth_error_text.dart';
+import '../../../core/observability/app_failure.dart';
 import 'widgets/auth_design.dart';
 
 enum _Role { client, coach, vendor }
@@ -58,7 +60,10 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
 
     final state = ref.read(authNotifierProvider);
     state.whenOrNull(
-      error: (e, _) => _showError(e.toString()),
+      error: (e, st) {
+        reportError('SignupScreen._signUp', e, st);
+        _showError(authErrorText(e));
+      },
       data: (_) async {
         if (!mounted) return;
         final role = _selectedRole.name;

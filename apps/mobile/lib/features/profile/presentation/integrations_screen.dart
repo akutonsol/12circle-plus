@@ -40,6 +40,7 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
           .select('provider')
           .eq('user_id', uid)
           .eq('connected', true);
+      if (!mounted) return;
       setState(() {
         _connected.clear();
         for (final r in (row as List)) {
@@ -48,6 +49,7 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
         _loading = false;
       });
     } catch (_) {
+      if (!mounted) return;
       setState(() => _loading = false);
     }
   }
@@ -63,12 +65,14 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
           'connected': true,
           'connected_at': DateTime.now().toIso8601String(),
         }, onConflict: 'user_id,provider');
+        if (!mounted) return;
         setState(() => _connected.add(provider));
       } else {
         await Supabase.instance.client.from('user_integrations')
             .update({'connected': false, 'disconnected_at': DateTime.now().toIso8601String()})
             .eq('user_id', uid)
             .eq('provider', provider);
+        if (!mounted) return;
         setState(() => _connected.remove(provider));
       }
     } catch (_) {
@@ -97,6 +101,7 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
           child: SizedBox(height: 56, child: Row(children: [
             IconButton(
               icon: const Icon(Icons.arrow_back_ios_new, color: _pri, size: 20),
+              tooltip: 'Back',
               onPressed: () => Navigator.of(context).pop()),
             const Expanded(child: Center(child: Text('INTEGRATIONS',
               style: TextStyle(color: _pri, fontSize: 16,

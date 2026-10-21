@@ -68,7 +68,7 @@ class GoalService {
 
   Future<void> complete(String id) async {
     final uid = _uid;
-    if (uid == null) return;
+    if (uid == null) throw StateError('Not signed in — the goal was not updated.');
     await _db.from('goals').update({
       'status': 'completed',
       'completed_at': DateTime.now().toIso8601String(),
@@ -77,7 +77,7 @@ class GoalService {
 
   Future<void> deleteGoal(String id) async {
     final uid = _uid;
-    if (uid == null) return;
+    if (uid == null) throw StateError('Not signed in — the goal was not deleted.');
     await _db.from('goals').delete().eq('id', id).eq('client_id', uid);
   }
 }

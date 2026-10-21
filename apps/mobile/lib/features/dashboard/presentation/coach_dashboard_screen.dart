@@ -11,6 +11,10 @@ import '../../coach/domain/coach_ecosystem_provider.dart';
 import '../../coach/presentation/coach_business_screen.dart';
 import '../../coach/presentation/coach_availability_screen.dart';
 import 'client_detail_screen.dart';
+import '../../../core/widgets/named_icon_button.dart';
+import '../domain/coach_triage_provider.dart';
+import 'widgets/needs_you_today.dart';
+import '../domain/session_as_log.dart';
 
 const _bg      = Color(0xFF030303);
 const _card    = Color(0xFF0E0B16);
@@ -26,6 +30,8 @@ const _error   = Color(0xFFFFB4AB);
 final _supabase = Supabase.instance.client;
 
 final coachNotificationsProvider = StreamProvider<List<Map<String, dynamic>>>((ref) {
+  // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
+  ref.watch(currentUserProvider);
   final uid = _supabase.auth.currentUser?.id;
   if (uid == null) return Stream.value([]);
   try {
@@ -46,10 +52,17 @@ final unreadNotificationCountProvider = Provider<int>((ref) {
   return notifs.where((n) => n['read'] == false).length;
 });
 
+// F-15/F-16: the error propagates. These four reads ended `catch { return []; }`,
+// so a failure reached `/coach-dashboard` as "no clients", "no check-ins" and
+// "no workouts" — a coach told their whole roster had vanished. `clientIds
+// .isEmpty` is still an early empty list, because having no clients IS a real
+// answer and must stay distinguishable from the read having failed.
 final coachClientsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
+  ref.watch(currentUserProvider);
   // Live: re-fetch when a relationship changes (new client, status flip).
   ref.watch(tableTickerProvider('coach_client_relationships'));
-  try {
+  {
     final coachId = _supabase.auth.currentUser?.id;
     if (coachId == null) return [];
     // Only fetch clients with an active relationship to this coach
@@ -65,8 +78,6 @@ final coachClientsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) as
         .select('id, first_name, last_name, email, avatar_url, role')
         .inFilter('id', clientIds);
     return List<Map<String, dynamic>>.from(data);
-  } catch (e) {
-    return [];
   }
 });
 
@@ -92,14 +103,12 @@ Widget _riskPill(String label, Color color) => Container(
 // AI coaching signals for the coach's active clients (risk/adherence/last brief).
 final coachAiSignalsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   ref.watch(tableTickerProvider('coach_client_relationships'));
-  try {
-    final data = await _supabase.rpc('coach_client_ai_signals');
-    return List<Map<String, dynamic>>.from(data as List);
-  } catch (_) { return []; }
+  final data = await _supabase.rpc('coach_client_ai_signals');
+  return List<Map<String, dynamic>>.from(data as List);
 });
 
 final clientCheckinsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
-  try {
+  {
     final ids = await _coachClientIds();
     if (ids.isEmpty) return []; // no clients → no data (was showing ALL platform check-ins)
     final today = DateTime.now();
@@ -111,27 +120,62 @@ final clientCheckinsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
         .gte('checked_in_at', start.toIso8601String())
         .order('checked_in_at', ascending: false);
     return List<Map<String, dynamic>>.from(data);
-  } catch (e) {
-    return [];
   }
 });
 
+/// The coach's clients' completed sessions this week.
+///
+/// ── WHY THIS READS `workout_sessions` AND NOT `workout_logs` ──────────────
+/// `workout_logs` carries **one** policy — `003:193`,
+/// `USING (user_id = auth.uid())` — and no coach clause exists in any of the
+/// 131 migrations. An RLS-filtered SELECT is not an error: PostgREST answers
+/// `200` with `[]`. So this provider returned an empty list for **every coach,
+/// always**, and `_buildWorkoutsTab` rendered "No workouts this week" as a
+/// fact. Not a failure a retry could fix — a confident, permanent, wrong zero.
+///
+/// `workout_sessions` answers the same question and a coach is **authorized**
+/// to ask it: `100_rls_harden_client_data.sql` grants
+/// `USING (user_id = auth.uid() OR public.is_active_coach_of(user_id))`
+/// FOR SELECT. That helper binds `coach_id` to `auth.uid()` and requires an
+/// active relationship row, and `113:223` revokes `authenticated` from
+/// `coach_client_relationships` entirely — so unlike F-21's shape, the caller
+/// cannot forge the relationship that would satisfy it.
+///
+/// Both tables are written on the same completion — `active_workout_screen`
+/// calls `logWorkout()` at :649 and `completeSession()` at :653 — so nothing
+/// is lost by reading the one a coach may actually see.
+///
+/// Two deliberate narrowings:
+///
+///   * **`status = 'completed'`.** The table also holds `in_progress` and
+///     `abandoned` rows, whose `completed_at` is null. Unfiltered, the tab's
+///     `w['completed_at'] != null ? parse : DateTime.now()` fallback would
+///     render an abandoned session as "0m ago" — a workout the client did not
+///     finish, shown as one they just did.
+///   * **explicit columns.** `workout_sessions` has gained five columns since
+///     001 (`workout_name`, `total_exercises`, `total_sets`, `completed_sets`,
+///     `calories_burned`). A bare `select()` would have pulled each one into a
+///     coach surface as it landed, with nobody deciding.
 final clientWorkoutLogsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
-  try {
+  {
     final ids = await _coachClientIds();
     if (ids.isEmpty) return []; // no clients → no data (was showing ALL platform workouts)
     final now = DateTime.now();
     final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
     final start = DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day);
     final data = await _supabase
-        .from('workout_logs')
-        .select()
+        .from('workout_sessions')
+        .select('user_id, workout_title, completed_at, duration_seconds')
         .inFilter('user_id', ids)
+        .eq('status', 'completed')
         .gte('completed_at', start.toIso8601String())
         .order('completed_at', ascending: false);
-    return List<Map<String, dynamic>>.from(data);
-  } catch (e) {
-    return [];
+    // `duration_seconds` here; `duration_minutes` on the old table. Converted
+    // at the boundary so the four call sites below are untouched.
+    return [
+      for (final row in data as List)
+        sessionAsWorkoutLog(Map<String, dynamic>.from(row as Map))
+    ];
   }
 });
 
@@ -170,9 +214,17 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
     final checkins = ref.watch(clientCheckinsProvider);
     final workouts = ref.watch(clientWorkoutLogsProvider);
 
-    final clientList    = clients.valueOrNull  ?? [];
-    final checkinList   = checkins.valueOrNull ?? [];
-    final workoutList   = workouts.valueOrNull ?? [];
+    // F-15: a failed read must not become "no clients". These three reads
+    // decide what a coach is told about their entire roster, and a failure
+    // arriving as an empty list told them it had vanished. `.valueOrNull` is
+    // kept — these are the reads EC-G8 already counts — but a failure is now
+    // tracked alongside it so the screen can tell the two apart.
+    final failed = clients is AsyncError ||
+        checkins is AsyncError ||
+        workouts is AsyncError;
+    final clientList    = clients is AsyncError ? const <Map<String, dynamic>>[] : (clients.valueOrNull  ?? []);
+    final checkinList   = checkins is AsyncError ? const <Map<String, dynamic>>[] : (checkins.valueOrNull ?? []);
+    final workoutList   = workouts is AsyncError ? const <Map<String, dynamic>>[] : (workouts.valueOrNull ?? []);
 
     // Stats
     final checkedInToday  = checkinList.map((c) => c['user_id']).toSet().length;
@@ -230,8 +282,25 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                 ]),
               ),
               const Spacer(),
+              // FIT-032 declares "Messages" and "Notifications" as named
+              // controls. The bell shipped as a bare GestureDetector + Icon —
+              // an A-G8 site, and the coverage tool read it as present only
+              // because `Icons.notifications_outlined` contains the word.
+              NamedIconButton(
+                label: 'Messages',
+                onTap: () => context.go('/messages'),
+                child: Container(
+                  width: 36, height: 36,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.06),
+                    shape: BoxShape.circle),
+                  child: const Icon(Icons.chat_bubble_outline,
+                      color: _white, size: 18)),
+              ),
+              const SizedBox(width: 8),
               // Notification bell
-              GestureDetector(
+              NamedIconButton(
+                label: 'Notifications',
                 onTap: () => _showNotificationsSheet(context),
                 child: Stack(
                   clipBehavior: Clip.none,
@@ -258,7 +327,8 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                             style: const TextStyle(color: Colors.white,
                               fontSize: 8, fontWeight: FontWeight.w800)))),
                   ],
-                )),
+                ),
+              ),
               const SizedBox(width: 8),
               // All coach tools live behind one menu — keeps the header clean
               // and overflow-proof on any width.
@@ -335,7 +405,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
           child: TabBarView(
             controller: _tabs,
             children: [
-              _buildClientsTab(clientList, checkinList, workoutList),
+              _buildClientsTab(clientList, checkinList, workoutList, failed: failed),
               _buildRequestsTab(),
               _buildCheckinsTab(checkinList, clientList),
               _buildWorkoutsTab(workoutList, clientList),
@@ -470,8 +540,9 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
   Widget _buildClientsTab(
     List<Map<String, dynamic>> clients,
     List<Map<String, dynamic>> checkins,
-    List<Map<String, dynamic>> workouts,
-  ) {
+    List<Map<String, dynamic>> workouts, {
+    required bool failed,
+  }) {
     // Client Intelligence metrics
     final highRisk = clients.where((c) => c['risk_level'] == 'high').length;
     final modRisk  = clients.where((c) => c['risk_level'] == 'moderate').length;
@@ -484,6 +555,16 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
     // AI Recommendations (rule-based from aggregate data)
     final aiRecs = _generateCoachRecs(clients, checkins, workouts);
 
+    if (failed) {
+      // NOT "No clients found". A coach whose roster read failed is being told
+      // their clients have gone, which is both false and alarming. The line
+      // follows the `Could not load [noun]` pattern this repository renders in
+      // fifteen files; "Try again" is the package's own label.
+      return _EmptyState(
+        icon: Icons.cloud_off_rounded,
+        message: "Could not load your clients",
+        sub: "Pull to refresh to try again");
+    }
     if (clients.isEmpty) {
       return _EmptyState(
         icon: Icons.people_outline,
@@ -505,6 +586,36 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
           // ── Client Intelligence header (index 0) ──
           if (i == 0) {
             return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              // ── FIT-032 · "Needs you today" ────────────────────────────
+              // The board's triage surface, added ABOVE the roster rather
+              // than replacing it: this screen carries a coach's only path
+              // to invites and pending requests, which the board does not
+              // draw, and removing a capability because a frame omits it is
+              // the mistake OD-15 records.
+              //
+              // The two thresholds are stated HERE, at the call site, so the
+              // choice is visible in the diff. Neither is the board's — it
+              // shows `9 days` and `Sunday` as sample values, not rules —
+              // and both are recorded as OD-21.
+              ref.watch(coachTriageSignalsProvider).when(
+                loading: () => const SizedBox.shrink(),
+                // A failed read must not read as "nothing needs you". That
+                // is F-15 on the screen F-15 was found on.
+                error: (_, __) => const Padding(
+                  padding: EdgeInsets.only(bottom: 18),
+                  child: Text("Couldn't load what needs you today",
+                      style: TextStyle(color: _muted, fontSize: 13)),
+                ),
+                data: (signals) => Padding(
+                  padding: const EdgeInsets.only(bottom: 22),
+                  child: NeedsYouToday(
+                    clients: signals,
+                    totalClients: clients.length,
+                    inactivityDays: 9,
+                    blockEndHorizonDays: 7,
+                  ),
+                ),
+              ),
               // Section header
               Padding(
                 padding: const EdgeInsets.only(bottom: 10),
@@ -740,7 +851,12 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                       final clientLn  = client['last_name'] as String? ?? '';
                       final convId = await MessagingService()
                           .getOrCreateCoachClientConversation(clientId);
-                      if (!context.mounted) return;
+                      // `mounted`, not `context.mounted`: this closure captures
+                      // the STATE's context, and for a State the lint wants the
+                      // State's own liveness. The two are equivalent here —
+                      // State.mounted is State.context.mounted — so this is the
+                      // idiomatic spelling, not a suppression.
+                      if (!mounted) return;
                       ref.read(selectedConversationProvider.notifier).state = {
                         'id': convId,
                         'participant': {

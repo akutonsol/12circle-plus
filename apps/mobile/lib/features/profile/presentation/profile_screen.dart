@@ -9,6 +9,7 @@ import '../../auth/domain/auth_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coaching_mode/domain/coaching_mode_provider.dart';
 import '../../payments/domain/entitlements.dart';
+import '../domain/connected_apps.dart';
 
 class _C {
   static const bg                  = Color(0xFF0A0A0B);
@@ -348,7 +349,7 @@ class ProfileScreen extends ConsumerWidget {
 
             // ── My Coach (only in Coach-Guided mode; self/AI have no coach) ──
             if (coachingMode == CoachingMode.coachGuided) ...[
-              _MyCoachSection(onCoachCancelled: () {
+              MyCoachSection(onCoachCancelled: () {
                 ref.invalidate(assignedCoachProvider);
                 ref.invalidate(clientRelationshipProvider);
               }),
@@ -362,12 +363,50 @@ class ProfileScreen extends ConsumerWidget {
             _GlassCard(
               padding: EdgeInsets.zero,
               child: Column(children: [
+                // FIT-029's wording. "Personal Info" was an abbreviation the
+                // locked screen writes out in full.
                 _ProfileRow(
                   icon: Icons.person_outline,
-                  label: 'Personal Info',
+                  label: 'Personal information',
                   hasBorder: true,
                   onTap: () => context.push('/personal-info'),
                 ),
+                // FIT-029's "You" list declares `Goals` and `Connected apps`
+                // between `Personal information` and the plan row. Neither was
+                // on the screen.
+                //
+                // `/goals` is REGISTERED and nothing in the app navigated to
+                // it — the third orphaned route this cycle has found by asking
+                // what a declared control opens, after `/activity` and
+                // `/meal-plan`. This row is its door.
+                _ProfileRow(
+                  icon: Icons.flag_outlined,
+                  label: 'Goals',
+                  hasBorder: true,
+                  onTap: () => context.push('/goals'),
+                ),
+                // The count is live, from the same `user_integrations` rows
+                // the integrations screen reads, so the row and the screen
+                // behind it cannot disagree. No badge when nothing is
+                // connected, while it loads, or if the read fails — see
+                // `connectedAppsBadge`.
+                Consumer(builder: (context, ref, _) {
+                  final badge =
+                      connectedAppsBadge(ref.watch(connectedAppsCountProvider));
+                  return _ProfileRow(
+                    icon: Icons.watch_outlined,
+                    label: 'Connected apps',
+                    hasBorder: true,
+                    trailing: badge == null
+                        ? null
+                        : Text(badge,
+                            style: const TextStyle(
+                                color: _C.onSurfaceVar,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600)),
+                    onTap: () => context.push('/integrations'),
+                  );
+                }),
                 _ProfileRow(
                   icon: Icons.notifications_outlined,
                   label: 'Notifications',
@@ -438,12 +477,28 @@ class ProfileScreen extends ConsumerWidget {
                   hasBorder: true,
                   onTap: () => context.go('/settings'),
                 ),
+                // FIT-029 calls this "Connected apps". It draws a count beside
+                // it ("Connected apps 2") — that number is NOT added, because
+                // nothing in this app knows how many integrations a client has
+                // connected. A badge reading 2 for everyone would be a
+                // fabricated fact on their own profile.
                 _ProfileRow(
                   icon: Icons.integration_instructions_outlined,
-                  label: 'Integrations',
+                  label: 'Connected apps',
+                  iconColor: _C.secondary,
+                  hasBorder: true,
+                  onTap: () => context.push('/integrations'),
+                ),
+                // FIT-029 declares "Cycle & wellbeing" on this screen. It is a
+                // second entry point to a screen every client can already reach
+                // from Home — the tile there is shown to everyone; only its
+                // subtitle changes — so no new exposure is introduced.
+                _ProfileRow(
+                  icon: Icons.favorite_outline,
+                  label: 'Cycle & wellbeing',
                   iconColor: _C.secondary,
                   hasBorder: false,
-                  onTap: () => context.push('/integrations'),
+                  onTap: () => context.push('/womens-health'),
                 ),
               ]),
             ),
@@ -698,9 +753,54 @@ class _MiniRingPainter extends CustomPainter {
 }
 
 // ── My Coach Section ──────────────────────────────────────────────────────────
-class _MyCoachSection extends ConsumerWidget {
+/// What the "MY COACH" section should render, derived from the read's state.
+///
+/// F-15 · `/profile` told a paying client they had **no coach**, and to go
+/// complete onboarding, whenever `assignedCoachProvider` failed. The section
+/// read `coachAsync.valueOrNull`, so a failure and "you have no coach" arrived
+/// as the same `null`. That is the FIT-028 falsehood in a second place: not a
+/// blank where data should be, but a specific false statement about the
+/// client's relationship, with an instruction attached to it.
+enum CoachSectionState {
+  loading,
+
+  /// The read failed. The screen knows nothing about this client's coach, so
+  /// it says nothing — the section is not rendered at all.
+  ///
+  /// **Hidden rather than reworded** because any wording would be new product
+  /// copy, and the string already sitting there is the false one. A full error
+  /// state with a retry is OD-8, like the other seven collapses. Saying nothing
+  /// is not ideal; saying something untrue is worse.
+  unavailable,
+
+  /// Genuinely no coach — this is a real answer and keeps its existing card.
+  none,
+
+  assigned,
+}
+
+/// Matches on the STATE, never on the value.
+///
+/// Two reasons, and both are the defect restated. Reading `.valueOrNull` is
+/// exactly how a failure became "no coach" in the first place — an error's null
+/// and an empty result's null are the same null. And `.valueOrNull` is the read
+/// EC-G8 ratchets, so reintroducing one here to fix an error→empty collapse
+/// would have been self-defeating; the baseline is unchanged at 134.
+CoachSectionState coachSectionFor(AsyncValue<Map<String, dynamic>?> coach) =>
+    switch (coach) {
+      AsyncError() => CoachSectionState.unavailable,
+      AsyncData(:final value) => value == null
+          ? CoachSectionState.none
+          : CoachSectionState.assigned,
+      _ => CoachSectionState.loading,
+    };
+
+/// Public so the F-15 branch can be mounted in a widget test — the decision
+/// function below is testable on its own, but the WIRING (that `unavailable`
+/// actually hides the section) is only assertable against the real tree.
+class MyCoachSection extends ConsumerWidget {
   final VoidCallback onCoachCancelled;
-  const _MyCoachSection({required this.onCoachCancelled});
+  const MyCoachSection({super.key, required this.onCoachCancelled});
 
   static const _cancelReasons = [
     'Not a good fit',
@@ -829,11 +929,15 @@ class _MyCoachSection extends ConsumerWidget {
     final relAsync   = ref.watch(clientRelationshipProvider);
     final coach      = coachAsync.valueOrNull;
     final rel        = relAsync.valueOrNull;
+    final section    = coachSectionFor(coachAsync);
+
+    // F-15: a failed read must not become "No coach assigned yet".
+    if (section == CoachSectionState.unavailable) return const SizedBox.shrink();
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const _SectionLabel(label: 'MY COACH'),
       const SizedBox(height: 12),
-      if (coachAsync.isLoading)
+      if (section == CoachSectionState.loading)
         const Center(child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2))
       else if (coach == null)
         _GlassCard(

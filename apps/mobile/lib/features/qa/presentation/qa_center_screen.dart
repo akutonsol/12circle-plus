@@ -109,6 +109,7 @@ class _QaCenterScreenState extends State<QaCenterScreen> {
     for (final s in _suites.where((s) => s.group == group)) {
       await _runOne(s);
     }
+    if (!mounted) return;
     setState(() => _busy = false);
   }
 
@@ -119,6 +120,7 @@ class _QaCenterScreenState extends State<QaCenterScreen> {
     for (final s in _suites) {
       await _runOne(s);
     }
+    if (!mounted) return;
     setState(() => _busy = false);
     _addLog('Done — ${_overall == QaStatus.pass ? 'ALL GREEN' : _statusLabel(_overall)}');
   }

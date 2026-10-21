@@ -151,8 +151,11 @@ class CoachRelationshipService {
     final list = List<Map<String, dynamic>>.from(rels);
     if (list.isEmpty) return [];
     final ids = list.map((r) => r['coach_id'] as String).toList();
+    // H-06 / 3A-7: repointed at public_profiles. getPendingRequests() below is
+    // the coach-facing half of H-06 and stays on user_profiles — blocked on
+    // Q-H1, not touched here.
     final profiles = await _db
-        .from('user_profiles')
+        .from('public_profiles')
         .select('id, first_name, last_name, avatar_url, coach_title, specialties, pricing_monthly')
         .inFilter('id', ids);
     final byId = {for (final p in profiles as List) p['id'] as String: p};

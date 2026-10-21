@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../auth/domain/auth_provider.dart';
 
 /// Aggregated, real performance data for the Insights screen.
 class InsightsData {
@@ -41,6 +42,8 @@ class InsightsData {
 }
 
 final insightsProvider = FutureProvider<InsightsData>((ref) async {
+  // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
+  ref.watch(currentUserProvider);
   final db = Supabase.instance.client;
   final uid = db.auth.currentUser?.id;
   if (uid == null) return InsightsData.empty();

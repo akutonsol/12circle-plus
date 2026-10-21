@@ -21,7 +21,7 @@ Future<bool> launchCheckout(
   } catch (e) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Checkout could not start. Please try again.\n$e'),
+        SnackBar(content: Text('Checkout could not start. Please try again.'),
           backgroundColor: const Color(0xFFFFB4AB)));
     }
     return false;

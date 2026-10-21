@@ -34,7 +34,7 @@ class CoachClassesScreen extends ConsumerWidget {
         ),
         body: classesAsync.when(
           loading: () => const Center(child: CircularProgressIndicator(color: AppColors.purple)),
-          error: (e, _) => Center(child: Text('Could not load classes.\n$e',
+          error: (e, _) => Center(child: Text('Could not load classes.',
               textAlign: TextAlign.center, style: const TextStyle(color: AppColors.textSecondary))),
           data: (classes) {
             if (classes.isEmpty) {

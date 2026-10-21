@@ -11,6 +11,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import '../../../features/coach/data/coach_program_service.dart';
 import '../data/habit_reminder_service.dart';
 import 'widgets/habit_card.dart';
+import '../../../core/widgets/named_icon_button.dart';
+import 'package:go_router/go_router.dart';
 
 // ── colour helpers ────────────────────────────────────────────────────────────
 
@@ -232,6 +234,16 @@ class _HeroHeader extends StatelessWidget {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // top row
         Row(children: [
+          // FIT-058 declares `Back`. The screen had no back control at all —
+          // it is reached by a push from the directory, so the only way out
+          // was the system gesture.
+          NamedIconButton(
+            label: 'Back',
+            onTap: () => context.canPop() ? context.pop() : context.go('/home'),
+            child: const Icon(Icons.arrow_back,
+                color: AppColors.white, size: 20),
+          ),
+          const SizedBox(width: 4),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('HABITS',

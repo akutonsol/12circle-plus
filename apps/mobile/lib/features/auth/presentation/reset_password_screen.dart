@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/errors/auth_error_text.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/router/app_router.dart' show passwordRecoveryNotifier;
 import 'widgets/auth_design.dart';
 
@@ -43,10 +45,11 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
       await Supabase.instance.client.auth.updateUser(UserAttributes(password: pw));
       passwordRecoveryNotifier.value = false;
       if (mounted) setState(() { _loading = false; _done = true; });
-    } catch (e) {
+    } catch (e, st) {
+      reportError('ResetPasswordScreen._submit', e, st);
       if (mounted) {
         setState(() => _loading = false);
-        _snack(e.toString());
+        _snack(authErrorText(e));
       }
     }
   }

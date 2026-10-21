@@ -70,13 +70,24 @@ class OnboardingScreen extends StatelessWidget {
                 const SizedBox(height: 28),
                 _SlideToStart(onConfirm: () => context.go('/signup')),
                 const SizedBox(height: 18),
-                Center(child: GestureDetector(
-                  onTap: () => context.go('/login'),
-                  child: const Text.rich(TextSpan(children: [
-                    TextSpan(text: 'Already a member?  ', style: TextStyle(color: _muted, fontSize: 14)),
-                    TextSpan(text: 'Sign In', style: TextStyle(
-                      color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
-                  ])))),
+                // FIT-006 declares "I already have one". The visible text is
+                // what changed — an accessible name has to contain the visible
+                // label (WCAG 2.5.3), so announcing the design's phrase over
+                // "Already a member? Sign In" would have been a violation
+                // dressed up as coverage. The destination is unchanged.
+                Center(child: Semantics(
+                  button: true,
+                  child: GestureDetector(
+                    onTap: () => context.go('/login'),
+                    behavior: HitTestBehavior.opaque,
+                    child: Container(
+                      constraints: const BoxConstraints(minHeight: 44),
+                      alignment: Alignment.center,
+                      child: const Text('I already have one', style: TextStyle(
+                        color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+                    ),
+                  ),
+                )),
               ]),
             ),
           ),
@@ -126,7 +137,23 @@ class _SlideToStartState extends State<_SlideToStart>
         }
       }
       final knob = _h - 8;
-      return Container(
+      return Semantics(
+        // ── F-26 ────────────────────────────────────────────────────────────
+        // This is the app's FRONT DOOR and it was drag-only:
+        // `onHorizontalDragUpdate` / `onHorizontalDragEnd`, no tap, no
+        // semantics. A screen-reader user, or anyone who cannot perform a
+        // precise horizontal drag — switch access, tremor, limited dexterity —
+        // **could not create an account at all.**
+        //
+        // The slide stays: it is what the design draws, and the friction is
+        // deliberate. What is added is a single activatable node for the
+        // accessibility APIs, which is the standard remedy and changes nothing
+        // on screen. FIT-006's own words name it.
+        button: true,
+        label: 'Create your account',
+        excludeSemantics: true,
+        onTap: widget.onConfirm,
+        child: Container(
         height: _h,
         decoration: BoxDecoration(
           color: const Color(0xFF14101F),
@@ -149,7 +176,8 @@ class _SlideToStartState extends State<_SlideToStart>
                 alignment: Alignment.centerLeft,
                 child: Opacity(
                   opacity: (1 - (_dx / maxDx) * 1.7).clamp(0.0, 1.0),
-                  child: const Text('Get Started', style: TextStyle(
+                  // FIT-006's wording for this control.
+                  child: const Text('Create your account', style: TextStyle(
                     color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700))))),
             // Draggable knob with arrow.
             Positioned(
@@ -178,6 +206,7 @@ class _SlideToStartState extends State<_SlideToStart>
             ),
           ]),
         ),
+      ),
       );
     });
   }

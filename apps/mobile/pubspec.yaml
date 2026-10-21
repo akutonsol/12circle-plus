@@ -27,6 +27,11 @@ dependencies:
   
   # Supabase Auth
   supabase_flutter: ^2.5.3
+  # Declared because test/widget/ec03_… injects an http.BaseClient through
+  # Supabase.initialize(httpClient:). It already arrives transitively via
+  # supabase_flutter; naming it keeps depend_on_referenced_packages honest
+  # rather than suppressed at the import.
+  http: ^1.2.0
   
   # UI
   google_fonts: ^8.1.0

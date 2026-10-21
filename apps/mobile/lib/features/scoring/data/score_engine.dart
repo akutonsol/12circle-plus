@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/observability/app_failure.dart';
+
 /// 12 Circle Automated Scoring Engine — client side.
 /// Every eligible action calls one of the typed helpers, which records an
 /// auditable score_event via the `award_points` RPC. Points/levels/badges are
@@ -23,7 +25,13 @@ class ScoreEngine {
         'p_category': category, 'p_action': action, 'p_points': points,
         'p_ref_type': refType, 'p_ref_id': refId, 'p_dedup_key': dedupKey,
       });
-    } catch (_) {/* scoring never blocks the user action */}
+    } catch (e) {
+      // Rule O: scoring never blocks the user action, but a sanctioned
+      // swallow that records is an engineering decision and one that does
+      // not is an outage nobody will ever see. Behaviour is unchanged.
+      reportError('ScoreEngine._award', e,
+          null, <String, Object?>{'category': category, 'action': action});
+    }
   }
 
   Future<void> _penalize({
@@ -35,7 +43,11 @@ class ScoreEngine {
         'p_category': category, 'p_action': action, 'p_points': points,
         'p_dedup_key': dedupKey,
       });
-    } catch (_) {/* scoring never blocks the user action */}
+    } catch (e) {
+      // Rule O, as above. Still non-blocking, now visible.
+      reportError('ScoreEngine._penalize', e,
+          null, <String, Object?>{'category': category, 'action': action});
+    }
   }
 
   // ── Penalties ─────────────────────────────────────────────

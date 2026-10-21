@@ -1,0 +1,1 @@
+-- CI-local stub: the objects migration 076 calls are created by supabase/tests/local/shim.sql

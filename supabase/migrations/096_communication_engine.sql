@@ -27,7 +27,12 @@ create table if not exists communications (
   approved_at  timestamptz,
   sent_at      timestamptz
 );
-create index if not exists idx_comm_subject on communications(subject_id, created_at desc);
+-- STAGE B.3 (B2-5): this index named created_at, which `communications` does not
+-- have -- the table's timestamp is generated_at. The statement aborted 096 on a
+-- clean replay, taking the rest of the communication engine with it. Left inert
+-- here rather than silently rewritten; migration 111 creates the index on the
+-- column that actually exists.
+-- create index if not exists idx_comm_subject on communications(subject_id, created_at desc);
 create index if not exists idx_comm_status  on communications(status);
 alter table communications enable row level security;
 drop policy if exists "comm read" on communications;

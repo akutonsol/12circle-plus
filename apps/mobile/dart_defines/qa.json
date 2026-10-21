@@ -1,0 +1,6 @@
+{
+  "APP_ENV": "qa",
+  "SUPABASE_URL": "https://eyqtldjqpgpljlqvpowh.supabase.co",
+  "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV5cXRsZGpxcGdwbGpscXZwb3doIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc1MTEyNDMsImV4cCI6MjEwMzA4NzI0M30.YJWUrPAHcL1QiQ78QoSXIZWeu7AuSEWZvs5zY4Xc9Uc",
+  "STRIPE_PK": ""
+}

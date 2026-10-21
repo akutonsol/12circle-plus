@@ -18,6 +18,7 @@ import '../../ai_coach/domain/ai_insights.dart';
 import '../../ai_coach/presentation/ai_briefing_sheet.dart';
 import '../../../core/widgets/app_top_nav.dart';
 import '../../../core/widgets/blood_drop.dart';
+import '../domain/home_session_card.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 class _C {
@@ -33,10 +34,24 @@ class _C {
 // 7-day activity bars: each value 0.0–1.0 representing relative activity that day.
 // Pulls from nutrition_logs (meal count) + coaching_calls (scheduled calls).
 // Returns List<double> length 7, index 0 = Monday of current week.
+//
+// F-15 · ERRORS PROPAGATE. This used to end `catch (_) { return List.filled(7,
+// 0.0); }`, so a failed read was indistinguishable from a week with nothing in
+// it — and the card does not merely look empty, it answers. A client who had
+// logged six meals was shown **"0%"** over seven flat bars and the line "Log
+// meals or workouts to see progress". A failure presented as a confident wrong
+// number, with a nudge blaming the client for it.
+//
+// `assignedWorkoutsProvider` in the workout feature carries the same note for
+// the same reason; `train_hub_screen`'s three `error: (_, __) => '0'` stats were
+// corrected to '—' on the same grounds.
 final weeklyActivityProvider = FutureProvider<List<double>>((ref) async {
+  // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
+  ref.watch(currentUserProvider);
   final uid = Supabase.instance.client.auth.currentUser?.id;
+  // Signed out is not a failure — there is genuinely nothing to show.
   if (uid == null) return List.filled(7, 0.0);
-  try {
+  {
     final now    = DateTime.now();
     final monday = now.subtract(Duration(days: now.weekday - 1));
     final weekStart = DateTime(monday.year, monday.month, monday.day);
@@ -77,10 +92,51 @@ final weeklyActivityProvider = FutureProvider<List<double>>((ref) async {
     final maxCount = counts.reduce((a, b) => a > b ? a : b);
     if (maxCount == 0) return List.filled(7, 0.0);
     return counts.map((c) => (c / maxCount).clamp(0.05, 1.0)).toList();
-  } catch (_) {
-    return List.filled(7, 0.0);
   }
 });
+
+/// What "This Week's Progress" should say, derived from the read's state rather
+/// than from a value the read never produced.
+///
+/// Extracted because `home_screen.dart` reaches `Supabase.instance` at the top
+/// level, so the card cannot be mounted in a widget test. Same reason
+/// `plan_summary.dart` and `extendRest()` were extracted.
+typedef WeekProgress = ({
+  /// What goes where the percentage goes. `'—'` when the read failed: the
+  /// screen does not know, and a number would be a claim it cannot support.
+  String headline,
+
+  /// The nudge under the title, or null when there is nothing honest to say.
+  /// **Null on failure is the point** — "Log meals or workouts to see progress"
+  /// told a client who had logged meals that they had not.
+  String? nudge,
+
+  /// Bar heights, 0.0–1.0.
+  List<double> bars,
+
+  /// True when the read failed, so the card can render the bars as unknown
+  /// rather than as zero.
+  bool failed,
+});
+
+WeekProgress weekProgressFrom(AsyncValue<List<double>> activity) {
+  final bars = activity.valueOrNull ?? List.filled(7, 0.0);
+  if (activity.hasError) {
+    return (headline: '—', nudge: null, bars: List.filled(7, 0.0), failed: true);
+  }
+  final activeDays = bars.where((v) => v > 0.05).length;
+  final pct = (activeDays / 7 * 100).round();
+  return (
+    headline: '$pct%',
+    nudge: pct == 0
+        ? 'Log meals or workouts to see progress'
+        : pct >= 70
+            ? 'Excellent consistency!'
+            : 'Keep building your streak',
+    bars: bars,
+    failed: false,
+  );
+}
 
 // ── Home Screen ───────────────────────────────────────────────────────────────
 class HomeScreen extends ConsumerStatefulWidget {
@@ -639,12 +695,9 @@ class _PanelWeekProgress extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final barsAsync = ref.watch(weeklyActivityProvider);
-    final bars      = barsAsync.valueOrNull ?? List.filled(7, 0.0);
+    final week      = weekProgressFrom(barsAsync);
+    final bars      = week.bars;
     final todayIdx  = (DateTime.now().weekday - 1).clamp(0, 6);
-
-    // % of days this week with any activity
-    final activeDays = bars.where((v) => v > 0.05).length;
-    final pct = (activeDays / 7 * 100).round();
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -656,21 +709,51 @@ class _PanelWeekProgress extends ConsumerWidget {
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
           crossAxisAlignment: CrossAxisAlignment.end, children: [
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text("This Week's Progress",
-              style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.8),
-                fontSize: 13, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 2),
-            Text(pct == 0
-                ? 'Log meals or workouts to see progress'
-                : pct >= 70 ? 'Excellent consistency!' : 'Keep building your streak',
-              style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.35), fontSize: 11)),
+            // FIT-001 folds Activity into Home — "Activity folded in ·
+            // Directory moved to the top bar" — and the bottom bar no longer
+            // carries an Activity tab. That tab was `/activity`'s ONLY
+            // entrance, and a 1,089-line screen losing its last door is not
+            // what "folded in" means (OD-15). This panel IS the activity
+            // content on Home, so it is where the full screen opens from.
+            Semantics(
+              button: true,
+              label: "This Week's Progress",
+              hint: 'Opens your activity',
+              excludeSemantics: true,
+              onTap: () => context.go('/activity'),
+              child: GestureDetector(
+                onTap: () => context.go('/activity'),
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 44),
+                  alignment: Alignment.centerLeft,
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text("This Week's Progress",
+                      style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.8),
+                        fontSize: 13, fontWeight: FontWeight.w600)),
+                    const SizedBox(width: 4),
+                    Icon(Icons.chevron_right,
+                        color: _C.onSurfVar.withValues(alpha: 0.5), size: 16),
+                  ]),
+                ),
+              ),
+            ),
+            if (week.nudge != null) ...[
+              const SizedBox(height: 2),
+              Text(week.nudge!,
+                style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.35), fontSize: 11)),
+            ],
           ]),
           if (barsAsync.isLoading)
             const SizedBox(width: 20, height: 20,
               child: CircularProgressIndicator(strokeWidth: 2, color: _C.primary))
           else
-            Text('$pct%',
-              style: const TextStyle(color: _C.primary, fontSize: 28,
+            Text(week.headline,
+              style: TextStyle(
+                color: week.failed
+                    ? _C.onSurfVar.withValues(alpha: 0.5)
+                    : _C.primary,
+                fontSize: 28,
                 fontWeight: FontWeight.w900, letterSpacing: -1, height: 1)),
         ]),
         const SizedBox(height: 16),
@@ -678,7 +761,11 @@ class _PanelWeekProgress extends ConsumerWidget {
           height: 72,
           child: Row(crossAxisAlignment: CrossAxisAlignment.end,
             children: List.generate(7, (i) {
-              final isToday  = i == todayIdx;
+              // On failure every bar is the flat unknown track and nothing is
+              // highlighted — a lit "today" bar over a failed read reads as
+              // "you did nothing today", which is exactly the claim the screen
+              // cannot make.
+              final isToday  = !week.failed && i == todayIdx;
               final isPast   = i < todayIdx;
               final height   = 72 * (bars[i] > 0 ? bars[i] : (isToday ? 0.15 : 0.04));
               return Expanded(child: Padding(
@@ -933,43 +1020,33 @@ class _FitnessSessionCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isAI    = mode == CoachingMode.aiGuided;
-    final isCoach = mode == CoachingMode.coachGuided;
+    final isAI = mode == CoachingMode.aiGuided;
 
-    // Prefer the user's generated/assigned program; fall back to the sample
-    // library only when no program exists yet (e.g. legacy accounts).
-    final assigned  = ref.watch(assignedWorkoutsProvider).valueOrNull ?? const [];
-    final sample    = ref.watch(workoutsProvider);
-    final workouts   = assigned.isNotEmpty ? assigned : sample;
-    final firstTitle = workouts.isNotEmpty ? workouts.first.title : 'Full Body Strength';
+    // FIT-001's Today card. The rules — and the four defects they replace —
+    // are in `domain/home_session_card.dart`. The short version: this read
+    // `assigned.isNotEmpty ? assigned : sample` and captioned a DEMO workout
+    // "Assigned by your coach", which is F-20 on the front door.
+    final session = homeSession(ref.watch(assignedWorkoutsProvider));
+    final badges = homeSessionBadges(session.workout);
 
-    final title    = isAI    ? 'AI Workout Plan'
-                   : isCoach ? 'Today\'s Session'
-                   :           firstTitle;
-    final subtitle = isAI    ? 'Personalised by your AI coach'
-                   : isCoach ? 'Assigned by your coach'
-                   :           'Workout Session';
-    final btnLabel = isAI    ? 'AI Train'
-                   : isCoach ? 'Start'
-                   :           'Start Circle';
-    final kcalText = isAI    ? 'AI Optimised' : '550 kcal';
-    final kcalIcon = isAI    ? Icons.auto_awesome : Icons.local_fire_department_rounded;
+    final title    = session.title ?? session.emptyLine;
+    final subtitle = session.context ??
+        (isAI ? 'Personalised by your AI coach' : 'Today');
+    // One label, because it is one action. The board gives it on FIT-001 and
+    // FIT-014 alike; the card had three words depending on coaching mode.
+    const btnLabel = HomeSession.beginLabel;
 
     void onStart() {
-      if (isAI) {
-        context.go('/ai-coach');
+      // A session that exists is started. Nothing else is invented: with no
+      // assignment the card sends the client to their plan rather than
+      // starting a workout that is not theirs.
+      final w = session.workout;
+      if (w != null) {
+        ref.read(selectedWorkoutProvider.notifier).state = w;
+        context.go('/active-workout');
         return;
       }
-      if (isCoach) {
-        context.go('/workouts');
-        return;
-      }
-      final assignedNow = ref.read(assignedWorkoutsProvider).valueOrNull ?? const [];
-      final startList = assignedNow.isNotEmpty ? assignedNow : ref.read(workoutsProvider);
-      if (startList.isNotEmpty) {
-        ref.read(selectedWorkoutProvider.notifier).state = startList.first;
-      }
-      context.go('/active-workout');
+      context.go(isAI ? '/ai-coach' : '/train');
     }
 
     // Start button gradient — purple in the design (blue tint for AI mode).
@@ -1010,17 +1087,22 @@ class _FitnessSessionCard extends ConsumerWidget {
                 colors: [Colors.transparent, Color(0x000A0A0B), Color(0xB80C0911)],
                 stops: [0.0, 0.5, 1.0],
                 begin: Alignment.topCenter, end: Alignment.bottomCenter))),
-            Positioned(left: 14, right: 14, bottom: 13,
-              child: Row(children: [
-                _SessionBadge(icon: Icons.schedule_rounded,
-                  text: '45 min', iconColor: _C.primary),
-                const SizedBox(width: 8),
-                _SessionBadge(icon: kcalIcon, text: kcalText,
-                  iconColor: isAI ? const Color(0xFF06B6D4) : const Color(0xFF4ADE80)),
-                const SizedBox(width: 8),
-                const _SessionBadge(icon: Icons.directions_walk_rounded,
-                  text: '2.0K steps', iconColor: _C.primary),
-              ])),
+            // Only what the workout states. `45 min`, `550 kcal` and
+            // `2.0K steps` were literals presented as this session's stats;
+            // duration is a real field, the other two are recorded nowhere.
+            if (badges.isNotEmpty)
+              Positioned(left: 14, right: 14, bottom: 13,
+                child: Row(children: [
+                  for (final b in badges) ...[
+                    _SessionBadge(
+                      icon: b.contains('min')
+                          ? Icons.schedule_rounded
+                          : Icons.fitness_center_rounded,
+                      text: b,
+                      iconColor: _C.primary),
+                    const SizedBox(width: 8),
+                  ],
+                ])),
           ])),
           // Title + Start section.
           Padding(
@@ -1038,7 +1120,12 @@ class _FitnessSessionCard extends ConsumerWidget {
                     fontWeight: FontWeight.w800, height: 1.05, letterSpacing: -0.2)),
               ])),
               const SizedBox(width: 12),
-              GestureDetector(
+              Semantics(
+                button: true,
+                label: session.canBegin ? btnLabel : 'Go to your plan',
+                excludeSemantics: true,
+                onTap: onStart,
+                child: GestureDetector(
                 onTap: onStart,
                 child: Container(
                   padding: const EdgeInsets.fromLTRB(19, 11, 16, 11),
@@ -1051,12 +1138,12 @@ class _FitnessSessionCard extends ConsumerWidget {
                       color: btnGradient.last.withValues(alpha: 0.45),
                       blurRadius: 18, offset: const Offset(0, 6))]),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Text(btnLabel,
+                    Text(session.canBegin ? btnLabel : 'Go to your plan',
                       style: const TextStyle(color: Colors.white, fontSize: 15,
                         fontWeight: FontWeight.w700)),
                     const SizedBox(width: 6),
                     const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 18),
-                  ]))),
+                  ])))),
             ])),
         ]),
       ),

@@ -29,14 +29,17 @@ class CoachProgramService {
   }
 
   /// Materialize one week's workouts by reusing build_workout per session.
+  ///
+  /// **Errors propagate.** This used to swallow every failure into `null`, and
+  /// the engine's own failure mode was worse than silent: an empty selection
+  /// was written as a workout with no exercises and reported as a successful
+  /// materialization. Migration 119 makes an empty selection raise; swallowing
+  /// that here would put the silence straight back.
   Future<Map<String, dynamic>?> materializeWeek(
       String programId, int week, Map<String, dynamic> context) async {
-    try {
-      final res = await _db.rpc('materialize_program_week',
-          params: {'p_program_id': programId, 'p_week': week, 'p_context': context});
-      if (res is Map) return res.cast<String, dynamic>();
-      return null;
-    } catch (_) { return null; }
+    final res = await _db.rpc('materialize_program_week',
+        params: {'p_program_id': programId, 'p_week': week, 'p_context': context});
+    return res is Map ? res.cast<String, dynamic>() : null;
   }
 
   // ── Coaching Communication Engine ────────────────────────
@@ -257,20 +260,21 @@ class CoachProgramService {
   }) async {
     final coachId = _db.auth.currentUser?.id;
     if (coachId == null) return;
-    await _db.from('client_nutrition_plans')
-        .update({'is_active': false})
-        .eq('client_id', clientId)
-        .eq('is_active', true);
-    await _db.from('client_nutrition_plans').insert({
-      'client_id': clientId,
-      'coach_id': coachId,
-      'calories_target': calories,
-      'protein_g': protein,
-      'carbs_g': carbs,
-      'fat_g': fat,
-      'water_target_oz': waterOz,
-      'notes': notes,
-      'is_active': true,
+    // One RPC, not deactivate-then-insert. The two statements used to run
+    // independently, so a failure between them left the client with NO active
+    // plan — and every reader answers that with the hard-coded default macros
+    // rather than an error (I-NUT-04). `assign_nutrition_plan` (migration 131)
+    // supersedes and inserts in one transaction, under the partial unique
+    // index that makes two active rows impossible. coach_id is taken from
+    // auth.uid() inside the function, so it is not passed here.
+    await _db.rpc('assign_nutrition_plan', params: {
+      'p_client_id': clientId,
+      'p_calories_target': calories,
+      'p_protein_g': protein,
+      'p_carbs_g': carbs,
+      'p_fat_g': fat,
+      'p_water_target_oz': waterOz,
+      'p_notes': notes,
     });
     await _db.from('notifications').insert({
       'recipient_id': clientId,
@@ -315,7 +319,8 @@ class CoachProgramService {
   // ── Assign habits ────────────────────────────────────────
   Future<void> assignHabits(String clientId, List<Map<String, dynamic>> habits) async {
     final coachId = _db.auth.currentUser?.id;
-    if (coachId == null) return;
+    // Refuse rather than no-op: the caller would otherwise announce "Habits assigned!".
+    if (coachId == null) throw StateError('Not signed in — habits were not assigned.');
     await _db.from('client_habits')
         .update({'is_active': false})
         .eq('client_id', clientId)

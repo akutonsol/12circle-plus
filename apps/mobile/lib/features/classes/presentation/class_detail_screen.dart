@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/animations/app_animations.dart';
 import '../domain/class_provider.dart';
+import 'widgets/cancel_booking_control.dart';
 
 class ClassDetailScreen extends ConsumerWidget {
   const ClassDetailScreen({super.key});
@@ -31,6 +32,7 @@ class ClassDetailScreen extends ConsumerWidget {
             pinned: true,
             leading: IconButton(
               icon: const Icon(Icons.arrow_back, color: AppColors.white),
+              tooltip: 'Back',
               onPressed: () => context.pop(),
             ),
             flexibleSpace: FlexibleSpaceBar(
@@ -282,18 +284,18 @@ class ClassDetailScreen extends ConsumerWidget {
                       ),
                     ).animate(delay: 800.ms).fadeIn(duration: 400.ms).scaleIn(),
                     const SizedBox(height: 12),
-                    OutlinedButton(
-                      onPressed: () async {
-                        await ref.read(liveClassServiceProvider).cancelBooking(fitnessClass.id);
+                    // FIT-088. This was a single unguarded tap: it cancelled,
+                    // refreshed and popped, with no confirmation on an action
+                    // that hands the seat to the next person on the waitlist,
+                    // and no failure path at all.
+                    CancelBookingControl(
+                      onCancel: () => ref
+                          .read(liveClassServiceProvider)
+                          .cancelBooking(fitnessClass.id),
+                      onCancelled: () {
                         ref.read(refreshClassesProvider.notifier).state++;
                         if (context.mounted) context.pop();
                       },
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size(double.infinity, 52),
-                        side: const BorderSide(color: AppColors.error),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      ),
-                      child: const Text('Cancel Booking', style: TextStyle(color: AppColors.error)),
                     ),
                   ] else if (fitnessClass.isWaitlisted) ...[
                     Container(

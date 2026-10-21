@@ -80,43 +80,71 @@ void main() {
         .delete().eq('user_id', _uid).eq('food_name', '__itest oats');
   });
 
-  // ── MSG-003: sending a message creates EXACTLY ONE recipient notification ──
-  // (validates the DB trigger fires and that the Dart duplicate was removed)
-  testWidgets('MessagingService.sendMessage notifies recipient exactly once',
+  // ── MSG-003 ─────────────────────────────────────────────────────────────
+  //
+  // F-25: THIS TEST USED TO ASSERT SOMETHING IT COULD NOT OBSERVE.
+  //
+  // It counted the RECIPIENT's notifications — `_notifCount(coachId, …)` —
+  // from the SENDER's session. `notifications` carries
+  // `recipients read own notifications … USING (recipient_id = auth.uid())`
+  // (003/004), so that query returns 0 before and 0 after, for any sender,
+  // forever. `after - before` was always 0 and the assertion `== 1` was
+  // unsatisfiable.
+  //
+  // It therefore said nothing about whether the trigger fires. Worse: **the
+  // only way it could ever have gone green is if `notifications` leaked rows
+  // across users.** A test whose passing condition is a privacy defect is not
+  // a weaker test, it is a wrong one.
+  //
+  // Verifying the recipient's side needs the RECIPIENT's session, and this
+  // file signs in as one fixture whose coach's credentials it does not have.
+  // So the recipient-side half is NOT claimed here — it is recorded as open in
+  // docs/QA_EVIDENCE.md rather than asserted from a session that cannot see it.
+  //
+  // What the sender CAN honestly observe is below, and it is the regression
+  // the test was originally written for: the Dart-side duplicate insert is
+  // gone and the notification is left to the DB trigger.
+  testWidgets('MessagingService.sendMessage leaves notification to the trigger',
       (_) async {
     final convId = await MessagingService().getOrCreateClientCoachConversation();
     expect(convId, isNotNull, reason: 'client must have a coach conversation');
 
-    final convo = await _db.from('conversations')
-        .select('participant_1, participant_2').eq('id', convId!).single();
-    final coachId = convo['participant_1'] == _uid
-        ? convo['participant_2'] as String
-        : convo['participant_1'] as String;
-
-    final before = await _notifCount(coachId, 'message');
+    // The sender must not notify themselves — the "not two" half of MSG-003,
+    // and the half this session can actually see.
+    final selfBefore = await _notifCount(_uid, 'message');
     final ok = await MessagingService()
-        .sendMessage(conversationId: convId, content: '__itest ping');
+        .sendMessage(conversationId: convId!, content: '__itest ping');
     expect(ok, isTrue);
-    await Future.delayed(const Duration(milliseconds: 600)); // let trigger commit
-    final after = await _notifCount(coachId, 'message');
+    await Future.delayed(const Duration(milliseconds: 600));
+    expect(await _notifCount(_uid, 'message'), selfBefore,
+        reason: 'the sender must not be notified of their own message');
 
-    expect(after - before, 1,
-        reason: 'recipient should get exactly one notification, not zero or two');
+    // And the message really was written.
+    final rows = await _db
+        .from('messages')
+        .select('id')
+        .eq('conversation_id', convId)
+        .eq('content', '__itest ping');
+    expect((rows as List), isNotEmpty);
 
-    // cleanup test message + the notification it produced
+    // cleanup test message
     await _db.from('messages')
         .delete().eq('conversation_id', convId).eq('content', '__itest ping');
   });
 
-  // ── SCR-004 + CHK-001: weekly check-in awards score and notifies coach once ─
   testWidgets('WeeklyCheckinService.submitWeeklyCheckin scores + notifies coach',
       (_) async {
-    // find this client's active coach (if any) to assert single coach notify
-    final rel = await _db.from('coach_client_relationships')
-        .select('coach_id').eq('client_id', _uid).eq('status', 'active')
-        .maybeSingle();
-    final coachId = rel?['coach_id'] as String?;
-    final beforeNotif = coachId == null ? 0 : await _notifCount(coachId, 'checkin');
+    // F-25, second instance. This used to count the COACH's notifications from
+    // the client's session and assert `after - before <= 1`. Under
+    // `recipients read own notifications` both reads are 0, so the assertion
+    // was `0 <= 1` — **green forever, whatever the app did**.
+    //
+    // The messaging test next door had the identical fault with the opposite
+    // symptom: it asserted `== 1` and was red forever. One root cause, and the
+    // green one is the more dangerous of the two, because nobody looks at it.
+    //
+    // What the client's own session can observe is asserted instead.
+    final selfBefore = await _notifCount(_uid, 'checkin');
 
     // reset checkin points for a clean assertion
     await _db.from('daily_scores').upsert({
@@ -136,11 +164,12 @@ void main() {
     expect((row['checkin_points'] as num).toInt(), greaterThan(0),
         reason: 'weekly check-in should award check-in points (SCR-004)');
 
-    if (coachId != null) {
-      await Future.delayed(const Duration(milliseconds: 600));
-      final afterNotif = await _notifCount(coachId, 'checkin');
-      expect(afterNotif - beforeNotif, lessThanOrEqualTo(1),
-          reason: 'coach should not be double-notified for one check-in');
-    }
+    // The client must not be notified about their own check-in. Whether the
+    // COACH was notified needs the coach's session, and this file does not
+    // have one — recorded as open in docs/QA_EVIDENCE.md rather than asserted
+    // from a session that cannot see it.
+    await Future.delayed(const Duration(milliseconds: 600));
+    expect(await _notifCount(_uid, 'checkin'), selfBefore,
+        reason: 'the client must not be notified of their own check-in');
   });
 }

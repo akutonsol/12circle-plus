@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../shared/widgets/app_scaffold.dart';
+import '../domain/whats_on_provider.dart';
 import 'event_ticket_screen.dart';
 
 // ── Colors ────────────────────────────────────────────────────────────────────
@@ -17,21 +17,14 @@ class _C {
 }
 
 // ── Provider ──────────────────────────────────────────────────────────────────
-final _eventsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
-  final now = DateTime.now().toIso8601String();
-  try {
-    final data = await Supabase.instance.client
-        .from('events')
-        .select()
-        .eq('status', 'upcoming')
-        .gte('event_date', now)
-        .order('event_date')
-        .limit(30);
-    return List<Map<String, dynamic>>.from(data as List);
-  } catch (_) {
-    return [];
-  }
-});
+// F-16: this read used to live here privately, ending `catch (_) { return []; }`,
+// which made the `error:` branch below — and the "Could not load events" string
+// it renders — **unreachable**. A failed read arrived as an empty list and the
+// screen said there were no events. The copy for the failure was written; the
+// catch made sure nobody ever saw it.
+//
+// It now lives in `domain/whats_on_provider.dart`, shared with FIT-027's
+// unified list, and the error propagates.
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 class EventsScreen extends ConsumerWidget {
@@ -39,10 +32,9 @@ class EventsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final eventsAsync = ref.watch(_eventsProvider);
+    final eventsAsync = ref.watch(whatsOnEventsProvider);
 
     return AppScaffold(
-      navIndex: 2,
       showBackButton: true,
       body: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // ── Header ──
@@ -70,7 +62,7 @@ class EventsScreen extends ConsumerWidget {
               return RefreshIndicator(
                 color: _C.brand,
                 backgroundColor: _C.card,
-                onRefresh: () async => ref.invalidate(_eventsProvider),
+                onRefresh: () async => ref.invalidate(whatsOnEventsProvider),
                 child: ListView.separated(
                   padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
                   itemCount: events.length,

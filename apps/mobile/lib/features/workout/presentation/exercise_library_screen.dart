@@ -89,7 +89,6 @@ class _ExerciseLibraryScreenState extends ConsumerState<ExerciseLibraryScreen> {
         : searched.where((e) => _matchesTab(e, tab)).toList();
 
     return AppScaffold(
-      navIndex: 2,
       showBackButton: true,
       body: Column(children: [
 

@@ -11,6 +11,7 @@
 // ClientPlanCaps capability matrix the app gates on — then exercises the
 // upgrade / downgrade / cancel / renew transitions and verifies NO data loss.
 //
+//   export QA_URL=... QA_ANON=...
 //   SERVICE_ROLE_KEY=... dart run tool/qa_entitlements.dart            # full matrix
 //   SERVICE_ROLE_KEY=... dart run tool/qa_entitlements.dart --plan=ai_guided
 //   SERVICE_ROLE_KEY=... dart run tool/qa_entitlements.dart --subscription=expired
@@ -24,9 +25,14 @@
 import 'dart:convert';
 import 'dart:io';
 
-const _url  = 'https://nxdbooufqzkpslkcogxc.supabase.co';
-const _anon =
-    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im54ZGJvb3VmcXprcHNsa2NvZ3hjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwMjA4NzksImV4cCI6MjA5NjU5Njg3OX0.D0rl8hxQmDjqknsDCPRuKK1uyIYruSMjycHmNTI-xcE';
+import 'qa_target.dart';
+
+// ENV-5: the target is resolved from QA_URL / QA_ANON and positively verified
+// as the QA project before a single request goes out. There is no default --
+// this file used to hardcode the PRODUCTION ref and key right here.
+final QaTarget _target = resolveQaTarget();
+String get _url => _target.url;
+String get _anon => _target.anonKey;
 
 final _serviceRole = Platform.environment['SERVICE_ROLE_KEY'];
 

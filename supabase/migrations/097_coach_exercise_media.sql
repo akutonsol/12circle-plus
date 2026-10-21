@@ -12,7 +12,7 @@
 
 create table if not exists coach_exercise_media (
   coach_id    uuid not null references user_profiles(id) on delete cascade,
-  exercise_id uuid not null references exercises(id) on delete cascade,
+  exercise_id uuid not null references custom_exercises(id) on delete cascade,
   note        text,                    -- free-form coaching note
   focus       text[] default '{}',     -- "Coach Focus Today" bullets
   video_ref   text,                    -- coach's own demo (YouTube id or url)

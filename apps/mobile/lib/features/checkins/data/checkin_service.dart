@@ -1,5 +1,8 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../domain/checkin_known.dart';
+import '../../../core/observability/app_failure.dart';
+
 class CheckinService {
   final _supabase = Supabase.instance.client;
 
@@ -26,14 +29,17 @@ class CheckinService {
       });
       return true;
     } catch (e) {
-      print('saveDailyCheckin error: \$e');
+      reportError('CheckinService.saveDailyCheckin', e);
       return false;
     }
   }
 
-  Future<bool> hasCheckedInToday() async {
+  /// CON-01: was `Future<bool>` with `catch (e) => false`, so a failed read
+  /// was indistinguishable from "you have not checked in today".
+  Future<CheckinKnown> hasCheckedInToday() async {
     final userId = _supabase.auth.currentUser?.id;
-    if (userId == null) return false;
+    // Signed out is a real answer, not a failure.
+    if (userId == null) return CheckinKnown.notDone;
     try {
       final today = DateTime.now();
       final start = DateTime(today.year, today.month, today.day);
@@ -44,15 +50,19 @@ class CheckinService {
           .eq('user_id', userId)
           .gte('checked_in_at', start.toIso8601String())
           .lt('checked_in_at', end.toIso8601String());
-      return (data as List).isNotEmpty;
+      return (data as List).isNotEmpty
+          ? CheckinKnown.done
+          : CheckinKnown.notDone;
     } catch (e) {
-      return false;
+      return CheckinKnown.unknown;
     }
   }
 
-  Future<bool> hasCheckedInThisWeek() async {
+  /// CON-01: same defect. A failed read here opens the form to someone who has
+  /// already checked in, and `_submit` then writes a duplicate.
+  Future<CheckinKnown> hasCheckedInThisWeek() async {
     final userId = _supabase.auth.currentUser?.id;
-    if (userId == null) return false;
+    if (userId == null) return CheckinKnown.notDone;
     try {
       final now = DateTime.now();
       final weekStart = now.subtract(Duration(days: now.weekday - 1));
@@ -65,9 +75,11 @@ class CheckinService {
           .eq('checkin_type', 'weekly')
           .gte('checked_in_at', start.toIso8601String())
           .lt('checked_in_at', end.toIso8601String());
-      return (data as List).isNotEmpty;
+      return (data as List).isNotEmpty
+          ? CheckinKnown.done
+          : CheckinKnown.notDone;
     } catch (e) {
-      return false;
+      return CheckinKnown.unknown;
     }
   }
 
@@ -95,7 +107,7 @@ class CheckinService {
       });
       return true;
     } catch (e) {
-      print('saveWeeklyCheckin error: $e');
+      reportError('CheckinService.saveWeeklyCheckin', e);
       return false;
     }
   }
@@ -104,7 +116,9 @@ class CheckinService {
     return energy <= 2 || stress >= 4;
   }
 
-  Future<int> getCheckinStreak() async {
+  /// CON-01: was `Future<int>` returning `0` on failure — a number the screen
+  /// cannot support, which is the class F-15 recorded. `null` is unknown.
+  Future<int?> getCheckinStreak() async {
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) return 0;
     try {
@@ -129,7 +143,7 @@ class CheckinService {
       }
       return streak;
     } catch (e) {
-      return 0;
+      return null;
     }
   }
 

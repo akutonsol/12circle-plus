@@ -247,9 +247,16 @@ class _DirectoryNotificationsPanel extends ConsumerWidget {
           child: Row(children: [
             const Text('Notifications', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
             const Spacer(),
-            GestureDetector(
+            Semantics(
+              button: true,
+              label: 'Close',
+              child: GestureDetector(
               onTap: () => Navigator.pop(context),
-              child: const Icon(Icons.close_rounded, color: Color(0xFF4D4354), size: 22)),
+              behavior: HitTestBehavior.opaque,
+              child: Container(
+                constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                alignment: Alignment.center,
+                child: const Icon(Icons.close_rounded, color: Color(0xFF4D4354), size: 22)))),
           ]),
         ),
         const SizedBox(height: 16),
@@ -427,11 +434,14 @@ class _FeaturedCard extends ConsumerWidget {
     var totalSetsInProgress = 0;
     var completedCount = 0;
     for (final w in workouts) {
-      final st = statusMap[w.title]?['status'] as String?;
+      // By identity — two days of a generated program can share a title, and a
+      // title-keyed lookup marked both of them as the one in progress.
+      final entry = sessionStatusFor(statusMap, w);
+      final st = entry?['status'] as String?;
       if (st == 'completed') completedCount++;
       if (st == 'in_progress' && inProgress == null) {
         inProgress = w;
-        loggedSets = (statusMap[w.title]?['logged_sets'] as int?) ?? 0;
+        loggedSets = (entry?['logged_sets'] as int?) ?? 0;
         totalSetsInProgress = w.exercises.fold<int>(0, (s, e) => s + e.sets.length);
       }
     }

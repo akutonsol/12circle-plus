@@ -1,13 +1,23 @@
 import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../domain/ai_nutrition_provider.dart';
+import '../../domain/chat_turn.dart';
 
 class AiChatBubble extends StatelessWidget {
   final ChatMessage message;
-  const AiChatBubble({super.key, required this.message});
+
+  /// FIT-090's `Send it again`. Only a failed turn offers it.
+  final VoidCallback? onRetry;
+
+  const AiChatBubble({super.key, required this.message, this.onRetry});
 
   @override
   Widget build(BuildContext context) {
+    // FIT-090. A failed turn used to render as a coach bubble — same avatar,
+    // same styling — so a transport failure was indistinguishable from
+    // nutrition advice, and there was no way to retry but to retype.
+    if (message.failed) return _failed(context);
+
     final isUser = message.isUser;
 
     return Padding(
@@ -65,4 +75,39 @@ class AiChatBubble extends StatelessWidget {
           ],
         ]));
   }
+
+  Widget _failed(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 16),
+        child: Semantics(
+          container: true,
+          label: message.content,
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceDark,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.surfaceDarkElevated),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.warning_amber_rounded,
+                    color: AppColors.textTertiary, size: 18),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(message.content,
+                      style: const TextStyle(
+                          color: AppColors.textTertiary, fontSize: 13)),
+                ),
+                if (onRetry != null)
+                  TextButton(
+                    onPressed: onRetry,
+                    child: const Text(sendItAgainLabel,
+                        style:
+                            TextStyle(color: AppColors.purple, fontSize: 13)),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
 }

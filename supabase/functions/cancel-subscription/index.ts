@@ -50,11 +50,52 @@ Deno.serve(async (req: Request) => {
     if (sub.user_id !== user.id) return json({ error: 'Forbidden' }, 403);
 
     // Cancel immediately at Stripe (no refund for the remaining period).
+    //
+    // K-07. This block used to swallow the Stripe error and fall through to the
+    // local update, with the comment "continuing to mark local". The consequence
+    // is the worst way round: Stripe keeps billing the customer, the local row
+    // says `canceled`, the coaching relationship is ended and the coach is
+    // notified — so the member pays for access they no longer have, while the UI
+    // reports "Switched to the Free plan".
+    //
+    // THE INVARIANT: local entitlement is revoked ONLY when the remote
+    // subscription is actually gone. A failure returns 502 and changes NOTHING
+    // locally, so the caller can safely retry.
+    //
+    // IDEMPOTENCY. A retry must not fail because the first attempt succeeded. Two
+    // outcomes mean "already gone" and are treated as success:
+    //   · `resource_missing` — Stripe has no such subscription;
+    //   · the subscription exists and its status is already `canceled`.
+    // Both leave the end state this function is trying to reach.
     if (sub.stripe_subscription_id) {
       try {
         await stripe.subscriptions.cancel(sub.stripe_subscription_id);
       } catch (e) {
-        console.error('Stripe cancel failed (continuing to mark local):', e);
+        const err = e as { code?: string; raw?: { code?: string } };
+        const code = err?.code ?? err?.raw?.code;
+        let alreadyGone = code === 'resource_missing';
+
+        if (!alreadyGone) {
+          // Ask Stripe what it actually holds before calling this a failure.
+          try {
+            const remote = await stripe.subscriptions.retrieve(sub.stripe_subscription_id);
+            alreadyGone = remote?.status === 'canceled';
+          } catch (probe) {
+            const pErr = probe as { code?: string; raw?: { code?: string } };
+            alreadyGone = (pErr?.code ?? pErr?.raw?.code) === 'resource_missing';
+          }
+        }
+
+        if (!alreadyGone) {
+          console.error('Stripe cancel failed — local entitlement PRESERVED (K-07):', e);
+          return json({
+            error: 'stripe_cancel_failed',
+            message: 'The subscription could not be cancelled with the payment '
+                   + 'provider. Your access is unchanged and you have not been '
+                   + 'switched to the Free plan. Please try again.',
+          }, 502);
+        }
+        console.warn('Stripe reports the subscription already cancelled; proceeding (K-07 idempotency).');
       }
     }
 

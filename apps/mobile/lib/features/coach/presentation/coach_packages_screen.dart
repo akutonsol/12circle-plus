@@ -63,7 +63,7 @@ class CoachPackagesScreen extends ConsumerWidget {
         ),
         body: pkgsAsync.when(
           loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
-          error: (e, _) => Center(child: Text('Could not load packages.\n$e',
+          error: (e, _) => Center(child: Text('Could not load packages.',
               textAlign: TextAlign.center, style: const TextStyle(color: _muted))),
           data: (pkgs) => ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
@@ -242,7 +242,7 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
       };
       await svc.saveSessionTiers(tiers);
     } else {
-      if (_name.text.trim().isEmpty) { setState(() => _saving = false); return; }
+      if (_name.text.trim().isEmpty) { if (mounted) setState(() => _saving = false); return; }
       await svc.savePackage(
         id: widget.existing?['id'] as String?,
         type: _type,

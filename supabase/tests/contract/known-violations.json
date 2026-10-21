@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "Every schema-contract violation that is OPEN in the working tree, as found by",
+    "QA Workstream I (docs/QA_WORKSTREAM_I_DATA_CONTRACT_REPORT.md).",
+    "",
+    "This file is a shrinking allowlist and is checked in BOTH directions:",
+    "  - a violation that is not listed here fails the guard (a NEW defect);",
+    "  - an entry listed here that no longer reproduces ALSO fails the guard,",
+    "    so a fix cannot leave a stale excuse behind.",
+    "",
+    "Removing an entry is the last step of fixing its finding. Nothing may be",
+    "added here without a finding ID."
+  ],
+  "missingRelation": [
+    {
+      "table": "checkins",
+      "finding": "I-CHK-01"
+    },
+    {
+      "table": "coach_tips",
+      "finding": "I-LEG-03"
+    }
+  ],
+  "missingColumn": []
+}

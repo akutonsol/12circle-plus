@@ -114,10 +114,16 @@ class ComplianceService {
         .inFilter('user_id', clientIds)
         .gte('score_date', weekAgo.toIso8601String().split('T')[0]);
 
+    // `workout_sessions`, not `workout_logs`: the latter has no coach-read
+    // policy (003:193, owner-only) and an RLS-filtered SELECT returns 200 + [],
+    // so every client's adherence read as zero completed workouts. The former
+    // is coach-readable by 100_rls_harden_client_data.sql. `status` is filtered
+    // because an abandoned session is not an adherence event.
     final workouts = await _db
-        .from('workout_logs')
+        .from('workout_sessions')
         .select('user_id, completed_at')
         .inFilter('user_id', clientIds)
+        .eq('status', 'completed')
         .gte('completed_at',
             DateTime(weekStart.year, weekStart.month, weekStart.day)
                 .toIso8601String());

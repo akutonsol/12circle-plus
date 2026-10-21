@@ -1,0 +1,6 @@
+{
+  "APP_ENV": "prod",
+  "SUPABASE_URL": "https://nxdbooufqzkpslkcogxc.supabase.co",
+  "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im54ZGJvb3VmcXprcHNsa2NvZ3hjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwMjA4NzksImV4cCI6MjA5NjU5Njg3OX0.D0rl8hxQmDjqknsDCPRuKK1uyIYruSMjycHmNTI-xcE",
+  "STRIPE_PK": "pk_test_51TjY6fLwsDN0E0HCYEjmJTW7kJlJAC81nHgNVtRfDpWJFcZ133ob0zSeSqJQoDw4BqqJsdlTOieOWSif2CYzzSrh00BXlrGnFb"
+}

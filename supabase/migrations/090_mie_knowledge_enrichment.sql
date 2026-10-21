@@ -63,7 +63,7 @@ grant execute on function public.intelligence_low_confidence(uuid, int) to authe
 create or replace function public.intelligence_stats()
 returns jsonb language sql stable security definer as $$
   select jsonb_build_object(
-    'total_exercises', (select count(*) from exercises),
+    'total_exercises', (select count(*) from custom_exercises),
     'profiled',     (select count(*) from exercise_intelligence),
     'ai_generated', (select count(*) from exercise_intelligence where status = 'ai_generated'),
     'under_review', (select count(*) from exercise_intelligence where status = 'under_review'),

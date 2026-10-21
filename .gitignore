@@ -31,3 +31,4 @@ node_modules/
 
 # Coverage
 **/coverage/
+supabase/tests/security/ids.json

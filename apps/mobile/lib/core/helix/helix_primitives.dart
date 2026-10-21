@@ -43,6 +43,13 @@ class HelixTypeScale {
   static const double display = 32, h1 = 24, h2 = 20, title = 17;
   static const double body = 15, bodySm = 13, label = 12, caption = 11;
 
+  // A brand whose display type is light/editorial needs weights below w400.
+  // NOTE: a weight existing here does not mean the chosen family ships it —
+  // Schibsted Grotesk via google_fonts 8.1.0 provides w400..w900 only, so
+  // selecting `light` for that family currently renders as w400. See
+  // docs/DESIGN_INTAKE_REPORT.md OD-6.
+  static const FontWeight extraLight = FontWeight.w200;
+  static const FontWeight light   = FontWeight.w300;
   static const FontWeight regular = FontWeight.w400;
   static const FontWeight medium  = FontWeight.w500;
   static const FontWeight semibold = FontWeight.w600;

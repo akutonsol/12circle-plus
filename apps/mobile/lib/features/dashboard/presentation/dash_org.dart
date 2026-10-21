@@ -29,7 +29,7 @@ class DashboardScreen extends ConsumerWidget {
             child: CircularProgressIndicator(color: AppColors.purple),
           ),
           error: (e, _) => Center(
-            child: Text('Error: $e', style: const TextStyle(color: AppColors.error)),
+            child: Text('Could not load your dashboard.', style: const TextStyle(color: AppColors.error)),
           ),
           data: (data) => CustomScrollView(
             slivers: [

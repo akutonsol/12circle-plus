@@ -18,6 +18,8 @@ final myRelationshipProvider = FutureProvider<Map<String, dynamic>?>((ref) async
 });
 
 final pendingRequestsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
+  ref.watch(currentUserProvider);
   ref.watch(tableTickerProvider('coach_client_relationships')); // live: new requests
   final coachId = Supabase.instance.client.auth.currentUser?.id;
   if (coachId == null) return [];
@@ -82,6 +84,8 @@ final weekScoresProvider = FutureProvider<List<Map<String, dynamic>>>((ref) asyn
 });
 
 final monthScoresProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
+  ref.watch(currentUserProvider);
   final userId = Supabase.instance.client.auth.currentUser?.id;
   if (userId == null) return [];
   final now = DateTime.now();
@@ -96,6 +100,8 @@ final monthScoresProvider = FutureProvider<List<Map<String, dynamic>>>((ref) asy
 });
 
 final sentInvitesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
+  ref.watch(currentUserProvider);
   final coachId = Supabase.instance.client.auth.currentUser?.id;
   if (coachId == null) return [];
   final data = await Supabase.instance.client
@@ -108,6 +114,8 @@ final sentInvitesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) asy
 });
 
 final coachLeaderboardProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
+  ref.watch(currentUserProvider);
   final coachId = Supabase.instance.client.auth.currentUser?.id;
   if (coachId == null) return [];
   return _scoreSvc.getCoachLeaderboard(coachId);
@@ -192,10 +200,16 @@ final clientDetailProvider = FutureProvider.family<Map<String, dynamic>, String>
       .eq('client_id', clientId)
       .eq('is_active', true);
 
+  // `workout_sessions`, not `workout_logs`: the latter is owner-only by
+  // 003:193 and returns 200 + [] to a coach, so `client_detail_screen.dart:933`
+  // showed every client as having trained never. Coach-readable by
+  // 100_rls_harden_client_data.sql; `completed` only, because the screen reads
+  // `completed_at` and an unfinished session has none.
   final workoutLogs = await db
-      .from('workout_logs')
-      .select()
+      .from('workout_sessions')
+      .select('user_id, workout_title, completed_at, duration_seconds')
       .eq('user_id', clientId)
+      .eq('status', 'completed')
       .order('completed_at', ascending: false)
       .limit(20);
 

@@ -4,12 +4,60 @@ import '../../../shared/theme/app_background.dart';
 import '../../../core/widgets/blood_drop.dart';
 import '../domain/cycle_phase.dart';
 import '../domain/cycle_provider.dart';
+import '../../../core/widgets/back_leading.dart';
+import '../../../core/observability/app_failure.dart';
 
 const _card  = Color(0xFF0E0B16);
 const _brd   = Color(0xFF1A1020);
 const _white = Colors.white;
 const _muted = Color(0xFFCFC2D6);
 const _brand = Color(0xFFA855F7);
+
+/// Shown inside a cycle sheet when its write did not land (QAX-ERR-01). The
+/// sheet stays open so nothing the user entered is lost.
+const cycleSaveFailedMessage = "Couldn't save — check your connection and try again.";
+
+/// Shown when today's symptom check-in could not be loaded (F-03): opening a
+/// blank sheet instead would overwrite the saved values on Save.
+const cycleLoadFailedMessage = "Couldn't load today's check-in — try again.";
+
+/// Shown when "Period ended" finds no period in progress (F-22).
+const noOpenPeriodMessage = 'There is no period in progress to end.';
+
+/// Runs one cycle write for a sheet. On success the sheet closes and the
+/// screen refreshes; on failure the failure is reported and [onMessage] gets a
+/// user-facing line while the sheet stays open (QAX-ERR-01). [write] returns
+/// null for success, or a message for a handled refusal.
+Future<void> _runSheetWrite({
+  required BuildContext sheetCtx,
+  required WidgetRef ref,
+  required String origin,
+  required Future<String?> Function() write,
+  required void Function(String message) onMessage,
+}) async {
+  String? refusal;
+  try {
+    refusal = await write();
+  } catch (e, s) {
+    reportError(origin, e, s);
+    onMessage(cycleSaveFailedMessage);
+    return;
+  }
+  if (refusal != null) {
+    onMessage(refusal);
+    return;
+  }
+  ref.read(cycleRefreshProvider.notifier).state++;
+  if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+}
+
+Widget _sheetMessage(String? message) => message == null
+    ? const SizedBox.shrink()
+    : Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Text(message,
+            style: const TextStyle(color: Color(0xFFFF6B8A), fontSize: 13, height: 1.4)),
+      );
 
 class WomensHealthScreen extends ConsumerWidget {
   const WomensHealthScreen({super.key});
@@ -22,13 +70,14 @@ class WomensHealthScreen extends ConsumerWidget {
         backgroundColor: Colors.transparent,
         appBar: AppBar(
           backgroundColor: Colors.transparent, elevation: 0,
+          leading: backLeading(context),
           iconTheme: const IconThemeData(color: _white),
           title: const Text("Women's Health",
               style: TextStyle(color: _white, fontWeight: FontWeight.w700)),
         ),
         body: statusAsync.when(
           loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
-          error: (e, _) => Center(child: Text('Could not load.\n$e',
+          error: (e, _) => Center(child: Text('Could not load.',
               textAlign: TextAlign.center, style: const TextStyle(color: _muted))),
           data: (status) {
             final guide = phaseGuides[status.phase]!;
@@ -136,6 +185,7 @@ class WomensHealthScreen extends ConsumerWidget {
 
   void _logPeriodSheet(BuildContext context, WidgetRef ref) {
     DateTime selected = DateTime.now();
+    String? message;
     showModalBottomSheet(
       context: context, backgroundColor: _card, isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
@@ -169,34 +219,63 @@ class WomensHealthScreen extends ConsumerWidget {
             Expanded(child: OutlinedButton(
               style: OutlinedButton.styleFrom(side: const BorderSide(color: _brd),
                   padding: const EdgeInsets.symmetric(vertical: 13)),
-              onPressed: () async {
-                await ref.read(cycleServiceProvider).endCurrentPeriod(DateTime.now());
-                ref.read(cycleRefreshProvider.notifier).state++;
-                if (sheetCtx.mounted) Navigator.pop(sheetCtx);
-              },
+              onPressed: () => _runSheetWrite(
+                sheetCtx: sheetCtx, ref: ref,
+                origin: 'WomensHealthScreen.endCurrentPeriod',
+                write: () async => await ref.read(cycleServiceProvider)
+                        .endCurrentPeriod(DateTime.now())
+                    ? null
+                    : noOpenPeriodMessage,
+                onMessage: (m) => setSheet(() => message = m),
+              ),
               child: const Text('Period ended', style: TextStyle(color: _muted)))),
             const SizedBox(width: 10),
             Expanded(child: ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: _brand, foregroundColor: _white,
                   padding: const EdgeInsets.symmetric(vertical: 13),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-              onPressed: () async {
-                await ref.read(cycleServiceProvider).logPeriod(start: selected);
-                ref.read(cycleRefreshProvider.notifier).state++;
-                if (sheetCtx.mounted) Navigator.pop(sheetCtx);
-              },
+              onPressed: () => _runSheetWrite(
+                sheetCtx: sheetCtx, ref: ref,
+                origin: 'WomensHealthScreen.logPeriod',
+                write: () async {
+                  await ref.read(cycleServiceProvider).logPeriod(start: selected);
+                  return null;
+                },
+                onMessage: (m) => setSheet(() => message = m),
+              ),
               child: const Text('Save', style: TextStyle(fontWeight: FontWeight.w700)))),
           ]),
+          _sheetMessage(message),
         ]),
       )),
     );
   }
 
-  void _symptomsSheet(BuildContext context, WidgetRef ref) {
+  Future<void> _symptomsSheet(BuildContext context, WidgetRef ref) async {
     const options = ['Cramps', 'Headache', 'Bloating', 'Fatigue', 'Mood swings',
       'Tender breasts', 'Cravings', 'Acne', 'Back pain', 'Nausea', 'Insomnia', 'Anxiety'];
-    final selected = <String>{};
-    int energy = 3, mood = 3;
+    // F-03: the check-in is an upsert on (user, day), so the sheet must open
+    // with what was already saved today — a blank sheet overwrote it on Save.
+    Map<String, dynamic>? today;
+    try {
+      today = await ref.read(cycleServiceProvider).getSymptomsForDate(DateTime.now());
+    } catch (e, s) {
+      reportError('WomensHealthScreen._symptomsSheet.load', e, s);
+      if (context.mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            const SnackBar(content: Text(cycleLoadFailedMessage)));
+      }
+      return;
+    }
+    if (!context.mounted) return;
+    final selected = <String>{
+      ...((today?['symptoms'] as List?)?.map((e) => '$e') ?? const <String>[]),
+    };
+    // The sliders are 1–5 and the table has no range constraint (F-01), so a
+    // stored out-of-range value is clamped for display rather than crashing.
+    int energy = ((today?['energy'] as num?)?.toInt() ?? 3).clamp(1, 5);
+    int mood = ((today?['mood'] as num?)?.toInt() ?? 3).clamp(1, 5);
+    String? message;
     showModalBottomSheet(
       context: context, backgroundColor: _card, isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
@@ -205,7 +284,10 @@ class WomensHealthScreen extends ConsumerWidget {
         child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('How are you feeling?', style: TextStyle(color: _white, fontSize: 18, fontWeight: FontWeight.w800)),
           const SizedBox(height: 14),
-          Wrap(spacing: 8, runSpacing: 8, children: options.map((s) {
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            ...options,
+            ...selected.where((s) => !options.contains(s)),
+          ].map((s) {
             final on = selected.contains(s);
             return GestureDetector(
               onTap: () => setSheet(() => on ? selected.remove(s) : selected.add(s)),
@@ -227,13 +309,18 @@ class WomensHealthScreen extends ConsumerWidget {
             style: ElevatedButton.styleFrom(backgroundColor: _brand, foregroundColor: _white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-            onPressed: () async {
-              await ref.read(cycleServiceProvider).logSymptoms(
-                date: DateTime.now(), symptoms: selected.toList(), energy: energy, mood: mood);
-              ref.read(cycleRefreshProvider.notifier).state++;
-              if (sheetCtx.mounted) Navigator.pop(sheetCtx);
-            },
+            onPressed: () => _runSheetWrite(
+              sheetCtx: sheetCtx, ref: ref,
+              origin: 'WomensHealthScreen.logSymptoms',
+              write: () async {
+                await ref.read(cycleServiceProvider).logSymptoms(
+                    date: DateTime.now(), symptoms: selected.toList(), energy: energy, mood: mood);
+                return null;
+              },
+              onMessage: (m) => setSheet(() => message = m),
+            ),
             child: const Text('Save check-in', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)))),
+          _sheetMessage(message),
         ])),
       )),
     );

@@ -1,6 +1,12 @@
 import 'package:flutter/material.dart';
+import 'widgets/checkin_pickers.dart';
+import '../data/weekly_checkin_service.dart';
+import '../domain/checkin_hub.dart';
+import '../../coach/domain/coach_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
+import '../domain/checkin_known.dart';
 import '../data/checkin_service.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -23,6 +29,11 @@ class DailyCheckinScreen extends ConsumerStatefulWidget {
 
 class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
   final _service    = CheckinService();
+  /// CON-01 (live): `public.checkins` does not exist — verified against the QA
+  /// database, where it answers PGRST205 exactly as a nonsense table does. The
+  /// submission below wrote there, so every weekly check-in this screen took
+  /// was lost. `weekly_checkins` DOES exist and already has a working writer.
+  final _weekly     = WeeklyCheckinService();
   final _notesCtrl  = TextEditingController();
 
   int    _mood          = 3;
@@ -32,8 +43,11 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
   bool   _workedOut     = false;
   bool   _hitWaterGoal  = false;
   bool   _saving        = false;
-  bool   _alreadyDone   = false;
-  int    _streak        = 0;
+  /// CON-01: was `bool _alreadyDone = false`, so a failed read opened the
+  /// form to someone who had already checked in and `_submit` wrote a
+  /// duplicate. Three states, because the screen needs three.
+  CheckinKnown _alreadyDone = CheckinKnown.notDone;
+  int?   _streak        = 0;
 
   static const _moodEmojis  = ['😞', '😐', '😊', '😄', '🤩'];
   static const _moodLabels  = ['Rough', 'Meh', 'Good', 'Great', 'Amazing'];
@@ -45,13 +59,11 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
   }
 
   Future<void> _load() async {
-    final results = await Future.wait([
-      _service.hasCheckedInThisWeek(),
-      _service.getCheckinStreak(),
-    ]);
+    final done = await _weekly.weekStatus();
+    final streak = await _service.getCheckinStreak();
     if (mounted) setState(() {
-      _alreadyDone = results[0] as bool;
-      _streak      = results[1] as int;
+      _alreadyDone = done;
+      _streak      = streak;
     });
   }
 
@@ -60,11 +72,16 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
 
   Future<void> _submit() async {
     setState(() => _saving = true);
-    final ok = await _service.saveWeeklyCheckin(
+    // Writes to `weekly_checkins`, which exists. `workedOut` and
+    // `hitWaterGoal` are not passed because that table has no column for them
+    // — and the old path did not persist them either, since it wrote to a
+    // table that is not there. Nothing that was ever saved is lost; adding
+    // columns for them is an owner decision.
+    final ok = await _weekly.submitWeeklyCheckin(
       mood: _mood, energy: _energy, stress: _stress,
-      sleepHours: _sleep, workedOut: _workedOut,
-      hitWaterGoal: _hitWaterGoal, notes: _notesCtrl.text.trim(),
+      sleepHoursAvg: _sleep, notes: _notesCtrl.text.trim(),
     );
+    if (!mounted) return;
     setState(() => _saving = false);
     if (!mounted) return;
     if (ok) {
@@ -163,8 +180,15 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
           child: Column(children: [
             _buildHeader(top),
             Expanded(
-              child: _alreadyDone
+              child: mayShowAlreadyDone(_alreadyDone)
                 ? _AlreadyDone(onGoHome: () => context.go('/home'))
+                : !mayOfferCheckinForm(_alreadyDone)
+                // CON-01. The read failed, so whether this week already has a
+                // check-in is unknown — and the form is how a duplicate gets
+                // written. `Could not load check-ins` is the copy this
+                // feature's own domain file carries for exactly this, noting
+                // the repository renders it in fifteen places.
+                ? _CheckinUnknown(onRetry: _load)
                 : SingleChildScrollView(
                     padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
                     child: Column(
@@ -174,7 +198,7 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
                         const SizedBox(height: 24),
                         _sectionLabel("How's your mood?"),
                         const SizedBox(height: 12),
-                        _MoodPicker(
+                        MoodPicker(
                           selected: _mood,
                           emojis: _moodEmojis,
                           labels: _moodLabels,
@@ -182,13 +206,15 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
                         const SizedBox(height: 24),
                         _sectionLabel('Energy Level'),
                         const SizedBox(height: 12),
-                        _NumberPicker(
+                        NumberPicker(
+                          scale: 'Energy Level',
                           value: _energy,
                           onChanged: (v) => setState(() => _energy = v)),
                         const SizedBox(height: 24),
                         _sectionLabel('Stress Level'),
                         const SizedBox(height: 12),
-                        _NumberPicker(
+                        NumberPicker(
+                          scale: 'Stress Level',
                           value: _stress,
                           onChanged: (v) => setState(() => _stress = v)),
                         if (_stress >= 4) ...[
@@ -224,11 +250,29 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
                         const SizedBox(height: 12),
                         _NotesField(controller: _notesCtrl),
                         const SizedBox(height: 32),
+                        // FIT-004 draws "Send to Nadia" — the client's coach,
+                        // by name. Real data, so nothing is invented; and the
+                        // name is used ONLY when the read has settled with one,
+                        // so a failed lookup cannot address the button to a
+                        // coach the client may not have. See checkinSubmitLabel.
                         _GradientBtn(
-                          label: 'Submit Check-In',
+                          label: checkinSubmitLabel(ref.watch(assignedCoachProvider)),
                           icon: Icons.check_circle_outline,
                           loading: _saving,
                           onTap: _saving ? null : _submit),
+                        const SizedBox(height: 16),
+                        // FIT-004's other two declared controls. Both go to the
+                        // screens this app already keeps that content on — no
+                        // screen is invented to satisfy a label.
+                        Row(children: [
+                          Expanded(child: _CheckinLink(
+                            label: 'Past check-ins',
+                            onTap: () => context.go('/checkins'))),
+                          const SizedBox(width: 10),
+                          Expanded(child: _CheckinLink(
+                            label: 'Add a progress photo',
+                            onTap: () => context.go('/progress'))),
+                        ]),
                       ]))),
           ])),
       ]),
@@ -243,16 +287,23 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
         border: Border(bottom: BorderSide(
           color: _brand.withValues(alpha: 0.1)))),
       child: Row(children: [
-        GestureDetector(
+        Semantics(
+          button: true,
+          label: 'Back',
+          child: GestureDetector(
           onTap: () => context.go('/home'),
+          behavior: HitTestBehavior.opaque,
           child: Container(
+            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+            alignment: Alignment.center,
+            child: Container(
             width: 36, height: 36,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: Colors.white.withValues(alpha: 0.07),
               border: Border.all(color: Colors.white.withValues(alpha: 0.08))),
             child: const Icon(Icons.arrow_back_ios_new,
-              color: _white, size: 16))),
+              color: _white, size: 16))))),
         const SizedBox(width: 12),
         const Text('Weekly Check-In',
           style: TextStyle(color: _white, fontSize: 18,
@@ -268,11 +319,11 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
               borderRadius: BorderRadius.circular(20),
               border: Border.all(color: _brand.withValues(alpha: 0.5))),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              if (_streak > 0) ...[
+              if (knownStreak(_streak) != null) ...[
                 const Icon(Icons.local_fire_department,
                   color: _brand, size: 13),
                 const SizedBox(width: 4),
-                Text('$_streak', style: const TextStyle(
+                Text('${knownStreak(_streak)}', style: const TextStyle(
                   color: _primary, fontSize: 11,
                   fontWeight: FontWeight.w700)),
                 const SizedBox(width: 4),
@@ -329,86 +380,6 @@ class _WeekCard extends StatelessWidget {
               fontSize: 12)),
         ])),
     ]));
-}
-
-// ── Mood Picker ───────────────────────────────────────────────────────────────
-class _MoodPicker extends StatelessWidget {
-  final int selected;
-  final List<String> emojis, labels;
-  final ValueChanged<int> onTap;
-  const _MoodPicker({required this.selected, required this.emojis,
-    required this.labels, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) => Row(
-    mainAxisAlignment: MainAxisAlignment.spaceAround,
-    children: List.generate(5, (i) {
-      final active = i + 1 == selected;
-      return GestureDetector(
-        onTap: () => onTap(i + 1),
-        child: Column(children: [
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: 54, height: 54,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: active
-                ? _brand.withValues(alpha: 0.15)
-                : Colors.white.withValues(alpha: 0.05),
-              border: Border.all(
-                color: active ? _brand : Colors.white.withValues(alpha: 0.1),
-                width: active ? 2 : 1),
-              boxShadow: active
-                ? [BoxShadow(color: _brand.withValues(alpha: 0.35),
-                    blurRadius: 12, spreadRadius: 1)]
-                : null),
-            child: Center(child: Text(emojis[i],
-              style: TextStyle(fontSize: active ? 28 : 22)))),
-          const SizedBox(height: 6),
-          Text(labels[i],
-            style: TextStyle(
-              color: active ? _primary : _muted.withValues(alpha: 0.4),
-              fontSize: 10, fontWeight: FontWeight.w600)),
-        ]));
-    }));
-}
-
-// ── Number Picker (Energy / Stress) ───────────────────────────────────────────
-class _NumberPicker extends StatelessWidget {
-  final int value;
-  final ValueChanged<int> onChanged;
-  const _NumberPicker({required this.value, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) => Row(
-    mainAxisAlignment: MainAxisAlignment.spaceAround,
-    children: List.generate(5, (i) {
-      final n = i + 1;
-      final active = n == value;
-      return GestureDetector(
-        onTap: () => onChanged(n),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          width: 58, height: 58,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
-            gradient: active
-              ? LinearGradient(
-                  colors: [_brand, const Color(0xFF7C3AED)],
-                  begin: Alignment.topLeft, end: Alignment.bottomRight)
-              : null,
-            color: active ? null : Colors.white.withValues(alpha: 0.05),
-            border: Border.all(
-              color: active ? _brand : Colors.white.withValues(alpha: 0.08)),
-            boxShadow: active
-              ? [BoxShadow(color: _brand.withValues(alpha: 0.4),
-                  blurRadius: 12, offset: const Offset(0, 4))]
-              : null),
-          child: Center(child: Text('$n',
-            style: TextStyle(
-              color: active ? _white : _muted.withValues(alpha: 0.45),
-              fontSize: 18, fontWeight: FontWeight.w800)))));
-    }));
 }
 
 // ── Sleep Slider ──────────────────────────────────────────────────────────────
@@ -619,4 +590,68 @@ class _AlreadyDone extends StatelessWidget {
         _GradientBtn(label: 'Back to Home',
           icon: Icons.home_outlined, onTap: onGoHome),
       ])));
+}
+
+/// FIT-004's two secondary controls: "Past check-ins" and "Add a progress
+/// photo". Both are the package's own labels.
+class _CheckinLink extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _CheckinLink({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 48),
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.12))),
+            child: Text(label,
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              style: const TextStyle(
+                color: _white, fontSize: 13, fontWeight: FontWeight.w700)),
+          ),
+        ),
+      );
+}
+
+/// CON-01 · the week's check-in state could not be read.
+///
+/// Not an empty form: the form is how a duplicate weekly check-in gets
+/// written. Copy comes from `checkin_hub.dart`, which already carries this
+/// repository's `Could not load [noun]` pattern.
+class _CheckinUnknown extends StatelessWidget {
+  final VoidCallback onRetry;
+  const _CheckinUnknown({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.cloud_off_rounded, color: _muted, size: 40),
+            const SizedBox(height: 14),
+            const Text(checkinHistoryFailure,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: _white, fontSize: 16, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: onRetry,
+                child: const Text('Try again'),
+              ),
+            ),
+          ]),
+        ),
+      );
 }

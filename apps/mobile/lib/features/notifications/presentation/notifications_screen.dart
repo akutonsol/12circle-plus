@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../data/notification_model.dart';
 import '../domain/notification_provider.dart';
+import '../domain/notification_groups.dart';
+import '../../../core/widgets/named_icon_button.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 class _C {
@@ -27,14 +29,16 @@ class NotificationsScreen extends ConsumerStatefulWidget {
 }
 
 class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
-  @override
-  void initState() {
-    super.initState();
-    // Mark all read when screen opens (after a brief delay so the user sees the dots)
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) ref.read(notificationsProvider.notifier).markAllRead();
-    });
-  }
+  // No `initState` marking everything read.
+  //
+  // This screen ran `Future.delayed(2s) → markAllRead()` on open. Two seconds
+  // after it appeared, every notification became read — whether the client had
+  // read anything or not. That made `Mark all read`, which FIT-062 draws as a
+  // **control**, pointless because it had already happened; it destroyed the
+  // state the board's three unread signals exist to convey; and it wrote on
+  // the client's behalf without being asked.
+  //
+  // The board draws marking-read as something the client does, so it is.
 
   @override
   Widget build(BuildContext context) {
@@ -66,7 +70,12 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
               border: Border(bottom: BorderSide(
                 color: Colors.white.withValues(alpha: 0.08)))),
             child: Row(children: [
-              GestureDetector(
+              // FIT-062 declares `Back` as a named control
+              // (`aria-label="Back"`). It shipped as an unnamed 38 px circle —
+              // an A-G8 site, and `NamedIconButton` also lifts it to the 44 dp
+              // floor it was two pixels under.
+              NamedIconButton(
+                label: 'Back',
                 onTap: () => context.canPop() ? context.pop() : context.go('/home'),
                 child: Container(
                   width: 38, height: 38,
@@ -89,7 +98,7 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
                     color: _C.brand.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(color: _C.brand.withValues(alpha: 0.25))),
-                  child: const Text('Mark all read',
+                  child: const Text(markAllReadLabel,
                     style: TextStyle(color: _C.primary, fontSize: 11,
                       fontWeight: FontWeight.w600)))),
             ]),
@@ -153,28 +162,18 @@ class _NotificationList extends ConsumerWidget {
   }
 
   Map<String, List<AppNotification>> _groupByDate(List<AppNotification> list) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final yesterday = today.subtract(const Duration(days: 1));
     final groups = <String, List<AppNotification>>{};
     for (final n in list) {
-      final d = DateTime(n.createdAt.year, n.createdAt.month, n.createdAt.day);
-      final String key;
-      if (d == today) {
-        key = 'Today';
-      } else if (d == yesterday) {
-        key = 'Yesterday';
-      } else {
-        final diff = today.difference(d).inDays;
-        key = diff < 7 ? '$diff days ago' : _formatDate(n.createdAt);
-      }
-      groups.putIfAbsent(key, () => []).add(n);
+      // FIT-062's two headings, plus one for anything older — see
+      // `groupFor`. The scheme this replaces produced `Yesterday`,
+      // `3 days ago` and `Sep 17` in the same list.
+      groups
+          .putIfAbsent(groupFor(n.createdAt).label, () => [])
+          .add(n);
     }
     return groups;
   }
 
-  String _formatDate(DateTime d) =>
-      '${_months[d.month - 1]} ${d.day}';
 
   int _countItems(Map<String, List<AppNotification>> g) =>
       g.entries.fold(0, (sum, e) => sum + 1 + e.value.length);
@@ -192,9 +191,6 @@ class _NotificationList extends ConsumerWidget {
 
   int _unreadInGroup(Map<String, List<AppNotification>> g, String key) =>
       g[key]?.where((n) => !n.read).length ?? 0;
-
-  static const _months = ['JAN','FEB','MAR','APR','MAY','JUN',
-      'JUL','AUG','SEP','OCT','NOV','DEC'];
 }
 
 // ── Group Header ──────────────────────────────────────────────────────────────
@@ -239,6 +235,9 @@ class _NotificationCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final n = notification;
     final cfg = _typeConfig(n.type);
+    // All three at once, so a caller cannot ship one and forget the other two
+    // — which is exactly what happened here.
+    final signals = unreadSignals(read: n.read);
 
     return Dismissible(
       key: ValueKey(n.id),
@@ -283,23 +282,46 @@ class _NotificationCard extends StatelessWidget {
                     style: TextStyle(color: cfg.color.withValues(alpha: 0.7),
                       fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
                   const Spacer(),
-                  Text(_timeAgo(n.createdAt),
-                    style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.4),
-                      fontSize: 10)),
+                  // FIT-062: "Unread carries a dot AND the word 'Unread' AND
+                  // full-strength ink — three signals, since a violet dot
+                  // alone fails for a colour-blind member."
+                  //
+                  // This is the SECOND signal. The screen shipped with the dot
+                  // and nothing else, which is the one the board names as
+                  // insufficient on its own.
+                  Text(notificationMeta(read: n.read, createdAt: n.createdAt),
+                    style: TextStyle(
+                      color: signals.word
+                          ? _C.primary
+                          : _C.onSurfVar.withValues(alpha: 0.4),
+                      fontSize: 10,
+                      fontWeight:
+                          signals.word ? FontWeight.w700 : FontWeight.w400)),
                 ]),
                 const SizedBox(height: 4),
+                // The THIRD signal: full-strength ink on unread, dimmed once
+                // read. A member who distinguishes neither the dot nor the
+                // word still sees which rows are new.
                 Text(n.title,
-                  style: const TextStyle(color: _C.onSurface,
-                    fontSize: 14, fontWeight: FontWeight.w600)),
+                  style: TextStyle(
+                    color: signals.fullStrengthInk
+                        ? _C.onSurface
+                        : _C.onSurface.withValues(alpha: 0.55),
+                    fontSize: 14,
+                    fontWeight: signals.fullStrengthInk
+                        ? FontWeight.w700
+                        : FontWeight.w600)),
                 const SizedBox(height: 3),
                 Text(n.body,
-                  style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.85),
+                  style: TextStyle(
+                    color: _C.onSurfVar.withValues(
+                        alpha: signals.fullStrengthInk ? 0.85 : 0.5),
                     fontSize: 13, height: 1.4),
                   maxLines: 3, overflow: TextOverflow.ellipsis),
               ]),
             ),
-            // Unread dot
-            if (!n.read) ...[
+            // The FIRST signal.
+            if (signals.dot) ...[
               const SizedBox(width: 10),
               Container(
                 width: 8, height: 8,
@@ -317,15 +339,6 @@ class _NotificationCard extends StatelessWidget {
     );
   }
 
-  static String _timeAgo(DateTime dt) {
-    final diff = DateTime.now().difference(dt);
-    if (diff.inMinutes < 1) return 'Just now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return '${diff.inHours}h ago';
-    if (diff.inDays == 1) return 'Yesterday';
-    if (diff.inDays < 7) return '${diff.inDays}d ago';
-    return '${dt.day}/${dt.month}/${dt.year}';
-  }
 
   static _TypeConfig _typeConfig(String type) {
     switch (type) {
@@ -378,11 +391,15 @@ class _EmptyState extends StatelessWidget {
         child: Icon(Icons.notifications_paused_outlined,
           color: _C.outline.withValues(alpha: 0.5), size: 36)),
       const SizedBox(height: 20),
-      Text('All caught up!',
+      // FIT-062's own words. The copy this replaces — "All caught up!" /
+      // "No more notifications for now." — says the list is empty twice and
+      // never says what would appear in it. The board's names the categories
+      // the app actually sends.
+      Text(emptyNotificationsTitle,
         style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.7),
           fontSize: 18, fontWeight: FontWeight.w700)),
       const SizedBox(height: 8),
-      Text('No more notifications for now.',
+      Text(emptyNotificationsBody,
         style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.4),
           fontSize: 13)),
     ]),

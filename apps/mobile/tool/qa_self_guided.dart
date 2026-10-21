@@ -1,8 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Self-Guided Coaching Mode — automated QA certification harness.
 //
-// Runs the whole automatable Self-Guided journey against the LIVE Supabase dev
-// instance and asserts real DB state:
+// Runs the whole automatable Self-Guided journey against the 12 Circle QA
+// project and asserts real DB state. The target comes from QA_URL / QA_ANON and
+// is verified before anything runs (tool/qa_target.dart); it used to be a
+// hardcoded production constant, which is what made this harness -- which
+// signs users up and calls generate_client_plan() -- a production writer:
 //   create user → onboarding → self_guided mode → program generation →
 //   workout session + resume state + completion → nutrition / habits / check-in →
 //   scoring (award_points) → permissions (RLS) → schema validation → cleanup.
@@ -11,6 +14,7 @@
 // reason (Google/Apple OAuth, real Stripe checkout, push-notification delivery,
 // pixel-level UI, 10k-record performance, device/offline/timezone edge cases).
 //
+//   export QA_URL=... QA_ANON=...
 //   dart run tool/qa_self_guided.dart
 //   SERVICE_ROLE_KEY=... dart run tool/qa_self_guided.dart   # also purges the test user
 //
@@ -19,9 +23,14 @@
 import 'dart:convert';
 import 'dart:io';
 
-const _url  = 'https://nxdbooufqzkpslkcogxc.supabase.co';
-const _anon =
-    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im54ZGJvb3VmcXprcHNsa2NvZ3hjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwMjA4NzksImV4cCI6MjA5NjU5Njg3OX0.D0rl8hxQmDjqknsDCPRuKK1uyIYruSMjycHmNTI-xcE';
+import 'qa_target.dart';
+
+// ENV-5: the target is resolved from QA_URL / QA_ANON and positively verified
+// as the QA project before a single request goes out. There is no default --
+// this file used to hardcode the PRODUCTION ref and key right here.
+final QaTarget _target = resolveQaTarget();
+String get _url => _target.url;
+String get _anon => _target.anonKey;
 
 // A seeded coach — used only as the "other user" for RLS/permission leak tests.
 const _coachEmail = 'coach@12circle.app';

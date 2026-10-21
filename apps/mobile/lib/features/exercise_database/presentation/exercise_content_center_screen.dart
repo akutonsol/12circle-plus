@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../data/custom_exercise_service.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../../core/router/app_router.dart' show kQaToolingEnabled;
 
 const _bg     = Color(0xFF0A0A0B);
 const _panel2 = Color(0xFF1B1526);
@@ -72,7 +73,7 @@ class _State extends ConsumerState<ExerciseContentCenterScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() { _loading = false; });
-      _addLog('Failed to load stats: $e');
+      _addLog('Failed to load stats.');
     }
   }
 
@@ -517,7 +518,9 @@ class _State extends ConsumerState<ExerciseContentCenterScreen> {
           ),
         ),
         const SizedBox(height: 8),
-        GestureDetector(
+        // REL-3: debug/profile only. The route itself is unregistered in a
+        // release build, so an ungated tile here would navigate to nothing.
+        if (kQaToolingEnabled) GestureDetector(
           onTap: () => context.push('/mie-debugger'),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),

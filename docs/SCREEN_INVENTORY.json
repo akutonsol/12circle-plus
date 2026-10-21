@@ -1,0 +1,2661 @@
+{
+  "schema_version": "1.0",
+  "generated": "2026-09-23",
+  "baseline_commit": "fbee6d5cc51d6c3aee468c95c12e2d55b52e1f89",
+  "baseline_note": "Repository was being concurrently modified by another agent session during this audit; committed state pinned at this SHA.",
+  "scope": "apps/mobile (Flutter). Routed surfaces only; push-only screens, modals and flow steps are catalogued in SCREEN_ECOSYSTEM_AUDIT.md and MISSING_SCREEN_REGISTER.md.",
+  "counts": {
+    "routes": 91,
+    "routes_in_release_build": 89,
+    "distinct_widgets": 88,
+    "designed_routes": 45,
+    "undesigned_routes": 46,
+    "orphan_routes_genuine": 7,
+    "total_surfaces_all_kinds": 148
+  },
+  "field_notes": {
+    "implementation_file": "null = not resolved per-record in this pass; route->file resolution is in DESIGN_IMPLEMENTATION_RECONCILIATION.md",
+    "fit_id": "null = not mapped per-record here; FIT<->route mapping lives in DESIGN_IMPLEMENTATION_RECONCILIATION.md"
+  },
+  "screens": [
+    {
+      "id": "SCR-001",
+      "name": "MieDebuggerScreen",
+      "domain": "mie",
+      "role": [
+        "developer"
+      ],
+      "route": "/mie-debugger",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "MieDebuggerScreen",
+      "shell": "ROOT",
+      "reachability": "DEBUG-ONLY",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "DEBUG-ONLY",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-002",
+      "name": "QaCenterScreen",
+      "domain": "qa",
+      "role": [
+        "developer"
+      ],
+      "route": "/qa-center",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "QaCenterScreen",
+      "shell": "ROOT",
+      "reachability": "DEBUG-ONLY",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "DEBUG-ONLY",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-003",
+      "name": "SplashScreen",
+      "domain": "splash",
+      "role": [
+        "public"
+      ],
+      "route": "/splash",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "SplashScreen",
+      "shell": "ROOT",
+      "reachability": "LIVE-EXTERNAL-ENTRY",
+      "authentication": "public-or-mixed",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-004",
+      "name": "OnboardingScreen",
+      "domain": "onboarding",
+      "role": [
+        "public"
+      ],
+      "route": "/onboarding",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "OnboardingScreen",
+      "shell": "ROOT",
+      "reachability": "ORPHANED-ROUTE",
+      "authentication": "public-or-mixed",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-005",
+      "name": "LoginScreen",
+      "domain": "login",
+      "role": [
+        "public"
+      ],
+      "route": "/login",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "LoginScreen",
+      "shell": "ROOT",
+      "reachability": "LIVE",
+      "authentication": "public-or-mixed",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-006",
+      "name": "SignupScreen",
+      "domain": "signup",
+      "role": [
+        "public"
+      ],
+      "route": "/signup",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "SignupScreen",
+      "shell": "ROOT",
+      "reachability": "LIVE",
+      "authentication": "public-or-mixed",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-007",
+      "name": "ForgotPasswordScreen",
+      "domain": "forgot",
+      "role": [
+        "public"
+      ],
+      "route": "/forgot-password",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ForgotPasswordScreen",
+      "shell": "ROOT",
+      "reachability": "LIVE",
+      "authentication": "public-or-mixed",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-008",
+      "name": "ResetPasswordScreen",
+      "domain": "reset",
+      "role": [
+        "public"
+      ],
+      "route": "/reset-password",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ResetPasswordScreen",
+      "shell": "ROOT",
+      "reachability": "LIVE-EXTERNAL-ENTRY",
+      "authentication": "public-or-mixed",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-009",
+      "name": "IntakeFlowScreen",
+      "domain": "intake",
+      "role": [
+        "public"
+      ],
+      "route": "/intake",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "IntakeFlowScreen",
+      "shell": "ROOT",
+      "reachability": "LIVE",
+      "authentication": "public-or-mixed",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-010",
+      "name": "AdminDashboardScreen",
+      "domain": "admin",
+      "role": [
+        "admin"
+      ],
+      "route": "/admin-dashboard",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "AdminDashboardScreen",
+      "shell": "ROOT",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "server-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": "admin",
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-011",
+      "name": "ExerciseReviewScreen",
+      "domain": "admin",
+      "role": [
+        "admin"
+      ],
+      "route": "/admin-exercise-review",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ExerciseReviewScreen",
+      "shell": "ROOT",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "server-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-012",
+      "name": "ExerciseContentCenterScreen",
+      "domain": "content",
+      "role": [
+        "admin"
+      ],
+      "route": "/content-center",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ExerciseContentCenterScreen",
+      "shell": "ROOT",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "widget"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-013",
+      "name": "ObservabilityScreen",
+      "domain": "observability",
+      "role": [
+        "admin"
+      ],
+      "route": "/observability",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ObservabilityScreen",
+      "shell": "ROOT",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "widget"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-014",
+      "name": "ContentReviewQueueScreen",
+      "domain": "content",
+      "role": [
+        "admin"
+      ],
+      "route": "/content-review",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ContentReviewQueueScreen",
+      "shell": "ROOT",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "widget"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-015",
+      "name": "IntelligenceReviewScreen",
+      "domain": "knowledge",
+      "role": [
+        "admin"
+      ],
+      "route": "/knowledge-review",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "IntelligenceReviewScreen",
+      "shell": "ROOT",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "widget"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-016",
+      "name": "VendorPortalScreen",
+      "domain": "vendor",
+      "role": [
+        "vendor"
+      ],
+      "route": "/vendor-portal",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "VendorPortalScreen",
+      "shell": "ROOT",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "server-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": "vendor",
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "BROKEN",
+      "data_note": "selects missing column event_registrations.ticket_code",
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-017",
+      "name": "PaymentResultScreen",
+      "domain": "payment",
+      "role": [
+        "client"
+      ],
+      "route": "/payment-success",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "PaymentResultScreen",
+      "shell": "ROOT",
+      "reachability": "LIVE-EXTERNAL-ENTRY",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-018",
+      "name": "PaymentResultScreen",
+      "domain": "payment",
+      "role": [
+        "client"
+      ],
+      "route": "/payment-cancel",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "PaymentResultScreen",
+      "shell": "ROOT",
+      "reachability": "LIVE-EXTERNAL-ENTRY",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": "/payment-success",
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-019",
+      "name": "HomeScreen",
+      "domain": "home",
+      "role": [
+        "client"
+      ],
+      "route": "/home",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "HomeScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": "client",
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "BROKEN",
+      "data_note": "coach-tip card reads missing table `coach_tips`; error swallowed",
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-020",
+      "name": "ActivityScreen",
+      "domain": "activity",
+      "role": [
+        "client"
+      ],
+      "route": "/activity",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ActivityScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-021",
+      "name": "DirectoryScreen",
+      "domain": "directory",
+      "role": [
+        "client"
+      ],
+      "route": "/directory",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "DirectoryScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-022",
+      "name": "CoachDashboardScreen",
+      "domain": "coach",
+      "role": [
+        "coach"
+      ],
+      "route": "/coach-dashboard",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CoachDashboardScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "NONE"
+      ],
+      "alias_of": null,
+      "role_landing_for": "coach",
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "BROKEN",
+      "data_note": "clientCheckinsProvider selects missing table `checkins`",
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-023",
+      "name": "CoachDirectoryScreen",
+      "domain": "coach",
+      "role": [
+        "coach"
+      ],
+      "route": "/coach-directory",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CoachDirectoryScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "NONE"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-024",
+      "name": "CoachCheckinReviewScreen",
+      "domain": "coach",
+      "role": [
+        "coach"
+      ],
+      "route": "/coach-checkin-review",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CoachCheckinReviewScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "NONE"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-025",
+      "name": "SettingsScreen",
+      "domain": "settings",
+      "role": [
+        "client"
+      ],
+      "route": "/settings",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "SettingsScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-026",
+      "name": "ProfileScreen",
+      "domain": "profile",
+      "role": [
+        "client"
+      ],
+      "route": "/profile",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ProfileScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-027",
+      "name": "TrainHubScreen",
+      "domain": "train",
+      "role": [
+        "client"
+      ],
+      "route": "/train",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "TrainHubScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-028",
+      "name": "WorkoutListScreen",
+      "domain": "workouts",
+      "role": [
+        "client"
+      ],
+      "route": "/workouts",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "WorkoutListScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-029",
+      "name": "WorkoutDetailScreen",
+      "domain": "workout",
+      "role": [
+        "client"
+      ],
+      "route": "/workout-detail",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "WorkoutDetailScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-030",
+      "name": "ActiveWorkoutScreen",
+      "domain": "active",
+      "role": [
+        "client"
+      ],
+      "route": "/active-workout",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ActiveWorkoutScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-031",
+      "name": "WorkoutHistoryScreen",
+      "domain": "workout",
+      "role": [
+        "client"
+      ],
+      "route": "/workout-history",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "WorkoutHistoryScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-032",
+      "name": "ExerciseLibraryScreen",
+      "domain": "exercise",
+      "role": [
+        "client"
+      ],
+      "route": "/exercise-library",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ExerciseLibraryScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-033",
+      "name": "ExerciseDatabaseScreen",
+      "domain": "exercise",
+      "role": [
+        "client"
+      ],
+      "route": "/exercise-database",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ExerciseDatabaseScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-034",
+      "name": "ExerciseDetailScreen",
+      "domain": "exercise",
+      "role": [
+        "client"
+      ],
+      "route": "/exercise-detail",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ExerciseDetailScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.selfGuided",
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-035",
+      "name": "NutritionSplashScreen",
+      "domain": "nutrition",
+      "role": [
+        "client"
+      ],
+      "route": "/nutrition",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "NutritionSplashScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.selfGuided",
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "REDIRECT-STUB",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-036",
+      "name": "MealsDashboardScreen",
+      "domain": "meals",
+      "role": [
+        "client"
+      ],
+      "route": "/meals-dashboard",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "MealsDashboardScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.selfGuided",
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-037",
+      "name": "NutritionScreen",
+      "domain": "nutrition",
+      "role": [
+        "client"
+      ],
+      "route": "/nutrition-overview",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "NutritionScreen",
+      "shell": "SHELL",
+      "reachability": "ORPHANED-ROUTE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.selfGuided",
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-038",
+      "name": "FoodSearchScreen",
+      "domain": "food",
+      "role": [
+        "client"
+      ],
+      "route": "/food-search",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "FoodSearchScreen",
+      "shell": "SHELL",
+      "reachability": "ORPHANED-ROUTE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.selfGuided",
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "REDIRECT-STUB",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-039",
+      "name": "LogMealScreen",
+      "domain": "log",
+      "role": [
+        "client"
+      ],
+      "route": "/log-meal",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "LogMealScreen",
+      "shell": "SHELL",
+      "reachability": "ORPHANED-ROUTE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.selfGuided",
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "REDIRECT-STUB",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-040",
+      "name": "AiNutritionScreen",
+      "domain": "ai",
+      "role": [
+        "client"
+      ],
+      "route": "/ai-nutrition",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "AiNutritionScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.aiGuided",
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-041",
+      "name": "MealPlanScreen",
+      "domain": "meal",
+      "role": [
+        "client"
+      ],
+      "route": "/meal-plan",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "MealPlanScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "NONE"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-042",
+      "name": "GroceryListScreen",
+      "domain": "grocery",
+      "role": [
+        "client"
+      ],
+      "route": "/grocery-list",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "GroceryListScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "NONE"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-043",
+      "name": "HabitScreen",
+      "domain": "habits",
+      "role": [
+        "client"
+      ],
+      "route": "/habits",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "HabitScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-044",
+      "name": "ProgressScreen",
+      "domain": "progress",
+      "role": [
+        "client"
+      ],
+      "route": "/progress",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ProgressScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-045",
+      "name": "CheckinScreen",
+      "domain": "checkins",
+      "role": [
+        "client"
+      ],
+      "route": "/checkins",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CheckinScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-046",
+      "name": "DailyCheckinScreen",
+      "domain": "daily",
+      "role": [
+        "client"
+      ],
+      "route": "/daily-checkin",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "DailyCheckinScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.selfGuided",
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "BROKEN",
+      "data_note": "writes to missing table `checkins`",
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-047",
+      "name": "InsightsScreen",
+      "domain": "insights",
+      "role": [
+        "client"
+      ],
+      "route": "/insights",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "InsightsScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.selfGuided",
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-048",
+      "name": "BookingScreen",
+      "domain": "appointments",
+      "role": [
+        "client"
+      ],
+      "route": "/appointments",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "BookingScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.coachGuided",
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-049",
+      "name": "CheckinFormScreen",
+      "domain": "checkin",
+      "role": [
+        "client"
+      ],
+      "route": "/checkin-form",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CheckinFormScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "REDIRECT-STUB",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-050",
+      "name": "CheckinDetailScreen",
+      "domain": "checkin",
+      "role": [
+        "client"
+      ],
+      "route": "/checkin-detail",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CheckinDetailScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.coachGuided",
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-051",
+      "name": "MessagingScreen",
+      "domain": "messages",
+      "role": [
+        "client"
+      ],
+      "route": "/messages",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "MessagingScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.coachGuided",
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-052",
+      "name": "ChatScreen",
+      "domain": "chat",
+      "role": [
+        "client"
+      ],
+      "route": "/chat",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ChatScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.coachGuided",
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-053",
+      "name": "CommunityScreen",
+      "domain": "community",
+      "role": [
+        "client"
+      ],
+      "route": "/community",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CommunityScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-054",
+      "name": "ChallengesScreen",
+      "domain": "challenges",
+      "role": [
+        "client"
+      ],
+      "route": "/challenges",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ChallengesScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.coachGuided",
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-055",
+      "name": "ActionCenterScreen",
+      "domain": "action",
+      "role": [
+        "client"
+      ],
+      "route": "/action-items",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ActionCenterScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.coachGuided",
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-056",
+      "name": "GoalsScreen",
+      "domain": "goals",
+      "role": [
+        "client"
+      ],
+      "route": "/goals",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "GoalsScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-057",
+      "name": "ComplianceDashboardScreen",
+      "domain": "compliance",
+      "role": [
+        "coach"
+      ],
+      "route": "/compliance",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ComplianceDashboardScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "NONE"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-058",
+      "name": "ProgramLibraryScreen",
+      "domain": "program",
+      "role": [
+        "coach"
+      ],
+      "route": "/program-builder",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ProgramLibraryScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "NONE"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-059",
+      "name": "UpgradeScreen",
+      "domain": "upgrade",
+      "role": [
+        "client"
+      ],
+      "route": "/upgrade",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "UpgradeScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-060",
+      "name": "CoachPlanScreen",
+      "domain": "coach",
+      "role": [
+        "coach"
+      ],
+      "route": "/coach-plan",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CoachPlanScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "NONE"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-061",
+      "name": "CoachPackagesScreen",
+      "domain": "coach",
+      "role": [
+        "coach"
+      ],
+      "route": "/coach-packages",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CoachPackagesScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "NONE"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-062",
+      "name": "ChallengeDetailScreen",
+      "domain": "challenge",
+      "role": [
+        "client"
+      ],
+      "route": "/challenge-detail",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ChallengeDetailScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.aiGuided",
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-063",
+      "name": "AICoachScreen",
+      "domain": "ai",
+      "role": [
+        "client"
+      ],
+      "route": "/ai-coach",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "AICoachScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.aiGuided",
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-064",
+      "name": "BookingScreen",
+      "domain": "book",
+      "role": [
+        "client"
+      ],
+      "route": "/book-call",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "BookingScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "paywall-gate"
+      ],
+      "alias_of": "/appointments",
+      "role_landing_for": null,
+      "paywall_tier": "ClientPlan.coachGuided",
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-065",
+      "name": "BookingHandoffScreen",
+      "domain": "booking",
+      "role": [
+        "client"
+      ],
+      "route": "/booking-handoff",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "BookingHandoffScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "REDIRECT-STUB",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-066",
+      "name": "WomensHealthScreen",
+      "domain": "womens",
+      "role": [
+        "client"
+      ],
+      "route": "/womens-health",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "WomensHealthScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-067",
+      "name": "ScoreScreen",
+      "domain": "score",
+      "role": [
+        "client"
+      ],
+      "route": "/score",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ScoreScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-068",
+      "name": "ClassesScreen",
+      "domain": "classes",
+      "role": [
+        "client"
+      ],
+      "route": "/classes",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ClassesScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-069",
+      "name": "CoachClassesScreen",
+      "domain": "coach",
+      "role": [
+        "coach"
+      ],
+      "route": "/coach-classes",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CoachClassesScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "NONE"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-070",
+      "name": "CoachPaymentsScreen",
+      "domain": "coach",
+      "role": [
+        "coach"
+      ],
+      "route": "/coach-payments",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CoachPaymentsScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "NONE"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-071",
+      "name": "ClassDetailScreen",
+      "domain": "class",
+      "role": [
+        "client"
+      ],
+      "route": "/class-detail",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ClassDetailScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-072",
+      "name": "TrainHubScreen",
+      "domain": "coach",
+      "role": [
+        "coach"
+      ],
+      "route": "/coach",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "TrainHubScreen",
+      "shell": "SHELL",
+      "reachability": "ORPHANED-ROUTE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": "/train",
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-073",
+      "name": "EventsScreen",
+      "domain": "events",
+      "role": [
+        "client"
+      ],
+      "route": "/events",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "EventsScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-074",
+      "name": "PodsScreen",
+      "domain": "pods",
+      "role": [
+        "client"
+      ],
+      "route": "/pods",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "PodsScreen",
+      "shell": "SHELL",
+      "reachability": "ORPHANED-ROUTE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-075",
+      "name": "CoachBusinessScreen",
+      "domain": "coach",
+      "role": [
+        "coach"
+      ],
+      "route": "/coach-business",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CoachBusinessScreen",
+      "shell": "SHELL",
+      "reachability": "ORPHANED-ROUTE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "NONE"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-076",
+      "name": "CoachCopilotScreen",
+      "domain": "coach",
+      "role": [
+        "coach"
+      ],
+      "route": "/coach-copilot",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CoachCopilotScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "widget"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-077",
+      "name": "DynamicProgramBuilderScreen",
+      "domain": "program",
+      "role": [
+        "coach"
+      ],
+      "route": "/program-designer",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "DynamicProgramBuilderScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "widget"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-078",
+      "name": "ContinuousCoachingScreen",
+      "domain": "continuous",
+      "role": [
+        "coach"
+      ],
+      "route": "/continuous-coaching",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ContinuousCoachingScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "widget"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-079",
+      "name": "WeeklyReviewScreen",
+      "domain": "weekly",
+      "role": [
+        "coach"
+      ],
+      "route": "/weekly-review",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "WeeklyReviewScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "widget"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-080",
+      "name": "CoachMarketplaceScreen",
+      "domain": "coach",
+      "role": [
+        "coach"
+      ],
+      "route": "/coach-marketplace",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CoachMarketplaceScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-081",
+      "name": "NotificationsScreen",
+      "domain": "notifications",
+      "role": [
+        "client"
+      ],
+      "route": "/notifications",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "NotificationsScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "D_DESIGN_AND_IMPL",
+      "design_source": "fitness-handoff/manifest.json",
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-082",
+      "name": "CreateExerciseScreen",
+      "domain": "create",
+      "role": [
+        "client"
+      ],
+      "route": "/create-exercise",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CreateExerciseScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-083",
+      "name": "StrengthProgressionScreen",
+      "domain": "strength",
+      "role": [
+        "client"
+      ],
+      "route": "/strength-progression",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "StrengthProgressionScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-084",
+      "name": "CoachClientWorkoutScreen",
+      "domain": "coach",
+      "role": [
+        "coach"
+      ],
+      "route": "/coach-client-workouts",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "CoachClientWorkoutScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "NONE"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-085",
+      "name": "PersonalInfoScreen",
+      "domain": "personal",
+      "role": [
+        "client"
+      ],
+      "route": "/personal-info",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "PersonalInfoScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-086",
+      "name": "NotificationPreferencesScreen",
+      "domain": "notification",
+      "role": [
+        "client"
+      ],
+      "route": "/notification-preferences",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "NotificationPreferencesScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-087",
+      "name": "ManageSubscriptionScreen",
+      "domain": "subscription",
+      "role": [
+        "client"
+      ],
+      "route": "/subscription",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "ManageSubscriptionScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-088",
+      "name": "IntegrationsScreen",
+      "domain": "integrations",
+      "role": [
+        "client"
+      ],
+      "route": "/integrations",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "IntegrationsScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "NO-SEED-DATA",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-089",
+      "name": "PrivacyPolicyScreen",
+      "domain": "privacy",
+      "role": [
+        "client"
+      ],
+      "route": "/privacy-policy",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "PrivacyPolicyScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-090",
+      "name": "TermsOfServiceScreen",
+      "domain": "terms",
+      "role": [
+        "client"
+      ],
+      "route": "/terms-of-service",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "TermsOfServiceScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    },
+    {
+      "id": "SCR-091",
+      "name": "HelpCenterScreen",
+      "domain": "help",
+      "role": [
+        "client"
+      ],
+      "route": "/help-center",
+      "route_source": "apps/mobile/lib/core/router/app_router.dart",
+      "implementation_file": null,
+      "widget_class": "HelpCenterScreen",
+      "shell": "SHELL",
+      "reachability": "LIVE",
+      "authentication": "required",
+      "authorization_enforced_by": [
+        "auth-only"
+      ],
+      "alias_of": null,
+      "role_landing_for": null,
+      "paywall_tier": null,
+      "design_status": "C_IMPL_NO_CURRENT_DESIGN",
+      "design_source": null,
+      "fit_id": null,
+      "implementation_status": "IMPLEMENTED",
+      "data_status": "OK",
+      "data_note": null,
+      "confidence": "high",
+      "evidence": "app_router.dart route table; two independent passes"
+    }
+  ]
+}

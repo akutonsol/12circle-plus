@@ -23,9 +23,10 @@ final assignedCoachProvider = FutureProvider<Map<String, dynamic>?>((ref) async 
         .maybeSingle();
     final coachId = rel?['coach_id'] as String?;
     if (coachId == null) return null;
+    // H-06 / 3A-7: repointed at public_profiles, which never carries email.
     return await _db
-        .from('user_profiles')
-        .select('id, first_name, last_name, email, avatar_url, coach_title, coach_bio, specialties, certifications, pricing_monthly, years_experience, rating_avg')
+        .from('public_profiles')
+        .select('id, first_name, last_name, avatar_url, coach_title, coach_bio, specialties, certifications, pricing_monthly, years_experience, rating_avg')
         .eq('id', coachId)
         .maybeSingle();
   } catch (_) { return null; }
@@ -44,8 +45,9 @@ final pendingCoachProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
         .maybeSingle();
     final coachId = rel?['coach_id'] as String?;
     if (coachId == null) return null;
+    // H-06 / 3A-7: repointed at public_profiles.
     final coach = await _db
-        .from('user_profiles')
+        .from('public_profiles')
         .select('id, first_name, last_name, avatar_url, coach_title')
         .eq('id', coachId)
         .maybeSingle();
@@ -90,8 +92,9 @@ final coachReviewsProvider =
     final list = List<Map<String, dynamic>>.from(rows);
     if (list.isEmpty) return list;
     final ids = list.map((r) => r['client_id'] as String).toSet().toList();
+    // H-06 / 3A-7: repointed at public_profiles.
     final profiles = await _db
-        .from('user_profiles')
+        .from('public_profiles')
         .select('id, first_name, last_name, avatar_url')
         .inFilter('id', ids);
     final byId = {for (final p in profiles as List) p['id'] as String: p};
@@ -120,7 +123,7 @@ final availableCoachesProvider = FutureProvider<List<Map<String, dynamic>>>((ref
     // Active clients per coach, counted as DISTINCT client_ids (duplicate or
     // orphaned relationship rows would otherwise inflate the number and diverge
     // from the coach dashboard, which counts distinct clients).
-    final activeByCoach = <String, Set<String>>{};
+    final activeByCoach = <String, int>{};
     if (coachIds.isNotEmpty) {
       final pkgs = await _db
           .from('coach_packages')
@@ -136,16 +139,18 @@ final availableCoachesProvider = FutureProvider<List<Map<String, dynamic>>>((ref
         if (cur == null || price < cur) lowestMonthly[cid] = price;
       }
 
-      final rels = await _db
-          .from('coach_client_relationships')
-          .select('coach_id, client_id')
-          .inFilter('coach_id', coachIds)
-          .eq('status', 'active');
-      for (final r in (rels as List)) {
+      // Capacity comes from an aggregate RPC, not from reading the relationship
+      // rows. coach_client_relationships is the authorization root and migration
+      // 113 scopes it to the two parties, so a client browsing the marketplace
+      // now sees zero rows for every coach but their own -- which would render
+      // every full coach as available. coach_active_client_counts() returns the
+      // DISTINCT active-client count per coach and nothing else.
+      final counts = await _db.rpc('coach_active_client_counts',
+          params: {'coach_ids': coachIds});
+      for (final r in (counts as List)) {
         final coachId = r['coach_id'] as String?;
-        final clientId = r['client_id'] as String?;
-        if (coachId == null || clientId == null) continue;
-        (activeByCoach[coachId] ??= <String>{}).add(clientId);
+        if (coachId == null) continue;
+        activeByCoach[coachId] = (r['active_clients'] as num?)?.toInt() ?? 0;
       }
     }
 
@@ -153,7 +158,7 @@ final availableCoachesProvider = FutureProvider<List<Map<String, dynamic>>>((ref
     final result = <Map<String, dynamic>>[];
     for (final c in coaches) {
       final cid = c['id'] as String;
-      final active = activeByCoach[cid]?.length ?? 0;
+      final active = activeByCoach[cid] ?? 0;
       final max = (c['max_clients'] as int?) ?? 20;
       // Profile rate wins; otherwise fall back to the cheapest monthly package.
       final profilePrice = (c['pricing_monthly'] as num?)?.toDouble() ?? 0;

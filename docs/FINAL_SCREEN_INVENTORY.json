@@ -1,0 +1,1567 @@
+{
+  "schema_version": "4.0",
+  "generated": "2026-09-24",
+  "baseline_commit": "0aa844a",
+  "supersedes": [
+    "SCREEN_INVENTORY.json v1.0",
+    "FINAL_SCREEN_INVENTORY.json v2.0"
+  ],
+  "governing_rule": "A designed anchor that is unimplemented is an IMPLEMENTATION gap, not a missing screen. A required surface with no design frame is a DESIGN COMMISSION.",
+  "counts": {
+    "routes": 91,
+    "routes_release_build": 89,
+    "fit_anchors": 110,
+    "anchors_complete": 19,
+    "anchors_partial": 56,
+    "anchors_zero_coverage": 32,
+    "interactions_present": 287,
+    "interactions_declared": 600,
+    "routes_with_design": 45,
+    "routes_without_design": 46,
+    "surfaces_all_kinds": 148,
+    "orphan_routes": 7,
+    "unreachable_anchors": 6,
+    "providers_declared": 230,
+    "providers_never_consumed": 34,
+    "section1_implementation_backlog_anchors": 32,
+    "section2_new_design_commission": 48,
+    "section2_provisional": 48,
+    "section2_confirmed_commission": 40,
+    "section2_reclassified": 8
+  },
+  "section2_breakdown": {
+    "missing_both": 8,
+    "client_routes_undesigned": 13,
+    "coach_routes_undesigned": 12,
+    "unrouted_undesigned": 8,
+    "admin_vendor_undesigned": 7
+  },
+  "open_questions_not_commissioned": [
+    "My bookings (FIT-080 may subsume as a tab)",
+    "Food search (may be a sub-surface of FIT-019)",
+    "/nutrition gateway (delete candidate)"
+  ],
+  "section1_anchor_backlog": [
+    {
+      "anchor": "FIT-001",
+      "have": 9,
+      "total": 9,
+      "locked": true,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-002",
+      "have": 5,
+      "total": 5,
+      "locked": true,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-003",
+      "have": 9,
+      "total": 12,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-004",
+      "have": 8,
+      "total": 11,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-005",
+      "have": 8,
+      "total": 12,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-006",
+      "have": 2,
+      "total": 2,
+      "locked": true,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-007",
+      "have": 1,
+      "total": 1,
+      "locked": true,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-008",
+      "have": 2,
+      "total": 7,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-009",
+      "have": 1,
+      "total": 1,
+      "locked": true,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-010",
+      "have": 1,
+      "total": 1,
+      "locked": false,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-011",
+      "have": 1,
+      "total": 2,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-012",
+      "have": 2,
+      "total": 2,
+      "locked": false,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-013",
+      "have": 1,
+      "total": 1,
+      "locked": false,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-014",
+      "have": 8,
+      "total": 12,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-015",
+      "have": 8,
+      "total": 9,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-016",
+      "have": 3,
+      "total": 7,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-017",
+      "have": 2,
+      "total": 2,
+      "locked": true,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-018",
+      "have": 4,
+      "total": 4,
+      "locked": true,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-019",
+      "have": 4,
+      "total": 5,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-020",
+      "have": 4,
+      "total": 5,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-021",
+      "have": 3,
+      "total": 3,
+      "locked": true,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-022",
+      "have": 1,
+      "total": 1,
+      "locked": true,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-023",
+      "have": 7,
+      "total": 10,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-024",
+      "have": 1,
+      "total": 2,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-025",
+      "have": 1,
+      "total": 1,
+      "locked": true,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-026",
+      "have": 4,
+      "total": 5,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-027",
+      "have": 5,
+      "total": 10,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-028",
+      "have": 8,
+      "total": 10,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-029",
+      "have": 4,
+      "total": 6,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-030",
+      "have": 5,
+      "total": 6,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-031",
+      "have": 1,
+      "total": 5,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-032",
+      "have": 6,
+      "total": 11,
+      "locked": true,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-033",
+      "have": 5,
+      "total": 5,
+      "locked": true,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-034",
+      "have": 0,
+      "total": 1,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-035",
+      "have": 1,
+      "total": 2,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-036",
+      "have": 8,
+      "total": 8,
+      "locked": false,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-037",
+      "have": 4,
+      "total": 8,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-038",
+      "have": 11,
+      "total": 12,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-039",
+      "have": 2,
+      "total": 6,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-040",
+      "have": 3,
+      "total": 4,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-041",
+      "have": 4,
+      "total": 4,
+      "locked": false,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-042",
+      "have": 2,
+      "total": 2,
+      "locked": false,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-043",
+      "have": 2,
+      "total": 5,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-044",
+      "have": 5,
+      "total": 9,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-045",
+      "have": 2,
+      "total": 6,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-046",
+      "have": 0,
+      "total": 3,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-047",
+      "have": 1,
+      "total": 5,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-048",
+      "have": 1,
+      "total": 5,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-049",
+      "have": 0,
+      "total": 1,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-050",
+      "have": 4,
+      "total": 6,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-051",
+      "have": 5,
+      "total": 8,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-052",
+      "have": 5,
+      "total": 5,
+      "locked": false,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-053",
+      "have": 5,
+      "total": 7,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-054",
+      "have": 4,
+      "total": 11,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-055",
+      "have": 0,
+      "total": 2,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-056",
+      "have": 1,
+      "total": 4,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-057",
+      "have": 5,
+      "total": 5,
+      "locked": false,
+      "class": "A-complete"
+    },
+    {
+      "anchor": "FIT-058",
+      "have": 0,
+      "total": 5,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-059",
+      "have": 0,
+      "total": 2,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-060",
+      "have": 0,
+      "total": 1,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-061",
+      "have": 0,
+      "total": 1,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-062",
+      "have": 2,
+      "total": 7,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-063",
+      "have": 0,
+      "total": 3,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-064",
+      "have": 1,
+      "total": 12,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-065",
+      "have": 11,
+      "total": 20,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-066",
+      "have": 3,
+      "total": 9,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-067",
+      "have": 4,
+      "total": 10,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-068",
+      "have": 0,
+      "total": 0,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-069",
+      "have": 8,
+      "total": 11,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-070",
+      "have": 3,
+      "total": 4,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-071",
+      "have": 0,
+      "total": 6,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-072",
+      "have": 0,
+      "total": 5,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-073",
+      "have": 0,
+      "total": 0,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-074",
+      "have": 0,
+      "total": 2,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-075",
+      "have": 1,
+      "total": 5,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-076",
+      "have": 0,
+      "total": 3,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-077",
+      "have": 0,
+      "total": 1,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-078",
+      "have": 0,
+      "total": 1,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-079",
+      "have": 1,
+      "total": 5,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-080",
+      "have": 1,
+      "total": 12,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-081",
+      "have": 0,
+      "total": 2,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-082",
+      "have": 0,
+      "total": 3,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-083",
+      "have": 0,
+      "total": 3,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-084",
+      "have": 2,
+      "total": 3,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-085",
+      "have": 0,
+      "total": 4,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-086",
+      "have": 0,
+      "total": 3,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-087",
+      "have": 0,
+      "total": 2,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-088",
+      "have": 0,
+      "total": 5,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-089",
+      "have": 0,
+      "total": 7,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-090",
+      "have": 0,
+      "total": 4,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-091",
+      "have": 14,
+      "total": 16,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-092",
+      "have": 1,
+      "total": 4,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-093",
+      "have": 0,
+      "total": 2,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-094",
+      "have": 1,
+      "total": 3,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-095",
+      "have": 0,
+      "total": 15,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-096",
+      "have": 3,
+      "total": 7,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-097",
+      "have": 1,
+      "total": 4,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-098",
+      "have": 0,
+      "total": 2,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-099",
+      "have": 0,
+      "total": 0,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-100",
+      "have": 0,
+      "total": 9,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-101",
+      "have": 0,
+      "total": 2,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-102",
+      "have": 2,
+      "total": 7,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-103",
+      "have": 0,
+      "total": 5,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-104",
+      "have": 0,
+      "total": 5,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    },
+    {
+      "anchor": "FIT-105",
+      "have": 7,
+      "total": 15,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-106",
+      "have": 5,
+      "total": 7,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-107",
+      "have": 1,
+      "total": 4,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-108",
+      "have": 3,
+      "total": 7,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-109",
+      "have": 3,
+      "total": 7,
+      "locked": false,
+      "class": "B-partial"
+    },
+    {
+      "anchor": "FIT-110",
+      "have": 0,
+      "total": 4,
+      "locked": false,
+      "class": "C-substantially-unimplemented"
+    }
+  ],
+  "section2_design_commission": [
+    {
+      "id": "N-01",
+      "name": "Report / moderate content",
+      "role": "shared",
+      "area": "community",
+      "tier": "missing-both",
+      "route": null,
+      "priority": "P0",
+      "confidence": "high",
+      "evidence": "post_card.dart:113 no-op; zero moderation objects in 132 migrations",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-02",
+      "name": "Client message inbox",
+      "role": "client",
+      "area": "coach-comms",
+      "tier": "missing-both",
+      "route": null,
+      "priority": "P0",
+      "confidence": "high",
+      "evidence": "096_communication_engine.sql:13-29; writer coach_program_service.dart:70,78; Dart readers 0",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-03",
+      "name": "Coach profile & reviews",
+      "role": "client",
+      "area": "marketplace",
+      "tier": "missing-both",
+      "route": null,
+      "priority": "P1",
+      "confidence": "high",
+      "evidence": "coach_reviews.review_text written home_screen.dart:1319, never rendered; no marketplace anchor exists",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-04",
+      "name": "Class check-in pass",
+      "role": "client",
+      "area": "classes",
+      "tier": "missing-both",
+      "route": null,
+      "priority": "P1",
+      "confidence": "high",
+      "evidence": "class_detail_screen.dart:272-279 promises QR; onPressed empty; no qr_code column; FIT-086 is a different entity",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-05",
+      "name": "Delete account & data export",
+      "role": "client",
+      "area": "account",
+      "tier": "missing-both",
+      "route": null,
+      "priority": "P0",
+      "confidence": "high",
+      "evidence": "help_center_screen.dart:44; privacy_policy_screen.dart:87; App Store 5.1.1(v)",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-06",
+      "name": "Community group detail",
+      "role": "client",
+      "area": "community",
+      "tier": "missing-both",
+      "route": null,
+      "priority": "P1",
+      "confidence": "high",
+      "evidence": "016_community_groups.sql; connect_sections.dart:95-97 teaser opens nothing; pods are a different entity",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-07",
+      "name": "Coach client assessment (intake/PAR-Q)",
+      "role": "coach",
+      "area": "coaching",
+      "tier": "missing-both",
+      "route": null,
+      "priority": "P0",
+      "confidence": "high",
+      "evidence": "intake_data.dart:157-241; client_detail_screen.dart:204,414 rollups only; no coach anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-08",
+      "name": "Exercise moderation review log",
+      "role": "admin",
+      "area": "content",
+      "tier": "missing-both",
+      "route": null,
+      "priority": "P3",
+      "confidence": "med",
+      "evidence": "exercise_reviews 058:111, no reader anywhere",
+      "has_fit_anchor": false,
+      "verdict": "F_insufficient_evidence",
+      "commissioned": false
+    },
+    {
+      "id": "N-C01",
+      "name": "/directory",
+      "role": "client",
+      "area": "client-product",
+      "tier": "routed-undesigned",
+      "route": "/directory",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-C02",
+      "name": "/workouts",
+      "role": "client",
+      "area": "client-product",
+      "tier": "routed-undesigned",
+      "route": "/workouts",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-C03",
+      "name": "/workout-history",
+      "role": "client",
+      "area": "client-product",
+      "tier": "routed-undesigned",
+      "route": "/workout-history",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-C04",
+      "name": "/exercise-library",
+      "role": "client",
+      "area": "client-product",
+      "tier": "routed-undesigned",
+      "route": "/exercise-library",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-C05",
+      "name": "/exercise-database",
+      "role": "client",
+      "area": "client-product",
+      "tier": "routed-undesigned",
+      "route": "/exercise-database",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-C06",
+      "name": "/exercise-detail",
+      "role": "client",
+      "area": "client-product",
+      "tier": "routed-undesigned",
+      "route": "/exercise-detail",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-C07",
+      "name": "/create-exercise",
+      "role": "client",
+      "area": "client-product",
+      "tier": "routed-undesigned",
+      "route": "/create-exercise",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-C08",
+      "name": "/strength-progression",
+      "role": "client",
+      "area": "client-product",
+      "tier": "routed-undesigned",
+      "route": "/strength-progression",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-C09",
+      "name": "/coach-marketplace",
+      "role": "client",
+      "area": "client-product",
+      "tier": "routed-undesigned",
+      "route": "/coach-marketplace",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-C10",
+      "name": "/personal-info",
+      "role": "client",
+      "area": "client-product",
+      "tier": "routed-undesigned",
+      "route": "/personal-info",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-C11",
+      "name": "/notification-preferences",
+      "role": "client",
+      "area": "client-product",
+      "tier": "routed-undesigned",
+      "route": "/notification-preferences",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-C12",
+      "name": "/subscription",
+      "role": "client",
+      "area": "client-product",
+      "tier": "routed-undesigned",
+      "route": "/subscription",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-C13",
+      "name": "/integrations",
+      "role": "client",
+      "area": "client-product",
+      "tier": "routed-undesigned",
+      "route": "/integrations",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-K01",
+      "name": "/coach-directory",
+      "role": "coach",
+      "area": "coach-product",
+      "tier": "routed-undesigned",
+      "route": "/coach-directory",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor; coach product has only FIT-032/033",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-K02",
+      "name": "/compliance",
+      "role": "coach",
+      "area": "coach-product",
+      "tier": "routed-undesigned",
+      "route": "/compliance",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor; coach product has only FIT-032/033",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-K03",
+      "name": "/program-builder",
+      "role": "coach",
+      "area": "coach-product",
+      "tier": "routed-undesigned",
+      "route": "/program-builder",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor; coach product has only FIT-032/033",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-K04",
+      "name": "/coach-plan",
+      "role": "coach",
+      "area": "coach-product",
+      "tier": "routed-undesigned",
+      "route": "/coach-plan",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor; coach product has only FIT-032/033",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-K05",
+      "name": "/coach-packages",
+      "role": "coach",
+      "area": "coach-product",
+      "tier": "routed-undesigned",
+      "route": "/coach-packages",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor; coach product has only FIT-032/033",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-K06",
+      "name": "/coach-classes",
+      "role": "coach",
+      "area": "coach-product",
+      "tier": "routed-undesigned",
+      "route": "/coach-classes",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor; coach product has only FIT-032/033",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-K07",
+      "name": "/coach-payments",
+      "role": "coach",
+      "area": "coach-product",
+      "tier": "routed-undesigned",
+      "route": "/coach-payments",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor; coach product has only FIT-032/033",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-K08",
+      "name": "/coach-copilot",
+      "role": "coach",
+      "area": "coach-product",
+      "tier": "routed-undesigned",
+      "route": "/coach-copilot",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor; coach product has only FIT-032/033",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-K09",
+      "name": "/program-designer",
+      "role": "coach",
+      "area": "coach-product",
+      "tier": "routed-undesigned",
+      "route": "/program-designer",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor; coach product has only FIT-032/033",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-K10",
+      "name": "/continuous-coaching",
+      "role": "coach",
+      "area": "coach-product",
+      "tier": "routed-undesigned",
+      "route": "/continuous-coaching",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor; coach product has only FIT-032/033",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-K11",
+      "name": "/weekly-review",
+      "role": "coach",
+      "area": "coach-product",
+      "tier": "routed-undesigned",
+      "route": "/weekly-review",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor; coach product has only FIT-032/033",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-K12",
+      "name": "/coach-client-workouts",
+      "role": "coach",
+      "area": "coach-product",
+      "tier": "routed-undesigned",
+      "route": "/coach-client-workouts",
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor; coach product has only FIT-032/033",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-J01",
+      "name": "/admin-dashboard",
+      "role": "admin/vendor",
+      "area": "internal",
+      "tier": "routed-undesigned",
+      "route": "/admin-dashboard",
+      "priority": "P3",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "E_owner_decision",
+      "commissioned": false
+    },
+    {
+      "id": "N-J02",
+      "name": "/admin-exercise-review",
+      "role": "admin/vendor",
+      "area": "internal",
+      "tier": "routed-undesigned",
+      "route": "/admin-exercise-review",
+      "priority": "P3",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "E_owner_decision",
+      "commissioned": false
+    },
+    {
+      "id": "N-J03",
+      "name": "/content-center",
+      "role": "admin/vendor",
+      "area": "internal",
+      "tier": "routed-undesigned",
+      "route": "/content-center",
+      "priority": "P3",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "E_owner_decision",
+      "commissioned": false
+    },
+    {
+      "id": "N-J04",
+      "name": "/observability",
+      "role": "admin/vendor",
+      "area": "internal",
+      "tier": "routed-undesigned",
+      "route": "/observability",
+      "priority": "P3",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "E_owner_decision",
+      "commissioned": false
+    },
+    {
+      "id": "N-J05",
+      "name": "/content-review",
+      "role": "admin/vendor",
+      "area": "internal",
+      "tier": "routed-undesigned",
+      "route": "/content-review",
+      "priority": "P3",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "E_owner_decision",
+      "commissioned": false
+    },
+    {
+      "id": "N-J06",
+      "name": "/knowledge-review",
+      "role": "admin/vendor",
+      "area": "internal",
+      "tier": "routed-undesigned",
+      "route": "/knowledge-review",
+      "priority": "P3",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "E_owner_decision",
+      "commissioned": false
+    },
+    {
+      "id": "N-J07",
+      "name": "/vendor-portal",
+      "role": "admin/vendor",
+      "area": "internal",
+      "tier": "routed-undesigned",
+      "route": "/vendor-portal",
+      "priority": "P3",
+      "confidence": "high",
+      "evidence": "route implemented; no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "E_owner_decision",
+      "commissioned": false
+    },
+    {
+      "id": "N-U01",
+      "name": "ClientDetailScreen",
+      "role": "coach",
+      "area": "unrouted",
+      "tier": "unrouted-undesigned",
+      "route": null,
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "MaterialPageRoute push only; no route, no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-U02",
+      "name": "ProgramBuilderScreen",
+      "role": "coach",
+      "area": "unrouted",
+      "tier": "unrouted-undesigned",
+      "route": null,
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "MaterialPageRoute push only; no route, no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-U03",
+      "name": "CreateClassScreen",
+      "role": "coach",
+      "area": "unrouted",
+      "tier": "unrouted-undesigned",
+      "route": null,
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "MaterialPageRoute push only; no route, no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-U04",
+      "name": "CoachAvailabilityScreen",
+      "role": "coach",
+      "area": "unrouted",
+      "tier": "unrouted-undesigned",
+      "route": null,
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "MaterialPageRoute push only; no route, no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-U05",
+      "name": "CoachVideoResponseScreen",
+      "role": "coach",
+      "area": "unrouted",
+      "tier": "unrouted-undesigned",
+      "route": null,
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "MaterialPageRoute push only; no route, no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-U06",
+      "name": "EventAttendeesScreen",
+      "role": "coach",
+      "area": "unrouted",
+      "tier": "unrouted-undesigned",
+      "route": null,
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "MaterialPageRoute push only; no route, no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-U07",
+      "name": "ChoosePackageScreen",
+      "role": "client",
+      "area": "unrouted",
+      "tier": "unrouted-undesigned",
+      "route": null,
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "MaterialPageRoute push only; no route, no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    },
+    {
+      "id": "N-U08",
+      "name": "EventAgendaScreen",
+      "role": "client",
+      "area": "unrouted",
+      "tier": "unrouted-undesigned",
+      "route": null,
+      "priority": "P2",
+      "confidence": "high",
+      "evidence": "MaterialPageRoute push only; no route, no FIT anchor",
+      "has_fit_anchor": false,
+      "verdict": "A_confirmed",
+      "commissioned": true
+    }
+  ],
+  "od38": {
+    "status": "RESOLVED",
+    "reference_images_found_on_disk": 0,
+    "reference_images_regenerated": 110,
+    "of": 110,
+    "source": "12Circle Fitness - Complete Board.dc.html (110 .phone frames)",
+    "generator": "capture-references.mjs (playwright/chromium)",
+    "verification": "avg 158KB, min 52KB, none blank, 1170px wide = 390 x deviceScaleFactor 3",
+    "note": "images are derived artifacts, never lost; regenerable in ~3 minutes",
+    "location": "session scratchpad design-pkg/fitness-handoff/screens/ \u2014 not copied into the repo"
+  },
+  "od36": {
+    "status": "CLEARED",
+    "disk_free": "5.6Gi",
+    "disk_used_pct": 76,
+    "was": "448Mi free / 98% used"
+  },
+  "reconciliation": {
+    "A_confirmed": 40,
+    "B_covered_by_other_anchor": 0,
+    "C_implementation_of_existing_design": 0,
+    "D_state_or_modal": 0,
+    "E_owner_decision": 7,
+    "F_insufficient_evidence": 1,
+    "note": "14 C-items and 4 D-items were already reclassified in the prior pass and are not re-counted here"
+  },
+  "section2_breakdown_confirmed": {
+    "missing_both": 7,
+    "client_routes": 13,
+    "coach_routes": 12,
+    "unrouted": 8
+  },
+  "owner_decisions_blocking_design": [
+    "OD-30 coach access to PAR-Q (blocks N-07)",
+    "OD-40 is admin/vendor tooling in design scope (7 surfaces)",
+    "OD-39 durable location for baseline images (blocks nothing)"
+  ],
+  "board_reconciliation": {
+    "date": "2026-09-24",
+    "board_screens": 156,
+    "with_voice": 169,
+    "original_anchors_on_board": 117,
+    "manifest_anchors": 110,
+    "new_state_variants_added": [
+      "Log a meal \u2014 Recent",
+      "Community hub \u2014 members",
+      "Challenges hub \u2014 upcoming",
+      "Challenges hub \u2014 done",
+      "Activity \u2014 Training",
+      "Activity \u2014 Food",
+      "Activity \u2014 Check-ins"
+    ],
+    "commissioned_on_board": 39,
+    "commission_confirmed": 40,
+    "missing_from_board": [
+      {
+        "id": "N-07",
+        "name": "Coach client assessment (intake/PAR-Q review)",
+        "priority": "P0",
+        "blocked_by": "OD-30"
+      }
+    ],
+    "correctly_absent": {
+      "admin_vendor": 7,
+      "withdrawn_F": 1,
+      "open_questions": 3
+    }
+  },
+  "audit_corrections": [
+    {
+      "id": "AC-01",
+      "claim_corrected": "no voice capability exists",
+      "finding": "voice IS implemented and backed: speech_to_text/record/audioplayers all consumed; SpeechToText in ai_nutrition_screen.dart:22; CoachVoiceRecorder/Player in coach_voice.dart hosted by coach_focus_section.dart; voice_url in 097_coach_exercise_media.sql; mic permissions on both platforms",
+      "consequence": "V-01..V-13 design an existing capability; AI-nutrition voice input and coach exercise voice notes are Section 1, not greenfield",
+      "why_missed": "dependency sweep tested for NON-use and these are used; coach_voice.dart sits under presentation/widgets/, excluded as component-level"
+    }
+  ]
+}

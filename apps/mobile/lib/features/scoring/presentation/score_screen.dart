@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../shared/theme/app_background.dart';
 import '../domain/score_provider.dart';
+import '../../../core/widgets/back_leading.dart';
 
 const _card  = Color(0xFF0E0B16);
 const _brd   = Color(0xFF1A1020);
@@ -31,6 +32,7 @@ class ScoreScreen extends ConsumerWidget {
           backgroundColor: Colors.transparent,
           appBar: AppBar(
             backgroundColor: Colors.transparent, elevation: 0,
+            leading: backLeading(context),
             iconTheme: const IconThemeData(color: _white),
             title: const Text('12 Circle Score',
                 style: TextStyle(color: _white, fontWeight: FontWeight.w700)),

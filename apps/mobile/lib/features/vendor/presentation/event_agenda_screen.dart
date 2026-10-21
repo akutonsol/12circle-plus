@@ -63,7 +63,7 @@ class EventAgendaScreen extends ConsumerWidget {
         loading: () =>
             const Center(child: CircularProgressIndicator(color: _brand)),
         error: (e, _) => Center(
-            child: Text('Could not load agenda.\n$e',
+            child: Text('Could not load agenda.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: _muted))),
         data: (sessions) {
@@ -356,6 +356,7 @@ class _SessionEditorSheetState extends State<_SessionEditorSheet> {
         initialTime:
             (isStart ? _start : _end) ?? const TimeOfDay(hour: 9, minute: 0));
     if (t == null) return;
+    if (!mounted) return;
     setState(() => isStart ? _start = t : _end = t);
   }
 

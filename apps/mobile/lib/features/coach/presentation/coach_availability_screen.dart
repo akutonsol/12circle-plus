@@ -46,12 +46,13 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
           .gte('scheduled_at', DateTime.now().toIso8601String())
           .order('scheduled_at');
 
+      if (!mounted) return;
       setState(() {
         _slots = List<Map<String, dynamic>>.from(data);
         _sessions = List<Map<String, dynamic>>.from(calls);
         _loading = false;
       });
-    } catch (_) { setState(() => _loading = false); }
+    } catch (_) { if (mounted) setState(() => _loading = false); }
   }
 
   Future<void> _delete(String id) async {
@@ -121,6 +122,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
         backgroundColor: _card, elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: _wht, size: 20),
+          tooltip: 'Back',
           onPressed: () => Navigator.pop(context)),
         title: const Text('Manage Availability',
           style: TextStyle(color: _wht, fontSize: 17, fontWeight: FontWeight.w700)),
@@ -377,7 +379,9 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
       }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
+        // ERR-2: see coach_video_response_screen.
+        const SnackBar(content: Text('Failed to save availability. Try again.'),
+            backgroundColor: Colors.red));
     } finally {
       if (mounted) setState(() => _saving = false);
     }

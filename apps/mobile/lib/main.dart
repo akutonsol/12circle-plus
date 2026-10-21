@@ -4,12 +4,27 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'core/theme/twelve_circle_theme.dart';
 import 'core/router/app_router.dart';
+import 'core/config/app_env.dart';
 import 'core/constants/app_constants.dart';
 import 'core/utils/web_logout.dart';
 import 'features/habits/data/habit_reminder_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Which backend this binary talks to is fixed at build time
+  // (--dart-define=APP_ENV=dev|qa|prod). Fail loudly rather than start up
+  // half-configured — a QA build with no Supabase project would otherwise
+  // throw deep inside the first query.
+  final env = AppEnv.current;
+  if (!env.canInitialiseSupabase) {
+    throw StateError(
+      'Environment "${env.environment.label}" is missing: '
+      '${env.missingSettings().join(', ')}. '
+      'Build with --dart-define-from-file=dart_defines/${env.environment.label}.json '
+      '(see dart_defines/README.md).',
+    );
+  }
 
   // Capture the launch URL BEFORE Supabase.initialize() — it strips the
   // recovery token from the URL while establishing the recovery session.

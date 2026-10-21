@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'models/post_model.dart';
+import '../domain/post_type_choice.dart';
+import '../domain/reaction_choice.dart';
 import '../../notifications/data/notification_service.dart';
 
 class LiveCommunityService {
@@ -98,14 +100,25 @@ class LiveCommunityService {
         .eq('post_id', postId)
         .eq('user_id', uid)
         .maybeSingle();
-    if (existing != null) {
-      await _db.from('post_reactions').delete().eq('id', existing['id']);
-    } else {
-      await _db.from('post_reactions').insert({
-        'post_id': postId,
-        'user_id': uid,
-        'reaction_type': reactionType,
-      });
+    switch (reactionWriteFor(
+      existingType: existing?['reaction_type'] as String?,
+      chosen: parseReactionType(reactionType),
+    )) {
+      case ReactionWrite.insert:
+        await _db.from('post_reactions').insert({
+          'post_id': postId,
+          'user_id': uid,
+          'reaction_type': reactionType,
+        });
+      case ReactionWrite.remove:
+        await _db.from('post_reactions').delete().eq('id', existing!['id']);
+      case ReactionWrite.change:
+        // This used to fall into the delete branch, so switching from Like to
+        // Fire removed the Like and left nothing — and UNIQUE(post_id,
+        // user_id) means an insert could not have replaced it either.
+        await _db.from('post_reactions')
+            .update({'reaction_type': reactionType})
+            .eq('id', existing!['id']);
     }
   }
 
@@ -202,11 +215,10 @@ class LiveCommunityService {
     }
   }
 
-  PostType _parseType(String t) => switch (t) {
-    'progress' => PostType.progress,
-    'achievement' => PostType.achievement,
-    _ => PostType.text,
-  };
+  // Was a three-arm switch that sent `photo` and `workout` to `text`, so two
+  // of the five enum values could not survive a write-and-read. One mapping,
+  // shared with the UI — see `post_type_choice.dart`.
+  PostType _parseType(String t) => parsePostType(t);
 
   ReactionType _parseReaction(String r) => switch (r) {
     'fire' => ReactionType.fire,

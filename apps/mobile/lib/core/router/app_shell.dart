@@ -2,7 +2,6 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../features/coaching_mode/domain/coaching_mode_provider.dart';
 import '../../features/auth/domain/auth_provider.dart';
 import '../notifications/notification_watcher.dart';
 import '../widgets/app_top_nav.dart';
@@ -57,6 +56,12 @@ class _PersistentNav extends ConsumerWidget {
   final String location;
   const _PersistentNav({required this.location});
 
+  /// Which of FIT-001's five destinations the current location belongs to.
+  ///
+  /// `/activity` maps to **Home**, because the design folds it in there —
+  /// FIT-001's own sub-title is "Activity folded in · Directory moved to the
+  /// top bar". The route still exists and is still reachable; it is no longer
+  /// a destination of its own in the bar.
   int get _activeIndex {
     if (location.startsWith('/train') ||
         location.startsWith('/workout') ||
@@ -64,10 +69,17 @@ class _PersistentNav extends ConsumerWidget {
         location.startsWith('/exercise')) {
       return 1;
     }
-    if (location.startsWith('/activity')) { return 3; }
+    if (location.startsWith('/meals-dashboard') ||
+        location.startsWith('/nutrition') ||
+        location.startsWith('/log-meal')) {
+      return 2;
+    }
     if (location.startsWith('/daily-checkin') ||
         location.startsWith('/checkin') ||
         location.startsWith('/appointments')) {
+      return 3;
+    }
+    if (location.startsWith('/messages') || location.startsWith('/chat')) {
       return 4;
     }
     return 0;
@@ -106,34 +118,39 @@ class _PersistentNav extends ConsumerWidget {
       );
     }
 
-    final idx    = _activeIndex;
-    final mode   = ref.watch(coachingModeProvider);
+    final idx = _activeIndex;
 
-    // Route Train tab based on modality
-    void onTrainTap() {
-      switch (mode) {
-        case CoachingMode.aiGuided:
-          // AI mode: go to AI Coach with training focus
-          context.go('/ai-coach');
-        case CoachingMode.coachGuided:
-          context.go('/train');
-        case CoachingMode.selfGuided:
-          // Self-guided: standard exercise hub
-          context.go('/train');
-      }
-    }
-
-    final trainLabel = switch (mode) {
-      CoachingMode.aiGuided    => 'AI Train',
-      CoachingMode.coachGuided => 'Train',
-      CoachingMode.selfGuided  => 'Train',
-    };
-    final trainIcon = switch (mode) {
-      CoachingMode.aiGuided    => Icons.auto_awesome,
-      CoachingMode.coachGuided => Icons.fitness_center_outlined,
-      CoachingMode.selfGuided  => Icons.fitness_center_outlined,
-    };
-
+    // ── FIT-001's five destinations ──────────────────────────────────────
+    //
+    // The package declares ONE client bottom nav, and declares it in **ten of
+    // the eleven** frames that carry one:
+    //
+    //     Home · Workouts · Nutrition · Check-In · Connect
+    //
+    // (The eleventh is FIT-001 itself, which prepends `Directory` — its top
+    // bar control, not a tab. Its sub-title says so: "Activity folded in ·
+    // Directory moved to the top bar".)
+    //
+    // What shipped was `Home · Train · [FAB] · Activity · Check-In`, and the
+    // package resolves every difference itself:
+    //
+    //   * **the FAB** — FIT-001's annotation: *"Directory, chat and
+    //     notifications sit in the top bar; the animated FAB is gone."*
+    //     `Directory` is already in `app_top_nav.dart`, so removing the FAB
+    //     takes nothing away;
+    //   * **Activity** — "folded in". Its content is already on Home
+    //     (`weeklyActivityProvider`, the week-progress panel, the score and
+    //     streak). `/activity` keeps its route and gains an entry from that
+    //     panel, because the tab was its ONLY door and orphaning a screen is
+    //     not what "folded in" means (OD-15's lesson);
+    //   * **Train → Workouts** — FIT-014's ruling, verbatim: *"the destination
+    //     is always `/train`, always labelled Workouts. `coachingModeProvider`
+    //     changes what renders here — AI-generated, coach-assigned, or the
+    //     self-guided library — **not where the tab goes**."* So the label no
+    //     longer varies by mode and AI mode no longer diverts to `/ai-coach`.
+    //
+    // The two freed slots are `Nutrition` and `Connect`, which is what the
+    // package asked for and what **F-14** has been recorded as blocking.
     return Container(
       padding: EdgeInsets.only(left: 16, right: 16, top: 10, bottom: bottom + 8),
       decoration: BoxDecoration(
@@ -144,11 +161,11 @@ class _PersistentNav extends ConsumerWidget {
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          _NavItem(icon: Icons.home_outlined, label: 'Home',   active: idx == 0, onTap: () => context.go('/home')),
-          _NavItem(icon: trainIcon,           label: trainLabel, active: idx == 1, onTap: onTrainTap),
-          _AnimatedFab(onTap: () => context.go('/directory')),
-          _NavItem(icon: Icons.bar_chart_rounded,     label: 'Activity', active: idx == 3, onTap: () => context.go('/activity')),
-          _NavItem(icon: Icons.check_circle_outline,  label: 'Check-In', active: idx == 4, onTap: () => context.go('/daily-checkin')),
+          _NavItem(icon: Icons.home_outlined,           label: 'Home',      active: idx == 0, onTap: () => context.go('/home')),
+          _NavItem(icon: Icons.fitness_center_outlined, label: 'Workouts',  active: idx == 1, onTap: () => context.go('/train')),
+          _NavItem(icon: Icons.restaurant_menu_outlined, label: 'Nutrition', active: idx == 2, onTap: () => context.go('/meals-dashboard')),
+          _NavItem(icon: Icons.check_circle_outline,    label: 'Check-In',  active: idx == 3, onTap: () => context.go('/daily-checkin')),
+          _NavItem(icon: Icons.chat_bubble_outline,     label: 'Connect',   active: idx == 4, onTap: () => context.go('/messages')),
         ],
       ),
     );

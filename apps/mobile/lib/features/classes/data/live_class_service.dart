@@ -5,8 +5,15 @@ import '../../notifications/data/notification_service.dart';
 class LiveClassService {
   final _db = Supabase.instance.client;
 
+  /// Upcoming and in-progress classes.
+  ///
+  /// **F-15/F-16: the error propagates.** This used to end
+  /// `catch (_) { return []; }`, so a failed read arrived at the screen as an
+  /// empty list and `/classes` said there were none. FIT-027 reports a failed
+  /// source separately from an empty one, and it can only do that if the
+  /// failure survives the service.
   Future<List<FitnessClass>> getUpcomingClasses() async {
-    try {
+    {
       final uid = _db.auth.currentUser?.id;
       // Include classes that started up to 4h ago so in-progress (live) ones
       // still surface; the mapping derives live/upcoming/completed from time.
@@ -37,8 +44,6 @@ class LiveClassService {
       };
 
       return data.map<FitnessClass>((c) => _mapRow(c, bookedIds, waitlistedIds)).toList();
-    } catch (_) {
-      return [];
     }
   }
 

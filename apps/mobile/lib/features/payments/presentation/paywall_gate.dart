@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../domain/entitlements.dart';
+import '../../../core/widgets/named_icon_button.dart';
 import '../../auth/domain/auth_provider.dart';
 
 const _bg    = Color(0xFF030303);
@@ -36,7 +37,7 @@ class PaywallGate extends ConsumerWidget {
     // mid-session refresh must never trap the user on a loading screen.
     final plan = planAsync.valueOrNull;
     if (plan != null) {
-      return plan.atLeast(required) ? child : _Locked(required: required, feature: featureName);
+      return plan.atLeast(required) ? child : PaywallLocked(required: required, feature: featureName);
     }
     return planAsync.when(
       loading: () => const Scaffold(
@@ -44,15 +45,19 @@ class PaywallGate extends ConsumerWidget {
           body: Center(child: CircularProgressIndicator(color: _brand))),
       error: (_, __) => child, // fail open rather than lock a paying user out
       data: (plan) =>
-          plan.atLeast(required) ? child : _Locked(required: required, feature: featureName),
+          plan.atLeast(required) ? child : PaywallLocked(required: required, feature: featureName),
     );
   }
 }
 
-class _Locked extends StatelessWidget {
+/// FIT-021 · the entitlement gate.
+///
+/// Public so its three declared controls can be asserted: `PaywallGate` reads
+/// two Supabase-backed providers, and this state takes plain values.
+class PaywallLocked extends StatelessWidget {
   final ClientPlan required;
   final String feature;
-  const _Locked({required this.required, required this.feature});
+  const PaywallLocked({super.key, required this.required, required this.feature});
 
   @override
   Widget build(BuildContext context) {
@@ -62,6 +67,13 @@ class _Locked extends StatelessWidget {
         backgroundColor: _bg,
         elevation: 0,
         iconTheme: const IconThemeData(color: _white),
+        // FIT-021 declares "Back". `AppBar`'s automatic leading is named by
+        // Material's default tooltip, not by the package.
+        leading: NamedIconButton(
+          label: 'Back',
+          onTap: () => Navigator.of(context).maybePop(),
+          child: const Icon(Icons.arrow_back, color: _white, size: 20),
+        ),
       ),
       body: Center(
         child: Padding(
@@ -103,8 +115,29 @@ class _Locked extends StatelessWidget {
                         borderRadius: BorderRadius.circular(14)),
                   ),
                   onPressed: () => context.push('/upgrade'),
-                  child: const Text('See Plans',
+                  // FIT-021's wording, which differs from the shipped
+                  // "See Plans" only in case — the locked screen wins.
+                  child: const Text('See plans',
                       style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                ),
+              ),
+              const SizedBox(height: 4),
+              // FIT-021 declares a second action, and it did not exist. A user
+              // who hits a paywall could previously only leave by the system
+              // back gesture — there was nothing on screen that said they were
+              // allowed to.
+              Semantics(
+                button: true,
+                child: GestureDetector(
+                  onTap: () => Navigator.of(context).maybePop(),
+                  behavior: HitTestBehavior.opaque,
+                  child: Container(
+                    constraints: const BoxConstraints(minHeight: 44),
+                    alignment: Alignment.center,
+                    child: const Text('Not now',
+                        style: TextStyle(
+                            color: _muted, fontSize: 14, fontWeight: FontWeight.w600)),
+                  ),
                 ),
               ),
             ],

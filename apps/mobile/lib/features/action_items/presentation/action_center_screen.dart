@@ -4,6 +4,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../shared/theme/app_background.dart';
 import '../data/models/action_item.dart';
 import '../domain/action_item_provider.dart';
+import '../../../core/widgets/back_leading.dart';
 
 /// Client-facing "Action Center" — the tasks the coach (or AI) assigned.
 class ActionCenterScreen extends ConsumerWidget {
@@ -18,6 +19,7 @@ class ActionCenterScreen extends ConsumerWidget {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        leading: backLeading(context),
         title: const Text('Action Items',
             style: TextStyle(color: AppColors.white, fontWeight: FontWeight.bold)),
         iconTheme: const IconThemeData(color: AppColors.white),

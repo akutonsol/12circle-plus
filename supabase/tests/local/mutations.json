@@ -1,0 +1,67 @@
+{
+  "_comment": [
+    "The declared mutation contract for the G-3 negative-control harness.",
+    "",
+    "Owner ruling 2026-08-25 (G-3 negative-control exception): where a guard was",
+    "written after the defect was already remediated, and no defective tree is",
+    "recoverable from repository history, the VERIFIED IN CI rung may be",
+    "satisfied by a negative control instead of a historical pre-fix red.",
+    "",
+    "Each entry reintroduces the EXACT defect condition of its finding by removing",
+    "or re-creating the exact object the committed migration created or dropped,",
+    "and declares the exact assertions of the existing suite that must then fail.",
+    "The harness requires SET EQUALITY: an undeclared FAIL is fatal, and a",
+    "declared FAIL that does not occur is fatal.",
+    "",
+    "Restoration is always by re-applying the committed migration UNMODIFIED.",
+    "No hand-authored inverse migration exists anywhere in this design.",
+    "",
+    "This produces SYNTHETIC PRE-FIX-EQUIVALENT CI EVIDENCE. It is not historical",
+    "pre-fix evidence and must never be recorded as such. The real QA BEFORE->AFTER",
+    "evidence is a separate rung (VERIFIED LIVE), obtained at commit 2a8d0b6.",
+    "",
+    "WRK-02 / WKA-02 is deliberately absent: its defect is client-side (a swap",
+    "inheriting set identities) and no schema mutation can express it. Its",
+    "negative control is Dart-layer and is not designed yet."
+  ],
+  "baseline": {
+    "through": "121",
+    "suite": "supabase/tests/workout/phase2-contract.sql",
+    "banner": "=== PHASE 2 WORKOUT CONTRACT ===",
+    "assertions": 20,
+    "seeds": ["supabase/seeds/test_accounts.sql", "supabase/seeds/full_test_data.sql"]
+  },
+  "mutations": [
+    {
+      "id": "M-1",
+      "findings": ["WRK-01", "WKA-01"],
+      "defect": "two live set-identity keys: 051's ordinal unique index made two legitimately different sets the same row",
+      "why": "re-creates the exact object migration 120 drops, and the exact constraint BEFORE-1 collided on",
+      "apply": "create unique index uq_workout_set_logs_set on workout_set_logs (session_id, exercise_name, set_number);",
+      "expect_fail": ["AFTER-2", "AFTER-6c"],
+      "collateral": ["AFTER-6c"],
+      "collateral_reason": "the suppressed insert lowers the surviving row count AFTER-6c asserts; declared, not exempted",
+      "restore_migration": "120_workout_set_identity_authority.sql"
+    },
+    {
+      "id": "M-2",
+      "findings": ["WRK-01", "WKA-01"],
+      "defect": "a set log could be written with no identity at all",
+      "why": "removes 120's identity-required trigger",
+      "apply": "drop trigger trg_workout_set_logs_require_identity on workout_set_logs;",
+      "expect_fail": ["AFTER-5"],
+      "collateral": [],
+      "restore_migration": "120_workout_set_identity_authority.sql"
+    },
+    {
+      "id": "M-3",
+      "findings": ["WRK-03", "WRK-04", "WRK-05", "WKA-03"],
+      "defect": "untyped program_workouts.exercises: String reps, 0 kg load, lost rest, numeric day_of_week",
+      "why": "removes 119's canonicalizing trigger and CHECK; reproduces BEFORE-4's stored shape exactly",
+      "apply": "drop trigger trg_program_workouts_canonicalize on program_workouts; alter table program_workouts drop constraint program_workouts_exercises_canonical;",
+      "expect_fail": ["AFTER-1a", "AFTER-1b", "AFTER-1c"],
+      "collateral": [],
+      "restore_migration": "119_workout_prescription_contract.sql"
+    }
+  ]
+}

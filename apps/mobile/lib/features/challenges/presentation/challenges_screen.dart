@@ -4,9 +4,11 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/animations/app_animations.dart';
 import '../domain/challenge_provider.dart';
+import '../../classes/domain/whats_on.dart';
 import '../data/models/challenge_model.dart';
 import '../../../shared/theme/app_background.dart';
 import 'widgets/challenge_card.dart';
+import '../../../core/widgets/back_leading.dart';
 
 class ChallengesScreen extends ConsumerStatefulWidget {
   const ChallengesScreen({super.key});
@@ -38,6 +40,15 @@ class _ChallengesScreenState extends ConsumerState<ChallengesScreen>
     final completed = ref.watch(completedChallengesProvider);
     final joined = ref.watch(challengeNotifierProvider).where((c) => c.isJoined && c.status == ChallengeStatus.active).toList();
 
+    // F-15: the three lists above are derived from a StateNotifier that is
+    // populated by `liveChallengesProvider`. Its AsyncError was never consumed
+    // anywhere, so a failed read left the notifier empty and every tab said
+    // "No challenges here" — a failure rendered as a definite answer about what
+    // exists. The source is watched here so the failure can be told apart from
+    // an empty month.
+    final source = ref.watch(liveChallengesProvider);
+    final failed = source is AsyncError;
+
     return AppGradientBackground(
       child: Scaffold(
       backgroundColor: Colors.transparent,
@@ -50,10 +61,28 @@ class _ChallengesScreenState extends ConsumerState<ChallengesScreen>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Challenges', style: TextStyle(color: AppColors.white, fontSize: 28, fontWeight: FontWeight.bold))
-                        .fadeSlideIn(),
+                    // FIT-075/078/079 draw a Back control; this screen is
+                    // declared `hasBottomNav: false` by the design and had no
+                    // back affordance at all. A custom header, so the control
+                    // sits beside the title rather than in an AppBar.
+                    Row(children: [
+                      backLeading(context),
+                      const SizedBox(width: 4),
+                      const Expanded(
+                        child: Text('Challenges',
+                            style: TextStyle(
+                                color: AppColors.white,
+                                fontSize: 28,
+                                fontWeight: FontWeight.bold)),
+                      ),
+                    ]).fadeSlideIn(),
                     const SizedBox(height: 4),
-                    Text('${joined.length} active challenges', style: const TextStyle(color: AppColors.textSecondary, fontSize: 14))
+                    // F-15: on a failed read this said "0 active challenges" —
+                    // a number the screen cannot support, the same class as
+                    // /train's "0 workouts" and /home's "0%". An em dash says
+                    // the count is unknown and needs no new copy to do it.
+                    Text(failed ? '— active challenges' : '${joined.length} active challenges',
+                        style: const TextStyle(color: AppColors.textSecondary, fontSize: 14))
                         .fadeSlideIn(delay: 100.ms),
                     const SizedBox(height: 24),
                     if (joined.isNotEmpty) ...[
@@ -132,9 +161,9 @@ class _ChallengesScreenState extends ConsumerState<ChallengesScreen>
           body: TabBarView(
             controller: _tabController,
             children: [
-              _buildList(active),
-              _buildList(upcoming),
-              _buildList(completed),
+              _buildList(active, failed: failed),
+              _buildList(upcoming, failed: failed),
+              _buildList(completed, failed: failed),
             ],
           ),
         ),
@@ -142,7 +171,44 @@ class _ChallengesScreenState extends ConsumerState<ChallengesScreen>
     ));
   }
 
-  Widget _buildList(List<Challenge> challenges) {
+  Widget _buildList(List<Challenge> challenges, {required bool failed}) {
+    if (failed) {
+      // The line `/classes` already renders for the same source (FIT-027), so
+      // no new product copy is introduced for this screen.
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.cloud_off_rounded, color: Color(0xFFFFB4AB), size: 40),
+            const SizedBox(height: 14),
+            Text(failureLine(WhatsOnKind.challenges),
+              style: const TextStyle(color: Color(0xFFFFB4AB), fontSize: 15,
+                fontWeight: FontWeight.w600)),
+            const SizedBox(height: 14),
+            Semantics(
+              button: true,
+              child: GestureDetector(
+                onTap: () => ref.invalidate(liveChallengesProvider),
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                  alignment: Alignment.center,
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.05),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.12))),
+                  // The package's own label, 16 declarations.
+                  child: const Text('Try again',
+                    style: TextStyle(color: AppColors.white, fontSize: 13,
+                      fontWeight: FontWeight.w700)),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     if (challenges.isEmpty) {
       return Center(
         child: Column(

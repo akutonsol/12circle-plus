@@ -187,13 +187,29 @@ class PaymentService {
   }
 
   /// The client's effective plan: 'coach_guided'|'ai_guided'|'self_guided'|'free'.
+  ///
+  /// **Does not catch.** `PaywallGate` states its own policy for a failed
+  /// resolve:
+  ///
+  /// ```dart
+  /// error: (_, __) => child, // fail open rather than lock a paying user out
+  /// ```
+  ///
+  /// That arm could never run while this returned `'free'` on failure: the
+  /// provider was always `AsyncData(ClientPlan.free)`, `plan != null` took the
+  /// early return, and a paying Coach-Guided member whose entitlement read
+  /// failed was shown `PaywallLocked` for a feature they had paid for. The
+  /// gate said fail open and the app failed closed.
+  ///
+  /// Letting the exception out is what makes the written policy effective. It
+  /// does **not** widen any server-side boundary: the gate decides whether a
+  /// screen is offered, and every read inside it is still filtered by RLS.
+  ///
+  /// A non-String result is still `'free'` — that is an answer from a
+  /// successful call, not a failure.
   Future<String?> clientPlan() async {
-    try {
-      final res = await _db.rpc('client_plan');
-      return res is String ? res : 'free';
-    } catch (_) {
-      return 'free';
-    }
+    final res = await _db.rpc('client_plan');
+    return res is String ? res : 'free';
   }
 
   /// The coach's active platform plan tier ('starter'|'growth'|'elite'), or null.

@@ -1,3 +1,20 @@
+-- ── STAGE B.4: search_path for pgcrypto ─────────────────────────────────────
+-- This file declares column DEFAULTs of the form
+--     encode(gen_random_bytes(16), 'hex')
+-- with gen_random_bytes() UNQUALIFIED. On Supabase pgcrypto is installed in the
+-- `extensions` schema, and the role `supabase db reset` logs in as has a
+-- search_path that does not include it, so the function does not resolve and the
+-- whole replay aborts here:
+--     ERROR: function gen_random_bytes(integer) does not exist  (SQLSTATE 42883)
+--
+-- Setting it in 000 does not help -- the CLI gives each migration file its own
+-- connection, so the setting has to be in the file that needs it. This is
+-- session-scoped: it changes no database or role configuration. `public` stays
+-- first, so unqualified CREATEs still land in public, and the DEFAULT is stored
+-- bound to extensions.gen_random_bytes by OID -- byte-identical to the shape the
+-- pre-rebuild QA database carried.
+SET search_path = public, extensions;
+
 -- ============================================================
 -- Migration 002: Additional ecosystem tables
 -- Run in Supabase SQL Editor after 001_full_ecosystem.sql

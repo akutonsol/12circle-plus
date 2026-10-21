@@ -17,17 +17,21 @@ class HelixThemeBuilder {
     // numeric font is applied by components via context.helixNumeric().
     final baseText = GoogleFonts.getTextTheme(s.fontBody,
         ThemeData(brightness: Brightness.dark).textTheme);
-    TextStyle disp(double size, FontWeight w) => GoogleFonts.getFont(
-        s.fontDisplay, fontSize: size, fontWeight: w, color: s.textPrimary, letterSpacing: -0.4, height: 1.05);
+    // Display weight and tracking come from the theme, not from literals — a
+    // brand whose hierarchy is built from size and space rather than weight
+    // could not previously express that, because these were hardcoded.
+    TextStyle disp(double size, [FontWeight? w]) => GoogleFonts.getFont(
+        s.fontDisplay, fontSize: size, fontWeight: w ?? s.displayWeight,
+        color: s.textPrimary, letterSpacing: s.displayTracking, height: 1.06);
     TextStyle body(double size, FontWeight w, Color c) => GoogleFonts.getFont(
         s.fontBody, fontSize: size, fontWeight: w, color: c);
 
     final textTheme = baseText.copyWith(
-      displayLarge:  disp(HelixTypeScale.metricLg, HelixTypeScale.heavy),
-      displayMedium: disp(HelixTypeScale.display, HelixTypeScale.heavy),
-      displaySmall:  disp(HelixTypeScale.h1, HelixTypeScale.bold),
-      headlineLarge: disp(HelixTypeScale.h1, HelixTypeScale.bold),
-      headlineMedium: disp(HelixTypeScale.h2, HelixTypeScale.bold),
+      displayLarge:  disp(HelixTypeScale.metricLg),
+      displayMedium: disp(HelixTypeScale.display),
+      displaySmall:  disp(HelixTypeScale.h1),
+      headlineLarge: disp(HelixTypeScale.h1),
+      headlineMedium: disp(HelixTypeScale.h2),
       headlineSmall: body(HelixTypeScale.title, HelixTypeScale.semibold, s.textPrimary),
       titleLarge:  body(HelixTypeScale.title, HelixTypeScale.semibold, s.textPrimary),
       titleMedium: body(HelixTypeScale.body, HelixTypeScale.semibold, s.textPrimary),
@@ -44,7 +48,9 @@ class HelixThemeBuilder {
       minimumSize: const Size(double.infinity, 54),
       elevation: 0, shadowColor: Colors.transparent,
       shape: s.buttonShape,
-      textStyle: GoogleFonts.getFont(s.fontBody, fontSize: HelixTypeScale.body, fontWeight: HelixTypeScale.bold, letterSpacing: 0.2),
+      // CTA label: medium, no extra tracking. A button label is not a place to
+      // reintroduce weight the type system has removed.
+      textStyle: GoogleFonts.getFont(s.fontBody, fontSize: HelixTypeScale.body, fontWeight: HelixTypeScale.medium, letterSpacing: 0),
     );
 
     return ThemeData(

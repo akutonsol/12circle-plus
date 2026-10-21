@@ -1,68 +1,125 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
-import '../../../core/constants/app_constants.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/config/app_env.dart';
 
+/// Thrown when the AI nutrition coach can't be reached or refuses the request.
+class AiNutritionException implements Exception {
+  final String message;
+  const AiNutritionException(this.message);
+  @override
+  String toString() => message;
+}
+
+/// Client for the AI Nutrition Coach.
+///
+/// The Anthropic integration lives behind the `ai-nutrition` Supabase Edge
+/// Function — this class holds no AI credential of any kind. It forwards the
+/// user's turn together with their Supabase access token; the function verifies
+/// that session and calls Claude with the server-held key.
+///
+/// PD-A17 = A, resolved as A2 (V5 §46). This used to POST to
+/// `{API_BASE_URL}/ai/nutrition/message` on a NestJS API that was never
+/// deployed anywhere — `API_BASE_URL` was empty in every environment, so the
+/// feature could not work in any build. It now targets the Edge Function, which
+/// is deployed alongside the other nineteen. The transport is still Dio and the
+/// request/response contract is unchanged.
 class AiNutritionService {
-  final Dio _dio = Dio();
-  static const _apiUrl = 'https://api.anthropic.com/v1/messages';
-  static const _model  = 'claude-sonnet-4-6';
-  static const _system = '''You are an expert AI Nutrition Coach for 12 Circle Fitness,
-a premium fitness platform designed for women seeking sustainable body transformation.
-Your role is to:
-- Analyze meal photos and estimate calories and macros accurately
-- Generate personalized meal plans
-- Create detailed grocery lists
-- Answer nutrition questions with science-backed advice
-- Be encouraging, supportive and empowering
-- Focus on sustainable, healthy eating habits
-Keep responses concise, actionable and motivating.''';
+  static const String functionName = 'ai-nutrition';
 
-  Options get _options => Options(headers: {
-    'Content-Type': 'application/json',
-    'anthropic-version': '2023-06-01',
-    'x-api-key': AppConstants.claudeApiKey,
-  });
+  final Dio _dio;
+  final EnvConfig _env;
+  final String? Function() _accessToken;
+
+  AiNutritionService({
+    Dio? dio,
+    EnvConfig? env,
+    String? Function()? accessToken,
+  })  : _dio = dio ?? Dio(),
+        _env = env ?? AppEnv.current,
+        _accessToken = accessToken ?? _currentSupabaseAccessToken;
+
+  static String? _currentSupabaseAccessToken() =>
+      Supabase.instance.client.auth.currentSession?.accessToken;
+
+  /// Absolute URL of the AI nutrition endpoint for this build's environment.
+  String get endpointUrl {
+    final base = _env.supabaseUrl.endsWith('/')
+        ? _env.supabaseUrl.substring(0, _env.supabaseUrl.length - 1)
+        : _env.supabaseUrl;
+    return '$base/functions/v1/$functionName';
+  }
 
   Future<String> sendMessage({
     required String message,
     required List<Map<String, dynamic>> history,
     File? imageFile,
   }) async {
-    // Build the user content block — optionally includes an image
-    final List<Map<String, dynamic>> userContent = [];
-    if (imageFile != null) {
-      final bytes  = await imageFile.readAsBytes();
-      final b64    = base64Encode(bytes);
-      final ext    = imageFile.path.split('.').last.toLowerCase();
-      final mime   = ext == 'png' ? 'image/png' : 'image/jpeg';
-      userContent.add({
-        'type': 'image',
-        'source': {'type': 'base64', 'media_type': mime, 'data': b64},
-      });
+    if (_env.supabaseUrl.isEmpty) {
+      throw const AiNutritionException(
+        'AI coach is unavailable: this build has no SUPABASE_URL configured.',
+      );
     }
-    userContent.add({'type': 'text', 'text': message});
 
-    final messages = [
-      ...history,
-      {'role': 'user', 'content': userContent},
-    ];
+    final token = _accessToken();
+    if (token == null || token.isEmpty) {
+      throw const AiNutritionException(
+        'Please sign in again to use the AI coach.',
+      );
+    }
+
+    final body = <String, dynamic>{
+      'message': message,
+      'history': history,
+      if (imageFile != null) 'image': await _encodeImage(imageFile),
+    };
 
     try {
-      final response = await _dio.post(
-        _apiUrl,
-        options: _options,
-        data: {
-          'model':      _model,
-          'max_tokens': 1024,
-          'system':     _system,
-          'messages':   messages,
-        },
+      final response = await _dio.post<Map<String, dynamic>>(
+        endpointUrl,
+        options: Options(headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+          // The Edge gateway requires an apikey alongside the user's token; it
+          // is the publishable anon key, never a service credential.
+          'apikey': _env.supabaseAnonKey,
+        }),
+        data: body,
       );
-      final content = response.data['content'] as List;
-      return content.first['text'] as String;
-    } catch (e) {
-      throw Exception('Failed to get AI response: $e');
+      final text = response.data?['text'];
+      if (text is! String || text.isEmpty) {
+        throw const AiNutritionException('AI coach returned an empty reply.');
+      }
+      return text;
+    } on DioException catch (e) {
+      throw AiNutritionException(_messageForStatus(e.response?.statusCode));
+    }
+  }
+
+  static Future<Map<String, dynamic>> _encodeImage(File imageFile) async {
+    final bytes = await imageFile.readAsBytes();
+    final ext = imageFile.path.split('.').last.toLowerCase();
+    return {
+      'mediaType': ext == 'png' ? 'image/png' : 'image/jpeg',
+      'data': base64Encode(bytes),
+    };
+  }
+
+  static String _messageForStatus(int? status) {
+    switch (status) {
+      case 401:
+        return 'Your session expired. Please sign in again.';
+      case 403:
+        return 'Your account does not have access to the AI coach.';
+      case 413:
+        return 'That photo is too large. Try a smaller image.';
+      case 429:
+        return 'The AI coach is busy right now. Please try again shortly.';
+      case 503:
+        return 'The AI coach is temporarily unavailable. Please try again.';
+      default:
+        return 'Could not reach the AI coach. Please try again.';
     }
   }
 

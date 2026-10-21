@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -60,6 +61,12 @@ import '../../features/compliance/presentation/compliance_dashboard_screen.dart'
 import '../../features/coach/presentation/program_builder_screen.dart';
 import '../../features/coach/presentation/coach_packages_screen.dart';
 import '../../features/admin/presentation/admin_dashboard_screen.dart';
+import '../../features/admin/presentation/admin_metrics_screen.dart';
+import '../../features/admin/presentation/admin_ecosystem_screen.dart';
+import '../../features/admin/presentation/admin_operations_screen.dart';
+import '../../features/admin/presentation/admin_people_screen.dart';
+import '../../features/admin/presentation/admin_settings_screen.dart';
+import '../../features/admin/presentation/admin_trust_screen.dart';
 import '../../features/admin/presentation/observability_screen.dart';
 import '../../features/admin/presentation/exercise_review_screen.dart';
 import '../../features/vendor/presentation/vendor_portal_screen.dart';
@@ -135,6 +142,40 @@ class _RouterNotifier extends ChangeNotifier {
   void dispose() { _disposed = true; _sub.close(); super.dispose(); }
 }
 
+// ── REL-3 · QA tooling must not exist in a release binary ────────────────────
+//
+// `/qa-center` and `/mie-debugger` were wired unconditionally into the shipping
+// router, gated by neither `kReleaseMode` nor a role check. `QaCenterScreen`
+// self-guards its `build` and renders a placeholder in release, but that is a
+// screen declining to draw, not a route declining to exist: the path still
+// resolved, still appeared in the web URL bar, and `MieDebuggerScreen` — which
+// reads decision traces — had no such guard at all.
+//
+// Registration is the right place for this. A route that is not registered
+// cannot be reached by a deep link, a typed URL, a restored session or a stale
+// bookmark, and there is no second screen-level check to forget.
+
+/// Paths that exist only in debug and profile builds.
+const List<String> kDebugOnlyRoutePaths = ['/mie-debugger', '/qa-center'];
+
+/// Whether this binary wires up its QA and diagnostic surfaces.
+///
+/// `kReleaseMode` rather than `kDebugMode`, deliberately: profile builds are
+/// used for on-device performance work and the debugger is wanted there.
+bool get kQaToolingEnabled => !kReleaseMode;
+
+/// The QA/diagnostic routes, or nothing at all in a release build.
+///
+/// [enabled] exists so the release behaviour can actually be tested —
+/// `kReleaseMode` is a compile-time constant, so a test binary cannot flip it.
+List<RouteBase> buildQaToolingRoutes({bool? enabled}) {
+  if (!(enabled ?? kQaToolingEnabled)) return const [];
+  return [
+    GoRoute(path: '/mie-debugger', builder: (_, __) => const MieDebuggerScreen()),
+    GoRoute(path: '/qa-center', builder: (_, __) => const QaCenterScreen()),
+  ];
+}
+
 final routerProvider = Provider<GoRouter>((ref) {
   final notifier = _RouterNotifier(ref);
   ref.onDispose(notifier.dispose);
@@ -197,14 +238,28 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/reset-password', builder: (_, __) => const ResetPasswordScreen()),
       GoRoute(path: '/intake',         builder: (_, __) => const IntakeFlowScreen()),
       GoRoute(path: '/admin-dashboard',builder: (_, __) => const AdminDashboardScreen()),
+      // V5 §167 · the owner-approved Admin metrics (migrations 171-174). Additive:
+      // the legacy /admin-dashboard console is untouched. Not role-gated here on
+      // purpose — every surface it reads gates on admin_can server-side, and a
+      // client-side check that looks like the boundary is worse than none.
+      GoRoute(path: '/admin-metrics',  builder: (_, __) => const AdminMetricsScreen()),
+      // V5 §183 · P6 · Trust. Read-only, and not role-gated here for the reason the
+      // sibling route records: every surface it reads gates on admin_can server-side,
+      // and a client gate that looks like the boundary is worse than none.
+      GoRoute(path: '/admin-trust',    builder: (_, __) => const AdminTrustScreen()),
+      GoRoute(path: '/admin-ecosystem', builder: (_, __) => const AdminEcosystemScreen()),
+      GoRoute(path: '/admin-operations', builder: (_, __) => const AdminOperationsScreen()),
+      GoRoute(path: '/admin-people',   builder: (_, __) => const AdminPeopleScreen()),
+      GoRoute(path: '/admin-settings', builder: (_, __) => const AdminSettingsScreen()),
       GoRoute(path: '/admin-exercise-review', builder: (_, __) => const ExerciseReviewScreen()),
       GoRoute(path: '/content-center', builder: (_, __) => const ExerciseContentCenterScreen()),
       GoRoute(path: '/observability',  builder: (_, __) => const ObservabilityScreen()),
       GoRoute(path: '/content-review',  builder: (_, __) => const ContentReviewQueueScreen()),
-      GoRoute(path: '/mie-debugger',    builder: (_, __) => const MieDebuggerScreen()),
       GoRoute(path: '/knowledge-review', builder: (_, __) => const IntelligenceReviewScreen()),
       GoRoute(path: '/vendor-portal',  builder: (_, __) => const VendorPortalScreen()),
-      GoRoute(path: '/qa-center',      builder: (_, __) => const QaCenterScreen()),
+
+      // Debug/profile only — see buildQaToolingRoutes (REL-3).
+      ...buildQaToolingRoutes(),
       GoRoute(path: '/payment-success',builder: (_, __) => const PaymentResultScreen(success: true)),
       GoRoute(path: '/payment-cancel', builder: (_, __) => const PaymentResultScreen(success: false)),
 

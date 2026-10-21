@@ -30,7 +30,7 @@ with base as (
     (coalesce(muscle_group, '') <> '')          as has_muscle,
     (coalesce(equipment, '') <> ''
        or coalesce(equipment_required::text, '') not in ('', '[]', '{}', 'null')) as has_equipment
-  from exercises
+  from custom_exercises
 ),
 reqs as (
   select *,
@@ -92,6 +92,11 @@ from reqs;
 grant select on public.exercise_certifications to authenticated, anon;
 
 -- Summary gains projected averages (current counts unchanged).
+-- STAGE B.3 (B2-10): this supersedes migration 084's certification_summary()
+-- by ADDING projected_pct to the returned table. CREATE OR REPLACE FUNCTION
+-- cannot change a return type, so the old signature has to be dropped first.
+-- This never surfaced before because 084 itself never applied (B2-2).
+drop function if exists public.certification_summary();
 create or replace function public.certification_summary()
 returns table(
   total bigint, exercise_library bigint, workout_builder bigint,

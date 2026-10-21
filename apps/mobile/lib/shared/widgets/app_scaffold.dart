@@ -1,32 +1,42 @@
+// ── WHY THERE IS NO BOTTOM NAV IN THIS FILE ────────────────────────────────
+// `AppBottomNav` lived here and drew a THIRD nav vocabulary —
+// `Overview · Appts · [FAB] · Track · Messages` — against `app_shell.dart`'s
+// live bar and the dead `home_org.dart`'s. It was never instantiated: nothing
+// in `lib` referenced it, and `AppScaffold.build` renders a header and a body
+// and nothing else.
+//
+// It went with `navIndex`, a REQUIRED parameter that nine screens computed and
+// passed and that no code ever read — the same defect A-G1 records for
+// `_IconBtn`'s `tooltip`, which reached neither a Tooltip nor the semantics
+// tree. A required argument that is discarded is worse than an unused one: it
+// tells nine authors they are configuring something.
+//
+// The one client bottom nav is `app_shell.dart`, and it is FIT-001's five.
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'dart:math' as math;
 import '../../features/auth/domain/auth_provider.dart';
 import '../../features/notifications/domain/notification_provider.dart';
 import '../theme/app_background.dart';
 
 class _C {
-  static const surface          = Color(0xFF131314);
   static const surfaceContainer = Color(0xFF201F20);
+  static const surface          = Color(0xFF131314);
   static const primary          = Color(0xFFDDB7FF);
   static const onSurface        = Color(0xFFE5E2E3);
-  static const onSurfaceVar     = Color(0xFFCDC3D0);
-  static const outlineVar       = Color(0xFF4B444F);
   static const error            = Color(0xFFFFB4AB);
 }
 
 class AppScaffold extends ConsumerWidget {
   final Widget body;
-  final int navIndex;
   final String? title;
   final bool showBackButton;
 
   const AppScaffold({
     super.key,
     required this.body,
-    required this.navIndex,
     this.title,
     this.showBackButton = false,
   });
@@ -87,6 +97,7 @@ class _AppHeader extends StatelessWidget {
           if (showBackButton)
             IconButton(
               icon: const Icon(Icons.arrow_back_ios_new, color: _C.primary, size: 20),
+              tooltip: 'Back',
               onPressed: () {
                 if (context.canPop()) {
                   context.pop();
@@ -247,168 +258,4 @@ class _ShakingBellIconState extends ConsumerState<_ShakingBellIcon>
       ),
     );
   }
-}
-
-class AppBottomNav extends StatelessWidget {
-  final int currentIndex;
-  const AppBottomNav({super.key, required this.currentIndex});
-
-  @override
-  Widget build(BuildContext context) {
-    final bottom = MediaQuery.of(context).padding.bottom;
-    return Container(
-      padding: EdgeInsets.only(left: 16, right: 16, top: 12, bottom: bottom + 12),
-      decoration: BoxDecoration(
-        color: _C.surfaceContainer.withValues(alpha: 0.85),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        border: Border(top: BorderSide(color: _C.outlineVar.withValues(alpha: 0.1))),
-        boxShadow: const [BoxShadow(color: Color(0x26842BD2), blurRadius: 20, offset: Offset(0, -4))],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          _NavItem(icon: Icons.grid_view_rounded,        label: 'Overview', index: 0, current: currentIndex, route: '/home'),
-          _NavItem(icon: Icons.calendar_today_outlined,  label: 'Appts',    index: 1, current: currentIndex, route: '/appointments'),
-          _AnimatedFab(onTap: () => context.go('/directory')),
-          _NavItem(icon: Icons.show_chart_outlined,      label: 'Track',    index: 3, current: currentIndex, route: '/progress'),
-          _NavItem(icon: Icons.chat_bubble_outline,      label: 'Messages', index: 4, current: currentIndex, route: '/messages'),
-        ],
-      ),
-    );
-  }
-}
-
-class _NavItem extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final int index;
-  final int current;
-  final String route;
-  const _NavItem({required this.icon, required this.label, required this.index,
-    required this.current, required this.route});
-
-  @override
-  Widget build(BuildContext context) {
-    final active = index == current;
-    return GestureDetector(
-      onTap: () => context.go(route),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: active ? BoxDecoration(
-          color: _C.primary.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _C.primary.withValues(alpha: 0.3)),
-          boxShadow: [BoxShadow(color: _C.primary.withValues(alpha: 0.2), blurRadius: 10)],
-        ) : null,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: active ? _C.primary : _C.onSurfaceVar.withValues(alpha: 0.6), size: 24),
-            const SizedBox(height: 2),
-            Text(label,
-              style: TextStyle(
-                color: active ? _C.primary : _C.onSurfaceVar.withValues(alpha: 0.6),
-                fontSize: 10,
-                fontWeight: active ? FontWeight.w700 : FontWeight.w400,
-                letterSpacing: 0.5)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _AnimatedFab extends StatefulWidget {
-  final VoidCallback onTap;
-  const _AnimatedFab({required this.onTap});
-  @override
-  State<_AnimatedFab> createState() => _AnimatedFabState();
-}
-
-class _AnimatedFabState extends State<_AnimatedFab>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _pingCtrl;
-  late final Animation<double> _pingScale;
-  late final Animation<double> _pingOpacity;
-
-  @override
-  void initState() {
-    super.initState();
-    _pingCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 1500))..repeat();
-    _pingScale = Tween<double>(begin: 1.0, end: 1.5)
-        .animate(CurvedAnimation(parent: _pingCtrl, curve: Curves.easeOut));
-    _pingOpacity = Tween<double>(begin: 0.3, end: 0.0)
-        .animate(CurvedAnimation(parent: _pingCtrl, curve: Curves.easeOut));
-  }
-
-  @override
-  void dispose() { _pingCtrl.dispose(); super.dispose(); }
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: widget.onTap,
-      child: Transform.translate(
-        offset: const Offset(0, -12),
-        child: SizedBox(
-          width: 64, height: 64,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              AnimatedBuilder(
-                animation: _pingCtrl,
-                builder: (_, __) => Transform.scale(
-                  scale: _pingScale.value,
-                  child: Container(
-                    width: 64, height: 64,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: const Color(0xFF842BD2).withValues(alpha: _pingOpacity.value * 2),
-                        width: 2.5)))),
-              ),
-              Image.asset('assets/images/12circle-fab.png',
-                width: 64, height: 64, fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) => Container(
-                  width: 64, height: 64,
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: RadialGradient(
-                      colors: [Color(0xFF1A0D2E), Color(0xFF0D0B1A)],
-                      center: Alignment.topLeft, radius: 1.2)),
-                  child: const Center(
-                    child: Text('12',
-                      style: TextStyle(color: Colors.white, fontSize: 22,
-                        fontWeight: FontWeight.w900, letterSpacing: -1))))),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ignore: unused_element — kept for compatibility
-class _FabArcPainter extends CustomPainter {
-  const _FabArcPainter();
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 2;
-    canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius),
-      -math.pi / 2, 1.55 * math.pi, false,
-      Paint()
-        ..shader = SweepGradient(
-          startAngle: 0, endAngle: 2 * math.pi,
-          colors: const [Color(0xFFA855F7), Color(0xFFD164E2), Colors.transparent],
-          stops: const [0.0, 0.5, 0.76],
-        ).createShader(Rect.fromCircle(center: center, radius: radius))
-        ..style = PaintingStyle.stroke..strokeWidth = 2.5..strokeCap = StrokeCap.round);
-  }
-  @override
-  bool shouldRepaint(_FabArcPainter _) => false;
 }

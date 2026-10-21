@@ -31,7 +31,7 @@ with base as (
     (coalesce(muscle_group, '') <> '')           as has_muscle,
     (coalesce(equipment, '') <> ''
        or coalesce(equipment_required::text, '') not in ('', '[]', '{}', 'null')) as has_equipment
-  from exercises
+  from custom_exercises
 ),
 certs as (
   select *,

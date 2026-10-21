@@ -19,9 +19,29 @@ const json = (d: unknown, s = 200) =>
 
 // deno-lint-ignore no-explicit-any
 type Db = any;
-const recent = async (db: Db, table: string, userCol: string, uid: string, n = 14) => {
+// F-J-04: every call used to order by `created_at`. Five of the ten context
+// tables do not have that column, so PostgREST answered 42703 and the reader
+// below turned it into `[]` — the AI was told "nothing happened" for the
+// user's workouts, sets, habits, nutrition and score. The ordering key is now
+// per-table and named at the call site. Truth read from the migrations, not
+// assumed; note that `nutrition_logs` is created by **006** (no `created_at`)
+// and 012's richer `CREATE TABLE IF NOT EXISTS` for the same name is a no-op,
+// so 006's shape is the one that exists.
+//
+//   goals            created_at   (018)      cycle_logs        created_at (033)
+//   daily_scores     created_at   (001)      workout_feedback  created_at (001)
+//   ai_memories      created_at   (074)
+//   user_scores      updated_at   (035)  — no created_at
+//   workout_sessions started_at   (001)  — no created_at
+//   nutrition_logs   logged_at    (006)  — no created_at
+//   habit_logs       logged_at    (001)  — no created_at
+//   workout_set_logs logged_at    (001)  — no created_at
+//
+// The `{ data } … ?? []` / `catch` degradation below is NOT changed here: that
+// is ERR-2 / `EC-02` (rule S), whose fail-closed behaviour is blocked on Q-5.
+const recent = async (db: Db, table: string, userCol: string, uid: string, n = 14, orderCol = 'created_at') => {
   try {
-    const { data } = await db.from(table).select('*').eq(userCol, uid).order('created_at', { ascending: false }).limit(n);
+    const { data } = await db.from(table).select('*').eq(userCol, uid).order(orderCol, { ascending: false }).limit(n);
     return data ?? [];
   } catch { return []; }
 };
@@ -120,22 +140,22 @@ Deno.serve(async (req: Request) => {
 
     // ── Assemble context ──
     const [{ data: profile }, { data: aiProfile }] = await Promise.all([
-      db.from('user_profiles').select('first_name, role, goal, gender, date_of_birth, height_cm, weight_kg, experience_level, membership_tier').eq('id', uid).maybeSingle(),
+      db.from('user_profiles').select('first_name, role, fitness_goal, gender, date_of_birth, height_cm, weight_kg, experience_level, membership_tier').eq('id', uid).maybeSingle(),
       db.from('ai_profiles').select('*').eq('user_id', uid).maybeSingle(),
     ]);
     const [goals, scores, dailyScores, workouts, nutrition, habits, cycles, feedback, memories] = await Promise.all([
       recent(db, 'goals', 'user_id', uid, 5),
-      recent(db, 'user_scores', 'user_id', uid, 1),
+      recent(db, 'user_scores', 'user_id', uid, 1, 'updated_at'),
       recent(db, 'daily_scores', 'user_id', uid, 7),
-      recent(db, 'workout_sessions', 'user_id', uid, 14),
-      recent(db, 'nutrition_logs', 'user_id', uid, 21),
-      recent(db, 'habit_logs', 'user_id', uid, 14),
+      recent(db, 'workout_sessions', 'user_id', uid, 14, 'started_at'),
+      recent(db, 'nutrition_logs', 'user_id', uid, 21, 'logged_at'),
+      recent(db, 'habit_logs', 'user_id', uid, 14, 'logged_at'),
       recent(db, 'cycle_logs', 'user_id', uid, 5),
       recent(db, 'workout_feedback', 'user_id', uid, 7),
       recent(db, 'ai_memories', 'user_id', uid, 50),
     ]);
     const setLogs = (type === 'progress_insight')
-      ? await recent(db, 'workout_set_logs', 'user_id', uid, 60) : [];
+      ? await recent(db, 'workout_set_logs', 'user_id', uid, 60, 'logged_at') : [];
 
     // For meal suggestions: active plan targets + today's logged macros → remaining.
     let nutritionTargets: Record<string, number> | null = null;
@@ -145,14 +165,20 @@ Deno.serve(async (req: Request) => {
         .eq('client_id', uid).eq('is_active', true).order('created_at', { ascending: false }).maybeSingle();
       const start = new Date(); start.setHours(0, 0, 0, 0);
       const { data: todays } = await db.from('nutrition_logs')
-        .select('calories, protein_g, carbs_g, fat_g').eq('user_id', uid).gte('logged_at', start.toISOString());
+        .select('calories, protein, carbs, fat').eq('user_id', uid).gte('logged_at', start.toISOString());
       const sum = (k: string) => ((todays ?? []) as Db[]).reduce((a, r) => a + (Number(r[k]) || 0), 0);
       if (plan) {
         nutritionTargets = {
           remaining_calories: Math.max(0, Math.round((plan.calories_target ?? 0) - sum('calories'))),
-          remaining_protein_g: Math.max(0, Math.round((plan.protein_g ?? 0) - sum('protein_g'))),
-          remaining_carbs_g: Math.max(0, Math.round((plan.carbs_g ?? 0) - sum('carbs_g'))),
-          remaining_fat_g: Math.max(0, Math.round((plan.fat_g ?? 0) - sum('fat_g'))),
+          // The plan's targets really are `*_g` (client_nutrition_plans, 001);
+          // the logged macros are not (nutrition_logs, 006). Mixing the two is
+          // I-NUT-01: `sum()` read a column that does not exist, returned 0 for
+          // every meal, and the remaining macros equalled the whole day's target
+          // no matter how much the client had already eaten. The response keys
+          // are prompt-facing and unchanged.
+          remaining_protein_g: Math.max(0, Math.round((plan.protein_g ?? 0) - sum('protein'))),
+          remaining_carbs_g: Math.max(0, Math.round((plan.carbs_g ?? 0) - sum('carbs'))),
+          remaining_fat_g: Math.max(0, Math.round((plan.fat_g ?? 0) - sum('fat'))),
         };
       }
     }
@@ -163,11 +189,11 @@ Deno.serve(async (req: Request) => {
       goals,
       score: scores?.[0] ?? {},
       daily_scores: dailyScores,
-      recent_workouts: workouts.map((w: Db) => ({ date: w.created_at, completed: w.completed ?? w.status, title: w.title })),
+      recent_workouts: workouts.map((w: Db) => ({ date: w.started_at, completed: w.completed ?? w.status, title: w.title })),
       recent_nutrition_days: nutrition.length,
       recent_habit_logs: habits.length,
       recovery: feedback?.[0] ?? cycles?.[0] ?? {},
-      recent_set_logs: setLogs.map((s: Db) => ({ exercise: s.exercise_name, weight_kg: s.weight_kg, reps: s.reps, date: s.created_at })),
+      recent_set_logs: setLogs.map((s: Db) => ({ exercise: s.exercise_name, weight_kg: s.weight_kg, reps: s.reps, date: s.logged_at })),
       remaining_macros_today: nutritionTargets,
       memory: {
         likes: memories.filter((m: Db) => m.kind === 'like').map((m: Db) => m.content),

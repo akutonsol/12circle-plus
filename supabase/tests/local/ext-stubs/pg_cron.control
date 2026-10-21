@@ -1,0 +1,12 @@
+# CI-LOCAL STUB for pg_cron. Used only by supabase/scripts/negative-control.sh.
+#
+# A hosted Supabase project ships the real pg_cron. A bare runner-local cluster
+# cannot. Migration 076 is the only file in the tree that calls CREATE EXTENSION,
+# and the objects it actually uses (cron.schedule / cron.unschedule / cron.job /
+# net.http_post) are provided by supabase/tests/local/shim.sql. This stub exists
+# solely so that 076 replays unmodified. It opens no network path and schedules
+# nothing.
+comment = 'CI-local stub for pg_cron (negative-control harness)'
+default_version = '1.0'
+relocatable = false
+superuser = false

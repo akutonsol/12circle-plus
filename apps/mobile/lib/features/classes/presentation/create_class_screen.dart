@@ -63,7 +63,7 @@ class _CreateClassScreenState extends ConsumerState<CreateClassScreen> {
       if (mounted) {
         setState(() => _saving = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not create class: $e'), backgroundColor: Colors.red));
+          SnackBar(content: Text('Could not create class.'), backgroundColor: Colors.red));
       }
     }
   }
@@ -135,12 +135,12 @@ class _CreateClassScreenState extends ConsumerState<CreateClassScreen> {
                 () async {
               final d = await showDatePicker(context: context, initialDate: _date,
                   firstDate: DateTime.now(), lastDate: DateTime.now().add(const Duration(days: 365)));
-              if (d != null) setState(() => _date = d);
+              if (d != null && mounted) setState(() => _date = d);
             }),
             _label('Start time'),
             _pickerTile(Icons.schedule_rounded, _time.format(context), () async {
               final t = await showTimePicker(context: context, initialTime: _time);
-              if (t != null) setState(() => _time = t);
+              if (t != null && mounted) setState(() => _time = t);
             }),
             _label('Duration (minutes)'),
             _stepper(_duration, (v) => setState(() => _duration = v), min: 15, step: 15),

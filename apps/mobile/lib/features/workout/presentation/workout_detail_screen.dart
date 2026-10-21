@@ -1,278 +1,342 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../data/models/workout_model.dart';
+import '../domain/exercise_brief.dart';
+import '../domain/workout_provider.dart';
+import 'widgets/exercise_brief_sheet.dart';
+
+/// FIT-016 · Workout detail — `/workout-detail`, "review before committing".
+///
+/// ── WHY THIS WAS REWRITTEN ─────────────────────────────────────────────────
+/// The previous implementation contained **zero** data access — no `ref.`, no
+/// `Supabase`, no `await`, no `Future`. It rendered one hardcoded workout with a
+/// fixed hero image, so every workout in the app opened the same screen.
+///
+/// It was reached as the FAILURE BRANCH of a title-string match in
+/// `workout_list_screen.dart`: the list recovered the domain object by comparing
+/// display titles, and when that missed it navigated here with no identity at
+/// all. The UI list's `'Glute & Hamstring\nFocus'` can never equal the domain's
+/// `'Glute and Hamstring Focus'`, so that card always landed here — showing the
+/// user a workout they had not selected.
+///
+/// Identity now comes from `selectedWorkoutProvider`, the same
+/// `StateProvider<Workout?>` that `active_workout_screen.dart:102` already
+/// reads. No new state-management pattern is introduced and no backend contract
+/// is invented: every value below is a field that already exists on `Workout`,
+/// `WorkoutExercise`, `WorkoutSet` and `Exercise`.
+///
+/// Layout is FIT-016's: back/more bar, context line, title, a three-column
+/// metric strip between hairlines, the coach note, then the numbered session
+/// rows and the primary CTA.
 class _C {
-  static const bg                  = Color(0xFF0E0E0F);
-  static const surfaceContainer    = Color(0xFF201F20);
-  static const surfaceContainerHigh= Color(0xFF2A2A2B);
-  static const glassCard           = Color(0x99201F20);
-  static const primary             = Color(0xFFDDB7FF);
-  static const primaryContainer    = Color(0xFFB76DFF);
-  static const inversePrimary      = Color(0xFF842BD2);
-  static const onSurface           = Color(0xFFE5E2E3);
-  static const onSurfaceVar        = Color(0xFFCDC3D0);
-  static const outline             = Color(0xFF968E99);
-  static const outlineVar          = Color(0xFF4B444F);
+  // Design tokens, FIT-016. Held locally for the same reason every other
+  // screen in this feature does; docs/DESIGN_INTAKE_REPORT.md §10 records that
+  // collapsing the per-screen palettes into context.helix is its own migration.
+  static const bg      = Color(0xFF0A0A0B); // --bg
+  static const ink     = Color(0xFFF4F3F6); // --ink
+  static const grey    = Color(0xFF9B96A3); // --grey
+  static const dim     = Color(0xFF8B8595); // --dim
+  static const line    = Color(0x14FFFFFF); // --line, white 8%
+  static const violet  = Color(0xFF7C3AED); // --violet
+  static const white   = Color(0xFFFFFFFF); // --white, metric readouts only
 }
 
-class WorkoutDetailScreen extends StatelessWidget {
+class WorkoutDetailScreen extends ConsumerWidget {
   const WorkoutDetailScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final workout = ref.watch(selectedWorkoutProvider);
+
     return Scaffold(
       backgroundColor: _C.bg,
-      extendBodyBehindAppBar: true,
-      body: CustomScrollView(
-        slivers: [
-          // Hero
-          SliverAppBar(
-            backgroundColor: Colors.transparent,
-            expandedHeight: 280,
-            pinned: true,
-            leading: GestureDetector(
-              onTap: () => context.canPop() ? context.pop() : context.go('/workouts'),
-              child: Container(
-                margin: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.black.withValues(alpha: 0.4),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-                ),
-                child: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 18),
-              ),
-            ),
-            flexibleSpace: FlexibleSpaceBar(
-              background: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image.asset('assets/images/workout-full-body.jpg',
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(color: _C.surfaceContainer)),
-                  const DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Colors.transparent, Color(0xCC0E0E0F), Color(0xFF0E0E0F)],
-                        stops: [0.3, 0.75, 1.0],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    top: 20, right: 16,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: _C.primary.withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: _C.primary.withValues(alpha: 0.4)),
-                      ),
-                      child: const Text('INTERMEDIATE',
-                        style: TextStyle(color: _C.primary, fontSize: 9,
-                          fontWeight: FontWeight.w700, letterSpacing: 1.5)),
-                    ),
-                  ),
-                  const Positioned(
-                    bottom: 20, left: 20,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('STRENGTH PROGRAM',
-                          style: TextStyle(color: _C.primary, fontSize: 10,
-                            fontWeight: FontWeight.w700, letterSpacing: 1.5)),
-                        SizedBox(height: 4),
-                        Text('Full Body Strength',
-                          style: TextStyle(color: Colors.white, fontSize: 26,
-                            fontWeight: FontWeight.w800, letterSpacing: -0.5)),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+      body: SafeArea(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _bar(context),
+          Expanded(
+            child: workout == null
+                ? const _NoWorkoutSelected()
+                : _Detail(workout: workout),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  /// `bar` — 44x44 targets, per the design's `tap` floor.
+  Widget _bar(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(6, 0, 6, 6),
+        child: Row(children: [
+          // Already named — F-20 gave this control its name and its 44 dp
+          // target. A-G8's scan reads FORWARD from each tappable, so the
+          // `Semantics` above it is invisible to the scan and this site is a
+          // known false positive in that count. Recorded in the guard.
+          Semantics(
+            button: true,
+            label: 'Back',
+            child: InkResponse(
+              onTap: () => context.canPop() ? context.pop() : context.go('/train'),
+              radius: 24,
+              child: const SizedBox(
+                width: 44, height: 44,
+                child: Icon(Icons.arrow_back, color: _C.grey, size: 19)),
             ),
           ),
-
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Stats row
-                  Row(children: [
-                    _StatChip(icon: Icons.verified_outlined, label: '12 Circle'),
-                    const SizedBox(width: 8),
-                    _StatChip(icon: Icons.timer_outlined, label: '45 min'),
-                    const SizedBox(width: 8),
-                    _StatChip(icon: Icons.local_fire_department_outlined, label: '420 kcal'),
-                  ]),
-                  const SizedBox(height: 20),
-
-                  // Start button
-                  GestureDetector(
-                    onTap: () => context.go('/active-workout'),
-                    child: Container(
-                      height: 52,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(14),
-                        gradient: const LinearGradient(
-                          colors: [_C.inversePrimary, _C.primaryContainer],
-                          begin: Alignment.centerLeft,
-                          end: Alignment.centerRight,
-                        ),
-                        boxShadow: const [
-                          BoxShadow(color: Color(0x55842BD2), blurRadius: 20),
-                        ],
-                      ),
-                      alignment: Alignment.center,
-                      child: const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.play_arrow_rounded, color: Colors.white, size: 24),
-                          SizedBox(width: 8),
-                          Text('Start Workout',
-                            style: TextStyle(color: Colors.white, fontSize: 16,
-                              fontWeight: FontWeight.w700, letterSpacing: 0.5)),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Description
-                  const Text('About This Workout',
-                    style: TextStyle(color: _C.onSurface, fontSize: 18,
-                      fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'A comprehensive full-body strength program designed to build muscle, increase strength, and improve overall fitness. This workout targets all major muscle groups with compound movements.',
-                    style: TextStyle(color: _C.onSurfaceVar, fontSize: 14, height: 1.6)),
-                  const SizedBox(height: 24),
-
-                  // Exercises
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Exercises',
-                        style: TextStyle(color: _C.onSurface, fontSize: 18,
-                          fontWeight: FontWeight.w700)),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: _C.primary.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Text('8 EXERCISES',
-                          style: TextStyle(color: _C.primary, fontSize: 10,
-                            fontWeight: FontWeight.w700, letterSpacing: 1)),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-
-                  ..._exercises.asMap().entries.map((e) => Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _ExerciseRow(index: e.key + 1, data: e.value),
-                  )),
-                ],
-              ),
-            ),
+          const Spacer(),
+          // FIT-016 declares a "More" control. What it opens is not drawn on
+          // the board, and GAP-04 says unlisted destinations must be asked
+          // rather than assumed — so it is rendered and deliberately inert
+          // rather than wired to an invented menu. Recorded as OD-10.
+          Semantics(
+            button: true,
+            label: 'More',
+            enabled: false,
+            child: const SizedBox(
+              width: 44, height: 44,
+              child: Icon(Icons.more_horiz, color: _C.dim, size: 19)),
           ),
+        ]),
+      );
+}
+
+/// Distinct from a workout that failed to load: nothing was selected. Reached
+/// when the list could not resolve a domain workout for the card that was
+/// tapped, which is true of several browse cards that have no workout behind
+/// them at all. Showing a placeholder workout here is what this screen used to
+/// do, and it is the defect.
+class _NoWorkoutSelected extends StatelessWidget {
+  const _NoWorkoutSelected();
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.fitness_center, color: _C.dim, size: 48),
+            const SizedBox(height: 12),
+            const Text('No workout selected',
+                style: TextStyle(color: _C.ink, fontSize: 17, fontWeight: FontWeight.w500)),
+            const SizedBox(height: 6),
+            const Text('Choose a workout to see the session before you start it.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: _C.grey, fontSize: 14, height: 1.55)),
+            const SizedBox(height: 20),
+            TextButton(
+              onPressed: () => context.go('/train'),
+              child: const Text('Browse workouts', style: TextStyle(color: _C.violet)),
+            ),
+          ]),
+        ),
+      );
+}
+
+class _Detail extends StatelessWidget {
+  final Workout workout;
+  const _Detail({required this.workout});
+
+  int get _setCount =>
+      workout.exercises.fold<int>(0, (n, e) => n + e.sets.length);
+
+  /// "Today · assigned by Nadia" in the design. Both halves are real fields —
+  /// `scheduledDate` and `coachName` — and each is omitted when absent rather
+  /// than filled with a placeholder.
+  String? get _context {
+    final parts = <String>[];
+    final when = workout.scheduledDate;
+    if (when != null) {
+      final now = DateTime.now();
+      final sameDay = when.year == now.year && when.month == now.month && when.day == now.day;
+      parts.add(sameDay ? 'Today' : '${when.day}/${when.month}');
+    }
+    final coach = workout.coachName;
+    if (coach != null && coach.isNotEmpty) parts.add('assigned by $coach');
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ctx = _context;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 6, 20, 24), // `body` gutter
+      children: [
+        if (ctx != null) ...[
+          Text(ctx.toUpperCase(), style: _mic),
+          const SizedBox(height: 10),
         ],
-      ),
+        Text(workout.title,
+            style: const TextStyle(color: _C.ink, fontSize: 24,
+                fontWeight: FontWeight.w500, letterSpacing: -0.6, height: 1.1)),
+        const SizedBox(height: 22),
+        _MetricStrip(
+          exercises: workout.exercises.length,
+          minutes: workout.estimatedDuration,
+          sets: _setCount,
+        ),
+        if (workout.description.isNotEmpty) ...[
+          const SizedBox(height: 20),
+          Text(workout.description,
+              style: const TextStyle(color: _C.grey, fontSize: 14.5, height: 1.55)),
+        ],
+        const SizedBox(height: 26),
+        Text('THE SESSION', style: _mic),
+        const SizedBox(height: 8),
+        if (workout.exercises.isEmpty)
+          // A workout that carries no exercises is a real, if unusual, state.
+          // It is NOT presented as a session that is ready to begin.
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Text('This workout has no exercises yet.',
+                style: TextStyle(color: _C.grey, fontSize: 14)),
+          )
+        else
+          ...workout.exercises.asMap().entries.map(
+              (e) => _ExerciseRow(index: e.key + 1, exercise: e.value)),
+        const SizedBox(height: 24),
+        if (workout.exercises.isNotEmpty)
+          // No `label:` here: the Text child supplies it. Wrapping a labelled
+          // Semantics around a widget that already contains the same string
+          // produces "Begin session\nBegin session" — the screen reader says it
+          // twice. Verified on-device with the auth buttons.
+          Semantics(
+            button: true,
+            child: GestureDetector(
+              onTap: () => context.go('/active-workout'),
+              child: Container(
+                height: 52, // `fc-btn`
+                decoration: BoxDecoration(
+                  color: _C.violet,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                alignment: Alignment.center,
+                child: const Text('Begin session',
+                    style: TextStyle(color: _C.white, fontSize: 15, fontWeight: FontWeight.w500)),
+              ),
+            ),
+          ),
+      ],
     );
   }
+
+  static const _mic = TextStyle(
+      color: _C.dim, fontSize: 11, fontWeight: FontWeight.w500, letterSpacing: 1.54);
 }
 
-const _exercises = [
-  ('Barbell Squat',       '4 sets × 8 reps',  'assets/images/exercise-squat.jpg'),
-  ('Bench Press',         '4 sets × 8 reps',  'assets/images/exercise-bench-press.jpg'),
-  ('Conventional Deadlift','3 sets × 6 reps', 'assets/images/exercise-deadlift.jpg'),
-  ('Wide-Grip Pull Ups',  '3 sets × 10 reps', 'assets/images/exercise-pullups.jpg'),
-  ('Overhead Press',      '3 sets × 10 reps', 'assets/images/exercise-bench-press.jpg'),
-  ('Barbell Row',         '3 sets × 10 reps', 'assets/images/exercise-deadlift.jpg'),
-  ('Romanian Deadlift',   '3 sets × 12 reps', 'assets/images/exercise-squat.jpg'),
-  ('Dumbbell Curl',       '3 sets × 12 reps', 'assets/images/exercise-pullups.jpg'),
-];
-
-class _StatChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  const _StatChip({required this.icon, required this.label});
+/// The three-column strip, between two hairlines, exactly as the board draws it.
+class _MetricStrip extends StatelessWidget {
+  final int exercises, minutes, sets;
+  const _MetricStrip({required this.exercises, required this.minutes, required this.sets});
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: _C.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _C.outlineVar.withValues(alpha: 0.2)),
-      ),
-      child: Row(children: [
-        Icon(icon, color: _C.onSurfaceVar, size: 14),
-        const SizedBox(width: 6),
-        Text(label, style: const TextStyle(color: _C.onSurfaceVar,
-          fontSize: 11, fontWeight: FontWeight.w600)),
-      ]),
-    );
-  }
-}
-
-class _ExerciseRow extends StatelessWidget {
-  final int index;
-  final (String, String, String) data;
-  const _ExerciseRow({required this.index, required this.data});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => context.go('/exercise-detail'),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: _C.glassCard,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0x0DFFFFFF)),
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: const BoxDecoration(
+          border: Border(
+            top: BorderSide(color: _C.line),
+            bottom: BorderSide(color: _C.line),
+          ),
         ),
         child: Row(children: [
-          Container(
-            width: 32, height: 32,
-            decoration: BoxDecoration(
-              color: _C.inversePrimary.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            alignment: Alignment.center,
-            child: Text('$index',
-              style: const TextStyle(color: _C.primary, fontSize: 12,
-                fontWeight: FontWeight.w700)),
-          ),
-          const SizedBox(width: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: SizedBox(
-              width: 48, height: 48,
-              child: Image.asset(data.$3, fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) =>
-                    Container(color: _C.surfaceContainer)),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(data.$1, style: const TextStyle(color: _C.onSurface,
-                  fontSize: 14, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Text(data.$2, style: const TextStyle(color: _C.onSurfaceVar,
-                  fontSize: 12)),
-              ],
-            ),
-          ),
-          const Icon(Icons.chevron_right, color: _C.outline, size: 18),
+          Expanded(child: _cell('$exercises', 'EXERCISES')),
+          Expanded(child: _cell('$minutes', 'ESTIMATED', unit: 'min')),
+          Expanded(child: _cell('$sets', 'SETS')),
         ]),
+      );
+
+  Widget _cell(String value, String label, {String? unit}) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // `met` — white, tabular figures so the three columns align.
+          Text.rich(
+            TextSpan(children: [
+              TextSpan(text: value),
+              if (unit != null)
+                TextSpan(text: unit,
+                    style: const TextStyle(fontSize: 12, color: _C.grey, fontWeight: FontWeight.w400)),
+            ]),
+            style: const TextStyle(
+                color: _C.white, fontSize: 20, fontWeight: FontWeight.w400,
+                height: 1, letterSpacing: -0.4,
+                fontFeatures: [FontFeature.tabularFigures()]),
+          ),
+          const SizedBox(height: 5),
+          Text(label,
+              style: const TextStyle(
+                  color: _C.dim, fontSize: 11, fontWeight: FontWeight.w500, letterSpacing: 1.54)),
+        ],
+      );
+}
+
+/// `row` — 22px index / title+prescription / info icon.
+class _ExerciseRow extends StatelessWidget {
+  final int index;
+  final WorkoutExercise exercise;
+  const _ExerciseRow({required this.index, required this.exercise});
+
+  @override
+  Widget build(BuildContext context) {
+    final name = exercise.exercise.name;
+    final prescription = prescriptionLine(exercise);
+    final brief = exerciseBrief(exercise);
+
+    // The board declares each session row as `el: "button"` and its annotation
+    // says the info icon "opens form and instructions". Both are honoured —
+    // but only when there IS form or instructions behind this movement.
+    //
+    // Before this, the row announced `button: true` with no action wired and
+    // drew an info icon that did nothing: a control that exists for assistive
+    // technology and for the eye, and responds to neither. The fix is not to
+    // wire something invented — it is to open what the data holds, and to stop
+    // claiming a control when the data holds nothing.
+    final open = brief.hasContent
+        ? () => showExerciseBrief(context, brief)
+        : null;
+
+    // Semantics OUTSIDE, gesture INSIDE — the shape `NamedIconButton` uses,
+    // and the one that makes `onTap:` below load-bearing. With the gesture on
+    // the outside it is the ancestor node that carries the action, so dropping
+    // `onTap:` changes nothing and no test can see the difference; F-20 is the
+    // reminder of what an unasserted action costs.
+    return Semantics(
+      button: open != null,
+      label: rowLabel(index, exercise),
+      hint: rowHint(exercise),
+      // The composed label already carries position, movement and
+      // prescription. Excluding the children stops it being announced twice —
+      // and drops their ACTIONS too, so the tap is re-declared here (F-20).
+      excludeSemantics: true,
+      onTap: open,
+      child: GestureDetector(
+        onTap: open,
+        behavior: HitTestBehavior.opaque,
+          child: Container(
+          constraints: const BoxConstraints(minHeight: 44), // `tap` floor
+          padding: const EdgeInsets.symmetric(vertical: 15),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: _C.line)),
+          ),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            SizedBox(
+              width: 22,
+              child: Text('$index',
+                  style: const TextStyle(
+                      color: _C.dim, fontSize: 11, fontWeight: FontWeight.w500, letterSpacing: 1.54)),
+            ),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(name,
+                    style: const TextStyle(color: _C.ink, fontSize: 15, fontWeight: FontWeight.w500)),
+                const SizedBox(height: 3),
+                Text(prescription,
+                    style: const TextStyle(color: _C.grey, fontSize: 12.5)),
+              ]),
+            ),
+            // Drawn only when it opens something.
+            if (open != null)
+              const Icon(Icons.info_outline, color: _C.dim, size: 15),
+          ]),
+        ),
       ),
     );
   }

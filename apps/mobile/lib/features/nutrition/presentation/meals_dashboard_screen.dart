@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import '../../../core/widgets/named_icon_button.dart';
+import 'widgets/nutrition_load_failed.dart';
+import 'widgets/pill_tab.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../data/nutrition_service.dart';
@@ -10,19 +13,25 @@ import '../../coaching_mode/domain/coaching_mode_provider.dart';
 import 'widgets/food_added_dialog.dart';
 import 'widgets/ai_scan_view.dart';
 import 'widgets/barcode_scan_view.dart';
+import 'nutrition_palette.dart';
+import 'widgets/meal_row_tile.dart';
 
 // ── Colors ─────────────────────────────────────────────────────────────────
-const _bg    = Color(0xFF050510);
-const _card  = Color(0xFF111120);
-const _brand = Color(0xFFA855F7);
-const _white = Colors.white;
-const _grey  = Color(0xFF888898);
-const _blue  = Color(0xFF60A5FA);
+// The palette moved to `nutrition_palette.dart` so `MealRowTile` could be
+// extracted without copying it into a 78th file that declares its own colours
+// (H-D2). Aliased so the 1,490 lines below are untouched.
+const _bg    = nutBg;
+const _card  = nutCard;
+const _brand = nutBrand;
+const _white = nutWhite;
+const _grey  = nutGrey;
+const _blue  = nutBlue;
 
 // ── Providers ──────────────────────────────────────────────────────────────
 final _svcProvider = Provider<NutritionService>((ref) => NutritionService());
 
-final _totalsProvider = FutureProvider<Map<String, double>>(
+/// Public so FIT-022's failure card can retry it.
+final nutritionTotalsProvider = FutureProvider<Map<String, double>>(
   (ref) async => ref.watch(_svcProvider).getTodayTotals());
 
 final _logsForDateProvider =
@@ -60,15 +69,28 @@ class _MealsDashboardScreenState
     double cal, double protein, double carbs, double fat,
     double calGoal, double proteinGoal, double carbGoal, double fatGoal,
     AsyncValue<List<Map<String, dynamic>>> logsAsync,
-    BuildContext context,
-  ) {
+    BuildContext context, {
+    required bool totalsFailed,
+  }) {
     final items = <Widget>[
       _MealTabs(
         active: _mealFilter,
         onSelect: (t) => setState(() => _mealFilter = t)),
       const SizedBox(height: 16),
     ];
-    if (_isToday) {
+    if (_isToday && totalsFailed) {
+      // FIT-022 · "Loading & failure". Until now a failed totals read rendered
+      // `?? 0.0` — a client who had logged three meals was shown **zero
+      // calories**, and may well have logged them again.
+      //
+      // The board's own words for this exact frame, and its annotation: "the
+      // failure state names what did NOT happen … because the fear a failed
+      // screen creates is data loss, not inconvenience."
+      items.addAll([
+        const NutritionLoadFailed(),
+        const SizedBox(height: 12),
+      ]);
+    } else if (_isToday) {
       items.addAll([
         _CalorieCard(cal: cal, protein: protein, carbs: carbs, fat: fat,
           calGoal: calGoal, proteinGoal: proteinGoal, carbGoal: carbGoal, fatGoal: fatGoal),
@@ -99,7 +121,7 @@ class _MealsDashboardScreenState
         return Column(
           children: logs.map((m) => Padding(
             padding: const EdgeInsets.only(bottom: 12),
-            child: _MealCard(meal: m))).toList());
+            child: MealRowTile(meal: m))).toList());
       }));
     items.add(const SizedBox(height: 16));
     return items;
@@ -108,7 +130,7 @@ class _MealsDashboardScreenState
   @override
   Widget build(BuildContext context) {
     final logsAsync = ref.watch(_logsForDateProvider(_selectedDate));
-    final totals    = ref.watch(_totalsProvider);
+    final totals    = ref.watch(nutritionTotalsProvider);
     final goals     = ref.watch(nutritionGoalsProvider);
     final cal     = totals.valueOrNull?['calories'] ?? 0.0;
     final protein = totals.valueOrNull?['protein']  ?? 0.0;
@@ -124,13 +146,15 @@ class _MealsDashboardScreenState
       body: SafeArea(
         child: Column(
           children: [
-            _Header(onAdd: () => _showAddSheet(context)),
+            _Header(
+              onAdd: () => _showAddSheet(context),
+              onScan: () => _showAddSheet(context, mode: 'ai_scan')),
             Expanded(
               child: RefreshIndicator(
                 color: _brand,
                 backgroundColor: _card,
                 onRefresh: () async {
-                  ref.invalidate(_totalsProvider);
+                  ref.invalidate(nutritionTotalsProvider);
                   ref.invalidate(_logsForDateProvider(_selectedDate));
                 },
                 child: SingleChildScrollView(
@@ -195,20 +219,21 @@ class _MealsDashboardScreenState
                           children: _innerChildren(
                             cal, protein, carbs, fat,
                             calGoal, proteinGoal, carbGoal, fatGoal,
-                            logsAsync, context))),
+                            logsAsync, context,
+                            totalsFailed: totals is AsyncError))),
                     ])))),
           ])));
   }
 
-  void _showAddSheet(BuildContext context) {
+  void _showAddSheet(BuildContext context, {String mode = 'manual'}) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _AddMealSheet(onLogged: () async {
+      builder: (_) => AddMealSheet(initialMode: mode, onLogged: () async {
         await Future.delayed(const Duration(milliseconds: 300));
         if (mounted) {
-          ref.invalidate(_totalsProvider);
+          ref.invalidate(nutritionTotalsProvider);
           ref.invalidate(_logsForDateProvider(_selectedDate));
           ref.invalidate(todayNutritionProvider);
         }
@@ -219,14 +244,18 @@ class _MealsDashboardScreenState
 // ── Header ─────────────────────────────────────────────────────────────────
 class _Header extends StatelessWidget {
   final VoidCallback onAdd;
-  const _Header({required this.onAdd});
+  final VoidCallback onScan;
+  const _Header({required this.onAdd, required this.onScan});
 
   @override
   Widget build(BuildContext context) => Container(
     color: _bg,
     padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
     child: Row(children: [
-      GestureDetector(
+      // Was an unnamed 30 px chevron — an A-G8 site. `Back` is the package's
+      // own word, declared 69 times.
+      NamedIconButton(
+        label: 'Back',
         onTap: () => context.canPop() ? context.pop() : context.go('/home'),
         child: const Icon(Icons.chevron_left, color: _brand, size: 30)),
       const Expanded(
@@ -234,8 +263,32 @@ class _Header extends StatelessWidget {
           textAlign: TextAlign.center,
           style: TextStyle(color: _white, fontSize: 18,
             fontWeight: FontWeight.w700))),
-      GestureDetector(
+      // FIT-003's header declares two icon-only controls that were not on the
+      // screen at all:
+      //
+      //   <button class="ph ph-scan"        aria-label="Scan a meal">
+      //   <button class="ph ph-list-checks" aria-label="Meal plan">
+      //
+      // `Meal plan` opens `/meal-plan`, which is REGISTERED and which nothing
+      // in the app navigated to — an orphaned route, the same shape `/activity`
+      // was in before FIT-001's nav work. This is its door.
+      NamedIconButton(
+        label: 'Scan a meal',
+        onTap: onScan,
+        child: const Icon(Icons.qr_code_scanner, color: _brand, size: 22)),
+      NamedIconButton(
+        label: 'Meal plan',
+        onTap: () => context.go('/meal-plan'),
+        child: const Icon(Icons.checklist_rtl, color: _brand, size: 22)),
+      // F-22: an unnamed 44 dp circle. FIT-003 declares "Log a meal" for this
+      // control, and that is what `onAdd` opens — the add-meal sheet — so the
+      // name is the package's own and describes what happens.
+      Semantics(
+        button: true,
+        label: 'Log a meal',
+        child: GestureDetector(
         onTap: onAdd,
+        behavior: HitTestBehavior.opaque,
         child: Container(
           width: 44, height: 44,
           decoration: BoxDecoration(
@@ -244,7 +297,7 @@ class _Header extends StatelessWidget {
             boxShadow: [BoxShadow(
               color: _brand.withValues(alpha: 0.55),
               blurRadius: 18, spreadRadius: 2)]),
-          child: const Icon(Icons.add, color: _white, size: 26))),
+          child: const Icon(Icons.add, color: _white, size: 26)))),
     ]));
 }
 
@@ -611,91 +664,6 @@ class _WaterCard extends StatelessWidget {
 }
 
 // ── Meal card ──────────────────────────────────────────────────────────────
-class _MealCard extends StatelessWidget {
-  final Map<String, dynamic> meal;
-  const _MealCard({required this.meal});
-
-  IconData get _icon {
-    final n = (meal['food_name'] as String? ?? '').toLowerCase();
-    if (n.contains('salad') || n.contains('egg')) return Icons.eco;
-    if (n.contains('shake') || n.contains('protein')) return Icons.local_drink;
-    if (n.contains('chicken') || n.contains('bowl')) return Icons.rice_bowl;
-    if (n.contains('avocado')) return Icons.brunch_dining;
-    return Icons.restaurant;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final name    = meal['food_name'] as String? ?? 'Meal';
-    final cal     = (meal['calories'] as num?)?.toDouble() ?? 0;
-    final protein = (meal['protein']  as num?)?.toDouble() ?? 0;
-    final fat     = (meal['fat']      as num?)?.toDouble() ?? 0;
-    final carbs   = (meal['carbs']    as num?)?.toDouble() ?? 0;
-    final maxVal  = [protein, fat, carbs, 1.0].reduce((a, b) => a > b ? a : b);
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(16)),
-      child: Column(children: [
-        Row(children: [
-          Container(
-            width: 52, height: 52,
-            decoration: BoxDecoration(
-              color: _brand.withValues(alpha: 0.18),
-              borderRadius: BorderRadius.circular(12)),
-            child: Icon(_icon, color: _brand, size: 28)),
-          const SizedBox(width: 12),
-          Expanded(child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(name,
-                style: const TextStyle(color: _white, fontSize: 16,
-                  fontWeight: FontWeight.w700)),
-              Text('${cal.toInt()} kcal',
-                style: const TextStyle(color: _grey, fontSize: 12)),
-            ])),
-          Icon(Icons.more_horiz, color: _grey.withValues(alpha: 0.6), size: 20),
-        ]),
-        const SizedBox(height: 14),
-        _MealMacro('Protein', protein, maxVal),
-        const SizedBox(height: 8),
-        _MealMacro('Fats',    fat,     maxVal),
-        const SizedBox(height: 8),
-        _MealMacro('Carbs',   carbs,   maxVal),
-      ]));
-  }
-}
-
-class _MealMacro extends StatelessWidget {
-  final String label;
-  final double value, maxVal;
-  const _MealMacro(this.label, this.value, this.maxVal);
-
-  @override
-  Widget build(BuildContext context) => Row(children: [
-    SizedBox(width: 60,
-      child: Text(label,
-        style: const TextStyle(color: _white, fontSize: 14))),
-    Expanded(
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(3),
-        child: LinearProgressIndicator(
-          value: maxVal == 0 ? 0 : (value / maxVal).clamp(0.0, 1.0),
-          backgroundColor: Colors.white.withValues(alpha: 0.08),
-          valueColor: const AlwaysStoppedAnimation(_brand),
-          minHeight: 6))),
-    const SizedBox(width: 10),
-    SizedBox(width: 32,
-      child: Text('${value.toInt()}g',
-        textAlign: TextAlign.right,
-        style: const TextStyle(color: _white, fontSize: 14,
-          fontWeight: FontWeight.w600))),
-  ]);
-}
-
-// ── Empty state ────────────────────────────────────────────────────────────
 class _EmptyMeals extends StatelessWidget {
   final String mealType;
   final VoidCallback onAdd;
@@ -727,17 +695,34 @@ class _EmptyMeals extends StatelessWidget {
 }
 
 // ── Add Meal Sheet ─────────────────────────────────────────────────────────
-class _AddMealSheet extends ConsumerStatefulWidget {
+class AddMealSheet extends ConsumerStatefulWidget {
   final VoidCallback onLogged;
-  const _AddMealSheet({required this.onLogged});
+
+  /// Which input the sheet opens on. FIT-003 declares a header `Scan a meal`
+  /// control **and** a `Scan` tab inside this sheet; the header one is the
+  /// short way to the same place, so it opens the sheet already on it rather
+  /// than asking the client to find the tab.
+  final String initialMode;
+
+  /// Injectable for widget tests; production passes null and the state
+  /// constructs its own.
+  @visibleForTesting
+  final NutritionService? service;
+
+  const AddMealSheet({
+    super.key,
+    required this.onLogged,
+    this.initialMode = 'manual',
+    this.service,
+  });
   @override
-  ConsumerState<_AddMealSheet> createState() => _AddMealSheetState();
+  ConsumerState<AddMealSheet> createState() => AddMealSheetState();
 }
 
-class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
-  final _svc        = NutritionService();
+class AddMealSheetState extends ConsumerState<AddMealSheet> {
+  late final NutritionService _svc = widget.service ?? NutritionService();
   final _searchCtrl = TextEditingController();
-  String _inputMode = 'manual';
+  late String _inputMode = widget.initialMode;
   Food?  _selected;
   String _mealType  = 'breakfast';
   bool   _saving    = false;
@@ -796,6 +781,9 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
   }
 
   Future<void> _logFood(Food f, double servings) async {
+    // One tap, one meal (QAX-COR-05): _saving is set synchronously below, so a
+    // second tap while the first save is in flight is ignored.
+    if (_saving) return;
     setState(() => _saving = true);
     try {
       await _svc.logMeal(
@@ -816,12 +804,16 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
         carbs:    (f.carbs   * servings).toInt(),
         fat:      (f.fat     * servings).toInt());
     } catch (e) {
+      if (!mounted) return;
       setState(() { _saving = false; _selected = null; });
-      _showMealError('Could not log meal: $e');
+      _showMealError('Could not log meal.');
     }
   }
 
   Future<void> _logFromScan(ScanResult r) async {
+    // One tap, one meal (QAX-COR-05): _saving is set synchronously below, so a
+    // second tap while the first save is in flight is ignored.
+    if (_saving) return;
     setState(() => _saving = true);
     try {
       await _svc.logMeal(
@@ -836,20 +828,28 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
       if (!mounted) return;
       widget.onLogged();
       setState(() => _saving = false);
-      final ctx = context;
-      Navigator.pop(ctx);
-      FoodAddedDialog.show(ctx,
+      // Navigator's context, not this route's — see nutrition_screen.dart for
+      // the reasoning. Popping deactivates this element; the NavigatorState's
+      // context outlives the route it popped, and FoodAddedDialog reads no
+      // inherited widget through the context it is handed.
+      final navigator = Navigator.of(context);
+      navigator.pop();
+      FoodAddedDialog.show(navigator.context,
         foodName: r.name,
         protein:  r.protein.toInt(),
         carbs:    r.carbs.toInt(),
         fat:      r.fat.toInt());
     } catch (e) {
+      if (!mounted) return;
       setState(() => _saving = false);
-      _showMealError('Could not log meal: $e');
+      _showMealError('Could not log meal.');
     }
   }
 
   Future<void> _logFromBarcode(Map<String, dynamic> food) async {
+    // One tap, one meal (QAX-COR-05): _saving is set synchronously below, so a
+    // second tap while the first save is in flight is ignored.
+    if (_saving) return;
     setState(() => _saving = true);
     final name    = food['name'] as String? ?? 'Scanned Food';
     final cal     = (food['calories'] as num?)?.toDouble() ?? 0;
@@ -869,16 +869,21 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
       if (!mounted) return;
       widget.onLogged();
       setState(() => _saving = false);
-      final ctx = context;
-      Navigator.pop(ctx);
-      FoodAddedDialog.show(ctx,
+      // Navigator's context, not this route's — see nutrition_screen.dart for
+      // the reasoning. Popping deactivates this element; the NavigatorState's
+      // context outlives the route it popped, and FoodAddedDialog reads no
+      // inherited widget through the context it is handed.
+      final navigator = Navigator.of(context);
+      navigator.pop();
+      FoodAddedDialog.show(navigator.context,
         foodName: name,
         protein:  protein.toInt(),
         carbs:    carbs.toInt(),
         fat:      fat.toInt());
     } catch (e) {
+      if (!mounted) return;
       setState(() => _saving = false);
-      _showMealError('Could not log meal: $e');
+      _showMealError('Could not log meal.');
     }
   }
 
@@ -932,7 +937,9 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
                     textAlign: TextAlign.center,
                     style: TextStyle(color: _white, fontSize: 26,
                       fontWeight: FontWeight.w800))),
-                GestureDetector(
+                // FIT-019 declares "Close". It was an unnamed 36 dp cross.
+                NamedIconButton(
+                  label: 'Close',
                   onTap: () => Navigator.pop(context),
                   child: Container(
                     width: 36, height: 36,
@@ -957,14 +964,25 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
                   borderRadius: BorderRadius.circular(999),
                   border: Border.all(
                     color: Colors.white.withValues(alpha: 0.08))),
+                // FIT-019 names these "Search", "Scan" and "Recent". The first
+                // two are label alignments to the locked design and describe
+                // what the tabs already do — the first searches foods, the
+                // second scans one.
+                //
+                // The third is NOT renamed. The design's slot is "Recent"; this
+                // one is Barcode, and they are different features. Renaming it
+                // would strand barcode scanning behind a label that promises
+                // something else, and deleting it would remove a shipped
+                // capability the design never said to remove. Recorded as
+                // OD-17 rather than resolved by guessing.
                 child: Row(children: [
-                  Expanded(child: _PillTab('Manual',
+                  Expanded(child: PillTab('Search',
                     _inputMode == 'manual',
                     () => setState(() => _inputMode = 'manual'))),
-                  Expanded(child: _PillTab('AI Scan',
+                  Expanded(child: PillTab('Scan',
                     _inputMode == 'ai_scan',
                     () => setState(() => _inputMode = 'ai_scan'))),
-                  Expanded(child: _PillTab('Barcode',
+                  Expanded(child: PillTab('Barcode',
                     _inputMode == 'barcode',
                     () => setState(() => _inputMode = 'barcode'))),
                 ]))),
@@ -1019,7 +1037,7 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
                     controller: _searchCtrl,
                     style: const TextStyle(color: _white, fontSize: 15),
                     decoration: InputDecoration(
-                      hintText: 'Search foods...',
+                      hintText: 'Search foods',
                       hintStyle: TextStyle(
                         color: _grey.withValues(alpha: 0.45), fontSize: 15),
                       prefixIcon: Icon(Icons.search,
@@ -1048,7 +1066,12 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
               child: _inputMode == 'barcode'
                 ? BarcodeScanView(onFound: _logFromBarcode)
                 : _inputMode == 'ai_scan'
-                ? AiScanView(onAccept: _logFromScan)
+                ? AiScanView(
+                    onAccept: _logFromScan,
+                    // FIT-020 names the save button after the meal chip the
+                    // client selected, and offers a way back to search.
+                    mealType: _label(_mealType),
+                    onSearchInstead: () => setState(() => _inputMode = 'manual'))
                 : _selected != null
                 ? _FoodDetail(
                     key: ValueKey(_selected!.name),
@@ -1182,35 +1205,6 @@ class _AddCustomRow extends StatelessWidget {
           style: TextStyle(color: _brand.withValues(alpha: 0.8),
             fontSize: 14, fontWeight: FontWeight.w600)),
       ])));
-}
-
-class _PillTab extends StatelessWidget {
-  final String label;
-  final bool active;
-  final VoidCallback onTap;
-  const _PillTab(this.label, this.active, this.onTap);
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      decoration: BoxDecoration(
-        gradient: active
-          ? const LinearGradient(
-              colors: [Color(0xFF7C3AED), Color(0xFFA855F7)])
-          : null,
-        borderRadius: BorderRadius.circular(999),
-        boxShadow: active
-          ? [BoxShadow(
-              color: _brand.withValues(alpha: 0.45),
-              blurRadius: 14, spreadRadius: -2)]
-          : null),
-      alignment: Alignment.center,
-      child: Text(label,
-        style: TextStyle(
-          color: active ? _white : _grey.withValues(alpha: 0.55),
-          fontSize: 15, fontWeight: FontWeight.w700))));
 }
 
 // ── Food Detail ────────────────────────────────────────────────────────────

@@ -7,6 +7,14 @@ class CycleService {
 
   String _date(DateTime d) => d.toIso8601String().split('T').first;
 
+  /// Writes refuse rather than no-op when there is no session (F-06): a
+  /// silently discarded health log is indistinguishable from a saved one.
+  String _requireUid() {
+    final uid = _uid;
+    if (uid == null) throw StateError('Not signed in — the cycle log was not saved.');
+    return uid;
+  }
+
   Future<Map<String, dynamic>?> getSettings() async {
     final uid = _uid;
     if (uid == null) return null;
@@ -14,8 +22,7 @@ class CycleService {
   }
 
   Future<void> saveSettings({int? cycleLength, int? periodLength}) async {
-    final uid = _uid;
-    if (uid == null) return;
+    final uid = _requireUid();
     await _db.from('cycle_settings').upsert({
       'user_id': uid,
       if (cycleLength != null) 'avg_cycle_length': cycleLength,
@@ -39,8 +46,7 @@ class CycleService {
 
   /// Logs a new period start (and optional end).
   Future<void> logPeriod({required DateTime start, DateTime? end}) async {
-    final uid = _uid;
-    if (uid == null) return;
+    final uid = _requireUid();
     await _db.from('cycle_logs').insert({
       'user_id': uid,
       'start_date': _date(start),
@@ -49,9 +55,9 @@ class CycleService {
   }
 
   /// Marks the end date on the most recent period that has no end yet.
-  Future<void> endCurrentPeriod(DateTime end) async {
-    final uid = _uid;
-    if (uid == null) return;
+  /// Returns false when there was no period in progress to end (F-22).
+  Future<bool> endCurrentPeriod(DateTime end) async {
+    final uid = _requireUid();
     final open = await _db
         .from('cycle_logs')
         .select('id')
@@ -60,9 +66,9 @@ class CycleService {
         .order('start_date', ascending: false)
         .limit(1)
         .maybeSingle();
-    if (open != null) {
-      await _db.from('cycle_logs').update({'end_date': _date(end)}).eq('id', open['id']);
-    }
+    if (open == null) return false;
+    await _db.from('cycle_logs').update({'end_date': _date(end)}).eq('id', open['id']);
+    return true;
   }
 
   /// Upserts today's symptom check-in.
@@ -74,8 +80,7 @@ class CycleService {
     String? flow,
     String? notes,
   }) async {
-    final uid = _uid;
-    if (uid == null) return;
+    final uid = _requireUid();
     await _db.from('cycle_symptoms').upsert({
       'user_id': uid,
       'log_date': _date(date),

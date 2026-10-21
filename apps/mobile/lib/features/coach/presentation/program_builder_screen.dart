@@ -41,7 +41,7 @@ class ProgramLibraryScreen extends ConsumerWidget {
         loading: () =>
             const Center(child: CircularProgressIndicator(color: _brand)),
         error: (e, _) => Center(
-            child: Text('Could not load programs.\n$e',
+            child: Text('Could not load programs.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: _muted))),
         data: (programs) {
@@ -210,7 +210,7 @@ class ProgramBuilderScreen extends ConsumerWidget {
         loading: () =>
             const Center(child: CircularProgressIndicator(color: _brand)),
         error: (e, _) => Center(
-            child: Text('Could not load workouts.\n$e',
+            child: Text('Could not load workouts.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: _muted))),
         data: (workouts) {
@@ -385,7 +385,8 @@ class _WorkoutCard extends ConsumerWidget {
                     Expanded(
                       child: Text(
                         '${m['name'] ?? ''}  ·  ${m['sets'] ?? '-'}×${m['reps'] ?? '-'}'
-                        '${m['rest'] != null ? '  ·  ${m['rest']}s rest' : ''}',
+                        '${_load(m)}'
+                        '${m['rest_seconds'] != null ? '  ·  ${m['rest_seconds']}s rest' : ''}',
                         style: const TextStyle(color: _muted, fontSize: 12),
                       ),
                     ),
@@ -609,7 +610,8 @@ class _WorkoutEditorSheetState extends State<_WorkoutEditorSheet> {
                 Expanded(
                   child: Text(
                     '${ex['name']}  ·  ${ex['sets']}×${ex['reps']}'
-                    '${ex['rest'] != null ? '  ·  ${ex['rest']}s' : ''}',
+                    '${_load(ex)}'
+                    '${ex['rest_seconds'] != null ? '  ·  ${ex['rest_seconds']}s' : ''}',
                     style: const TextStyle(color: _white, fontSize: 13),
                   ),
                 ),
@@ -661,6 +663,16 @@ class _ExerciseDialogState extends State<_ExerciseDialog> {
   final _sets = TextEditingController(text: '3');
   final _reps = TextEditingController(text: '10');
   final _rest = TextEditingController(text: '60');
+  final _weight = TextEditingController();
+  String? _error;
+
+  /// A fresh identity for this exercise instance. Random rather than derived
+  /// from the name: a coach may legitimately put the same movement in a session
+  /// twice, and those are two instances.
+  static String _mintInstanceId() =>
+      'ex-${DateTime.now().microsecondsSinceEpoch}-'
+      '${_seq = (_seq + 1) & 0xffff}';
+  static int _seq = 0;
 
   @override
   void dispose() {
@@ -668,6 +680,7 @@ class _ExerciseDialogState extends State<_ExerciseDialog> {
     _sets.dispose();
     _reps.dispose();
     _rest.dispose();
+    _weight.dispose();
     super.dispose();
   }
 
@@ -690,6 +703,15 @@ class _ExerciseDialogState extends State<_ExerciseDialog> {
               Expanded(child: _field('Rest s', _rest, keyboard: TextInputType.number)),
             ],
           ),
+          const SizedBox(height: 10),
+          _field('Load kg (optional)', _weight,
+              hint: 'leave blank for no prescribed load',
+              keyboard: TextInputType.number),
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            Text(_error!,
+                style: const TextStyle(color: Color(0xFFE5484D), fontSize: 12)),
+          ],
         ],
       ),
       actions: [
@@ -698,12 +720,30 @@ class _ExerciseDialogState extends State<_ExerciseDialog> {
             child: const Text('Cancel', style: TextStyle(color: _muted))),
         TextButton(
           onPressed: () {
-            if (_name.text.trim().isEmpty) return;
-            Navigator.pop(context, {
-              'name': _name.text.trim(),
-              'sets': int.tryParse(_sets.text.trim()) ?? 3,
-              'reps': _reps.text.trim(),
-              'rest': int.tryParse(_rest.text.trim()),
+            final name = _name.text.trim();
+            final sets = int.tryParse(_sets.text.trim());
+            final reps = int.tryParse(_reps.text.trim());
+            // Nothing leaves this dialog that the contract would reject.
+            // `reps` used to be handed on as the raw String, which the client's
+            // codec could not read — and the whole program then decoded to
+            // nothing at all, so authoring one exercise made the client's
+            // program disappear.
+            if (name.isEmpty || sets == null || sets < 1 || reps == null || reps < 0) {
+              setState(() => _error = 'Name, sets and reps are required, and '
+                  'sets and reps must be whole numbers.');
+              return;
+            }
+            Navigator.pop(context, <String, dynamic>{
+              // Identity is minted here, once, and travels with the exercise
+              // from now on — see docs/WORKOUT_DOMAIN_CONTRACT.md §2.
+              'exercise_instance_id': _mintInstanceId(),
+              'name': name,
+              'sets': sets,
+              'reps': reps,
+              // A coach who has not prescribed a load prescribes *no* load.
+              // Writing 0 would tell the client to lift nothing.
+              'weight_kg': double.tryParse(_weight.text.trim()),
+              'rest_seconds': int.tryParse(_rest.text.trim()),
             });
           },
           child: const Text('Add', style: TextStyle(color: _accent)),
@@ -845,4 +885,14 @@ Widget _field(String label, TextEditingController c,
       ],
     ),
   );
+}
+
+/// The prescribed load of a canonical exercise entry, for display.
+///
+/// Absent load is rendered as nothing at all, never as "0 kg" — a program that
+/// prescribes no weight is not a program that prescribes lifting nothing.
+String _load(Map<dynamic, dynamic> e) {
+  final kg = e['weight_kg'];
+  if (kg is! num) return '';
+  return '  ·  ${kg % 1 == 0 ? kg.toStringAsFixed(0) : kg}kg';
 }

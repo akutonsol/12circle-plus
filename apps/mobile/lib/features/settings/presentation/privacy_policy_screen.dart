@@ -28,6 +28,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
           child: SizedBox(height: 56, child: Row(children: [
             IconButton(
               icon: const Icon(Icons.arrow_back_ios_new, color: _pri, size: 20),
+              tooltip: 'Back',
               onPressed: () => Navigator.of(context).pop()),
             const Expanded(child: Center(child: Text('PRIVACY POLICY',
               style: TextStyle(color: _pri, fontSize: 16,
@@ -83,7 +84,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
             _section('5. Your Rights', [
               _subsection('Access', 'You may request a full export of your data at any time from Profile → Settings → Account.'),
               _subsection('Correction', 'You may update your personal information directly within the app.'),
-              _subsection('Deletion', 'You may delete your account from Profile → Settings → Account. Account deletion permanently removes all your data within 30 days.'),
+              _subsection('Deletion', 'You may request deletion of your account by emailing privacy@12circle.app from the address on your account. Account deletion permanently removes all your data within 30 days. Deleting your account from inside the app is not available yet.'),
               _subsection('Data Portability', 'We provide data exports in JSON or CSV format on request.'),
               _subsection('Opt-Out', 'You may disable marketing notifications from Profile → Settings → Notification Preferences at any time.'),
             ]),

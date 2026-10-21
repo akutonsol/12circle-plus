@@ -143,7 +143,7 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
         ),
         body: pkgsAsync.when(
           loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
-          error: (e, _) => Center(child: Text('Could not load packages.\n$e',
+          error: (e, _) => Center(child: Text('Could not load packages.',
               textAlign: TextAlign.center, style: const TextStyle(color: _muted))),
           data: (pkgs) {
             if (pkgs.isEmpty) {
@@ -311,7 +311,7 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
           onTap: () async {
             final t = await showTimePicker(
                 context: context, initialTime: _dayTimes[i] ?? _time);
-            if (t != null) setState(() { _dayTimes[i] = t; _time = t; });
+            if (t != null && mounted) setState(() { _dayTimes[i] = t; _time = t; });
           },
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),

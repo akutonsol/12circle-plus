@@ -34,7 +34,6 @@ class WorkoutHistoryScreen extends ConsumerWidget {
     final historyAsync = ref.watch(workoutHistoryProvider);
 
     return AppScaffold(
-      navIndex: 2,
       showBackButton: true,
       body: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // ── Header ──

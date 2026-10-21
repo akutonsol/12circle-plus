@@ -5,6 +5,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../../shared/theme/app_background.dart';
 import '../../../core/animations/app_animations.dart';
 import '../domain/community_provider.dart';
+import '../domain/post_type_choice.dart';
+import 'widgets/create_post_sheet.dart';
 import 'widgets/post_card.dart';
 
 class CommunityScreen extends ConsumerStatefulWidget {
@@ -59,98 +61,22 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => Container(
-        padding: EdgeInsets.only(
-          left: 24, right: 24, top: 24,
-          bottom: MediaQuery.of(context).viewInsets.bottom + 24,
-        ),
-        decoration: const BoxDecoration(
-          color: AppColors.bgDarkSecondary,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 40, height: 4,
-                decoration: BoxDecoration(color: AppColors.surfaceDarkElevated, borderRadius: BorderRadius.circular(2)),
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Text('Create Post', style: TextStyle(color: AppColors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                const CircleAvatar(
-                  radius: 20,
-                  backgroundColor: AppColors.purple,
-                  child: Icon(Icons.person, color: AppColors.white, size: 18),
-                ),
-                const SizedBox(width: 12),
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('You', style: TextStyle(color: AppColors.white, fontSize: 14, fontWeight: FontWeight.w600)),
-                    Text('Posting to Community', style: TextStyle(color: AppColors.textTertiary, fontSize: 12)),
-                  ],
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _postController,
-              maxLines: 5,
-              autofocus: true,
-              style: const TextStyle(color: AppColors.white, fontSize: 15),
-              decoration: const InputDecoration(
-                hintText: 'Share your progress, tips, or motivation...',
-                border: InputBorder.none,
-                filled: false,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                _buildPostTypeChip('📸 Photo', () {}),
-                const SizedBox(width: 8),
-                _buildPostTypeChip('🏆 Achievement', () {}),
-                const SizedBox(width: 8),
-                _buildPostTypeChip('💪 Workout', () {}),
-              ],
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: () {
-                if (_postController.text.trim().isEmpty) return;
-                ref.read(postNotifierProvider.notifier).addPost(_postController.text.trim());
-                _postController.clear();
-                Navigator.pop(context);
-                AppAnimations.hapticSuccess();
-              },
-              child: const Text('Post to Community'),
-            ),
-          ],
-        ),
+      // FIT-067. The sheet's body is its own widget now: the chosen post type
+      // needs state, and a `setState` here does not rebuild what
+      // `showModalBottomSheet` has already handed to the overlay.
+      builder: (_) => CreatePostSheet(
+        onPost: (content, type) {
+          // The type was never passed, so every post this app wrote went in
+          // as the default 'general' whatever the user tapped.
+          ref
+              .read(postNotifierProvider.notifier)
+              .addPost(content, postType: postTypeWire(type));
+          AppAnimations.hapticSuccess();
+        },
       ),
     );
   }
 
-  Widget _buildPostTypeChip(String label, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceDark,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: AppColors.surfaceDarkElevated),
-        ),
-        child: Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-      ),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {

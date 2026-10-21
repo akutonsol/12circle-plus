@@ -1,62 +1,57 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
+import '../data/workout_session_store.dart';
+import '../domain/workout_provider.dart';
 
 // ── UC10: Resume Incomplete Workout Banner ────────────────────────────────────
 // Drop this widget anywhere in the home/train hub screen to show the prompt
 // when a user has an in-progress workout session.
+//
+// Reads the same `activeSessionProvider` the Train hub uses, so both surfaces
+// always name the same session, and resumes through the same binding helper so
+// the Workout Zone opens on that session's workout rather than on whatever was
+// last selected in memory.
 
-class ResumeWorkoutBanner extends StatefulWidget {
+class ResumeWorkoutBanner extends ConsumerStatefulWidget {
   const ResumeWorkoutBanner({super.key});
   @override
-  State<ResumeWorkoutBanner> createState() => _ResumeWorkoutBannerState();
+  ConsumerState<ResumeWorkoutBanner> createState() => _ResumeWorkoutBannerState();
 }
 
-class _ResumeWorkoutBannerState extends State<ResumeWorkoutBanner> {
-  final _db = Supabase.instance.client;
-  Map<String, dynamic>? _session;
+class _ResumeWorkoutBannerState extends ConsumerState<ResumeWorkoutBanner> {
   bool _dismissed = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _check();
-  }
-
-  Future<void> _check() async {
-    final uid = _db.auth.currentUser?.id;
-    if (uid == null) return;
+  Future<void> _dismiss(WorkoutSessionRecord session) async {
+    setState(() => _dismissed = true);
     try {
-      final session = await _db
-          .from('workout_sessions')
-          .select('*, program_workouts(name)')
-          .eq('user_id', uid)
-          .eq('status', 'in_progress')
-          .order('started_at', ascending: false)
-          .limit(1)
-          .maybeSingle();
-      if (mounted && session != null) {
-        setState(() => _session = session);
-      }
+      await ref.read(workoutSessionManagerProvider).abandonSession(session.id);
     } catch (_) {}
+    if (mounted) ref.invalidate(activeSessionProvider);
   }
 
-  Future<void> _dismiss() async {
-    final id = _session?['id'] as String?;
-    if (id != null) {
-      await _db.from('workout_sessions').update({'status': 'abandoned'}).eq('id', id).catchError((_) {});
+  Future<void> _resume(WorkoutSessionRecord session) async {
+    final workout = await bindSessionToSelectedWorkout(ref, session);
+    if (!mounted) return;
+    if (workout == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('That workout is no longer available.')));
+      return;
     }
-    setState(() { _dismissed = true; _session = null; });
+    context.push('/active-workout');
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_session == null || _dismissed) return const SizedBox.shrink();
+    if (_dismissed) return const SizedBox.shrink();
+    final session = ref.watch(activeSessionProvider).valueOrNull;
+    if (session == null) return const SizedBox.shrink();
 
-    final startedAt = DateTime.tryParse(_session?['started_at'] as String? ?? '');
-    final elapsed = startedAt != null ? DateTime.now().difference(startedAt) : Duration.zero;
+    final elapsed = DateTime.now().difference(session.startedAt);
     final mins = elapsed.inMinutes;
-    final workoutName = (_session?['program_workouts'] as Map?)?['name'] as String? ?? 'Workout';
+    final workoutName =
+        session.workoutTitle.isNotEmpty ? session.workoutTitle : 'Workout';
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -87,7 +82,7 @@ class _ResumeWorkoutBannerState extends State<ResumeWorkoutBanner> {
         ])),
         const SizedBox(width: 8),
         ElevatedButton(
-          onPressed: () => context.push('/active-workout'),
+          onPressed: () => _resume(session),
           style: ElevatedButton.styleFrom(
             backgroundColor: const Color(0xFFA855F7),
             foregroundColor: Colors.white,
@@ -97,7 +92,7 @@ class _ResumeWorkoutBannerState extends State<ResumeWorkoutBanner> {
         ),
         const SizedBox(width: 4),
         IconButton(
-          onPressed: _dismiss,
+          onPressed: () => _dismiss(session),
           icon: const Icon(Icons.close_rounded, color: Color(0xFFCFC2D6), size: 18),
           padding: EdgeInsets.zero, constraints: const BoxConstraints()),
       ]),

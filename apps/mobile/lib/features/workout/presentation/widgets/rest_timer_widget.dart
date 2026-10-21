@@ -11,6 +11,11 @@ class RestTimerWidget extends StatefulWidget {
   final DateTime endTime;
   final int totalSeconds;
   final VoidCallback onComplete; // skip / dismiss
+  /// FIT-017 declares two controls on this state: "Skip rest, start set" and
+  /// "Add 30 seconds". The second one did not exist — a client who needed
+  /// longer could only watch the clock run into overtime and start draining
+  /// points. Null hides it rather than rendering a control that does nothing.
+  final VoidCallback? onExtend;
   final ValueChanged<int>? onTick; // remaining seconds (0 in overtime)
   final VoidCallback? onOvertime; // fired once when the rest runs into overtime
   // Fired again for every [penaltyIntervalSeconds] the user stays in overtime, so
@@ -23,6 +28,7 @@ class RestTimerWidget extends StatefulWidget {
     required this.endTime,
     required this.totalSeconds,
     required this.onComplete,
+    this.onExtend,
     this.onTick,
     this.onOvertime,
     this.onOvertimePenaltyTick,
@@ -135,11 +141,17 @@ class _RestTimerWidgetState extends State<RestTimerWidget> {
               style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
           ]),
           const Spacer(),
-          GestureDetector(
-            onTap: widget.onComplete,
-            child: const Text('STOP',
-              style: TextStyle(color: AppColors.error, fontSize: 12, fontWeight: FontWeight.w900, letterSpacing: 1)),
-          ),
+          if (widget.onExtend != null)
+            _RestAction(
+              text: '+30s',
+              label: 'Add 30 seconds',
+              color: AppColors.textSecondary,
+              onTap: widget.onExtend!),
+          _RestAction(
+            text: 'STOP',
+            label: 'Skip rest, start set',
+            color: AppColors.error,
+            onTap: widget.onComplete),
         ]),
       );
     }
@@ -174,13 +186,68 @@ class _RestTimerWidgetState extends State<RestTimerWidget> {
               valueColor: AlwaysStoppedAnimation<Color>(accent)),
           ),
         ),
-        const SizedBox(width: 12),
-        GestureDetector(
-          onTap: widget.onComplete,
-          child: const Text('SKIP',
-            style: TextStyle(color: AppColors.purple, fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 1)),
-        ),
+        const SizedBox(width: 4),
+        if (widget.onExtend != null)
+          _RestAction(
+            text: '+30s',
+            label: 'Add 30 seconds',
+            color: AppColors.textSecondary,
+            onTap: widget.onExtend!),
+        _RestAction(
+          text: 'SKIP',
+          label: 'Skip rest, start set',
+          color: AppColors.purple,
+          onTap: widget.onComplete),
       ]),
     );
   }
+}
+
+/// A control in the rest banner.
+///
+/// Two things it does that the bare `GestureDetector` + `Text` it replaced did
+/// not. It carries an **accessible name in the design's own wording** — the
+/// banner is too narrow for "Skip rest, start set" as visible text, so the
+/// short label is drawn and the full phrase is what a screen reader announces,
+/// rather than the nothing an icon-only or abbreviated control announces today
+/// (see F-22 / A-G8). And it reserves a 44 dp target around a 12 pt label that
+/// would otherwise be about 30 dp tall — the floor F-6 was raised about.
+class _RestAction extends StatelessWidget {
+  final String text;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+  const _RestAction({
+    required this.text,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        label: label,
+        // `excludeSemantics` drops the child's ACTIONS too, so the tap has to be
+        // handed to the Semantics as well — otherwise the node announces as a
+        // button a screen reader cannot activate. Measured on-device on the
+        // intake back button before it was caught here as well.
+        excludeSemantics: true,
+        onTap: onTap,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text(text,
+                style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1)),
+          ),
+        ),
+      );
 }

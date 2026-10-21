@@ -14,7 +14,7 @@ const _wht   = Colors.white;
 const _mut   = Color(0xFFCFC2D6);
 
 // ── State ─────────────────────────────────────────────────────────────────────
-enum _BookingState { loading, noCoach, pending, noSlots, ready, booked }
+enum _BookingState { loading, noCoach, pending, noSlots, ready, booked, error }
 
 class BookingScreen extends ConsumerStatefulWidget {
   const BookingScreen({super.key});
@@ -50,20 +50,47 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
     if (uid == null) { setState(() => _state = _BookingState.noCoach); return; }
 
     try {
-      // All of the client's coach relationships (a client may have several).
+      // UIX-1 / M-03. This query used to embed the coach profile as
+      // `coach:coach_id(...)`. `coach_client_relationships.coach_id` is a
+      // foreign key to `auth.users` (000_baseline_preexisting_tables.sql:237),
+      // not to any relation in the `public` schema, so PostgREST answered
+      // PGRST200 "no matches were found" and the whole screen was dead for
+      // every client. PD-A23 option (b), owner ruling 2026-08-28: drop the
+      // embed and read the profiles in a second query against
+      // `public_profiles` — the pattern coach_relationship_service.dart
+      // already uses. No migration.
       final rels = await _db
           .from('coach_client_relationships')
-          .select('coach_id, status, pending_at, activated_at, '
-              'coach:coach_id(first_name, last_name, avatar_url, '
-              'coach_title, coach_bio, specialties)')
+          .select('coach_id, status, pending_at, activated_at')
           .eq('client_id', uid)
           // Most recently activated first → default matches the "assigned coach"
           // shown on the home screen (assignedCoachProvider uses activated_at).
           .order('activated_at', ascending: false, nullsFirst: false);
       final list = List<Map<String, dynamic>>.from(rels as List);
 
+      // Second query. `public_profiles` (migration 110) is the sanctioned
+      // non-sensitive projection and carries every field this screen renders.
+      final coachIds = list
+          .map((r) => r['coach_id'] as String?)
+          .whereType<String>()
+          .toSet()
+          .toList();
+      final profileMap = <String, Map<String, dynamic>>{};
+      if (coachIds.isNotEmpty) {
+        final profiles = await _db
+            .from('public_profiles')
+            .select('id, first_name, last_name, avatar_url, '
+                'coach_title, coach_bio, specialties')
+            .inFilter('id', coachIds);
+        for (final row in (profiles as List)) {
+          final m = Map<String, dynamic>.from(row as Map);
+          final id = m['id'] as String?;
+          if (id != null) profileMap[id] = m;
+        }
+      }
+
       Map<String, dynamic> coachOf(Map<String, dynamic> r) {
-        final c = r['coach'] as Map<String, dynamic>? ?? {};
+        final c = profileMap[r['coach_id']] ?? const <String, dynamic>{};
         final fn = c['first_name'] as String? ?? '';
         final ln = c['last_name'] as String? ?? '';
         return {
@@ -72,7 +99,11 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
           'avatar': c['avatar_url'],
           'title': c['coach_title'],
           'bio': c['coach_bio'],
-          'specialties': c['specialties'],
+          // `user_profiles.specialties` is `text[]` (001:42), and this screen
+          // renders it as a comma-separated string it splits itself. The embed
+          // never returned, so the old `as String?` cast was never exercised;
+          // it would throw now that the read works. Normalise at the join.
+          'specialties': _specialtiesLabel(c['specialties']),
           'pending_at': r['pending_at'],
         };
       }
@@ -89,9 +120,11 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
           _coachBio         = c['bio'] as String?;
           _coachSpecialties = c['specialties'] as String?;
           _pendingAt        = c['pending_at'] as String?;
+          if (!mounted) return;
           setState(() => _state = _BookingState.pending);
           return;
         }
+        if (!mounted) return;
         setState(() => _state = _BookingState.noCoach);
         return;
       }
@@ -102,8 +135,31 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
           ? _coachId! : _coaches.first['id'] as String;
       await _applyCoach(selId);
     } catch (_) {
-      setState(() { _slots = []; _state = _BookingState.noSlots; });
+      // UIX-1 / invariants I-1 and I-5: the authoritative data could not be
+      // obtained, so the screen must not present the confident "no slots"
+      // answer. An empty value is an answer; this is not one.
+      if (!mounted) return;
+      setState(() {
+        _slots  = [];
+        _booked = [];
+        _state  = _BookingState.error;
+      });
     }
+  }
+
+  /// `specialties` is `text[]` in the schema and a comma-separated string in
+  /// this screen's widgets. One place converts.
+  static String? _specialtiesLabel(Object? raw) {
+    if (raw == null) return null;
+    if (raw is String) return raw.trim().isEmpty ? null : raw;
+    if (raw is List) {
+      final parts = raw
+          .map((e) => e?.toString().trim() ?? '')
+          .where((e) => e.isNotEmpty)
+          .toList();
+      return parts.isEmpty ? null : parts.join(', ');
+    }
+    return null;
   }
 
   /// Loads the chosen coach's open slots + the client's booked calls with them.
@@ -240,6 +296,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: _wht, size: 20),
+          tooltip: 'Back',
           onPressed: () => context.canPop() ? context.pop() : context.go('/home')),
         title: const Text('Book a Call',
           style: TextStyle(color: _wht, fontSize: 18, fontWeight: FontWeight.w700)),
@@ -267,6 +324,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         onRefresh:    _load,
       ),
       _BookingState.noSlots  => _NoSlotsState(coachName: _coachName),
+      _BookingState.error    => _LoadFailedState(onRetry: _load),
       _BookingState.ready || _BookingState.booked => _ReadyState(
         coachName: _coachName ?? 'Your Coach',
         coachAvatar: _coachAvatar,
@@ -549,6 +607,44 @@ class _PendingCoachState extends StatelessWidget {
   }
 }
 
+// ── Load failed ───────────────────────────────────────────────────────────────
+//
+// UIX-1 / M-03. Distinct from `_NoSlotsState` on purpose: "no slots" is an
+// answer about the coach's availability, and this is the absence of an answer.
+// Collapsing the two is the false-success condition Workstream M recorded.
+class _LoadFailedState extends StatelessWidget {
+  final VoidCallback onRetry;
+  const _LoadFailedState({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: 72, height: 72,
+          decoration: BoxDecoration(
+            color: _brand.withValues(alpha: 0.1), shape: BoxShape.circle),
+          child: const Icon(Icons.cloud_off_rounded, color: _brand, size: 36)),
+        const SizedBox(height: 20),
+        const Text("Couldn't load your bookings",
+          style: TextStyle(color: _wht, fontSize: 20, fontWeight: FontWeight.w700),
+          textAlign: TextAlign.center),
+        const SizedBox(height: 10),
+        const Text(
+          'We could not reach your coach and availability data just now. '
+          'This is a connection problem, not an empty schedule.',
+          style: TextStyle(color: _mut, fontSize: 13, height: 1.5),
+          textAlign: TextAlign.center),
+        const SizedBox(height: 20),
+        TextButton.icon(
+          onPressed: onRetry,
+          icon: const Icon(Icons.refresh_rounded, color: _pri, size: 18),
+          label: const Text('Try again',
+            style: TextStyle(color: _pri, fontSize: 14, fontWeight: FontWeight.w600))),
+      ])));
+}
+
 // ── No Slots ──────────────────────────────────────────────────────────────────
 class _NoSlotsState extends StatelessWidget {
   final String? coachName;
@@ -801,6 +897,20 @@ class _SlotCardState extends State<_SlotCard> {
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _brand, foregroundColor: _wht,
+                  // The app's ElevatedButton theme is the full-width CTA style
+                  // (helix_theme_builder.dart:44 — minimumSize
+                  // Size(double.infinity, 54)), and an unset property here
+                  // falls through to it. In a bounded column that infinite
+                  // minWidth clamps harmlessly to the parent's maxWidth; as a
+                  // non-flex child of this Row it does not, because RenderFlex
+                  // lays inflexible children out with an unbounded main axis —
+                  // so the button is asked for BoxConstraints(minWidth:
+                  // Infinity) and layout throws "BoxConstraints forces an
+                  // infinite width." Overriding only the width component keeps
+                  // the themed 54px height and the intended hug-content width,
+                  // matching the design system's own non-full-width idiom
+                  // (helix_theme_builder.dart:76).
+                  minimumSize: const Size(0, 54),
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                 child: const Text('Book', style: TextStyle(fontWeight: FontWeight.w700))),

@@ -1,0 +1,960 @@
+{
+  "version": "1.0",
+  "authority": "Julia",
+  "approved": "2026-10-05",
+  "provenance": "Owner-supplied role policies, transcribed mechanically. No grant was inferred: no verb hierarchy (Manage does not imply Update), no cross-group inference, and the role levels Full/Limited/Read-only were NOT used as grants. V5 §115 vocabulary; binary model per §118.1.",
+  "areas": [
+    {
+      "group": "Ecosystem",
+      "area": "Community",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": true,
+            "content_editor": true,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": true,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": true,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Ecosystem",
+      "area": "Events",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": true,
+            "content_editor": true,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": true,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": true,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Ecosystem",
+      "area": "Training",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": true,
+            "content_editor": true,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": true,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": true,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Ecosystem",
+      "area": "Monetization",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": true,
+            "content_editor": true,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Ecosystem",
+      "area": "Wearable intelligence",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": true,
+            "content_editor": true,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Trust",
+      "area": "AI Guardian",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Trust",
+      "area": "Security",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Trust",
+      "area": "Incidents",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Trust",
+      "area": "Audit logs",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Operations",
+      "area": "QA",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": true,
+            "content_editor": true,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Operations",
+      "area": "Releases",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": true,
+            "content_editor": true,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Operations",
+      "area": "Integrations",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": true,
+            "content_editor": true,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Operations",
+      "area": "System",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": true,
+            "content_editor": true,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": true,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Settings",
+      "area": "Organization",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": true,
+            "content_editor": true,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Settings",
+      "area": "Users",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": true,
+            "content_editor": true,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": true,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Settings",
+      "area": "Roles",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": true,
+            "content_editor": true,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    },
+    {
+      "group": "Settings",
+      "area": "Configuration",
+      "verbs": [
+        {
+          "verb": "View",
+          "grants": {
+            "trust_lead": true,
+            "operations_lead": true,
+            "support": true,
+            "content_editor": true,
+            "viewer": true
+          }
+        },
+        {
+          "verb": "Create",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Update",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Manage",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        },
+        {
+          "verb": "Approve",
+          "grants": {
+            "trust_lead": false,
+            "operations_lead": false,
+            "support": false,
+            "content_editor": false,
+            "viewer": false
+          }
+        }
+      ]
+    }
+  ]
+}

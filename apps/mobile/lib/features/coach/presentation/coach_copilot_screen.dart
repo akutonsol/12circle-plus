@@ -100,7 +100,7 @@ class _State extends ConsumerState<CoachCopilotScreen> {
       await _programs.assignProgram(prog['id'] as String, c['id'] as String);
       if (mounted) setState(() => _status = 'Assigned to ${c['first_name'] ?? 'client'} ✓');
     } catch (e) {
-      if (mounted) setState(() => _status = 'Assign failed: $e');
+      if (mounted) setState(() => _status = 'Assign failed.');
     } finally {
       if (mounted) setState(() => _assigning = false);
     }
@@ -122,7 +122,7 @@ class _State extends ConsumerState<CoachCopilotScreen> {
         clients.when(
           loading: () => const Padding(padding: EdgeInsets.all(20),
             child: Center(child: CircularProgressIndicator(color: _brand))),
-          error: (e, _) => Text('Could not load clients: $e', style: const TextStyle(color: _fail)),
+          error: (e, _) => Text('Could not load clients.', style: const TextStyle(color: _fail)),
           data: (list) => list.isEmpty
               ? const Text('No active clients yet.', style: TextStyle(color: _muted))
               : _clientPicker(list),

@@ -61,7 +61,7 @@ class VendorPortalScreen extends ConsumerWidget {
         loading: () =>
             const Center(child: CircularProgressIndicator(color: _brand)),
         error: (e, _) => Center(
-            child: Text('Could not load events.\n$e',
+            child: Text('Could not load events.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: _muted))),
         data: (events) {
@@ -265,7 +265,7 @@ class EventAttendeesScreen extends ConsumerWidget {
         loading: () =>
             const Center(child: CircularProgressIndicator(color: _brand)),
         error: (e, _) => Center(
-            child: Text('Could not load attendees.\n$e',
+            child: Text('Could not load attendees.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: _muted))),
         data: (regs) {
@@ -459,6 +459,7 @@ class _EventEditorSheetState extends State<_EventEditorSheet> {
     if (!mounted) return;
     final t = await showTimePicker(
         context: context, initialTime: TimeOfDay.fromDateTime(_date));
+    if (!mounted) return;
     setState(() {
       _date = DateTime(d.year, d.month, d.day, t?.hour ?? 9, t?.minute ?? 0);
     });

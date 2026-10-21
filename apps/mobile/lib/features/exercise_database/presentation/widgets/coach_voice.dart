@@ -7,6 +7,7 @@
 // headlessly — this needs on-device testing (mic permission + capture + upload +
 // playback across web/iOS/Android). Structured against record ^7 / audioplayers ^6.
 import 'dart:async';
+import 'dart:io' show File;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -22,6 +23,18 @@ const _muted = Color(0xFFB6A9C4);
 const _panel = Color(0xFF1B1526);
 
 const _maxSeconds = 30;
+
+/// Shown when the mic is refused. The hold gesture used to do nothing at all —
+/// `if (!await _rec.hasPermission()) return;` — so a coach could not tell a
+/// denied permission from a broken button.
+const micDeniedMessage = 'Microphone access is off. Enable it in Settings to '
+    'record a voice note.';
+
+/// Shown when the note did not reach the server. `_stop()` ended in
+/// `catch (_) {}`, and the `url == null` path fell through silently, so a
+/// failed upload looked exactly like a successful one: the coach released, the
+/// control reset, and nothing was saved.
+const voiceUploadFailedMessage = 'Could not send your voice note. Try again.';
 
 // Fixed decorative bar heights — a waveform that "feels alive" without sampling
 // the audio (transcription/analysis is intentionally out of scope for beta).
@@ -50,10 +63,19 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
   @override
   void dispose() { _timer?.cancel(); _rec.dispose(); super.dispose(); }
 
+  void _say(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
   Future<void> _start() async {
     if (_busy || _recording) return;
     try {
-      if (!await _rec.hasPermission()) return;
+      if (!await _rec.hasPermission()) {
+        _say(micDeniedMessage);
+        return;
+      }
       final String path;
       if (kIsWeb) {
         path = 'coach-voice.m4a';
@@ -63,30 +85,75 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
       }
       await _rec.start(const RecordConfig(encoder: AudioEncoder.aacLc, numChannels: 1), path: path);
       _startedAt = DateTime.now();
+      // `_start` awaits twice before this; the widget can be gone by now.
+      if (!mounted) {
+        await _rec.stop();
+        return;
+      }
+      if (!mounted) return;
       setState(() { _recording = true; _elapsed = 0; });
       _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+        if (!mounted) return;
         setState(() => _elapsed++);
         if (_elapsed >= _maxSeconds) _stop();
       });
-    } catch (_) { setState(() => _recording = false); }
+    } catch (_) {
+      if (mounted) setState(() => _recording = false);
+    }
   }
 
   Future<void> _stop() async {
     if (!_recording) return;
     _timer?.cancel();
     setState(() { _recording = false; _busy = true; });
+    String? path;
     try {
-      final path = await _rec.stop();
+      path = await _rec.stop();
       final durationMs = _startedAt == null ? 0 : DateTime.now().difference(_startedAt!).inMilliseconds;
-      if (path == null || durationMs < 800) { setState(() => _busy = false); return; } // discard taps
+      if (path == null || durationMs < 800) { // discard taps
+        if (mounted) setState(() => _busy = false);
+        return;
+      }
       final bytes = await XFile(path).readAsBytes();
       final url = await _svc.uploadCoachVoice(widget.exerciseId, bytes);
-      if (url != null) {
-        await _svc.setCoachVoice(widget.exerciseId, url, durationMs, widget.resolveExpiry());
-        widget.onRecorded();
+      // `url == null` is how `uploadCoachVoice` reports failure — it catches
+      // internally and stashes `lastError`. Falling through silently here is
+      // what made a failed send indistinguishable from a successful one.
+      if (url == null) {
+        _say(voiceUploadFailedMessage);
+      } else {
+        final saved = await _svc.setCoachVoice(
+            widget.exerciseId, url, durationMs, widget.resolveExpiry());
+        if (saved) {
+          widget.onRecorded();
+        } else {
+          _say(voiceUploadFailedMessage);
+        }
       }
-    } catch (_) {}
+    } catch (_) {
+      _say(voiceUploadFailedMessage);
+    } finally {
+      // The capture is a real audio file of the coach's voice sitting in the
+      // device's temp directory. It was never removed, so every recording
+      // accumulated there for the lifetime of the install — including the
+      // sub-800ms ones discarded as taps, which were never even uploaded.
+      await _discard(path);
+    }
     if (mounted) setState(() => _busy = false);
+  }
+
+  /// Removes the local capture once it has been read.
+  ///
+  /// Web records to an in-memory/blob path that is not a filesystem entry, so
+  /// there is nothing to unlink there.
+  Future<void> _discard(String? path) async {
+    if (path == null || kIsWeb) return;
+    try {
+      final f = File(path);
+      if (await f.exists()) await f.delete();
+    } catch (_) {
+      // Best effort: a temp file that will not delete must not fail the send.
+    }
   }
 
   @override
@@ -132,6 +199,7 @@ class CoachVoicePlayer extends StatefulWidget {
 
 class _CoachVoicePlayerState extends State<CoachVoicePlayer> {
   final _player = AudioPlayer();
+  final _svc = CustomExerciseService();
   bool _playing = false;
   double _progress = 0; // 0..1
   Duration _total = Duration.zero;
@@ -152,13 +220,20 @@ class _CoachVoicePlayerState extends State<CoachVoicePlayer> {
   void dispose() { _player.dispose(); super.dispose(); }
 
   Future<void> _toggle() async {
-    if (_playing) { await _player.pause(); setState(() => _playing = false); return; }
+    if (_playing) { await _player.pause(); if (mounted) setState(() => _playing = false); return; }
     try {
       if (_progress == 0) {
-        await _player.play(UrlSource(widget.url));
+        // SEC-VOICE-1: sign at render time rather than replaying the stored
+        // public URL. A signed URL expires; the stored one never does. The
+        // fallback keeps legacy rows playable while the bucket is still
+        // public — once it is private, an unsigned URL cannot play and the
+        // fallback becomes a no-op rather than a silent bypass.
+        final signed = await _svc.signedCoachVoiceUrl(widget.url);
+        await _player.play(UrlSource(signed ?? widget.url));
       } else {
         await _player.resume();
       }
+      if (!mounted) return;
       setState(() => _playing = true);
     } catch (_) {}
   }

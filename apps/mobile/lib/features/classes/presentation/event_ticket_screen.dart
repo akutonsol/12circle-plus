@@ -39,14 +39,15 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
     try {
       final reg = await _db
           .from('event_registrations')
-          .select('ticket_code')
+          .select('qr_code')
           .eq('event_id', widget.event['id'] as String)
           .eq('user_id', uid)
           .maybeSingle();
       if (reg != null) {
+        if (!mounted) return;
         setState(() {
           _registered = true;
-          _ticketCode = reg['ticket_code'] as String?;
+          _ticketCode = reg['qr_code'] as String?;
         });
       }
     } catch (_) {}
@@ -61,14 +62,28 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
       await _db.from('event_registrations').insert({
         'event_id': widget.event['id'],
         'user_id': uid,
-        'ticket_code': code,
+        'qr_code': code,
         'status': 'confirmed',
       });
+      if (!mounted) return;
       setState(() { _registered = true; _ticketCode = code; });
     } catch (_) {
-      // Demo fallback
-      final code = 'TKT-DEMO-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
-      setState(() { _registered = true; _ticketCode = code; });
+      // I-COM-01 / DAT-4. This block used to invent a demo ticket code and set
+      // `_registered = true`, so a failed write rendered the same _TicketView as
+      // a real registration. QA_CLOSURE_STANDARD §9 invariant I-1 names that
+      // exactly — "Not 'You're registered' on a failed registration" and "never
+      // demo data presented as the user's own" — and PD-B27 requires the
+      // fabricating catch deleted "regardless of the answer".
+      //
+      // The failure is now surfaced through the mechanism this screen already
+      // uses for the paid path (_buyTicket, below): no state is invented, so
+      // `_registered` stays false and the build falls through to the register
+      // affordance. What becomes of the error object is ERR-1/EC-11 territory
+      // and is deliberately NOT changed here.
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Could not complete your registration. Try again.')));
+      }
     } finally {
       setState(() => _loading = false);
     }
@@ -106,6 +121,7 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
         backgroundColor: _card, elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: _wht, size: 20),
+          tooltip: 'Back',
           onPressed: () => Navigator.pop(context)),
         title: const Text('Event Ticket', style: TextStyle(color: _wht, fontSize: 17, fontWeight: FontWeight.w700)),
       ),

@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Refuses a push while a governed CI run is in flight on the same branch.
+#
+# WHY THIS IS A HOOK AND NOT A RULE. V5 §96.2 made it a rule — "check that no run
+# is in flight before pushing" — after §95. It was then broken in §98.4 and again
+# in §137. Three violations by the same operator is evidence that operator
+# discipline is the wrong mechanism, not that the operator needs reminding.
+#
+# WHAT IT COSTS WHEN IT FIRES. Pushing over a run CANCELS it, and a cancelled
+# process never runs a `finally`. In §137 that left a fixture row in
+# admin_role_assignments; the next run's arrange hit 409 on a primary key, and
+# because the cleanup was guarded by `if (arranged)` the failure perpetuated
+# itself. One impatient push produced a red CI that had nothing to do with the
+# code and would not have self-cleared.
+#
+# FAIL-CLOSED ON A RUN IN FLIGHT. FAIL-OPEN ON MISSING TOOLING: if `gh` is absent
+# or unauthenticated this cannot know, and blocking every push because a CLI is
+# missing would be worse than the problem. It says so rather than staying silent.
+#
+# Override, when you genuinely mean to supersede a run:
+#   ALLOW_PUSH_OVER_CI=1 git push ...
+set -uo pipefail
+
+[ "${ALLOW_PUSH_OVER_CI:-0}" = "1" ] && {
+  echo "pre-push: ALLOW_PUSH_OVER_CI=1 — proceeding, the in-flight run will be cancelled."
+  exit 0
+}
+
+command -v gh >/dev/null 2>&1 || {
+  echo "pre-push: gh CLI not found — cannot check for in-flight CI. Proceeding."
+  exit 0
+}
+
+branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" || exit 0
+[ -z "$branch" ] || [ "$branch" = "HEAD" ] && exit 0
+
+runs="$(gh run list --branch "$branch" --limit 10 \
+          --json status,databaseId,headSha,workflowName 2>/dev/null)" || {
+  echo "pre-push: could not reach GitHub to check CI (offline or unauthenticated). Proceeding."
+  exit 0
+}
+
+busy="$(printf '%s' "$runs" | python3 -c '
+import json,sys
+try: rows = json.load(sys.stdin)
+except Exception: sys.exit(0)
+live = [r for r in rows if r.get("status") in
+        ("queued","in_progress","requested","waiting","pending")]
+for r in live:
+    print(f'"'"'  {r.get("workflowName","CI")}  run {r.get("databaseId")}  '"'"'
+          f'"'"'{r.get("headSha","")[:7]}  {r.get("status")}'"'"')
+' 2>/dev/null)"
+
+[ -z "$busy" ] && exit 0
+
+cat >&2 <<MSG
+
+  ✋ PUSH REFUSED — a CI run is in flight on "$branch":
+
+$busy
+
+  Pushing now cancels it. A cancelled run dies mid-suite without running its
+  cleanup, which has already poisoned a later run once (V5 §137).
+
+  Wait for it, or override deliberately:
+      ALLOW_PUSH_OVER_CI=1 git push ...
+
+MSG
+exit 1

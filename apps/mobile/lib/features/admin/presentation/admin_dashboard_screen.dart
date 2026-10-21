@@ -86,6 +86,54 @@ class AdminDashboardScreen extends ConsumerWidget {
                         const SizedBox(height: 20),
                         _CommissionCard(),
                         const SizedBox(height: 16),
+                        // V5 §167 · the way in to the owner-approved metric
+                        // surfaces (migrations 171-174). A route with no entry
+                        // point is not UI consumption, which ROUTE-G1 caught when
+                        // /admin-metrics was first registered.
+                        // V5 §183 · the way in to Trust. ROUTE-G1 fails on a route
+                        // with no entry point, and it is right to.
+                        _AdminActionTile(
+                          icon: Icons.settings_outlined,
+                          title: 'Settings',
+                          subtitle: 'Administrators, roles & permissions, platform',
+                          onTap: () => context.push('/admin-settings'),
+                        ),
+                        const SizedBox(height: 12),
+                        _AdminActionTile(
+                          icon: Icons.people_outline,
+                          title: 'People',
+                          subtitle: 'Users, coaches, clients, wellness partners',
+                          onTap: () => context.push('/admin-people'),
+                        ),
+                        const SizedBox(height: 12),
+                        _AdminActionTile(
+                          icon: Icons.build_outlined,
+                          title: 'Operations',
+                          subtitle: 'Releases, integrations, system events',
+                          onTap: () => context.push('/admin-operations'),
+                        ),
+                        const SizedBox(height: 12),
+                        _AdminActionTile(
+                          icon: Icons.hub_outlined,
+                          title: 'Ecosystem',
+                          subtitle: 'Community, events, training, monetization, wearables',
+                          onTap: () => context.push('/admin-ecosystem'),
+                        ),
+                        const SizedBox(height: 12),
+                        _AdminActionTile(
+                          icon: Icons.verified_user_outlined,
+                          title: 'Trust',
+                          subtitle: 'AI Guardian, security, incidents, audit logs',
+                          onTap: () => context.push('/admin-trust'),
+                        ),
+                        const SizedBox(height: 12),
+                        _AdminActionTile(
+                          icon: Icons.query_stats_rounded,
+                          title: 'Platform Metrics',
+                          subtitle: 'Activity, people, community, events, revenue, release',
+                          onTap: () => context.push('/admin-metrics'),
+                        ),
+                        const SizedBox(height: 12),
                         _AdminActionTile(
                           icon: Icons.rule_folder_rounded,
                           title: 'Global Library Review',
@@ -192,6 +240,11 @@ class AdminDashboardScreen extends ConsumerWidget {
   }
 
   Widget _errorCard(Object e) {
+    // ERR-2: the exception is PARSED here and deliberately not displayed. The
+    // card used to end `'Could not load platform stats.\n$e'`, and the
+    // `denied` branch exists precisely because non-admins reach this screen —
+    // so any error that was NOT 42501 showed raw Postgres text, table and
+    // column names included, to exactly the audience that branch is for.
     final denied = '$e'.toLowerCase().contains('not authorized') ||
         '$e'.contains('42501');
     return Container(
@@ -204,7 +257,7 @@ class AdminDashboardScreen extends ConsumerWidget {
       child: Text(
         denied
             ? 'This account is not an admin. Admin tools are restricted.'
-            : 'Could not load platform stats.\n$e',
+            : 'Could not load platform stats.',
         style: const TextStyle(color: _muted, height: 1.4),
       ),
     );

@@ -18,6 +18,7 @@ class _C {
   static const outlineVar          = Color(0xFF4B444F);
   static const tertiary            = Color(0xFF6FFBBE);
   static const amber               = Color(0xFFFFD580);
+  static const error               = Color(0xFFEF4444);
 }
 
 // ── Static sample items (browse section) ─────────────────────────────────────
@@ -35,10 +36,25 @@ class _WorkoutItem {
   final String? kcal;
   final double? intensity;
   final String? intensityLabel;
+  /// The domain `Workout.id` this card stands for, or null when no workout
+  /// exists behind it.
+  ///
+  /// This replaces matching on `title`. Title matching was not merely fragile,
+  /// it was already broken: this list's `'Glute & Hamstring\nFocus'` can never
+  /// equal the domain's `'Glute and Hamstring Focus'`, so that card always fell
+  /// through to a detail screen with no identity and showed a workout the user
+  /// had not chosen.
+  ///
+  /// Four of the five cards below have no domain workout at all — they are
+  /// presentation samples. `null` states that honestly instead of resolving to
+  /// whichever workout happens to share a word.
+  final String? workoutId;
+
   const _WorkoutItem({
     required this.title, required this.image, required this.tag,
     required this.tagColor, required this.category, required this.tab,
     required this.coach, required this.duration, required this.categoryIcon,
+    this.workoutId,
     this.exercises, this.kcal, this.intensity, this.intensityLabel,
   });
 }
@@ -48,6 +64,7 @@ const _tabs = ['All', 'Strength', 'Cardio', 'HIIT', 'Recovery'];
 const _sampleWorkouts = [
   _WorkoutItem(
     title: 'Full Body Strength',
+    workoutId: '1', // domain Workout id, workout_service.getSampleWorkouts()
     image: 'assets/images/workout-full-body.jpg',
     tag: 'INTERMEDIATE', tagColor: _C.primary,
     category: 'STRENGTH PROGRAM', tab: 'Strength',
@@ -57,6 +74,7 @@ const _sampleWorkouts = [
   ),
   _WorkoutItem(
     title: 'Glute & Hamstring\nFocus',
+    workoutId: '2', // domain title is 'Glute and Hamstring Focus' — ids, not titles
     image: 'assets/images/workout-glute.jpg',
     tag: 'BEGINNER FRIENDLY', tagColor: _C.tertiary,
     category: 'LOWER BODY', tab: 'Strength',
@@ -127,18 +145,50 @@ class _WorkoutListScreenState extends ConsumerState<WorkoutListScreen> {
     context.go('/active-workout');
   }
 
+  /// Open FIT-016 for [item]. The design calls `/workout-detail` "review before
+  /// committing", so a tap reviews the session; starting it is the detail
+  /// screen's own "Begin session".
+  ///
+  /// Identity is resolved by `Workout.id`, never by title. When the card has no
+  /// domain workout behind it, the selection is CLEARED rather than left
+  /// pointing at whatever was opened last — otherwise the previous workout's
+  /// data would appear under this card's name, which is the defect this whole
+  /// change exists to remove.
+  void _openDetail(_WorkoutItem item, List<Workout> catalogue) {
+    final id = item.workoutId;
+    final resolved = id == null
+        ? null
+        : catalogue.where((w) => w.id == id).firstOrNull;
+    ref.read(selectedWorkoutProvider.notifier).state = resolved;
+    // `push`, not `go`: the detail screen is a review step the user comes back
+    // from, so it must leave a pop-able entry. With `go` the route replaces the
+    // list, `canPop()` is false, and the detail screen's Back button falls back
+    // to /train instead of returning to the list the user came from. Verified
+    // on-device. This matches the convention already used for /workouts
+    // (train_hub_screen.dart:123).
+    context.push('/workout-detail');
+  }
+
   bool _generatingAi = false;
   Future<void> _generateAiWorkout() async {
     setState(() => _generatingAi = true);
-    final workout = await generateAiWorkout();
+    Workout? workout;
+    Object? failure;
+    try {
+      workout = await generateAiWorkout();
+    } catch (e) {
+      failure = e;
+    }
     if (!mounted) return;
     setState(() => _generatingAi = false);
     if (workout != null) {
       _startWorkout(workout);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not generate a workout. Try again.')));
+      return;
     }
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(failure == null
+          ? 'The generator had nothing to suggest right now.'
+          : 'Could not generate a workout: $failure')));
   }
 
   @override
@@ -147,7 +197,6 @@ class _WorkoutListScreenState extends ConsumerState<WorkoutListScreen> {
     final sampleWorkouts = ref.watch(workoutsProvider);
 
     return AppScaffold(
-      navIndex: 2,
       showBackButton: true,
       body: Stack(
         children: [
@@ -239,7 +288,13 @@ class _WorkoutListScreenState extends ConsumerState<WorkoutListScreen> {
                   loading: () => const Padding(
                     padding: EdgeInsets.only(bottom: 24),
                     child: _AssignedLoadingCard()),
-                  error: (_, __) => const SizedBox.shrink(),
+                  // Named, with a retry. Rendering nothing here is what turned
+                  // "your program could not be read" into "you have no
+                  // program" — the client then reasonably concludes their coach
+                  // never assigned one.
+                  error: (e, __) => _AssignedErrorCard(
+                      error: e,
+                      onRetry: () => ref.invalidate(assignedWorkoutsProvider)),
                   data: (workouts) => workouts.isEmpty
                       ? const SizedBox.shrink()
                       : _AssignedProgramSection(
@@ -295,15 +350,7 @@ class _WorkoutListScreenState extends ConsumerState<WorkoutListScreen> {
                         padding: const EdgeInsets.only(bottom: 16),
                         child: _WorkoutCard(
                           workout: w,
-                          onTap: () {
-                            final match = sampleWorkouts.where(
-                                (sw) => sw.title == w.title).firstOrNull;
-                            if (match != null) {
-                              _startWorkout(match);
-                            } else {
-                              context.go('/workout-detail');
-                            }
-                          }))),
+                          onTap: () => _openDetail(w, sampleWorkouts)))),
               ],
             ),
           ),
@@ -394,7 +441,7 @@ class _AssignedWorkoutCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final statusMap = ref.watch(programSessionStatusProvider).valueOrNull ?? const {};
-    final s = statusMap[workout.title];
+    final s = sessionStatusFor(statusMap, workout);
     final status = s?['status'] as String?;
     final inProgress = status == 'in_progress';
     final completed = status == 'completed';
@@ -660,4 +707,45 @@ class _CoachAdjustmentBanner extends StatelessWidget {
       Icon(icon, color: color, size: 13), const SizedBox(width: 5),
       Text(label, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600)),
     ]));
+}
+
+/// The assigned program could not be read.
+///
+/// Distinct from having no program: the request or the decode failed, the
+/// program is still there, and the client is offered a retry rather than a
+/// silent absence.
+class _AssignedErrorCard extends StatelessWidget {
+  final Object error;
+  final VoidCallback onRetry;
+  const _AssignedErrorCard({required this.error, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _C.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _C.error.withValues(alpha: 0.4))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(Icons.error_outline_rounded, color: _C.error, size: 18),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text('Your program could not be loaded',
+              style: TextStyle(color: _C.onSurface, fontSize: 14,
+                fontWeight: FontWeight.w700))),
+        ]),
+        // ERR-2: this second line printed the raw exception beneath the
+        // sentence above. A PostgREST error carries table, column and
+        // constraint text; the human sentence already says what happened, so
+        // the detail line is removed rather than reworded.
+        const SizedBox(height: 10),
+        TextButton(
+          onPressed: onRetry,
+          child: const Text('Try again',
+            style: TextStyle(color: _C.primary, fontWeight: FontWeight.w700))),
+      ]));
+  }
 }

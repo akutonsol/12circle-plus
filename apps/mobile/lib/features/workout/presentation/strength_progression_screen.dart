@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../domain/workout_provider.dart';
+import '../../../core/widgets/named_icon_button.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const _bg      = Color(0xFF030303);
@@ -38,7 +39,8 @@ class _StrengthProgressionScreenState extends ConsumerState<StrengthProgressionS
           decoration: const BoxDecoration(color: _card, border: Border(bottom: BorderSide(color: _border))),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
-              GestureDetector(
+              NamedIconButton(
+                label: 'Back',
                 onTap: () => context.pop(),
                 child: const Icon(Icons.arrow_back_ios_new_rounded, color: _primary, size: 20)),
               const SizedBox(width: 14),

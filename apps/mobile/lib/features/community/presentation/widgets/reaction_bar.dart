@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../data/models/post_model.dart';
+import 'reaction_picker.dart';
 
 class ReactionBar extends StatelessWidget {
   final CommunityPost post;
+  /// Kept: the heart in the action row below still means `like`.
   final VoidCallback onLike;
+
+  /// FIT-065/066: any of the five.
+  final ValueChanged<ReactionType> onReact;
   final VoidCallback onComment;
   final VoidCallback onShare;
 
@@ -12,30 +17,33 @@ class ReactionBar extends StatelessWidget {
     super.key,
     required this.post,
     required this.onLike,
+    required this.onReact,
     required this.onComment,
     required this.onShare,
   });
 
   @override
   Widget build(BuildContext context) {
-    final totalReactions = post.reactions.length;
     final commentCount = post.comments.length;
 
     return Column(
       children: [
-        if (totalReactions > 0 || commentCount > 0)
-          Padding(
+        Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                if (totalReactions > 0)
-                  Row(
-                    children: [
-                      _buildReactionEmoji(),
-                      const SizedBox(width: 6),
-                      Text('$totalReactions', style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-                    ],
+                // FIT-065/066. This was `_buildReactionEmoji()` — bare emoji
+                // and a bare integer, which a screen reader reads as emoji
+                // characters and a number, saying nothing about what they
+                // are. The picker names each one and makes all five
+                // reachable; only `like` could be written before.
+                Expanded(
+                    child: ReactionPicker(
+                      reactions: post.reactions,
+                      uid: 'me',
+                      onReact: onReact,
+                    ),
                   ),
                 if (commentCount > 0)
                   Text('$commentCount comments', style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
@@ -72,22 +80,6 @@ class ReactionBar extends StatelessWidget {
     );
   }
 
-  Widget _buildReactionEmoji() {
-    final types = post.reactions.map((r) => r.type).toSet().take(3).toList();
-    return Row(
-      children: types.map((type) => Text(_reactionEmoji(type), style: const TextStyle(fontSize: 14))).toList(),
-    );
-  }
-
-  String _reactionEmoji(ReactionType type) {
-    switch (type) {
-      case ReactionType.like: return '👍';
-      case ReactionType.love: return '❤️';
-      case ReactionType.fire: return '🔥';
-      case ReactionType.clap: return '👏';
-      case ReactionType.strong: return '💪';
-    }
-  }
 
   Widget _buildActionButton({required IconData icon, required String label, required Color color, required VoidCallback onTap}) {
     return GestureDetector(

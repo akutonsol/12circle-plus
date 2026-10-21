@@ -28,7 +28,7 @@ class WorkoutLog {
     'calories_burned': caloriesBurned,
     'category': category,
     'notes': notes,
-    'completed_at': DateTime.now().toIso8601String(),
+    'completed_at': DateTime.now().toUtc().toIso8601String(),
   };
 }
 

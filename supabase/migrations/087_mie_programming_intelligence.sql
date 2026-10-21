@@ -11,7 +11,7 @@
 
 -- ── Exercise Intelligence Profile (1:1 with exercises, reviewable) ──────────
 create table if not exists exercise_intelligence (
-  exercise_id          uuid primary key references exercises(id) on delete cascade,
+  exercise_id          uuid primary key references custom_exercises(id) on delete cascade,
   -- difficulty applicability
   beginner             boolean default false,
   intermediate         boolean default true,
@@ -56,7 +56,7 @@ returns jsonb language plpgsql security definer as $$
 declare r record; v_count int := 0; gt jsonb; compound boolean;
 begin
   if not public.is_content_editor() then raise exception 'forbidden'; end if;
-  for r in select id, goal_tags, exercise_type from exercises loop
+  for r in select id, goal_tags, exercise_type from custom_exercises loop
     gt := to_jsonb(coalesce(r.goal_tags, array[]::text[]));
     compound := (coalesce(r.exercise_type,'') ilike '%compound%');
     insert into exercise_intelligence as ei (
@@ -106,7 +106,7 @@ declare
   final numeric;
 begin
   select * into ei from exercise_intelligence where exercise_id = p_exercise_id;
-  select equipment, movement_pattern, name into ex from exercises where id = p_exercise_id;
+  select equipment, movement_pattern, name into ex from custom_exercises where id = p_exercise_id;
   if not found then return jsonb_build_object('error','exercise not found'); end if;
   if ei.exercise_id is null then
     return jsonb_build_object('final_score', 0, 'no_profile', true, 'name', ex.name);
@@ -175,7 +175,7 @@ language sql stable security definer as $$
   select e.id, e.name,
          (public.score_exercise(e.id, p_context)->>'final_score')::int as final_score,
          public.score_exercise(e.id, p_context) as breakdown
-  from exercises e
+  from custom_exercises e
   join exercise_intelligence ei on ei.exercise_id = e.id
   order by (public.score_exercise(e.id, p_context)->>'final_score')::int desc nulls last
   limit greatest(1, least(p_limit, 50));
@@ -186,7 +186,7 @@ grant execute on function public.rank_exercises(jsonb, int) to authenticated;
 create or replace function public.intelligence_stats()
 returns jsonb language sql stable security definer as $$
   select jsonb_build_object(
-    'total_exercises', (select count(*) from exercises),
+    'total_exercises', (select count(*) from custom_exercises),
     'profiled', (select count(*) from exercise_intelligence),
     'approved', (select count(*) from exercise_intelligence where status = 'approved'),
     'draft', (select count(*) from exercise_intelligence where status = 'draft'),

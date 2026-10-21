@@ -1,4 +1,6 @@
-import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
+import 'package:flutter/foundation.dart' show kIsWeb;
+
+import '../../../core/router/app_router.dart' show kQaToolingEnabled;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -49,15 +51,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
-  Future<void> _persistUnit(String unit) async {
+  /// CORR-2. Returns whether the preference was actually stored.
+  ///
+  /// This was `Future<void>` with `if (uid == null) return;` and a bare
+  /// `catch (_) {}`, called unawaited after an optimistic `setState`. The
+  /// toggle moved, nothing persisted, and nothing said so — the member's unit
+  /// preference silently reverted on the next load.
+  ///
+  /// `_saveToggle` in `notification_preferences_screen` and
+  /// `WeeklyCheckinService.submitWeeklyCheckin` already report failure; this
+  /// matches them rather than inventing a convention.
+  Future<bool> _persistUnit(String unit) async {
     final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (uid == null) return;
+    if (uid == null) return false;
     try {
       await Supabase.instance.client.from('user_profiles').update({
         'unit_preference': unit == 'KG' ? 'metric' : 'imperial',
       }).eq('id', uid);
       ref.invalidate(currentUserProfileProvider);
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   @override
@@ -101,6 +116,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 children: [
                   IconButton(
                     icon: const Icon(Icons.arrow_back_ios_new, color: _C.primary, size: 20),
+                    tooltip: 'Back',
                     onPressed: () => context.go('/profile'),
                   ),
                   const Expanded(
@@ -207,9 +223,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: ['KG', 'LB'].map((u) => GestureDetector(
-                            onTap: () {
+                            onTap: () async {
+                              // Optimistic, but REVERTED on failure: an
+                              // un-reverted toggle shows a preference that was
+                              // never stored.
+                              final previous = _selectedUnit;
                               setState(() => _selectedUnit = u);
-                              _persistUnit(u);
+                              final ok = await _persistUnit(u);
+                              if (!ok && context.mounted) {
+                                setState(() => _selectedUnit = previous);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Failed to save.')),
+                                );
+                              }
                             },
                             child: AnimatedContainer(
                               duration: const Duration(milliseconds: 200),
@@ -309,29 +335,48 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   // ── Legal & Support ──
                   _SectionLabel(label: 'Legal & Support'),
                   const SizedBox(height: 10),
+                  // FIT-030's wording. Three of these differ from what shipped
+                  // only in spelling or case — "Help centre", "Privacy policy",
+                  // "Sign out" against "Help Center", "Privacy Policy",
+                  // "Logout" — and the locked screen wins. The package is
+                  // consistently UK English (it also prices in £), and the app
+                  // shipped US spellings; see OD-18, which is the same
+                  // divergence with money attached.
                   _GlassSection(children: [
+                    // FIT-030 declares "Change password". It routes to the
+                    // reset flow this app already has — `/forgot-password`
+                    // sends the email that `reset_password_screen.dart`
+                    // completes. No new auth path is introduced.
                     _SettingsRow(
-                      title: 'Help Center',
+                      title: 'Change password',
+                      trailing: const Icon(Icons.chevron_right, color: _C.onSurfaceVar, size: 20),
+                      hasBorder: true,
+                      onTap: () => context.push('/forgot-password'),
+                    ),
+                    _SettingsRow(
+                      title: 'Help centre',
                       trailing: const Icon(Icons.open_in_new, color: _C.onSurfaceVar, size: 18),
                       hasBorder: true,
                       onTap: () => context.push('/help-center'),
                     ),
                     _SettingsRow(
-                      title: 'Privacy Policy',
+                      title: 'Privacy policy',
                       trailing: const Icon(Icons.chevron_right, color: _C.onSurfaceVar, size: 20),
                       hasBorder: true,
                       onTap: () => context.push('/privacy-policy'),
                     ),
                     _SettingsRow(
-                      title: 'Logout',
+                      title: 'Sign out',
                       titleColor: _C.error,
                       trailing: const Icon(Icons.logout, color: _C.error, size: 20),
                       hasBorder: false,
                       onTap: () => _showLogoutDialog(context),
                     ),
                   ]),
-                  // Developer tools — debug/QA builds only.
-                  if (kDebugMode) ...[
+                  // Developer tools — debug/profile builds only. Gated on the
+                  // same flag as the route itself (REL-3), so the affordance and
+                  // the destination can never disagree about who may see it.
+                  if (kQaToolingEnabled) ...[
                     const SizedBox(height: 12),
                     _GlassSection(children: [
                       _SettingsRow(
@@ -432,7 +477,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       builder: (dialogCtx) => AlertDialog(
         backgroundColor: _C.surfaceContainer,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Logout', style: TextStyle(color: _C.onSurface, fontWeight: FontWeight.w700)),
+        // The row says "Sign out"; the dialog confirming it must say the same
+        // thing, or the client is asked to confirm an action they did not
+        // press.
+        title: const Text('Sign out', style: TextStyle(color: _C.onSurface, fontWeight: FontWeight.w700)),
         content: const Text('Are you sure you want to logout?',
           style: TextStyle(color: _C.onSurfaceVar)),
         actions: [
@@ -442,7 +490,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.of(dialogCtx, rootNavigator: true).pop(true),
-            child: const Text('Logout', style: TextStyle(color: _C.error, fontWeight: FontWeight.w700)),
+            child: const Text('Sign out', style: TextStyle(color: _C.error, fontWeight: FontWeight.w700)),
           ),
         ],
       ),
@@ -544,6 +592,7 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
       if (coaches.isNotEmpty) {
         final confirmed = await _confirmEndCoaching(coaches);
         if (confirmed != true) return; // kept their coach → abort the switch
+        if (!mounted) return;
         setState(() => _saving = true);
         final svc = CoachRelationshipService();
         for (final c in coaches) {
@@ -558,6 +607,7 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
       }
     }
 
+    if (!mounted) return;
     setState(() => _saving = true);
     try {
       await widget.ref
@@ -567,7 +617,7 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
       if (!mounted) return;
       setState(() => _saving = false);
       messenger.showSnackBar(SnackBar(
-        content: Text('Could not save coaching mode: $e')));
+        content: Text('Could not save coaching mode.')));
       return; // keep the sheet open so the change isn't silently lost
     }
     if (!mounted) return;

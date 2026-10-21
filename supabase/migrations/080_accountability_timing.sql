@@ -3,6 +3,11 @@
 -- Learns each user's usual workout HOUR (UTC) and fires a contextual
 -- accountability nudge ~1 hour before it, only for active users who haven't
 -- trained yet today. Reproduces ai_detect_patterns (078) + the modal hour.
+--
+-- ENVIRONMENT SAFETY: the edge-function URL is resolved per project from the
+-- Vault secret 'project_url' (see migration 076 for the one-time, per-project
+-- setup). It is never hardcoded. The service_role key likewise stays in Vault
+-- and is never exposed to Flutter/client code.
 
 create or replace function public.ai_detect_patterns(p_uid uuid)
 returns void language plpgsql security definer as $$
@@ -76,13 +81,28 @@ create or replace function public.ai_cron_accountability()
 returns void language plpgsql security definer
 set search_path = public, extensions, vault as $$
 declare
-  v_key text;
-  v_url text := 'https://nxdbooufqzkpslkcogxc.supabase.co/functions/v1/ai-coaching-engine';
-  v_hr int := extract(hour from now())::int;
+  v_key  text;
+  v_base text;
+  v_url  text;
+  v_hr   int := extract(hour from now())::int;
   u record;
 begin
   select decrypted_secret into v_key from vault.decrypted_secrets where name = 'service_role_key';
-  if v_key is null then return; end if;
+  if v_key is null then
+    raise notice 'ai_cron_accountability: vault secret "service_role_key" not set — skipping';
+    return;
+  end if;
+
+  -- Environment safety: resolve THIS project's base URL from Vault (helper is
+  -- defined in 076). Fails closed -- there is deliberately no hardcoded
+  -- fallback, because the previous literal pointed at PRODUCTION and made any
+  -- replayed QA/branch project POST to prod with a service_role token.
+  v_base := public.project_base_url();
+  if v_base is null then
+    raise notice 'ai_cron_accountability: vault secret "project_url" not set — skipping';
+    return;
+  end if;
+  v_url := v_base || '/functions/v1/ai-coaching-engine';
 
   for u in
     select p.user_id from ai_profiles p

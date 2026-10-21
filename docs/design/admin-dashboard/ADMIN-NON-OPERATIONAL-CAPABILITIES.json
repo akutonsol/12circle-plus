@@ -1,0 +1,285 @@
+{
+  "_": [
+    "NON-OPERATIONAL CAPABILITY REGISTER \u2014 V5 \u00a7139.",
+    "",
+    "A capability in this register is AUTHORIZED AND NOT OFFERED. admin_can() answers",
+    "for it exactly as the approved matrix says, and the product provides no operation",
+    "for it to gate. That is a decided state, not an unfinished one.",
+    "",
+    "WHY THIS FILE EXISTS. 38 of the 39 write grants in the approved matrix have no",
+    "write path (V5 \u00a7136). Without a record saying WHICH of those are settled and why,",
+    "a later reader finds a long list of grants that do nothing and reopens them as",
+    "implementation debt -- which is exactly how B-20 reached the owner. Prose in a",
+    "13,000-line ledger did not prevent that. A machine-readable register, enforced by",
+    "a live test, does.",
+    "",
+    "THIS REGISTER IS NOT A LIST OF EVERYTHING THAT IS INERT. It holds only what the",
+    "owner has RULED non-operational. `undecided` below names the rest, so the file",
+    "cannot be mistaken for a complete account of the inert grants.",
+    "",
+    "IT GRANTS AND REMOVES NOTHING. The approved capability matrix",
+    "(ADMIN-CAPABILITY-MATRIX.json) is untouched and remains the sole authority on who",
+    "may do what. This file records the SEPARATE fact that no operation exists.",
+    "",
+    "Each entry is verified live by D15: the grant still answers correctly, the",
+    "resource still refuses mutation, and no write path is gated on it."
+  ],
+  "version": "1.0",
+  "authority": "owner decisions B-20 (2026-10-05), B-21c, B-23 and CAP-1 (2026-10-06)",
+  "matrix_is_unchanged": true,
+  "non_operational": [
+    {
+      "area": "Audit logs",
+      "verb": "Update",
+      "granted_to": [
+        "trust_lead"
+      ],
+      "invariant": "A11 append-only \u2014 audit_events",
+      "reason": "An audit record cannot be modified. trg_audit_events_freeze (142:273) raises on UPDATE for every caller, including service_role, and 148 revokes the table from authenticated and service_role leaving only SELECT.",
+      "why_not_an_implementation_defect": "No approved design feature is being withheld. The build spec contains no mutate affordance on any screen, and the Dashboard drawer states 'Actions open the item. Nothing is changed from this screen.' There is nothing to extend the architecture toward, so the \u00a7102 union rule is not engaged.",
+      "what_would_change_this": "An owner decision defining a non-mutating management surface (saved views, export requests, retention class). That would be new product behaviour and must be specified, not inferred."
+    },
+    {
+      "area": "Audit logs",
+      "verb": "Manage",
+      "granted_to": [
+        "trust_lead"
+      ],
+      "invariant": "A11 append-only \u2014 audit_events",
+      "reason": "The only existing management operation on the audit surface is audit_sever_identity() (152:175), which mutates no audit record and is RESERVED to is_erasure_executor() by A12 ruling 6. The Admin layer must not reach it, and erasure_executor semantics must not be modified.",
+      "why_not_an_implementation_defect": "Every adjacent resource is frozen or reserved: audit_events and audit_control_evidence carry freeze triggers, observability_events is retained and write-once, and audit_identity_map is severed only by the erasure executor. No mutable resource exists in this area for the Admin layer to manage.",
+      "what_would_change_this": "Same as Audit logs / Update."
+    },
+    {
+      "area": "Security",
+      "verb": "Update",
+      "granted_to": [
+        "trust_lead"
+      ],
+      "invariant": "A11 append-only \u2014 audit_events, via the Security projection",
+      "reason": "The Security area is a category filter over audit_events (owner decision B-1: authentication, authorization_denial, admin_action, audit_read). Its records are the same frozen rows, reached through admin_security_events, which is itself read-only (159 revokes write from PUBLIC, anon and authenticated).",
+      "why_not_an_implementation_defect": "As Audit logs / Update. The spec describes Security as 'Authentication anomalies, authorization events, suspicious activity, unresolved security incidents' \u2014 four read populations.",
+      "what_would_change_this": "An owner decision defining detector or threshold configuration as a Security-area resource. No such resource exists today."
+    },
+    {
+      "area": "Security",
+      "verb": "Manage",
+      "granted_to": [
+        "trust_lead"
+      ],
+      "invariant": "A11 append-only \u2014 audit_events, via the Security projection",
+      "reason": "As Security / Update. 'unresolved security incidents' are governed by the Incidents area, whose write verbs are a SEPARATE and still-undecided boundary (B-21) over a genuinely mutable table.",
+      "why_not_an_implementation_defect": "As Audit logs / Manage.",
+      "what_would_change_this": "Same as Security / Update, or an owner ruling that Security/Manage means acting on incidents \u2014 which would resolve into B-21 rather than into this register."
+    },
+    {
+      "area": "Incidents",
+      "verb": "Approve",
+      "granted_to": [
+        "trust_lead"
+      ],
+      "invariant": "no ruled vocabulary \u2014 V5 \u00a777.3",
+      "reason": "approval_status has NO enumerated values. Migration 143's own column comment: \"unlike severity, which V5 specifies as Critical/High/Warning/Informational, the approval-status values are not enumerated in any tracked source. Left unconstrained rather than invented; see V5 \u00a777.3.\" All 160 live incidents sit at 'pending' and nothing has ever moved.",
+      "why_not_an_implementation_defect": "Implementing Approve means choosing what value it sets, which is inventing the vocabulary \u00a777.3 deliberately declined to invent. The approved design names 'incident workflows' and 'incident and approval states' as things to DESIGN, not as specified behaviour.",
+      "what_would_change_this": "An owner ruling enumerating the approval_status values. The transition itself is then mechanical: the table is tracked-mutable and the transitions trigger already journals approval_status changes."
+    },
+    {
+      "area": "Incidents",
+      "verb": "Manage",
+      "granted_to": [
+        "trust_lead"
+      ],
+      "invariant": "undefined verb",
+      "reason": "No tracked source states what Manage does on an incident. The same condition as B-23's sixteen grants.",
+      "why_not_an_implementation_defect": "Nothing is being withheld, because nothing has been specified. Incidents are readable (B-4), openable (B-21b) and their response fields writable (B-21a); Manage names no further operation.",
+      "what_would_change_this": "An owner or design ruling stating what Manage does that Update and Approve do not."
+    },
+    {
+      "area": "System",
+      "verb": "Create",
+      "granted_to": [
+        "operations_lead"
+      ],
+      "invariant": "write-once, system-produced \u2014 observability_events",
+      "reason": "observability_events is frozen by observability_events_freeze (145): DELETE blocked, identity and occurrence facts immutable, payload and correlation_signature write-once. INSERT is granted to service_role ONLY; authenticated holds SELECT. Live: 112 rows, every one component='metric' \u2014 a single system producer.",
+      "why_not_an_implementation_defect": "The approved design offers status readouts only \u2014 'API health, database health, authentication, background jobs, notifications, integrations, uptime'. No control, queue or action appears anywhere, and no retry/acknowledge/resolve operation exists in the schema.",
+      "what_would_change_this": "An owner decision defining an alert-acknowledgement surface, which would be new product behaviour requiring new state and a producer."
+    },
+    {
+      "area": "Integrations",
+      "verb": "Create",
+      "granted_to": [
+        "operations_lead"
+      ],
+      "invariant": "member-owned credential surface \u2014 user_integrations",
+      "reason": "user_integrations holds MEMBER-OWNED OAuth connections including access_token and refresh_token. Its base policy user_own_integrations is FOR ALL USING (auth.uid() = user_id) \u2014 only the member writes their own connection. No disconnect, reconnect, retry or resync function exists.",
+      "why_not_an_implementation_defect": "The design offers status only \u2014 'Connected devices, synchronization health, ingestion issues'. The ingestion-health half is WI-13/WI-15, deferred under PD-G01 (APPROVED \u2014 FUTURE BUILD). Acting on a member's own OAuth link is an action against a member's account that the design never asks for.",
+      "what_would_change_this": "An owner decision that an Admin may act on a member's integration \u2014 most plausibly a disconnect that clears `connected` without ever reading the tokens. Revisit with PD-G01."
+    },
+    {
+      "area": "System",
+      "verb": "Update",
+      "granted_to": [
+        "operations_lead"
+      ],
+      "invariant": "write-once, system-produced \u2014 observability_events",
+      "reason": "observability_events is frozen by observability_events_freeze (145): DELETE blocked, identity and occurrence facts immutable, payload and correlation_signature write-once. INSERT is granted to service_role ONLY; authenticated holds SELECT. Live: 112 rows, every one component='metric' \u2014 a single system producer.",
+      "why_not_an_implementation_defect": "The approved design offers status readouts only \u2014 'API health, database health, authentication, background jobs, notifications, integrations, uptime'. No control, queue or action appears anywhere, and no retry/acknowledge/resolve operation exists in the schema.",
+      "what_would_change_this": "An owner decision defining an alert-acknowledgement surface, which would be new product behaviour requiring new state and a producer."
+    },
+    {
+      "area": "Integrations",
+      "verb": "Update",
+      "granted_to": [
+        "operations_lead"
+      ],
+      "invariant": "member-owned credential surface \u2014 user_integrations",
+      "reason": "user_integrations holds MEMBER-OWNED OAuth connections including access_token and refresh_token. Its base policy user_own_integrations is FOR ALL USING (auth.uid() = user_id) \u2014 only the member writes their own connection. No disconnect, reconnect, retry or resync function exists.",
+      "why_not_an_implementation_defect": "The design offers status only \u2014 'Connected devices, synchronization health, ingestion issues'. The ingestion-health half is WI-13/WI-15, deferred under PD-G01 (APPROVED \u2014 FUTURE BUILD). Acting on a member's own OAuth link is an action against a member's account that the design never asks for.",
+      "what_would_change_this": "An owner decision that an Admin may act on a member's integration \u2014 most plausibly a disconnect that clears `connected` without ever reading the tokens. Revisit with PD-G01."
+    },
+    {
+      "area": "System",
+      "verb": "Manage",
+      "granted_to": [
+        "operations_lead"
+      ],
+      "invariant": "write-once, system-produced \u2014 observability_events",
+      "reason": "observability_events is frozen by observability_events_freeze (145): DELETE blocked, identity and occurrence facts immutable, payload and correlation_signature write-once. INSERT is granted to service_role ONLY; authenticated holds SELECT. Live: 112 rows, every one component='metric' \u2014 a single system producer.",
+      "why_not_an_implementation_defect": "The approved design offers status readouts only \u2014 'API health, database health, authentication, background jobs, notifications, integrations, uptime'. No control, queue or action appears anywhere, and no retry/acknowledge/resolve operation exists in the schema.",
+      "what_would_change_this": "An owner decision defining an alert-acknowledgement surface, which would be new product behaviour requiring new state and a producer."
+    },
+    {
+      "area": "Integrations",
+      "verb": "Manage",
+      "granted_to": [
+        "operations_lead"
+      ],
+      "invariant": "member-owned credential surface \u2014 user_integrations",
+      "reason": "user_integrations holds MEMBER-OWNED OAuth connections including access_token and refresh_token. Its base policy user_own_integrations is FOR ALL USING (auth.uid() = user_id) \u2014 only the member writes their own connection. No disconnect, reconnect, retry or resync function exists.",
+      "why_not_an_implementation_defect": "The design offers status only \u2014 'Connected devices, synchronization health, ingestion issues'. The ingestion-health half is WI-13/WI-15, deferred under PD-G01 (APPROVED \u2014 FUTURE BUILD). Acting on a member's own OAuth link is an action against a member's account that the design never asks for.",
+      "what_would_change_this": "An owner decision that an Admin may act on a member's integration \u2014 most plausibly a disconnect that clears `connected` without ever reading the tokens. Revisit with PD-G01."
+    },
+    {
+      "area": "System",
+      "verb": "Approve",
+      "granted_to": [
+        "operations_lead"
+      ],
+      "invariant": "write-once, system-produced \u2014 observability_events",
+      "reason": "observability_events is frozen by observability_events_freeze (145): DELETE blocked, identity and occurrence facts immutable, payload and correlation_signature write-once. INSERT is granted to service_role ONLY; authenticated holds SELECT. Live: 112 rows, every one component='metric' \u2014 a single system producer.",
+      "why_not_an_implementation_defect": "The approved design offers status readouts only \u2014 'API health, database health, authentication, background jobs, notifications, integrations, uptime'. No control, queue or action appears anywhere, and no retry/acknowledge/resolve operation exists in the schema.",
+      "what_would_change_this": "An owner decision defining an alert-acknowledgement surface, which would be new product behaviour requiring new state and a producer."
+    },
+    {
+      "area": "Integrations",
+      "verb": "Approve",
+      "granted_to": [
+        "operations_lead"
+      ],
+      "invariant": "member-owned credential surface \u2014 user_integrations",
+      "reason": "user_integrations holds MEMBER-OWNED OAuth connections including access_token and refresh_token. Its base policy user_own_integrations is FOR ALL USING (auth.uid() = user_id) \u2014 only the member writes their own connection. No disconnect, reconnect, retry or resync function exists.",
+      "why_not_an_implementation_defect": "The design offers status only \u2014 'Connected devices, synchronization health, ingestion issues'. The ingestion-health half is WI-13/WI-15, deferred under PD-G01 (APPROVED \u2014 FUTURE BUILD). Acting on a member's own OAuth link is an action against a member's account that the design never asks for.",
+      "what_would_change_this": "An owner decision that an Admin may act on a member's integration \u2014 most plausibly a disconnect that clears `connected` without ever reading the tokens. Revisit with PD-G01."
+    },
+    {
+      "area": "AI Guardian",
+      "verb": "Approve",
+      "granted_to": [
+        "trust_lead"
+      ],
+      "invariant": "no action queue \u2014 P7",
+      "reason": "Build Spec \u00a75 defines the semantics \u2014 'Actions awaiting human approval' \u2014 so this is NOT a semantic gap. What is missing is the queue: nothing in the schema holds an action awaiting approval, and the action's shape is undefined. AI Guardian/Manage was in this same position until B-17 supplied the state store (169); Approve still has no producer.",
+      "why_not_an_implementation_defect": "Not a semantic gap \u2014 a producer gap. B-17 supplies the state store; the action queue is P7-gated.",
+      "what_would_change_this": "P7, which supplies the Guardian action queue. The approval transition is then mechanical, exactly as the state transition was once guardian_state existed."
+    },
+    {
+      "area": "Audit logs",
+      "verb": "Create",
+      "granted_to": [
+        "trust_lead"
+      ],
+      "invariant": "A11 append-only \u2014 audit_events",
+      "reason": "audit_events is append-only: trg_audit_events_freeze raises on UPDATE and DELETE for every caller including service_role, and 148 grants SELECT only. Writes reach it exclusively through audit_record_event().",
+      "why_not_an_implementation_defect": "The design offers no audit-authoring or audit-approval affordance, and nothing in the audit population carries an approval state. Owner ruling B-23-AUD: audit events are emitted by the operations they record, never authored by hand \u2014 an audit population whose entries can be hand-written is weaker evidence than one whose entries cannot.",
+      "what_would_change_this": "An owner ruling that an Admin may author an audit entry, which would add a 16th A2 category and is therefore a D4 change."
+    },
+    {
+      "area": "Security",
+      "verb": "Create",
+      "granted_to": [
+        "trust_lead"
+      ],
+      "invariant": "A11 append-only \u2014 audit_events, via the Security projection",
+      "reason": "The Security area is a category filter over audit_events (owner decision B-1), served by the read-only admin_security_events view. Same append-only base; no approval state exists.",
+      "why_not_an_implementation_defect": "As Audit logs. The build spec also rules that 'Security controls remain independent of the AI Guardian', so Security's verbs cannot borrow Guardian's approval semantics.",
+      "what_would_change_this": "An owner decision defining detector or threshold configuration as a Security-area resource. No such resource exists today."
+    },
+    {
+      "area": "Audit logs",
+      "verb": "Approve",
+      "granted_to": [
+        "trust_lead"
+      ],
+      "invariant": "A11 append-only \u2014 audit_events",
+      "reason": "audit_events is append-only: trg_audit_events_freeze raises on UPDATE and DELETE for every caller including service_role, and 148 grants SELECT only. Writes reach it exclusively through audit_record_event().",
+      "why_not_an_implementation_defect": "The design offers no audit-authoring or audit-approval affordance, and nothing in the audit population carries an approval state. Owner ruling B-23-AUD: audit events are emitted by the operations they record, never authored by hand \u2014 an audit population whose entries can be hand-written is weaker evidence than one whose entries cannot.",
+      "what_would_change_this": "An owner ruling that an Admin may author an audit entry, which would add a 16th A2 category and is therefore a D4 change."
+    },
+    {
+      "area": "Security",
+      "verb": "Approve",
+      "granted_to": [
+        "trust_lead"
+      ],
+      "invariant": "A11 append-only \u2014 audit_events, via the Security projection",
+      "reason": "The Security area is a category filter over audit_events (owner decision B-1), served by the read-only admin_security_events view. Same append-only base; no approval state exists.",
+      "why_not_an_implementation_defect": "As Audit logs. The build spec also rules that 'Security controls remain independent of the AI Guardian', so Security's verbs cannot borrow Guardian's approval semantics.",
+      "what_would_change_this": "An owner decision defining detector or threshold configuration as a Security-area resource. No such resource exists today."
+    },
+    {
+      "area": "Community",
+      "verb": "Create",
+      "granted_to": [
+        "content_editor"
+      ],
+      "invariant": "no platform-authorship concept exists",
+      "reason": "community_posts is author-scoped (`users manage own posts`, FOR ALL USING (user_id = auth.uid())) and carries no notion of platform authorship. Every post belongs to the member who wrote it.",
+      "why_not_an_implementation_defect": "Owner decision CAP-1-3: staff do not post. No design element shows platform-authored community content \u2014 the approved design names a 'reports/moderation queue', which is what Community/Update now serves (migration 170).",
+      "what_would_change_this": "An owner decision introducing platform-authored community content, which would need an authorship concept the schema does not have."
+    }
+  ],
+  "undecided": {
+    "_": "NOT ruled non-operational. These have no write path and no decision; they must not be read as settled.",
+    "B-21": {
+      "areas": [
+        "Incidents"
+      ],
+      "verbs": [],
+      "note": "RESOLVED 2026-10-06. Update -> implemented, response fields only (164). Create -> implemented, owner amended B1 additively (164). Approve and Manage -> ruled non-operational above."
+    },
+    "B-22": {
+      "areas": [],
+      "verbs": [],
+      "note": "RESOLVED 2026-10-06. Events and Training implemented (165). Community/Update IMPLEMENTED as moderation (170, owner decisions CAP-1-1 and CAP-1-2); Community/Create ruled non-operational above (CAP-1-3). CAP-1 is discharged."
+    },
+    "B-23": {
+      "areas": [],
+      "verbs": [],
+      "note": "RESOLVED 2026-10-06 by owner decisions B-23-SYS/INT/AUD/SEC (non-operational), B-23-AI-1 (Create/Update IMPLEMENTED against the 154 registry) and B-23-AI-2 (Manage/Approve held for B-17). Guardian Manage/Approve are registered above as producer-gated, not semantically undefined \u2014 the build spec defines both."
+    },
+    "B-5/B-6": {
+      "areas": [
+        "QA",
+        "Releases"
+      ],
+      "verbs": [
+        "Create",
+        "Update",
+        "Manage",
+        "Approve"
+      ],
+      "note": "Area deferred by owner to an A11 empty state; the write verbs defer with it."
+    }
+  }
+}

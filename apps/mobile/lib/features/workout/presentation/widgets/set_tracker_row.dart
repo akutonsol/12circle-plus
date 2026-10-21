@@ -5,7 +5,12 @@ import '../../../../core/theme/app_theme.dart';
 class SetTrackerRow extends StatefulWidget {
   final int setNumber;
   final int targetReps;
-  final double targetWeight; // always stored in kg
+  /// Prescribed load in kg, or null when nothing prescribes one.
+  ///
+  /// Null and 0 are different: null means the program says nothing about load
+  /// and the client is free to enter theirs; 0 is a prescribed zero. Falling
+  /// back to 0 for "unknown" is what made every program read as "lift nothing".
+  final double? targetWeight;
   final bool completed;
   final String? tempo;
   final String unit; // display unit: 'kg' or 'lb'
@@ -28,6 +33,10 @@ class SetTrackerRow extends StatefulWidget {
   final bool isBodyweight;
   // Some exercises don't track RPE — hide the field when false.
   final bool showRpe;
+  // Deliberate correction of an already-completed set. When provided, a
+  // completed row offers a small "Edit" action that opens the correction flow;
+  // the locked fields themselves stay locked either way.
+  final VoidCallback? onEditCompleted;
 
   const SetTrackerRow({
     super.key,
@@ -46,6 +55,7 @@ class SetTrackerRow extends StatefulWidget {
     this.onWeightFocus,
     this.isBodyweight = false,
     this.showRpe = true,
+    this.onEditCompleted,
   });
 
   static const double _kgPerLb = 0.45359237;
@@ -138,9 +148,23 @@ class _SetTrackerRowState extends State<SetTrackerRow>
   void _emitChange() {
     final cb = widget.onChanged;
     if (cb == null) return;
+    // A completed set's weight/reps/RPE are a recorded result: re-send exactly
+    // what was recorded so a late debounce or blur can't nudge them. Only the
+    // note (still editable while completed) travels as typed.
+    if (widget.completed) {
+      final note = _notesController.text.trim();
+      cb(
+        widget.savedReps ?? widget.targetReps,
+        widget.savedWeightKg ?? widget.targetWeight ?? 0,
+        widget.savedRpe,
+        note.isEmpty ? null : note,
+      );
+      return;
+    }
     final reps = int.tryParse(_repsController.text) ?? widget.targetReps;
     final displayWeight =
-        double.tryParse(_weightController.text) ?? widget._toDisplay(widget.targetWeight);
+        double.tryParse(_weightController.text) ??
+            widget._toDisplay(widget.targetWeight ?? 0);
     final weightKg = widget._toKg(displayWeight);
     final rpe = double.tryParse(_rpeController.text);
     final notes = _notesController.text.trim().isEmpty ? null : _notesController.text.trim();
@@ -202,12 +226,22 @@ class _SetTrackerRowState extends State<SetTrackerRow>
                 ),
               ),
               const SizedBox(width: 8),
-              Expanded(child: _buildInput(_weightController, widget.isBodyweight ? 'BW' : widget.unit, _weightFocus)),
+              Expanded(
+                child: widget.completed
+                    ? _lockedValue(_recordedWeight, widget.isBodyweight ? '' : widget.unit)
+                    : _buildInput(_weightController, widget.isBodyweight ? 'BW' : widget.unit, _weightFocus)),
               const SizedBox(width: 8),
-              Expanded(child: _buildInput(_repsController, 'reps', _repsFocus)),
+              Expanded(
+                child: widget.completed
+                    ? _lockedValue(widget.savedReps?.toString() ?? '—', 'reps')
+                    : _buildInput(_repsController, 'reps', _repsFocus)),
               if (widget.showRpe) ...[
                 const SizedBox(width: 8),
-                Expanded(child: _buildInput(_rpeController, 'RPE', _rpeFocus)),
+                Expanded(
+                  child: widget.completed
+                      ? _lockedValue(
+                          widget.savedRpe != null ? _fmt(widget.savedRpe!) : '—', 'RPE')
+                      : _buildInput(_rpeController, 'RPE', _rpeFocus)),
               ],
               const SizedBox(width: 8),
               GestureDetector(
@@ -245,12 +279,29 @@ class _SetTrackerRowState extends State<SetTrackerRow>
                 ),
               ),
               const SizedBox(width: 6),
-              GestureDetector(
-                onTap: () {
+              // FIT-002 names this control "Log set". It was an unlabelled
+              // 32 dp check: a screen reader announced nothing for the single
+              // most-used control on the most focus-critical screen in the app,
+              // and the target was under the 44 dp floor (F-6's class).
+              //
+              // `enabled: !completed` rather than a second label: completion is
+              // one-way, so a logged set's control is genuinely disabled, and
+              // saying so is what a screen reader needs. Inventing a "Set
+              // logged" string would be product copy the design does not
+              // supply.
+              Semantics(
+                button: true,
+                enabled: !widget.completed,
+                label: 'Log set',
+                child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                // Completion is one-way: a completed set has no tap handler, so
+                // it can't be deselected and its values can't be re-submitted.
+                onTap: widget.completed ? null : () {
                   final reps = int.tryParse(_repsController.text) ?? widget.targetReps;
                   // Field is in the display unit; convert back to kg for storage.
                   final displayWeight = double.tryParse(_weightController.text)
-                      ?? widget._toDisplay(widget.targetWeight);
+                      ?? widget._toDisplay(widget.targetWeight ?? 0);
                   final weightKg = widget._toKg(displayWeight);
                   final rpe = double.tryParse(_rpeController.text);
                   final notes = _notesController.text.trim().isEmpty
@@ -258,26 +309,67 @@ class _SetTrackerRowState extends State<SetTrackerRow>
                       : _notesController.text.trim();
                   widget.onCompleted(reps, weightKg, rpe, notes);
                 },
+                // The visual check stays 32 dp — the TARGET is what grew, the
+                // same treatment FIT-001's top nav and FIT-002's Zone controls
+                // use.
                 child: Container(
-                  width: 32,
-                  height: 32,
-                  decoration: BoxDecoration(
-                    color: widget.completed ? AppColors.success : AppColors.surfaceDark,
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: widget.completed ? AppColors.success : AppColors.textTertiary,
+                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                  alignment: Alignment.center,
+                  child: Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: widget.completed ? AppColors.success : AppColors.surfaceDark,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: widget.completed ? AppColors.success : AppColors.textTertiary,
+                      ),
+                    ),
+                    child: Icon(
+                      Icons.check,
+                      color: widget.completed ? AppColors.white : AppColors.textTertiary,
+                      size: 16,
                     ),
                   ),
-                  child: Icon(
-                    Icons.check,
-                    color: widget.completed ? AppColors.white : AppColors.textTertiary,
-                    size: 16,
-                  ),
                 ),
+              ),
               ),
             ],
           ),
         ),
+        // Correction affordance: deliberately below the row and right-aligned
+        // under the value columns, well clear of the completion check.
+        //
+        // FIT-002 · "Adjust weight or reps" — the screen's fifth declared
+        // control. It read "Edit", which is why the anchor was recorded at 4/5
+        // rather than claimed: the accessible name must CONTAIN the visible
+        // label (WCAG 2.5.3), so announcing the design's phrase over a button
+        // drawn "Edit" would have been a violation dressed up as a coverage
+        // point. The visible label is what changed, and the name follows it.
+        //
+        // The target was measured on `emulator-5554` at **54.8 × 13.0 dp** —
+        // under a third of the 44 dp floor, on a control that appears under
+        // every completed set. `minimumSize` fixes that, and the `bottom: 4`
+        // padding is dropped to give part of the height back.
+        if (widget.completed && widget.onEditCompleted != null)
+          Padding(
+            padding: const EdgeInsets.only(right: 46),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: widget.onEditCompleted,
+                icon: const Icon(Icons.edit_outlined, size: 12),
+                label: const Text('Adjust weight or reps'),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.textTertiary,
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                  minimumSize: const Size(0, 44),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+          ),
         if (widget.tempo != null)
           Padding(
             padding: const EdgeInsets.only(left: 14, bottom: 4),
@@ -319,6 +411,40 @@ class _SetTrackerRowState extends State<SetTrackerRow>
   String _fmt(double v) {
     final r = (v * 10).round() / 10;
     return r == r.roundToDouble() ? r.toStringAsFixed(0) : r.toStringAsFixed(1);
+  }
+
+  /// The recorded weight, in the display unit. 'BW' for a bodyweight set with
+  /// no external load, so a completed row still reads as intentional.
+  String get _recordedWeight {
+    final kg = widget.savedWeightKg;
+    if (kg == null || kg <= 0) return widget.isBodyweight ? 'BW' : '—';
+    return _fmt(widget._toDisplay(kg));
+  }
+
+  /// A completed value: shown, not editable. Flat and unbordered so it reads as
+  /// a record rather than an input the user could tap into.
+  Widget _lockedValue(String value, String suffix) {
+    return Container(
+      height: 36,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: AppColors.success.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(value,
+            style: const TextStyle(
+              color: AppColors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+          if (suffix.isNotEmpty) ...[
+            const SizedBox(width: 3),
+            Text(suffix,
+              style: const TextStyle(color: AppColors.textTertiary, fontSize: 10)),
+          ],
+        ],
+      ),
+    );
   }
 
   Widget _buildInput(TextEditingController controller, String hint, FocusNode focusNode) {

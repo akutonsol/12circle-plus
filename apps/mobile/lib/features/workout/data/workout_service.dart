@@ -4,7 +4,10 @@ import 'models/workout_model.dart';
 import 'models/workout_log_model.dart';
 
 class WorkoutService {
-  final _supabase = Supabase.instance.client;
+  // Resolved on use, not in the constructor: the sample workout/exercise
+  // catalogue below needs no client, so constructing the service must not
+  // require an initialised Supabase instance.
+  SupabaseClient get _supabase => Supabase.instance.client;
 
   String? get _uid => _supabase.auth.currentUser?.id;
 
@@ -25,21 +28,21 @@ class WorkoutService {
     final ex = getSampleExercises();
     return [
       Workout(id: '1', title: 'Full Body Strength', description: 'A complete full body workout targeting all major muscle groups.', estimatedDuration: 45, difficulty: 'Intermediate', category: 'Strength', coachName: 'Coach Sarah', exercises: [
-        WorkoutExercise(exercise: ex[0], sets: [WorkoutSet(setNumber: 1, reps: 8, weight: 60, restSeconds: 90), WorkoutSet(setNumber: 2, reps: 8, weight: 60, restSeconds: 90), WorkoutSet(setNumber: 3, reps: 8, weight: 60, restSeconds: 90)]),
-        WorkoutExercise(exercise: ex[1], sets: [WorkoutSet(setNumber: 1, reps: 10, weight: 50, restSeconds: 90), WorkoutSet(setNumber: 2, reps: 10, weight: 50, restSeconds: 90)]),
-        WorkoutExercise(exercise: ex[5], sets: [WorkoutSet(setNumber: 1, reps: 30, weight: 0, restSeconds: 60), WorkoutSet(setNumber: 2, reps: 30, weight: 0, restSeconds: 60)]),
+        WorkoutExercise(exercise: ex[0], sets: [WorkoutSet(setNumber: 1, reps: 8, weightKg: 60, restSeconds: 90), WorkoutSet(setNumber: 2, reps: 8, weightKg: 60, restSeconds: 90), WorkoutSet(setNumber: 3, reps: 8, weightKg: 60, restSeconds: 90)]),
+        WorkoutExercise(exercise: ex[1], sets: [WorkoutSet(setNumber: 1, reps: 10, weightKg: 50, restSeconds: 90), WorkoutSet(setNumber: 2, reps: 10, weightKg: 50, restSeconds: 90)]),
+        WorkoutExercise(exercise: ex[5], sets: [WorkoutSet(setNumber: 1, reps: 30, weightKg: 0, restSeconds: 60), WorkoutSet(setNumber: 2, reps: 30, weightKg: 0, restSeconds: 60)]),
       ]),
       Workout(id: '2', title: 'Glute and Hamstring Focus', description: 'Target your posterior chain with this focused lower body session.', estimatedDuration: 50, difficulty: 'Intermediate', category: 'Strength', coachName: 'Coach Sarah', exercises: [
-        WorkoutExercise(exercise: ex[6], sets: [WorkoutSet(setNumber: 1, reps: 12, weight: 80, restSeconds: 90), WorkoutSet(setNumber: 2, reps: 12, weight: 80, restSeconds: 90), WorkoutSet(setNumber: 3, reps: 12, weight: 80, restSeconds: 90)]),
-        WorkoutExercise(exercise: ex[7], sets: [WorkoutSet(setNumber: 1, reps: 10, weight: 60, restSeconds: 90), WorkoutSet(setNumber: 2, reps: 10, weight: 60, restSeconds: 90)]),
+        WorkoutExercise(exercise: ex[6], sets: [WorkoutSet(setNumber: 1, reps: 12, weightKg: 80, restSeconds: 90), WorkoutSet(setNumber: 2, reps: 12, weightKg: 80, restSeconds: 90), WorkoutSet(setNumber: 3, reps: 12, weightKg: 80, restSeconds: 90)]),
+        WorkoutExercise(exercise: ex[7], sets: [WorkoutSet(setNumber: 1, reps: 10, weightKg: 60, restSeconds: 90), WorkoutSet(setNumber: 2, reps: 10, weightKg: 60, restSeconds: 90)]),
       ]),
       // Example with superset
       Workout(id: '3', title: 'Upper Body + Core Circuit', description: 'Superset and circuit combo for upper body and core.', estimatedDuration: 40, difficulty: 'Advanced', category: 'Strength', coachName: 'Coach Sarah', exercises: [
-        WorkoutExercise(exercise: ex[2], sets: [WorkoutSet(setNumber: 1, reps: 5, weight: 100, restSeconds: 120), WorkoutSet(setNumber: 2, reps: 5, weight: 100, restSeconds: 120)]),
-        WorkoutExercise(exercise: ex[3], sets: [WorkoutSet(setNumber: 1, reps: 8, weight: 0, restSeconds: 60), WorkoutSet(setNumber: 2, reps: 8, weight: 0, restSeconds: 60)], isSuperset: true, supersetGroup: 'A'),
-        WorkoutExercise(exercise: ex[1], sets: [WorkoutSet(setNumber: 1, reps: 10, weight: 40, restSeconds: 60), WorkoutSet(setNumber: 2, reps: 10, weight: 40, restSeconds: 60)], isSuperset: true, supersetGroup: 'A'),
-        WorkoutExercise(exercise: ex[5], sets: [WorkoutSet(setNumber: 1, reps: 45, weight: 0, restSeconds: 30), WorkoutSet(setNumber: 2, reps: 45, weight: 0, restSeconds: 30), WorkoutSet(setNumber: 3, reps: 45, weight: 0, restSeconds: 30)], isCircuit: true, circuitGroup: 'C1', circuitRounds: 3),
-        WorkoutExercise(exercise: ex[4], sets: [WorkoutSet(setNumber: 1, reps: 12, weight: 15, restSeconds: 30), WorkoutSet(setNumber: 2, reps: 12, weight: 15, restSeconds: 30), WorkoutSet(setNumber: 3, reps: 12, weight: 15, restSeconds: 30)], isCircuit: true, circuitGroup: 'C1', circuitRounds: 3),
+        WorkoutExercise(exercise: ex[2], sets: [WorkoutSet(setNumber: 1, reps: 5, weightKg: 100, restSeconds: 120), WorkoutSet(setNumber: 2, reps: 5, weightKg: 100, restSeconds: 120)]),
+        WorkoutExercise(exercise: ex[3], sets: [WorkoutSet(setNumber: 1, reps: 8, weightKg: 0, restSeconds: 60), WorkoutSet(setNumber: 2, reps: 8, weightKg: 0, restSeconds: 60)], isSuperset: true, supersetGroup: 'A'),
+        WorkoutExercise(exercise: ex[1], sets: [WorkoutSet(setNumber: 1, reps: 10, weightKg: 40, restSeconds: 60), WorkoutSet(setNumber: 2, reps: 10, weightKg: 40, restSeconds: 60)], isSuperset: true, supersetGroup: 'A'),
+        WorkoutExercise(exercise: ex[5], sets: [WorkoutSet(setNumber: 1, reps: 45, weightKg: 0, restSeconds: 30), WorkoutSet(setNumber: 2, reps: 45, weightKg: 0, restSeconds: 30), WorkoutSet(setNumber: 3, reps: 45, weightKg: 0, restSeconds: 30)], isCircuit: true, circuitGroup: 'C1', circuitRounds: 3),
+        WorkoutExercise(exercise: ex[4], sets: [WorkoutSet(setNumber: 1, reps: 12, weightKg: 15, restSeconds: 30), WorkoutSet(setNumber: 2, reps: 12, weightKg: 15, restSeconds: 30), WorkoutSet(setNumber: 3, reps: 12, weightKg: 15, restSeconds: 30)], isCircuit: true, circuitGroup: 'C1', circuitRounds: 3),
       ]),
     ];
   }
@@ -57,99 +60,138 @@ class WorkoutService {
         'calories_burned': log.caloriesBurned ?? 0,
         'category': log.category ?? 'Strength',
         'notes': log.notes ?? '',
-        'completed_at': DateTime.now().toIso8601String(),
+        'completed_at': DateTime.now().toUtc().toIso8601String(),
       });
     } catch (_) {}
   }
 
+  /// Records what the client did on one set.
+  ///
+  /// **The identity of a logged set is `(session_id, set_id)` and nothing
+  /// else.** It is not the exercise's name, and it is not the set number.
+  /// Those are recorded *attributes* of what was performed — useful for
+  /// history and PR lookups, meaningless as a key:
+  ///
+  ///  * a workout may prescribe the same movement twice, so two sets can
+  ///    legitimately share a name and a set number;
+  ///  * swapping an exercise changes the name while the client is mid-session,
+  ///    so a name-keyed update matches nothing, falls through to an insert, and
+  ///    collides with the row already written under that set's identity
+  ///    (`uq_workout_set_logs_set_identity`, 23505).
+  ///
+  /// Keying on `set_id` — the identity migration 106 introduced and migration
+  /// 120 made the only one — removes both. rpe/notes/tempo are always written
+  /// (null when blank) so an edit can clear them. Errors propagate so the
+  /// caller can surface them; a swallowed save is a lost set.
   Future<void> saveSetLog({
     required String sessionId,
     required String exerciseName,
-    required String exerciseId,
+    /// The exercise *instance* this set belongs to — identity of the slot in
+    /// the workout, not of the library movement.
+    required String exerciseInstanceId,
+    /// Reference to the library exercise performed. A recorded attribute.
+    String? libraryExerciseId,
+    /// Identity of the set this row records, from the workout definition.
+    required String setId,
     required int setNumber,
     required int reps,
     required double weightKg,
     double? rpe,
     String? notes,
     String? tempo,
+    // Whether the client confirmed this set. A row is written for an edited
+    // set too, so this is what separates a recorded result from a set that is
+    // merely filled in (migration 104).
+    required bool completed,
   }) async {
     final uid = _uid;
     if (uid == null) return;
+    if (setId.isEmpty) {
+      // Refused rather than written under a guessed key. A row with no
+      // identity cannot be read back onto its set, and inserting one would
+      // resurrect exactly the ordinal-keyed behaviour this replaced.
+      throw ArgumentError.value(
+          setId, 'setId', 'a set log must carry the identity of the set it records');
+    }
     final cleanNotes = (notes != null && notes.isNotEmpty) ? notes : null;
-    // Update-or-insert (one row per set) without relying on a DB unique
-    // constraint, so editing a set's weight/reps/RPE/notes updates the same row
-    // and re-completing it doesn't duplicate. rpe/notes/tempo are always written
-    // (null when blank) so edits can clear them. Errors propagate so the caller
-    // can surface them (no silent swallow).
+    final payload = {
+      'exercise_name': exerciseName,
+      'exercise_instance_id': exerciseInstanceId,
+      'exercise_id': libraryExerciseId,
+      'set_number': setNumber,
+      'reps': reps,
+      'weight_kg': weightKg,
+      'rpe': rpe,
+      'notes': cleanNotes,
+      'tempo': tempo,
+      'completed': completed,
+    };
+    // Update-or-insert on the identity. Done as update-then-insert rather than
+    // a PostgREST upsert so it works against databases where the partial unique
+    // index on (session_id, set_id) cannot serve as an ON CONFLICT target.
     final existing = await _supabase
         .from('workout_set_logs')
-        .update({
-          'exercise_id': exerciseId,
-          'reps': reps,
-          'weight_kg': weightKg,
-          'rpe': rpe,
-          'notes': cleanNotes,
-          'tempo': tempo,
-        })
+        .update(payload)
         .eq('session_id', sessionId)
-        .eq('exercise_name', exerciseName)
-        .eq('set_number', setNumber)
+        .eq('set_id', setId)
         .select('id');
     if ((existing as List).isEmpty) {
       await _supabase.from('workout_set_logs').insert({
+        ...payload,
         'session_id': sessionId,
         'user_id': uid,
-        'exercise_name': exerciseName,
-        'exercise_id': exerciseId,
-        'set_number': setNumber,
-        'reps': reps,
-        'weight_kg': weightKg,
-        'rpe': rpe,
-        'notes': cleanNotes,
-        'tempo': tempo,
+        'set_id': setId,
       });
     }
   }
 
-  /// Returns {exerciseId: [{completed: true, reps, weight_kg, rpe, notes}]}
+  /// Returns {exerciseInstanceId: [{set_id, set_number, completed, reps,
+  /// weight, rpe, notes}]} for every set logged in a session, so resuming restores what the
+  /// client entered *and* which sets they actually confirmed.
+  ///
+  /// `set_id` is the set's own identity and is what the restore path attaches
+  /// a row by; `set_number` is carried alongside it for rows written before
+  /// migration 106, and for display. Grouping is by `exercise_instance_id`, so
+  /// a workout prescribing the same movement twice keeps the two instances'
+  /// sets apart.
+  ///
+  /// Rows written before migration 104 have no completion flag; they are read
+  /// as completed, which is how the app has always treated them.
+  ///
+  /// Read errors propagate. Returning an empty map for a failed read is
+  /// indistinguishable from "this session has no sets", which would show a
+  /// resumed workout as untouched and invite the client to redo logged work;
+  /// the restore path turns a raised error into a recovery state instead.
   Future<Map<String, List<Map<String, dynamic>>>> getSessionCompletedSets(String sessionId) async {
-    try {
-      final rows = await _supabase
-          .from('workout_set_logs')
-          .select()
-          .eq('session_id', sessionId)
-          .order('set_number');
-      final result = <String, List<Map<String, dynamic>>>{};
-      for (final row in (rows as List)) {
-        final exId = row['exercise_id'] as String? ?? row['exercise_name'] as String? ?? '';
-        result.putIfAbsent(exId, () => []).add({
-          'completed': true,
-          'reps': row['reps'],
-          'weight': row['weight_kg'],
-          'rpe': row['rpe'],
-          'notes': row['notes'],
-          'set_number': row['set_number'],
-        });
-      }
-      return result;
-    } catch (_) {
-      return {};
+    final rows = await _supabase
+        .from('workout_set_logs')
+        .select()
+        .eq('session_id', sessionId)
+        // Ascending explicitly: postgrest-dart's `order` defaults to
+        // DESCENDING (unlike the JS client), which is what made a resumed
+        // workout come back set 3, 2, 1 and re-seat each set's
+        // weight/reps/RPE/notes onto the wrong row.
+        .order('set_number', ascending: true);
+    final result = <String, List<Map<String, dynamic>>>{};
+    for (final row in (rows as List)) {
+      // Instance identity first; the library id and the name are the
+      // pre-instance fallbacks, in that order.
+      final exId = row['exercise_instance_id'] as String? ??
+          row['exercise_id'] as String? ??
+          row['exercise_name'] as String? ??
+          '';
+      result.putIfAbsent(exId, () => []).add({
+        'completed': row['completed'] != false,
+        'reps': row['reps'],
+        'weight': row['weight_kg'],
+        'rpe': row['rpe'],
+        'notes': row['notes'],
+        'set_id': row['set_id'],
+        'set_number': row['set_number'],
+        'exercise_instance_id': row['exercise_instance_id'],
+      });
     }
-  }
-
-  Future<Map<String, dynamic>?> getActiveSession() async {
-    final uid = _uid;
-    if (uid == null) return null;
-    try {
-      return await _supabase
-          .from('workout_sessions')
-          .select()
-          .eq('user_id', uid)
-          .eq('status', 'in_progress')
-          .order('started_at', ascending: false)
-          .limit(1)
-          .maybeSingle();
-    } catch (_) { return null; }
+    return result;
   }
 
   // ── History ───────────────────────────────────────────────────────────────
@@ -175,8 +217,10 @@ class WorkoutService {
           .from('workout_set_logs')
           .select()
           .eq('session_id', sessionId)
-          .order('exercise_name')
-          .order('set_number');
+          // Ascending explicitly — see getSessionCompletedSets: the default is
+          // descending, which showed a past session's sets in reverse.
+          .order('exercise_name', ascending: true)
+          .order('set_number', ascending: true);
       return List<Map<String, dynamic>>.from(data as List);
     } catch (_) { return []; }
   }
@@ -190,13 +234,16 @@ class WorkoutService {
     try {
       final rows = await _supabase
           .from('workout_set_logs')
-          .select('weight_kg, reps, created_at')
+          .select('weight_kg, reps, logged_at')
           .eq('user_id', uid)
           .eq('exercise_name', exerciseName)
-          .order('created_at');
+          // Explicit direction — the default is descending. The rows are
+          // regrouped by date and re-sorted below, so this only makes the
+          // stated "sorted by date asc" contract true of the query as well.
+          .order('logged_at', ascending: true);
       final grouped = <String, Map<String, dynamic>>{};
       for (final row in (rows as List)) {
-        final date = (row['created_at'] as String).substring(0, 10);
+        final date = (row['logged_at'] as String).substring(0, 10);
         final weight = (row['weight_kg'] as num?)?.toDouble() ?? 0.0;
         final reps = (row['reps'] as int?) ?? 0;
         if (!grouped.containsKey(date)) {
@@ -227,77 +274,80 @@ class WorkoutService {
   }
 
   // ── Stats ─────────────────────────────────────────────────────────────────
+  // A-G5 (root cause). `train_hub_screen` already renders
+  // `error: (_, __) => '—'` for these tiles, with the note: "Showing '0' told
+  // the member their streak was broken when the app had simply failed to ask."
+  //
+  // That arm could never run. This catch turned the failure into `0` before it
+  // reached the FutureProvider, so the AsyncValue was always `AsyncData(0)` —
+  // the repair had been made at the presentation layer, over a service that
+  // destroyed the signal it needed. A-G5 has been green while guarding a
+  // branch nothing could reach.
+  //
+  // A signed-out user is still `0`: that is a real answer, not a failure.
 
   Future<int> getWeeklyWorkoutCount() async {
     final uid = _uid;
     if (uid == null) return 0;
-    try {
-      final now = DateTime.now();
-      final start = DateTime(now.year, now.month, now.day - now.weekday + 1);
-      final data = await _supabase
-          .from('workout_logs')
-          .select('id')
-          .eq('user_id', uid)
-          .gte('completed_at', start.toIso8601String());
-      return (data as List).length;
-    } catch (_) { return 0; }
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day - now.weekday + 1);
+    final data = await _supabase
+        .from('workout_logs')
+        .select('id')
+        .eq('user_id', uid)
+        .gte('completed_at', start.toIso8601String());
+    return (data as List).length;
   }
 
   Future<int> getCurrentStreak() async {
     final uid = _uid;
     if (uid == null) return 0;
-    try {
-      final data = await _supabase
-          .from('workout_logs')
-          .select('completed_at')
-          .eq('user_id', uid)
-          .order('completed_at', ascending: false)
-          .limit(30);
-      if ((data as List).isEmpty) return 0;
-      int streak = 0;
-      DateTime checkDate = DateTime.now();
-      for (final log in data) {
-        final logDate = DateTime.parse(log['completed_at']);
-        final logDay = DateTime(logDate.year, logDate.month, logDate.day);
-        final checkDay = DateTime(checkDate.year, checkDate.month, checkDate.day);
-        final diff = checkDay.difference(logDay).inDays;
-        if (diff == 0 || diff == 1) {
-          streak++;
-          checkDate = logDay.subtract(const Duration(days: 1));
-        } else {
-          break;
-        }
+    final data = await _supabase
+        .from('workout_logs')
+        .select('completed_at')
+        .eq('user_id', uid)
+        .order('completed_at', ascending: false)
+        .limit(30);
+    if ((data as List).isEmpty) return 0;
+    int streak = 0;
+    DateTime checkDate = DateTime.now();
+    for (final log in data) {
+      final logDate = DateTime.parse(log['completed_at']);
+      final logDay = DateTime(logDate.year, logDate.month, logDate.day);
+      final checkDay = DateTime(checkDate.year, checkDate.month, checkDate.day);
+      final diff = checkDay.difference(logDay).inDays;
+      if (diff == 0 || diff == 1) {
+        streak++;
+        checkDate = logDay.subtract(const Duration(days: 1));
+      } else {
+        break;
       }
-      return streak;
-    } catch (_) { return 0; }
+    }
+    return streak;
   }
 
   Future<int> getTotalWorkoutCount() async {
     final uid = _uid;
     if (uid == null) return 0;
-    try {
-      final data = await _supabase.from('workout_logs').select('id').eq('user_id', uid);
-      return (data as List).length;
-    } catch (_) { return 0; }
+    final data = await _supabase.from('workout_logs').select('id').eq('user_id', uid);
+    return (data as List).length;
   }
 
   /// Completion rate over last 30 days: completed / (completed + abandoned)
   Future<double> getCompletionRate() async {
     final uid = _uid;
     if (uid == null) return 0;
-    try {
-      final cutoff = DateTime.now().subtract(const Duration(days: 30)).toIso8601String();
-      final rows = await _supabase
-          .from('workout_sessions')
-          .select('status')
-          .eq('user_id', uid)
-          .gte('started_at', cutoff)
-          .inFilter('status', ['completed', 'abandoned']);
-      final all = (rows as List);
-      if (all.isEmpty) return 0;
-      final completed = all.where((r) => r['status'] == 'completed').length;
-      return completed / all.length;
-    } catch (_) { return 0; }
+    final cutoff = DateTime.now().subtract(const Duration(days: 30)).toIso8601String();
+    final rows = await _supabase
+        .from('workout_sessions')
+        .select('status')
+        .eq('user_id', uid)
+        .gte('started_at', cutoff)
+        .inFilter('status', ['completed', 'abandoned']);
+    final all = (rows as List);
+    if (all.isEmpty) return 0;
+    final completed = all.where((r) => r['status'] == 'completed').length;
+    return completed / all.length;
   }
 
   /// Program adherence: workouts done this week / target days per week
@@ -332,17 +382,15 @@ class WorkoutService {
   Future<double> getTotalVolumeLifted() async {
     final uid = _uid;
     if (uid == null) return 0;
-    try {
-      final data = await _supabase
-          .from('workout_set_logs')
-          .select('weight_kg, reps')
-          .eq('user_id', uid);
-      double total = 0;
-      for (final row in (data as List)) {
-        total += ((row['weight_kg'] as num?)?.toDouble() ?? 0) * ((row['reps'] as int?) ?? 0);
-      }
-      return total;
-    } catch (_) { return 0; }
+    final data = await _supabase
+        .from('workout_set_logs')
+        .select('weight_kg, reps')
+        .eq('user_id', uid);
+    double total = 0;
+    for (final row in (data as List)) {
+      total += ((row['weight_kg'] as num?)?.toDouble() ?? 0) * ((row['reps'] as int?) ?? 0);
+    }
+    return total;
   }
 
   // ── Coach: client stats ───────────────────────────────────────────────────

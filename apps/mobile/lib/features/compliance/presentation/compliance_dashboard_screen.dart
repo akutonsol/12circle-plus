@@ -49,7 +49,7 @@ class ComplianceDashboardScreen extends ConsumerWidget {
         loading: () => const Center(
             child: CircularProgressIndicator(color: _brand)),
         error: (e, _) => Center(
-            child: Text('Could not load compliance.\n$e',
+            child: Text('Could not load compliance.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: _muted))),
         data: (roster) {

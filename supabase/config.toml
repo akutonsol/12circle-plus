@@ -1,1 +1,133 @@
-project_id = "nxdbooufqzkpslkcogxc"
+project_id = "eyqtldjqpgpljlqvpowh"
+
+# Seed files applied after a `supabase db reset`.
+#
+# Listed EXPLICITLY rather than globbed: order matters and a glob would sort
+# full_test_data.sql before test_accounts.sql, which breaks the fixtures --
+# full_test_data.sql builds on the coach/client that test_accounts.sql creates.
+#
+# Declaring them here makes the rebuild one reproducible CLI operation instead of
+# two out-of-band psql invocations, so a QA rebuild is `supabase db reset
+# --linked` and nothing else.
+[db.seed]
+enabled = true
+sql_paths = ["./seeds/test_accounts.sql", "./seeds/full_test_data.sql"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Edge Function JWT verification — E-09.
+#
+# There was no [functions] block at all. Two consequences, in opposite
+# directions:
+#
+#   1. `stripe-webhook` inherited the platform default `verify_jwt = true`.
+#      Stripe signs its deliveries with a webhook secret, not a Supabase JWT, so
+#      EVERY Stripe delivery 401s unless someone remembers `--no-verify-jwt` on
+#      the deploy command. Subscription state then silently stops reconciling.
+#      It is declared `false` here so the correct posture is committed rather
+#      than retyped from memory at deploy time.
+#
+#   2. The other 18 inherited `true`, which reads like protection and is not.
+#      `verify_jwt` checks that the request carries *a* valid project JWT — and
+#      the anon key is a valid project JWT that ships in every client. It
+#      establishes "someone on the internet", never "this specific user".
+#      Authorization is the function's own `getUser()` + policy check.
+#
+#      This distinction is the whole of EDGE-1 (`notify-coach-email`) and EDGE-2
+#      (`send-checkin-reminder`): both are declared `true` below and both are
+#      still callable by any anon-key holder, because neither reads the
+#      Authorization header. Declaring `verify_jwt` here does NOT close them.
+#      They are Wave 5, decisions D-4 and D-5.
+#
+# Every function is listed explicitly. An undeclared function inherits a default
+# nobody chose, which is the defect this block exists to remove.
+#
+# HOW THIS BLOCK IS DEPLOYED — W1B-N5 (Wave 5.0 entry precondition).
+# Do NOT run `supabase config push` to apply these declarations. `config push`
+# writes this ENTIRE file to the linked project, and this file deliberately
+# declares almost no [auth]/[db] settings — a push would silently reset QA's
+# live auth configuration (site URL, redirect allowlist, JWT expiry, providers,
+# email templates) to CLI defaults. Until config.toml has been reconciled with
+# QA's live configuration and that reconciliation is recorded, each function's
+# verify_jwt posture reaches an environment only via
+# `supabase functions deploy <name>` — and function deployment itself is gated
+# to Wave 5. See docs/qa-environments.md and MASTER_REMEDIATION_REGISTRY.md §7.7.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Signed by Stripe, not by Supabase ────────────────────────────────────────
+[functions.stripe-webhook]
+verify_jwt = false
+# Safe because the handler authenticates the caller itself: it 400s on a missing
+# `stripe-signature` header and 400s on a signature that does not verify against
+# STRIPE_WEBHOOK_SECRET — including when that secret is unset. Fail-closed.
+
+# ── AI surfaces ──────────────────────────────────────────────────────────────
+[functions.ai-coach]
+verify_jwt = true
+
+[functions.ai-coaching-engine]
+verify_jwt = true
+
+[functions.ai-generate-workout]
+verify_jwt = true
+
+[functions.analyze-food-image]
+verify_jwt = true
+
+# PD-A17 = A, resolved as A2 (V5 §46). The Edge replacement for the NestJS route
+# POST /ai/nutrition/message, which was that API's only live surface. Spends a
+# paid Anthropic credential, so it is JWT-verified like every other AI function.
+[functions.ai-nutrition]
+verify_jwt = true
+
+[functions.explain-decision]
+verify_jwt = true
+
+[functions.generate-communication]
+verify_jwt = true
+
+# ── Billing ──────────────────────────────────────────────────────────────────
+[functions.create-checkout]
+verify_jwt = true
+
+[functions.create-portal-session]
+verify_jwt = true
+
+[functions.cancel-subscription]
+verify_jwt = true
+
+[functions.update-subscription]
+verify_jwt = true
+
+[functions.stripe-connect]
+verify_jwt = true
+
+# ── Content enrichment ───────────────────────────────────────────────────────
+[functions.enrich-exercise]
+verify_jwt = true
+
+[functions.enrich-exercise-content]
+verify_jwt = true
+
+[functions.enrich-exercise-intelligence]
+verify_jwt = true
+
+[functions.enrich-exercise-videos]
+verify_jwt = true
+
+# ── Notifications and invites ────────────────────────────────────────────────
+[functions.send-invite-email]
+verify_jwt = true
+
+[functions.notify-coach-email]
+verify_jwt = true
+# EDGE-1 (P0, Wave 5, D-4): reads no Authorization header, so the anon key is
+# sufficient to reach it, and it interpolates caller-controlled `client_name` /
+# `client_email` raw into a branded HTML email sent to every coach. It has no
+# caller in the codebase. `verify_jwt = true` does not mitigate this.
+
+[functions.send-checkin-reminder]
+verify_jwt = true
+# EDGE-2 (P0, Wave 5, D-5): reads no Authorization header despite its own header
+# claiming pg_cron + service-role invocation, and has no idempotency guard, so N
+# invocations produce N notifications and N emails per client.
+# `verify_jwt = true` does not mitigate this either.

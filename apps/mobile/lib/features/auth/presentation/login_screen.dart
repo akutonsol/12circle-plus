@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../domain/auth_provider.dart';
+import '../../../core/errors/auth_error_text.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/router/app_router.dart' show authErrorNotifier;
 import 'widgets/auth_design.dart';
 
@@ -98,7 +100,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
     final authState = ref.read(authNotifierProvider);
     if (authState.hasError) {
-      _showError(authState.error.toString());
+      // The raw object goes to the sink (status code, error code, type); the
+      // user gets the provider's human-readable message. Showing
+      // `error.toString()` here put `AuthApiException(message: …,
+      // statusCode: 400, code: invalid_credentials)` on screen.
+      reportError('LoginScreen._signIn', authState.error!, authState.stackTrace);
+      _showError(authErrorText(authState.error));
       return;
     }
     await _handlePostAuthNavigation();
@@ -118,31 +125,34 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light.copyWith(statusBarColor: Colors.transparent));
     final isLoading = ref.watch(authNotifierProvider).isLoading;
 
+    // FIT-007 (locked). Structure, copy and order come from the design board:
+    // logo, "Welcome back", labelled fields, right-aligned forgot link, primary
+    // CTA, "or" divider, then Apple ABOVE Google as full-width secondary
+    // buttons, and the "New here?" footer.
     return AuthScaffold(
-      title: 'Welcome Back',
-      subtitle: 'Sign in to continue your fitness journey.',
-      footer: AuthFooterLink(prefix: "Don't have an account?", action: 'Sign Up', onTap: () => context.go('/signup')),
+      title: 'Welcome back',
+      footer: AuthFooterLink(prefix: 'New here?', action: 'Create an account', onTap: () => context.go('/signup')),
       children: [
-        AuthField(controller: _emailCtrl, hint: 'Email address', keyboardType: TextInputType.emailAddress),
-        const SizedBox(height: 12),
-        AuthField(controller: _passwordCtrl, hint: 'Password', isPassword: true),
-        const SizedBox(height: 12),
+        AuthField(controller: _emailCtrl, label: 'Email', hint: 'you@example.com',
+            keyboardType: TextInputType.emailAddress),
+        const SizedBox(height: 16),
+        AuthField(controller: _passwordCtrl, label: 'Password', hint: 'Your password', isPassword: true),
+        const SizedBox(height: 14),
         Align(alignment: Alignment.centerRight, child: GestureDetector(
           onTap: () => context.go('/forgot-password'),
           child: const Text('Forgot password?',
-            style: TextStyle(color: AuthColors.purpleLight, fontSize: 14, fontWeight: FontWeight.w600)))),
+            style: TextStyle(color: AuthColors.purpleLight, fontSize: 13, fontWeight: FontWeight.w500)))),
         const SizedBox(height: 22),
-        AuthButton(label: 'Sign In', loading: isLoading, onTap: _signIn),
+        AuthButton(label: 'Sign in', loading: isLoading, onTap: _signIn),
         const SizedBox(height: 22),
         const AuthDivider(),
-        const SizedBox(height: 18),
-        Row(children: [
-          Expanded(child: AuthSocialButton(label: 'Google', icon: const GoogleGlyph(),
-            onTap: isLoading ? () {} : _signInWithGoogle)),
-          const SizedBox(width: 12),
-          Expanded(child: AuthSocialButton(label: 'Apple', icon: const Icon(Icons.apple, color: Colors.white, size: 22),
-            onTap: isLoading ? () {} : _signInWithApple)),
-        ]),
+        const SizedBox(height: 22),
+        AuthSocialButton(label: 'Continue with Apple',
+          icon: const Icon(Icons.apple, color: AuthColors.text, size: 18),
+          onTap: isLoading ? () {} : _signInWithApple),
+        const SizedBox(height: 10),
+        AuthSocialButton(label: 'Continue with Google', icon: const GoogleGlyph(),
+          onTap: isLoading ? () {} : _signInWithGoogle),
       ],
     );
   }

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/errors/auth_error_text.dart';
+import '../../../core/observability/app_failure.dart';
 import 'widgets/auth_design.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
@@ -37,10 +39,11 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         redirectTo: kIsWeb ? Uri.base.origin : null,
       );
       if (mounted) setState(() { _loading = false; _sent = true; });
-    } catch (e) {
+    } catch (e, st) {
+      reportError('ForgotPasswordScreen._submit', e, st);
       if (mounted) {
         setState(() => _loading = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(authErrorText(e))));
       }
     }
   }

@@ -1,0 +1,85 @@
+-- AUTHORED / BLOCKED — NOT A MIGRATION. DO NOT APPLY AS-IS.
+--
+-- Status:   AUTHORED, awaiting a wave-entry migration number and owner sign-off.
+-- Finding:  SEC-VOICE-1 (storage privacy), FAILED CONTROL.
+-- Filed by: the QA programme. This file deliberately carries NO migration
+--           number: `docs/MASTER_REMEDIATION_WAVES.md` reserves 132+ for
+--           "assigned at wave entry, never before", and self-assigning one is
+--           exactly the collision that document exists to prevent.
+--
+-- ── WHAT WAS VERIFIED, AND HOW ──────────────────────────────────────────────
+-- Probed live against the QA project with NO credentials at all — which is
+-- exactly what a stranger holding a URL has:
+--
+--   coach-media       -> NoSuchKey    "Object not found"  => the bucket SERVED
+--                                                            the request
+--   exercise-media    -> NoSuchKey                         => public
+--   avatars           -> NoSuchKey                         => public
+--   progress-photos   -> NoSuchBucket                      => private (130)
+--   chat-media        -> NoSuchBucket                      => private (130)
+--   messages          -> NoSuchBucket                      => private (130)
+--   <nonexistent>     -> NoSuchBucket                      => control
+--
+-- Origin: 036_client_plan_and_coach_media.sql:33 creates it with public = true.
+-- 130_private_storage_buckets.sql privatised three buckets and did not include
+-- this one.
+--
+-- ── WHY IT MATTERS ──────────────────────────────────────────────────────────
+-- `coach-media` holds a coach's recorded VOICE NOTES and VIDEO RESPONSES
+-- addressed to a particular client:
+--   custom_exercise_service.dart:674   getPublicUrl  (voice)
+--   coach_video_response_screen.dart:78 getPublicUrl (video)
+--   coach_business_screen.dart:132      getPublicUrl
+--
+-- The app already uses the correct pattern elsewhere —
+-- `createSignedUrl(path, 3600)` for progress-photos and chat-media — and
+-- chat_media_path.dart:14 states the rule outright:
+--   "The bucket is PRIVATE. Nothing in the app may call getPublicUrl() on it".
+--
+-- A public Supabase bucket serves objects WITHOUT AUTHENTICATION. The object
+-- path embeds UUIDs so it is not trivially enumerable, but a leaked URL grants
+-- permanent, unauthenticated, non-expiring access.
+--
+-- ── THE DART HALF IS ALREADY DONE ───────────────────────────────────────────
+-- The deletion arm needed no migration and is fixed in code: clearCoachVoice()
+-- now removes the stored object before nulling the row, so a removed note stops
+-- being fetchable even while the bucket is public. That reduces the exposure;
+-- it does not close it. Existing objects remain public until this runs.
+--
+-- ── WHAT THIS WOULD DO ──────────────────────────────────────────────────────
+-- 1. Flip the bucket to private (converging it however it was created).
+-- 2. Add owner-scoped RLS on storage.objects for it, mirroring 130's shape.
+-- 3. REQUIRES a companion Dart change, NOT included here: the three
+--    getPublicUrl() call sites above must move to createSignedUrl(), or every
+--    existing coach voice note and video stops loading the moment this applies.
+--    Applying the SQL alone is a visible regression.
+--
+-- ── NOT VERIFIED ────────────────────────────────────────────────────────────
+-- The storage RLS below is written from 130's pattern and has NOT been executed
+-- or tested: Docker is unavailable (no `supabase db dump`/local apply) and the
+-- QA service-role key is unavailable, so neither a schema read nor an applied
+-- test is possible. Treat the policy bodies as a draft to be reviewed against
+-- the live schema, not as verified SQL.
+
+-- ── 1. make the bucket private ──────────────────────────────────────────────
+UPDATE storage.buckets SET public = false WHERE id = 'coach-media';
+
+-- ── 2. owner-scoped access, mirroring 130 ───────────────────────────────────
+-- DRAFT. The read arm is the open question and is an OWNER DECISION:
+-- a coach's voice note is addressed to a client, so "who may read it" is
+-- narrower than "who uploaded it" and wider than "only the owner". The client
+-- it was recorded for must be able to play it. That relationship is expressed
+-- by coach_exercise_media (coach_id, exercise_id) plus an active
+-- coach_client_relationship, and resolving it correctly needs the schema read
+-- that is currently blocked.
+--
+-- DROP POLICY IF EXISTS "coach media owner write" ON storage.objects;
+-- CREATE POLICY "coach media owner write"
+--   ON storage.objects FOR ALL TO authenticated
+--   USING      (bucket_id = 'coach-media' AND owner = auth.uid())
+--   WITH CHECK (bucket_id = 'coach-media' AND owner = auth.uid());
+--
+-- DROP POLICY IF EXISTS "coach media assigned client read" ON storage.objects;
+-- CREATE POLICY "coach media assigned client read"
+--   ON storage.objects FOR SELECT TO authenticated
+--   USING (bucket_id = 'coach-media' AND ( owner = auth.uid() OR <TO BE RESOLVED> ));

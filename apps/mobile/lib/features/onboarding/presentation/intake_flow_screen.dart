@@ -2,6 +2,8 @@ import 'dart:typed_data';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'widgets/intake_back_button.dart';
+import 'widgets/intake_complete_page.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../scoring/data/score_engine.dart';
@@ -207,24 +209,86 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     }
   }
 
+  /// FIT-009 · "Intake complete". The flow used to `context.go('/home')` the
+  /// instant the last answer saved, so the state the anchor draws never
+  /// existed — the client's work ended in a screen transition.
+  bool _done = false;
+
+  /// EC-03 · set when the final save failed. While it is non-null the flow does NOT
+  /// present itself as complete, and the person keeps a Retry affordance.
+  String? _saveError;
+
+  /// EC-03 · ONBOARDING NO LONGER MARKS ITSELF COMPLETE AFTER THE SAVE FAILS.
+  ///
+  /// This handler used to catch the upsert and then explicitly write
+  /// `{'onboarding_complete': true, 'onboarding_step': 0}` — "so the user isn't looped
+  /// back here on next login". The cost of not being looped back was everything the
+  /// flow collected: PAR-Q answers, medical conditions, injuries, allergies, dietary
+  /// restrictions, goal, experience **and consent** were discarded, while the person
+  /// was recorded as fully onboarded and could never return to supply them.
+  ///
+  /// The registry names this the parent of CON-04, E-NUT-05, ERR-2 and DAT-2, and
+  /// "the reason `risk_*` is frequently null" — the same NULL that EC-04 then rendered
+  /// to the coach as a green LOW RISK badge (V5 §170).
+  ///
+  /// Being looped back is the CORRECT outcome of an unsaved intake: the data is
+  /// genuinely missing and the flow is where it gets supplied. `_saveProgress`'s
+  /// Phase 1 has already persisted `onboarding_step` with `onboarding_complete: false`
+  /// (see above), so the person resumes where they were rather than starting over.
+  ///
+  /// TWO SIDE EFFECTS ALSO MOVED BEHIND THE SUCCESS PATH. `assessmentComplete()`
+  /// awarded a score for an assessment that was not stored, and `generate_client_plan`
+  /// built a program from answers the database never received. Neither should run over
+  /// a failed save.
   Future<void> _finish() async {
-    setState(() => _saving = true);
+    setState(() { _saving = true; _saveError = null; });
     final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (uid != null) {
+    // EC-03 · THE ARM THE ORIGINAL FIX LEFT OPEN. The guard above used to be
+    // `if (uid != null) { …save… }` with the completion state set unconditionally after
+    // it — so a NULL uid skipped the save entirely and the flow still rendered
+    // IntakeCompletePage. "Not saved because it failed" was fixed; "not saved because it
+    // was never attempted" was not, and it is the same false success state over a weaker
+    // premise: nothing was even tried.
+    //
+    // IT IS REACHABLE WITHOUT A SESSION EXPIRY. `/intake` is listed in the router's
+    // `isAuthRoute` set (app_router.dart:203), so `!isAuthenticated && !isAuthRoute` does
+    // NOT send an unauthenticated caller to /login — the route is deliberately open, and
+    // `_loadProgress` already treats a null uid as "nothing to restore" and carries on.
+    // A person can therefore answer all 26 steps, tap Finish, and be told they are done
+    // while PAR-Q answers, injuries, allergies, dietary restrictions, goal, experience and
+    // CONSENT are discarded. That is the registry's description of EC-03's parent defect,
+    // which it names the parent of CON-04, E-NUT-05, ERR-2 and DAT-2.
+    //
+    // The message differs from the catch below because the cause differs and Retry alone
+    // cannot fix it: a save needs a session. Retry is still offered, because a token
+    // refresh between taps makes it work and withholding it would leave no way forward.
+    if (uid == null) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _saveError = 'We could not save your answers because you are not signed in. '
+              'Nothing was lost on this device — sign in on another tab or app and tap '
+              'Retry.';
+        });
+      }
+      return;
+    }
+    {
       _data.biggestChallenges = _challenges.toList();
       try {
         await Supabase.instance.client
             .from('user_profiles')
             .upsert({'id': uid, ..._data.toSupabase()});
-      } catch (_) {
-        // Full save failed (e.g. missing columns) — at minimum mark onboarding done
-        // so the user isn't looped back here on next login.
-        try {
-          await Supabase.instance.client
-              .from('user_profiles')
-              .update({'onboarding_complete': true, 'onboarding_step': 0})
-              .eq('id', uid);
-        } catch (_) {}
+      } catch (e) {
+        // NOT marked complete. The intake is not finished, because it was not saved.
+        if (mounted) {
+          setState(() {
+            _saving = false;
+            _saveError = 'We could not save your answers. Nothing was lost on this '
+                'device — tap Retry to try again.';
+          });
+        }
+        return;
       }
       ScoreEngine().assessmentComplete(); // +25 (once)
       // Self/AI-Guided clients have no coach, so the system generates their plan
@@ -237,7 +301,10 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
         } catch (_) {/* generation must never block finishing onboarding */}
       }
     }
-    if (mounted) context.go('/home');
+    // FIT-009 is a state, not a redirect. The board's note is explicit:
+    // "Success is quiet: a mark, a sentence, what happens next. No confetti,
+    // no celebration animation."
+    if (mounted) setState(() { _saving = false; _done = true; });
   }
 
   @override
@@ -258,6 +325,8 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
       );
     }
 
+    if (_done) return IntakeCompletePage(onGoHome: () => context.go('/home'));
+
     return Scaffold(
       backgroundColor: _bg,
       body: Stack(
@@ -275,7 +344,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
               // 0 — Welcome
               _WelcomePage(onStart: _next),
               // 1 — Profile Info (name, gender, dob)
-              _ProfileInfoPage(
+              ProfileInfoPage(
                 firstName: _data.firstName,
                 lastName: _data.lastName,
                 gender: _data.gender,
@@ -482,6 +551,44 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
               _Step11Page(data: _data, saving: _saving, onEnter: _finish),
             ],
           ),
+
+          // EC-03 · the failed-save state, which this flow previously did not have.
+          // It is a persistent banner rather than a SnackBar, because a transient
+          // message for "none of your answers were saved" is a message that can be
+          // missed — and the old behaviour's whole problem was that nobody was told.
+          if (_saveError != null)
+            Positioned(
+              left: 16, right: 16, bottom: 24,
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2A1416),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFFE8556D)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_saveError!,
+                          style: const TextStyle(
+                              color: Color(0xFFF07A8C), fontSize: 13, height: 1.4)),
+                      const SizedBox(height: 12),
+                      Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                        TextButton(
+                          onPressed: _saving ? null : _finish,
+                          child: Text(_saving ? 'Saving…' : 'Retry',
+                              style: const TextStyle(
+                                  color: Color(0xFFF07A8C),
+                                  fontWeight: FontWeight.w700)),
+                        ),
+                      ]),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -517,10 +624,10 @@ class _AppBar extends StatelessWidget {
         child: Row(
           children: [
             if (onBack != null)
-              GestureDetector(
+              IntakeBackButton(
                 onTap: onBack,
-                child: Container(
-                  width: 40, height: 40,
+                size: 40,
+                chip: Container(
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.05),
                     borderRadius: BorderRadius.circular(999),
@@ -530,7 +637,7 @@ class _AppBar extends StatelessWidget {
                 ),
               )
             else
-              const SizedBox(width: 40),
+              const SizedBox(width: 44),
             const Expanded(
               child: Center(
                 child: Text('12 Circle',
@@ -644,7 +751,16 @@ class _GradientButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    // The child `Text` supplies the name, so no label is set here — adding one
+    // would double the announcement, which is a mistake this repository has
+    // already made once (see `auth_design.dart`). What is added is the ROLE and
+    // the ENABLED state: the button is disabled until the page's fields are
+    // filled, and a screen reader had no way to know that.
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      onTap: enabled ? onTap : null,
+      child: GestureDetector(
       onTap: enabled ? onTap : null,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
@@ -672,6 +788,7 @@ class _GradientButton extends StatelessWidget {
           ],
         ),
       ),
+    ),
     );
   }
 }
@@ -719,10 +836,9 @@ class _IntakeStepBar extends StatelessWidget {
       padding: EdgeInsets.fromLTRB(16, top + 12, 16, 16),
       child: Row(
         children: [
-          GestureDetector(
+          IntakeBackButton(
             onTap: onBack,
-            child: Container(
-              width: 36, height: 36,
+            chip: Container(
               decoration: BoxDecoration(
                 color: _surfCH,
                 borderRadius: BorderRadius.circular(10),
@@ -925,7 +1041,23 @@ class _WelcomePage extends StatelessWidget {
         Positioned(
           bottom: bottom + 40,
           left: 20, right: 20,
-          child: GestureDetector(
+          // F-9: this page produced ONE merged accessibility node covering the
+          // whole screen — headline and button together — so "Get Started" was
+          // not separately focusable and a screen reader read the page as one
+          // run-on string. There is no MergeSemantics here; it is Flutter's
+          // default. With only one actionable node on the page, the
+          // surrounding Text has no boundary and is absorbed into it, which
+          // also expands its rect to the full screen. The next page produces 11
+          // discrete nodes because its form fields create those boundaries.
+          //
+          // Declaring an explicit bounded button gives the control its own node
+          // and stops it swallowing the headline. `excludeSemantics` keeps the
+          // label from being announced twice.
+          child: Semantics(
+            button: true,
+            label: 'Get Started',
+            excludeSemantics: true,
+            child: GestureDetector(
             onTap: onStart,
             child: Container(
               height: 60,
@@ -944,6 +1076,7 @@ class _WelcomePage extends StatelessWidget {
                   color: Colors.white, fontSize: 18,
                   fontWeight: FontWeight.w700, letterSpacing: 0.3)),
             ),
+          ),
           ),
         ),
       ],
@@ -1208,7 +1341,7 @@ class _HeightPageState extends State<_HeightPage> {
           child: SizedBox(
             width: double.infinity,
             child: _GradientButton(
-              label: 'Next', onTap: widget.onContinue),
+              label: 'Continue', onTap: widget.onContinue),
           ),
         ),
       ],
@@ -1320,7 +1453,7 @@ class _Step1Page extends StatelessWidget {
           child: SizedBox(
             width: double.infinity,
             child: _GradientButton(
-              label: 'Next',
+              label: 'Continue',
               enabled: hasSelection,
               onTap: hasSelection ? onContinue : null,
             ),
@@ -1388,7 +1521,7 @@ class _ActivitiesPage extends StatelessWidget {
           child: SizedBox(
             width: double.infinity,
             child: _GradientButton(
-              label: 'Next',
+              label: 'Continue',
               enabled: hasSelection,
               onTap: hasSelection ? onContinue : null,
             ),
@@ -1620,7 +1753,7 @@ class _WeightPageState extends State<_WeightPage> {
           padding: EdgeInsets.fromLTRB(20, 12, 20, bottom + 24),
           child: SizedBox(
             width: double.infinity,
-            child: _GradientButton(label: 'Next', onTap: widget.onContinue),
+            child: _GradientButton(label: 'Continue', onTap: widget.onContinue),
           ),
         ),
       ],
@@ -2005,7 +2138,7 @@ class _TargetWeightPageState extends State<_TargetWeightPage> {
         ),
         Padding(
           padding: EdgeInsets.fromLTRB(20, 8, 20, bottom + 24),
-          child: _GradientButton(label: 'Next', onTap: widget.onContinue),
+          child: _GradientButton(label: 'Continue', onTap: widget.onContinue),
         ),
       ],
     );
@@ -4692,7 +4825,9 @@ class _BottomBar extends StatelessWidget {
 }
 
 // ── Profile Info Page ─────────────────────────────────────────────────────────
-class _ProfileInfoPage extends StatefulWidget {
+/// Public so F-9's whole-screen-node finding can be re-measured on the device.
+/// It takes plain values and callbacks — no Supabase — so it mounts standalone.
+class ProfileInfoPage extends StatefulWidget {
   final String firstName;
   final String lastName;
   final String gender;
@@ -4700,16 +4835,17 @@ class _ProfileInfoPage extends StatefulWidget {
   final void Function(String, String, String, DateTime?) onChanged;
   final VoidCallback onContinue;
   final VoidCallback onBack;
-  const _ProfileInfoPage({
+  const ProfileInfoPage({
+    super.key,
     required this.firstName, required this.lastName,
     required this.gender, required this.dateOfBirth,
     required this.onChanged, required this.onContinue, required this.onBack,
   });
   @override
-  State<_ProfileInfoPage> createState() => _ProfileInfoPageState();
+  State<ProfileInfoPage> createState() => _ProfileInfoPageState();
 }
 
-class _ProfileInfoPageState extends State<_ProfileInfoPage> {
+class _ProfileInfoPageState extends State<ProfileInfoPage> {
   late final TextEditingController _fnCtrl;
   late final TextEditingController _lnCtrl;
   late String _gender;
@@ -4777,21 +4913,30 @@ class _ProfileInfoPageState extends State<_ProfileInfoPage> {
         padding: EdgeInsets.only(top: top + 16, left: 20, right: 20, bottom: 24),
         child: Column(children: [
           Row(children: [
-            GestureDetector(
+            IntakeBackButton(
               onTap: widget.onBack,
-              child: Container(
-                width: 36, height: 36,
+              chip: Container(
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.07),
                   shape: BoxShape.circle),
                 child: const Icon(Icons.arrow_back_ios_new, color: _onSurf, size: 16))),
             const SizedBox(width: 12),
-            const Expanded(child: Text('Your Profile',
-              style: TextStyle(color: _onSurf, fontSize: 20, fontWeight: FontWeight.w800))),
+            // F-9: these two lines had no semantics boundary and were absorbed
+            // into the only actionable node on the page — the back button —
+            // whose rect then covered the whole screen. `header`/`container`
+            // give each its own node, which is also what a screen reader needs
+            // in order to offer the title as a heading.
+            Expanded(child: Semantics(
+              header: true,
+              container: true,
+              child: const Text('Your Profile',
+                style: TextStyle(color: _onSurf, fontSize: 20, fontWeight: FontWeight.w800)))),
           ]),
           const SizedBox(height: 8),
-          const Text('Tell us a little about yourself.',
-            style: TextStyle(color: _onSurfV, fontSize: 14)),
+          Semantics(
+            container: true,
+            child: const Text('Tell us a little about yourself.',
+              style: TextStyle(color: _onSurfV, fontSize: 14))),
         ])),
 
       Expanded(child: SingleChildScrollView(

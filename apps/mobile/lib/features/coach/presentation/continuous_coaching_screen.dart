@@ -57,7 +57,7 @@ class _State extends ConsumerState<ContinuousCoachingScreen> {
       'completion_pct': _completion, 'recovery': _recovery, 'energy': _energy,
       'pain': _pain ? ['reported'] : [],
     });
-    if (!ok) { setState(() { _busy = false; _status = 'Feedback save failed — apply migration 094.'; }); return; }
+    if (!ok) { if (mounted) setState(() { _busy = false; _status = 'Feedback save failed — apply migration 094.'; }); return; }
     final e = await _svc.evaluateWeek(p['id'] as String, _week);
     if (!mounted) return;
     setState(() { _busy = false; _eval = e; });

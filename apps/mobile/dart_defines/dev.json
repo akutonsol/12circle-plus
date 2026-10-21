@@ -1,0 +1,6 @@
+{
+  "APP_ENV": "dev",
+  "SUPABASE_URL": "",
+  "SUPABASE_ANON_KEY": "",
+  "STRIPE_PK": ""
+}

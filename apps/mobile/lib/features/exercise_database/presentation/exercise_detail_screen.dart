@@ -11,6 +11,7 @@ import '../../workout/data/models/video_variant_model.dart';
 import '../../workout/presentation/widgets/youtube_embed.dart';
 import '../../auth/domain/auth_provider.dart';
 import 'widgets/coach_focus_section.dart';
+import '../../../core/widgets/named_icon_button.dart';
 
 class _C {
   static const bg                   = Color(0xFF0E0E0F);
@@ -85,7 +86,8 @@ class _ExerciseDetailView extends StatelessWidget {
           backgroundColor: Colors.transparent,
           expandedHeight: 300,
           pinned: true,
-          leading: GestureDetector(
+          leading: NamedIconButton(
+            label: 'Back',
             onTap: () => context.canPop()
                 ? context.pop()
                 : context.go('/exercise-library'),

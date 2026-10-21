@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 
 class MessagingService {
   final supabase = Supabase.instance.client;
@@ -8,7 +9,13 @@ class MessagingService {
   // Table schema: id, participant_1, participant_2, last_message, last_message_at
 
   /// Returns all conversations for the current user, each enriched with the
-  /// other participant's profile from user_profiles.
+  /// other participant's display profile.
+  ///
+  /// Reads conversation_participant_profiles, NOT user_profiles: migration 102
+  /// restricts the base table to the owner and their coach, and messaging has
+  /// no business seeing a partner's contact, medical or billing columns. The
+  /// view is row-scoped by shares_conversation_with(), so an id smuggled into
+  /// `otherIds` that the caller shares no conversation with returns nothing.
   Future<List<Map<String, dynamic>>> getConversations() async {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return [];
@@ -28,7 +35,7 @@ class MessagingService {
       ).toSet().toList();
 
       final profiles = await supabase
-          .from('user_profiles')
+          .from('conversation_participant_profiles')
           .select('id, first_name, last_name, role, avatar_url')
           .inFilter('id', otherIds);
 
@@ -46,7 +53,7 @@ class MessagingService {
         };
       }).toList();
     } catch (e) {
-      print('getConversations error: $e');
+      reportError('MessagingService.getConversations', e);
       return [];
     }
   }
@@ -70,72 +77,71 @@ class MessagingService {
       if (coachId == null) return null; // no accepted coach yet
       return getOrCreateConversationWith(coachId);
     } catch (e) {
-      print('getOrCreateClientCoachConversation error: $e');
+      reportError('MessagingService.getOrCreateClientCoachConversation', e);
       return null;
     }
   }
 
   /// Finds (or creates) the 1:1 conversation between the current user and a
   /// specific other participant (e.g. a chosen coach).
+  ///
+  /// One RPC, not a check-then-insert. The read and the insert used to be two
+  /// round trips with no arbiter between them, so two devices — or this method
+  /// and [getOrCreateCoachClientConversation], which is the same operation
+  /// entered from the coach's side — could each create a thread for one pair
+  /// and split the message history in half with no error anywhere (I-NOT-05).
+  /// `get_or_create_conversation` (migration 131) does both under the unique
+  /// participant-pair index, so a race resolves to one id instead of two rows.
   Future<String?> getOrCreateConversationWith(String otherUserId) async {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return null;
     try {
-      // Only a conversation between exactly these two participants.
-      final existing = await supabase
-          .from('conversations')
-          .select('id')
-          .or('and(participant_1.eq.$userId,participant_2.eq.$otherUserId),'
-              'and(participant_1.eq.$otherUserId,participant_2.eq.$userId)')
-          .limit(1);
-      if ((existing as List).isNotEmpty) return existing.first['id'] as String;
-
-      final result = await supabase
-          .from('conversations')
-          .insert({
-            'participant_1': userId,
-            'participant_2': otherUserId,
-            'last_message_at': DateTime.now().toIso8601String(),
-          })
-          .select('id')
-          .single();
-      return result['id'] as String;
+      return await _getOrCreateConversation(otherUserId);
     } catch (e) {
-      print('getOrCreateConversationWith error: $e');
+      reportError('MessagingService.getOrCreateConversationWith', e);
       return null;
     }
   }
 
   /// For a COACH: finds or creates a conversation with a specific client.
+  ///
+  /// The same operation as [getOrCreateConversationWith], entered from the
+  /// other side. Both now go through the one RPC, which is what I-NOT-05's
+  /// fix means by "collapse both Dart paths": the participant pair is
+  /// unordered, so which party is `participant_1` must not decide whether a
+  /// second thread gets created.
   Future<String?> getOrCreateCoachClientConversation(String clientId) async {
     final coachId = supabase.auth.currentUser?.id;
     if (coachId == null) return null;
     try {
-      // Check both orderings since the table has no role constraint
-      final existing = await supabase
-          .from('conversations')
-          .select('id')
-          .or(
-            'and(participant_1.eq.$coachId,participant_2.eq.$clientId),'
-            'and(participant_1.eq.$clientId,participant_2.eq.$coachId)'
-          )
-          .limit(1);
-      if ((existing as List).isNotEmpty) return existing.first['id'] as String;
-
-      final result = await supabase
-          .from('conversations')
-          .insert({
-            'participant_1': coachId,
-            'participant_2': clientId,
-            'last_message_at': DateTime.now().toIso8601String(),
-          })
-          .select('id')
-          .single();
-      return result['id'] as String;
+      return await _getOrCreateConversation(clientId);
     } catch (e) {
-      print('getOrCreateCoachClientConversation error: $e');
+      reportError('MessagingService.getOrCreateCoachClientConversation', e);
       return null;
     }
+  }
+
+  /// The single arbiter for "the conversation between me and [otherUserId]".
+  ///
+  /// **Propagates.** Each caller catches under its own name, which is what
+  /// keeps the two entry points distinguishable in the failure sink — and what
+  /// keeps them anchorable. `ec23_negative_control.sh` reproduces the seven
+  /// pre-ERR-1 `print()` offenders by matching `reportError('<literal>', e);`
+  /// in this file and `checkin_service.dart`; a single reporter taking the
+  /// origin as a *parameter* is invisible to that regex, and collapsing these
+  /// two catches into one is what took the harness's anchor set from 7 to 5.
+  /// The RPC consolidation I-NOT-05 requires is unaffected: there is still
+  /// exactly one path to `get_or_create_conversation` and no check-then-insert
+  /// anywhere.
+  ///
+  /// `participant_1` is `auth.uid()` inside the RPC and is not a parameter, so
+  /// this cannot open a conversation on someone else's behalf.
+  Future<String?> _getOrCreateConversation(String otherUserId) async {
+    final id = await supabase.rpc(
+      'get_or_create_conversation',
+      params: {'other_user': otherUserId},
+    );
+    return id as String?;
   }
 
   // ── Messages ──────────────────────────────────────────────────────────────
@@ -201,14 +207,14 @@ class MessagingService {
           .eq('conversation_id', conversationId)
           .neq('sender_id', userId);
     } catch (e) {
-      print('markAsRead error: $e');
+      reportError('MessagingService.markAsRead', e);
     }
   }
 
   Future<int> getUnreadCount() async {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return 0;
-    try {
+    {
       final convs = await supabase
           .from('conversations')
           .select('id')
@@ -223,9 +229,15 @@ class MessagingService {
           .neq('sender_id', userId)
           .inFilter('conversation_id', convIds);
       return (data as List).length;
-    } catch (e) {
-      return 0;
     }
+    // ERR-3: no `catch` here. A failed read used to answer `0`, which is
+    // "you have no unread messages" — the A-G5 class. Both consumers do
+    // `.valueOrNull ?? 0`, so the badge is hidden either way TODAY; what
+    // changes is that the error now reaches the provider instead of being
+    // destroyed, so a consumer that wants to render it can. Destroying the
+    // signal is what left `train_hub`'s `error: → '—'` arm unreachable.
+    //
+    // Signed out still returns 0 above: that is an answer, not a failure.
   }
 
   List<Map<String, dynamic>> getSampleMessages() {

@@ -227,6 +227,6 @@ class _AssignSheetState extends State<_AssignSheet> {
       firstDate: DateTime.now().subtract(const Duration(days: 1)),
       lastDate: DateTime.now().add(const Duration(days: 365)),
     );
-    if (picked != null) setState(() => _due = picked);
+    if (picked != null && mounted) setState(() => _due = picked);
   }
 }

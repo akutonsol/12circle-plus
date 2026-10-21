@@ -1,4 +1,50 @@
 -- ============================================================
+-- REL-36 · SEED TARGET GUARD — do not remove.
+--
+-- This file creates auth.users rows with PUBLISHED passwords
+-- (test@12circle.app / Test1234!, coach@12circle.app / Coach1234!, and the
+-- bcrypt hashes below, which are in git history as of W1-T1). Anywhere it runs,
+-- it creates known-credential accounts. It must therefore only ever run against
+-- an empty QA database.
+--
+-- `supabase db reset` applies this file automatically via [db.seed] in
+-- config.toml, against whatever project the CLI happens to be linked to. There
+-- is no CLI-level confirmation of that target, so the refusal lives here, in
+-- the one place every invocation path has to pass through -- including a
+-- hand-run `psql -f`, which a wrapper script cannot intercept.
+--
+-- The test: a genuine `db reset` truncates everything before seeding, so
+-- auth.users is empty. Any populated database -- production first among them --
+-- aborts the whole seed before a single credential is written.
+--
+-- Companion control: supabase/scripts/qa-db-reset.sh verifies the LINKED PROJECT
+-- REF before it will call `supabase db reset` at all. Two independent controls,
+-- because one of them is a shell script that can simply be bypassed.
+-- ============================================================
+DO $seed_guard$
+DECLARE
+  existing_users bigint;
+BEGIN
+  SELECT count(*) INTO existing_users FROM auth.users;
+
+  IF existing_users > 0 THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'raise_exception',
+      MESSAGE = format(
+        'REFUSING TO SEED: auth.users already contains %s row(s).',
+        existing_users),
+      DETAIL  = 'This seed writes accounts with published passwords and is only '
+                'valid against a freshly reset QA database. A database that '
+                'already has users is not one -- it may be production.',
+      HINT    = 'Reset first with supabase/scripts/qa-db-reset.sh, which '
+                'verifies the linked project ref before doing anything.';
+  END IF;
+
+  RAISE NOTICE 'REL-36 seed guard: auth.users is empty, proceeding.';
+END
+$seed_guard$;
+
+-- ============================================================
 -- 12 Circle Fitness — Test Accounts Seed
 -- Run in Supabase SQL Editor AFTER running 001_full_ecosystem.sql
 --
@@ -6,13 +52,18 @@
 -- TEST COACH:   coach@12circle.app / Coach1234!
 -- ============================================================
 
--- NOTE: Auth users must be created via Supabase Dashboard → Authentication → Users
--- or via the app's sign-up flow. This script seeds the PROFILE and RELATIONSHIP data
--- once those auth users exist.
+-- STAGE B.3: this script now creates its own auth.users rows.
 --
--- Step 1: Create the two auth users in Supabase Dashboard or via sign-up, note their UUIDs
--- Step 2: Replace the UUIDs below with the actual ones
--- Step 3: Run this script
+-- The two UUIDs below are pinned, and public.user_profiles.id has a FOREIGN KEY
+-- to auth.users(id) ON DELETE CASCADE (confirmed in the QA schema dump). Creating
+-- the auth users by hand in the dashboard produces DIFFERENT uuids, so on a
+-- rebuilt database the profile inserts below failed the FK and every fixture
+-- keyed on these ids was orphaned. They are inserted here at their pinned ids
+-- instead, exactly as full_test_data.sql already does for its own fixtures.
+--
+-- raw_user_meta_data carries first_name/last_name/role so the
+-- on_auth_user_created trigger (migration 109 -> handle_new_user, 044) builds a
+-- correct profile row immediately; the upserts below then fill in the detail.
 
 DO $$
 DECLARE
@@ -21,6 +72,38 @@ DECLARE
   v_rel_id    uuid;
   v_program_id uuid;
 BEGIN
+
+-- ── Auth users (must exist first: user_profiles.id -> auth.users.id) ──────────
+-- Migration 109's trigger fires on each of these and creates the matching
+-- public.user_profiles row.
+-- The four *_token / email_change columns have NO column default. A row inserted
+-- directly into auth.users therefore leaves them NULL, and GoTrue scans them into
+-- non-nullable Go strings -- so every LOGIN for a seeded user fails with
+--     500 {"error_code":"unexpected_failure","msg":"Database error querying schema"}
+-- even though the password is correct. GoTrue's own signup path writes ''. Found
+-- in Stage B.4 by attempting a real login against the rebuilt QA project.
+INSERT INTO auth.users (
+  instance_id, id, aud, role, email,
+  encrypted_password, email_confirmed_at,
+  raw_app_meta_data, raw_user_meta_data,
+  created_at, updated_at,
+  confirmation_token, recovery_token, email_change_token_new, email_change
+) VALUES
+  ('00000000-0000-0000-0000-000000000000', v_coach_id,
+   'authenticated', 'authenticated', 'coach@12circle.app',
+   crypt('Coach1234!', gen_salt('bf')), NOW(),
+   '{"provider":"email","providers":["email"]}',
+   '{"first_name":"Alex","last_name":"Coach","role":"coach"}',
+   NOW(), NOW(),
+   '', '', '', ''),
+  ('00000000-0000-0000-0000-000000000000', v_client_id,
+   'authenticated', 'authenticated', 'test@12circle.app',
+   crypt('Test1234!', gen_salt('bf')), NOW(),
+   '{"provider":"email","providers":["email"]}',
+   '{"first_name":"Jordan","last_name":"Test","role":"client"}',
+   NOW(), NOW(),
+   '', '', '', '')
+ON CONFLICT (id) DO NOTHING;
 
 -- ── Coach Profile ──────────────────────────────────────────────────────────────
 INSERT INTO user_profiles (
@@ -39,9 +122,22 @@ INSERT INTO user_profiles (
   149.00, 8, 4.9, 47,
   true
 ) ON CONFLICT (id) DO UPDATE SET
-  bio = EXCLUDED.bio,
-  specialties = EXCLUDED.specialties,
-  certifications = EXCLUDED.certifications;
+  -- STAGE B.3 (B2-7): every column in the INSERT list must be repeated here.
+  -- Migration 109's trigger has already created this row as role='client' with
+  -- first_name='User', so anything omitted below keeps the trigger's value --
+  -- which previously left the platform with zero coaches.
+  email             = EXCLUDED.email,
+  first_name        = EXCLUDED.first_name,
+  last_name         = EXCLUDED.last_name,
+  role              = EXCLUDED.role,
+  bio               = EXCLUDED.bio,
+  specialties       = EXCLUDED.specialties,
+  certifications    = EXCLUDED.certifications,
+  pricing_monthly   = EXCLUDED.pricing_monthly,
+  years_experience  = EXCLUDED.years_experience,
+  rating_avg        = EXCLUDED.rating_avg,
+  review_count      = EXCLUDED.review_count,
+  onboarding_complete = EXCLUDED.onboarding_complete;
 
 -- ── Client Profile ─────────────────────────────────────────────────────────────
 INSERT INTO user_profiles (
@@ -60,8 +156,21 @@ INSERT INTO user_profiles (
   4, ARRAY[]::text[],
   true
 ) ON CONFLICT (id) DO UPDATE SET
-  fitness_goal = EXCLUDED.fitness_goal,
-  current_weight_kg = EXCLUDED.current_weight_kg;
+  -- STAGE B.3 (B2-7): full column list, same reason as the coach upsert above.
+  email             = EXCLUDED.email,
+  first_name        = EXCLUDED.first_name,
+  last_name         = EXCLUDED.last_name,
+  role              = EXCLUDED.role,
+  age               = EXCLUDED.age,
+  height_cm         = EXCLUDED.height_cm,
+  current_weight_kg = EXCLUDED.current_weight_kg,
+  goal_weight_kg    = EXCLUDED.goal_weight_kg,
+  fitness_goal      = EXCLUDED.fitness_goal,
+  fitness_level     = EXCLUDED.fitness_level,
+  activity_level    = EXCLUDED.activity_level,
+  training_days_per_week = EXCLUDED.training_days_per_week,
+  dietary_restrictions   = EXCLUDED.dietary_restrictions,
+  onboarding_complete    = EXCLUDED.onboarding_complete;
 
 -- ── Active Coach-Client Relationship ──────────────────────────────────────────
 INSERT INTO coach_client_relationships (
@@ -79,30 +188,40 @@ VALUES (
   'Summer Shred 8-Week', '4-day split focused on fat loss while preserving muscle', 8, 'intermediate'
 ) RETURNING id INTO v_program_id;
 
--- Week 1 workouts
+-- Week 1 workouts.
+--
+-- `day_of_week` is the full English day name, per the canonical contract
+-- (docs/WORKOUT_DOMAIN_CONTRACT.md §3.4). This seed used to write '1'..'5';
+-- the client matches today's NAME against the column, so the seeded coach
+-- program could never be "today's workout" for anyone. Verified live on QA
+-- before the fix: the stored values were "1","2","4","5".
+--
+-- Loads are under `weight_kg` — the canonical key. They used to be dropped on
+-- the floor because the codec read `weight`, so a 60 kg bench press reached the
+-- client as 0 kg.
 INSERT INTO program_workouts (program_id, week_number, day_of_week, title, exercises) VALUES
-  (v_program_id, 1, 1, 'Monday — Upper Push', '[
+  (v_program_id, 1, 'Monday', 'Monday — Upper Push', '[
     {"name":"Bench Press","sets":4,"reps":8,"weight_kg":60,"rest_seconds":90},
     {"name":"Overhead Press","sets":3,"reps":10,"weight_kg":40,"rest_seconds":75},
     {"name":"Incline Dumbbell Press","sets":3,"reps":12,"weight_kg":20,"rest_seconds":60},
     {"name":"Tricep Pushdown","sets":3,"reps":15,"weight_kg":25,"rest_seconds":45},
     {"name":"Lateral Raises","sets":3,"reps":15,"weight_kg":10,"rest_seconds":45}
   ]'::jsonb),
-  (v_program_id, 1, 2, 'Tuesday — Lower Pull', '[
+  (v_program_id, 1, 'Tuesday', 'Tuesday — Lower Pull', '[
     {"name":"Romanian Deadlift","sets":4,"reps":8,"weight_kg":80,"rest_seconds":120},
     {"name":"Leg Curl","sets":3,"reps":12,"weight_kg":40,"rest_seconds":60},
     {"name":"Walking Lunges","sets":3,"reps":20,"weight_kg":20,"rest_seconds":60},
     {"name":"Calf Raises","sets":4,"reps":20,"weight_kg":60,"rest_seconds":45},
     {"name":"Plank","sets":3,"reps":1,"weight_kg":0,"rest_seconds":60}
   ]'::jsonb),
-  (v_program_id, 1, 4, 'Thursday — Upper Pull', '[
+  (v_program_id, 1, 'Thursday', 'Thursday — Upper Pull', '[
     {"name":"Pull-Ups","sets":4,"reps":8,"weight_kg":0,"rest_seconds":90},
     {"name":"Barbell Row","sets":4,"reps":8,"weight_kg":60,"rest_seconds":90},
     {"name":"Cable Row","sets":3,"reps":12,"weight_kg":50,"rest_seconds":60},
     {"name":"Face Pulls","sets":3,"reps":15,"weight_kg":20,"rest_seconds":45},
     {"name":"Dumbbell Curl","sets":3,"reps":12,"weight_kg":15,"rest_seconds":45}
   ]'::jsonb),
-  (v_program_id, 1, 5, 'Friday — Lower Quad', '[
+  (v_program_id, 1, 'Friday', 'Friday — Lower Quad', '[
     {"name":"Back Squat","sets":4,"reps":8,"weight_kg":80,"rest_seconds":120},
     {"name":"Leg Press","sets":3,"reps":12,"weight_kg":120,"rest_seconds":90},
     {"name":"Leg Extension","sets":3,"reps":15,"weight_kg":40,"rest_seconds":60},
@@ -173,6 +292,6 @@ RAISE NOTICE 'Test accounts seeded successfully!';
 RAISE NOTICE 'Coach UUID: %', v_coach_id;
 RAISE NOTICE 'Client UUID: %', v_client_id;
 RAISE NOTICE '';
-RAISE NOTICE 'IMPORTANT: Replace the UUIDs at the top of this script with real Supabase auth user UUIDs';
+RAISE NOTICE 'Auth users were created by this script at the pinned UUIDs above.';
 
 END $$;

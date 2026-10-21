@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../shared/widgets/app_scaffold.dart';
+import '../domain/checkin_hub.dart';
+import 'checkin_hub_sections.dart';
 
 class _C {
   static const surfaceContainerHigh= Color(0xFF2A2A2B);
@@ -89,6 +91,10 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
 
   List<_Appt> _appointments = [];
   bool _loading = true;
+  /// F-15: a failed read is not an empty schedule. This used to end
+  /// `catch (_) { _loading = false; }`, so a client whose session list failed
+  /// to load was told they had no upcoming sessions and should book one.
+  bool _callsFailed = false;
 
   @override
   void initState() {
@@ -113,6 +119,7 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
     final uid = Supabase.instance.client.auth.currentUser?.id;
     if (uid == null) { setState(() => _loading = false); return; }
     try {
+      if (mounted) setState(() => _callsFailed = false);
       final now = DateTime.now();
       final rows = await Supabase.instance.client
           .from('coaching_calls')
@@ -137,6 +144,7 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
       // Mark week dots for days that have calls
       final now2 = DateTime.now();
       final monday = now2.subtract(Duration(days: now2.weekday - 1));
+      if (!mounted) return;
       setState(() {
         _appointments = appts;
         _hasDot = List.generate(7, (i) =>
@@ -144,7 +152,7 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
         _loading = false;
       });
     } catch (_) {
-      setState(() => _loading = false);
+      if (mounted) setState(() { _loading = false; _callsFailed = true; });
     }
   }
 
@@ -157,7 +165,6 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
   @override
   Widget build(BuildContext context) {
     return AppScaffold(
-      navIndex: 1,
       body: Stack(
         children: [
           SingleChildScrollView(
@@ -246,6 +253,11 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
                     );
                   }),
                 ),
+                const SizedBox(height: 20),
+
+                // FIT-023 · the hub's two declared controls and its history.
+                const CheckinHubSections(),
+
                 const SizedBox(height: 28),
 
                 // Upcoming sessions
@@ -277,6 +289,46 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
                     padding: EdgeInsets.all(32),
                     child: CircularProgressIndicator(color: _C.primary),
                   ))
+                else if (_callsFailed)
+                  // NOT "no upcoming sessions". A failed read knows nothing
+                  // about this client's schedule, and telling them to book a
+                  // call they may already have booked is the F-15 collapse.
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                    decoration: BoxDecoration(
+                      color: _C.surfaceContainerHigh,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: _C.outlineVar.withValues(alpha: 0.3)),
+                    ),
+                    child: Column(children: [
+                      const Icon(Icons.cloud_off_rounded, color: Color(0xFFFFB4AB), size: 32),
+                      const SizedBox(height: 10),
+                      const Text(checkinSessionsFailure,
+                        style: TextStyle(color: Color(0xFFFFB4AB), fontSize: 14,
+                          fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 12),
+                      Semantics(
+                        button: true,
+                        child: GestureDetector(
+                          onTap: _loadCalls,
+                          behavior: HitTestBehavior.opaque,
+                          child: Container(
+                            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                            alignment: Alignment.center,
+                            padding: const EdgeInsets.symmetric(horizontal: 18),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.05),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white.withValues(alpha: 0.12))),
+                            // The package's own label, 16 declarations.
+                            child: const Text('Try again',
+                              style: TextStyle(color: _C.onSurface, fontSize: 13,
+                                fontWeight: FontWeight.w700)),
+                          ),
+                        ),
+                      ),
+                    ]),
+                  )
                 else if (_appointments.isEmpty)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),

@@ -1,0 +1,134 @@
+{
+  "about": "QA-exhaustion classification of every guarded write in an UPDATE/UPSERT path. Shrinking list: when a defect is fixed its entries must be removed (the guard fails if a listed entry is no longer found). See docs/QA_AUTONOMOUS_EXHAUSTION_FINAL_REPORT.md.",
+  "indirectWriters": [
+    {
+      "file": "features/workout/domain/workout_provider.dart",
+      "call": "_write",
+      "why": "correctCompletedSet() builds the patch and _write() persists it to workout_set_logs via _persistSet"
+    }
+  ],
+  "updatePayloadBuilders": [
+    {
+      "file": "features/profile/presentation/personal_info_screen.dart",
+      "function": "buildPersonalInfoPayload",
+      "why": "PersonalInfoScreen._save sends its result as user_profiles.update"
+    }
+  ],
+  "entries": [
+    {
+      "file": "features/profile/presentation/personal_info_screen.dart",
+      "column": "date_of_birth",
+      "classification": "NO-CLEAR-AFFORDANCE (date picker cannot produce null; see QAX-COR-01 note)"
+    },
+    {
+      "file": "features/profile/presentation/personal_info_screen.dart",
+      "column": "fitness_goal",
+      "classification": "NO-CLEAR-AFFORDANCE (selector cannot produce null)"
+    },
+    {
+      "file": "features/profile/presentation/personal_info_screen.dart",
+      "column": "activity_level",
+      "classification": "NO-CLEAR-AFFORDANCE (selector cannot produce null)"
+    },
+    {
+      "file": "features/profile/presentation/personal_info_screen.dart",
+      "column": "training_location",
+      "classification": "NO-CLEAR-AFFORDANCE (selector cannot produce null)"
+    },
+    {
+      "file": "features/profile/presentation/personal_info_screen.dart",
+      "column": "nutrition_goal",
+      "classification": "NO-CLEAR-AFFORDANCE (selector cannot produce null)"
+    },
+    {
+      "file": "features/workout/domain/workout_provider.dart",
+      "column": "reps",
+      "classification": "DEFECT QAX-COR-02 (Edit Completed Set)"
+    },
+    {
+      "file": "features/workout/domain/workout_provider.dart",
+      "column": "weight",
+      "classification": "DEFECT QAX-COR-02 (Edit Completed Set)"
+    },
+    {
+      "file": "features/workout/domain/workout_provider.dart",
+      "column": "rpe",
+      "classification": "CORRECT — has explicit clearRpe arm"
+    },
+    {
+      "file": "features/workout/domain/workout_provider.dart",
+      "column": "notes",
+      "classification": "CORRECT — has explicit clearNotes arm"
+    },
+    {
+      "file": "features/womens_health/data/cycle_service.dart",
+      "column": "avg_cycle_length",
+      "classification": "UNREACHABLE — saveSettings() has no caller (existing F-05)"
+    },
+    {
+      "file": "features/womens_health/data/cycle_service.dart",
+      "column": "avg_period_length",
+      "classification": "UNREACHABLE — saveSettings() has no caller (existing F-05)"
+    },
+    {
+      "file": "features/womens_health/data/cycle_service.dart",
+      "column": "energy",
+      "classification": "UI always sends a value (existing F-03 overwrite is the defect, not the guard)"
+    },
+    {
+      "file": "features/womens_health/data/cycle_service.dart",
+      "column": "mood",
+      "classification": "UI always sends a value (existing F-03)"
+    },
+    {
+      "file": "features/womens_health/data/cycle_service.dart",
+      "column": "flow",
+      "classification": "LATENT — no UI input sets flow today"
+    },
+    {
+      "file": "features/womens_health/data/cycle_service.dart",
+      "column": "notes",
+      "classification": "LATENT — no UI input sets notes today"
+    },
+    {
+      "file": "features/action_items/data/action_item_service.dart",
+      "column": "proof_url",
+      "classification": "NOT A CORRECTION SURFACE — completion stamp adds optional evidence"
+    },
+    {
+      "file": "features/action_items/data/action_item_service.dart",
+      "column": "client_notes",
+      "classification": "NOT A CORRECTION SURFACE — completion stamp adds optional note"
+    },
+    {
+      "file": "features/exercise_database/data/custom_exercise_service.dart",
+      "column": "beginner_modification",
+      "classification": "NOT DEMONSTRATED — create serialiser; edit path builds its own map (create_exercise_screen.dart:618)"
+    },
+    {
+      "file": "features/exercise_database/data/custom_exercise_service.dart",
+      "column": "advanced_progression",
+      "classification": "NOT DEMONSTRATED — as above"
+    },
+    {
+      "file": "features/exercise_database/data/custom_exercise_service.dart",
+      "column": "image_url",
+      "classification": "NOT DEMONSTRATED — as above"
+    },
+    {
+      "file": "features/exercise_database/data/custom_exercise_service.dart",
+      "column": "p_note",
+      "classification": "RPC optional argument, not a column write"
+    },
+    {
+      "file": "features/exercise_database/data/custom_exercise_service.dart",
+      "column": "p_subject",
+      "classification": "RPC optional argument, not a column write"
+    },
+    {
+      "file": "features/messaging/data/messaging_service.dart",
+      "column": "metadata",
+      "classification": "INSERT payload of a new message (method also updates conversations.last_message)"
+    }
+  ]
+}

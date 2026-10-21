@@ -38,7 +38,7 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
     try {
       final video = await ImagePicker().pickVideo(
         source: ImageSource.camera, maxDuration: const Duration(minutes: 5));
-      if (video != null) setState(() => _videoFile = video);
+      if (video != null && mounted) setState(() => _videoFile = video);
     } catch (e) {
       _err('Recording not available here — try “From Gallery”.');
     }
@@ -47,9 +47,9 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
   Future<void> _pickVideo() async {
     try {
       final video = await ImagePicker().pickVideo(source: ImageSource.gallery);
-      if (video != null) setState(() => _videoFile = video);
+      if (video != null && mounted) setState(() => _videoFile = video);
     } catch (e) {
-      _err('Could not open the video: $e');
+      _err('Could not open that video. Try another file.');
     }
   }
 
@@ -72,10 +72,26 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
         final mime = ext == 'mov' ? 'video/quicktime' : ext == 'webm' ? 'video/webm' : 'video/mp4';
         final bytes = await _videoFile!.readAsBytes();
         final path = 'coach-videos/$uid/${widget.clientId}/${DateTime.now().millisecondsSinceEpoch}.$ext';
+        if (!mounted) return;
         setState(() => _progress = 0.3);
         await _db.storage.from('coach-media').uploadBinary(path, bytes,
           fileOptions: FileOptions(contentType: mime, upsert: true));
-        videoUrl = _db.storage.from('coach-media').getPublicUrl(path);
+        // SEC-VIDEO-1. This was `getPublicUrl(path)`, which minted a permanent
+        // unauthenticated URL to a video of a coach discussing a named client
+        // and persisted it in the database. Store the OBJECT PATH instead and
+        // let whatever eventually plays it sign at render time — the treatment
+        // SEC-VOICE-1 gave `coach_voice` (`coachVoiceSigningPath`), and the
+        // prerequisite that lets `coach-media` be made private without
+        // stranding rows.
+        //
+        // This is safe to change here because NOTHING reads this column:
+        // `coach_video_responses` is written at the insert below and read
+        // nowhere in the app. Which is also the defect — see OD-57. The video
+        // is uploaded, the client is told "Tap to watch", and there is no
+        // player, so this change repairs the storage of the value without
+        // pretending the feature works.
+        videoUrl = path;
+        if (!mounted) return;
         setState(() => _progress = 0.7);
       }
 
@@ -96,11 +112,18 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
         'read': false,
       });
 
+      if (!mounted) return;
       setState(() { _progress = 1.0; _done = true; _uploading = false; });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _uploading = false);
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));
+        // ERR-2: was `Text('Error: \$e')`. A Postgres/Storage error carries
+        // table, column and constraint text; a coach does not need it and
+        // should not be shown it. Copy matches this repository's own
+        // `Failed to … Try again.` pattern.
+        const SnackBar(content: Text('Failed to send your response. Try again.'),
+            backgroundColor: Colors.red));
     }
   }
 
