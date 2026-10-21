@@ -549,7 +549,13 @@ It governs measurement only. It changes no finding status, no decision state, an
 
 ### What was established first
 
-**`design/manifest.json` cannot be reconstructed from this repository, and not for want of effort.**
+**The FIT interaction manifest cannot be reconstructed from this repository, and not for want of
+effort.** It is the default argument of `apps/mobile/tool/fit_backlog.dart:179` — a `manifest.json`
+expected under a `design/` directory that **was never published here**. It is deliberately NOT cited
+by path in this document: `check-design-citations.mjs` verifies that every design citation resolves
+either in the working tree or at the design commit `931218b`, and this artifact resolves in neither.
+Citing it would assert a published design artifact that does not exist — which is exactly the false
+citation that guard exists to catch, and it caught this document doing it.
 It is a **design-board export**: `fit_coverage.dart:98` records that it stores interaction labels
 **HTML-escaped** — `Cycle &amp; wellbeing`, `Smaller &lt; larger` — i.e. text lifted from Figma
 frames, with `route`, `interactions[]` and `hasBottomNav` per anchor.
