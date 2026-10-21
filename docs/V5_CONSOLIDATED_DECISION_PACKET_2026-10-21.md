@@ -345,10 +345,24 @@ ask the same question twice.
 | **B-13** | `V5-EVD-SEC08` | QA write authorization **and** wave authorization | the `QAX-SEC-08` lifecycle probe cannot run |
 | **B-14** | `V5-SEC-ODQ2`, `V5-SEC-OD14`, migrations 182/183 | a QA apply window, plus 182's Option A approval and 183's PD-A01 decision | nothing can pass *FIXED ON QA* or *VERIFIED LIVE* |
 
-**B-12 is a hidden critical path.** `QA_CLOSURE_STANDARD.md` §2.1 permits **no partial closures**, so
-while Actions billing is unresolved, **no finding in this packet can reach formal closure** regardless
-of which decisions are answered. Answering B-01 through B-10 makes work *implementable*; it does not
-make anything *closable*.
+**B-12 — CORRECTED 2026-10-21. The earlier text here was wrong and is retracted.**
+
+It read: *"while Actions billing is unresolved, no finding in this packet can reach formal closure
+regardless of which decisions are answered."* **That conflated two repositories.** `V5-INF-001`'s
+billing blocker is about **Helix** — its own summary says *"Restore Helix hosted CI so PR #1 and PR #2
+can report real check results"*, and the Helix repository is not even reachable from this account.
+
+**`12circle-plus` CI works.** Measured 2026-10-21: 10 runs that day, and full-green runs across all
+seven jobs on both `f316ced5` and `472dab69`. So the closure ladder's **VERIFIED IN CI** rung is
+reachable here, and B-12 is **not** a critical path for anything in this packet.
+
+What that changes: findings whose only outstanding rung was CI are closer to closable than this
+document previously claimed. In particular `V5-PROM-001` (SEC-04) and `V5-PROM-002` (ENV-6) each
+record that their stated criteria are already **MET**, and are blocked solely on authorization to edit
+the protected registry — not on evidence that cannot be obtained.
+
+What remains true: **VERIFIED LIVE** still needs QA access, which this session is prohibited from
+using, so security-class findings still require the owner for that rung.
 
 ---
 
