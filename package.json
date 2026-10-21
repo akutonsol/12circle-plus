@@ -19,7 +19,11 @@
     "check:prod-refs": ".github/scripts/check-production-refs.sh",
     "check:migrations": ".github/scripts/check-migration-hygiene.sh",
     "check:functions": ".github/scripts/check-edge-function-config.sh",
-    "check:guards": "npm run check:prod-refs && npm run check:migrations && npm run check:functions"
+    "check:guards": "npm run check:prod-refs && npm run check:migrations && npm run check:functions",
+    "flow": "node scripts/skills-agent-coordinator.mjs status",
+    "flow:validate": "node scripts/skills-agent-coordinator.mjs validate",
+    "flow:selftest": "node scripts/skills-agent-coordinator.mjs --self-test",
+    "guard:selftest": "node scripts/guard-protected-paths.mjs --self-test"
   },
   "keywords": [],
   "author": "",

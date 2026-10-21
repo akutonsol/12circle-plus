@@ -1,0 +1,28 @@
+{
+  "_": [
+    "Paths that scripts/guard-protected-paths.mjs refuses to let a tool write.",
+    "",
+    "Git-tracked ON PURPOSE. This is the only exception mechanism the guard",
+    "honours, because it is the only one the agent cannot change without leaving",
+    "a reviewable diff. The task queue's `paths` field and",
+    ".skills-agent/decisions.json are deliberately NOT trusted as authorization:",
+    "the same agent writes both, so relying on them would be circular.",
+    "",
+    "`exceptions` is normally empty. Adding an entry is a deliberate, reviewable",
+    "act that narrows the protection for one specific path."
+  ],
+  "protected": [
+    "supabase/migrations",
+    "supabase/expected_applied.json",
+    "docs/MASTER_PRODUCT_DECISIONS.md",
+    "docs/decision-log.md",
+    "docs/decisions",
+    "docs/MASTER_REMEDIATION_REGISTRY.md",
+    "docs/MASTER_REMEDIATION_WAVES.md",
+    "docs/QA_CLOSURE_STANDARD.md",
+    "docs/RELEASE_GATES.md",
+    "docs/REMEDIATION_PROGRESS.md",
+    "docs/adr"
+  ],
+  "exceptions": []
+}

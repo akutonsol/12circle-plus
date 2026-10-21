@@ -28,5 +28,18 @@
     "additionalDirectories": [
       "/Users/dmac/.claude"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/guard-protected-paths.mjs\""
+          }
+        ]
+      }
+    ]
   }
 }
