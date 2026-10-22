@@ -3,6 +3,7 @@ import 'models/checkin_model.dart';
 import '../../notifications/data/notification_service.dart';
 import '../../coach/data/score_service.dart';
 import '../../scoring/data/score_engine.dart';
+import '../../../core/observability/app_failure.dart';
 import '../domain/checkin_columns.dart';
 import '../domain/checkin_known.dart';
 
@@ -139,7 +140,41 @@ class WeeklyCheckinService {
       // trg_notify_coach_on_checkin DB trigger, so no Dart-side insert here.
       return true;
     } catch (e) {
+      // Rule O: this was a silent `return false`. The retired CheckinService
+      // reported its save failure through the sink; that obligation moves to the
+      // writer that is actually live, instead of vanishing with the old file.
+      reportError('WeeklyCheckinService.submitWeeklyCheckin', e);
       return false;
+    }
+  }
+
+  /// Whether a check-in tells the coach to look at this client. Pure; moved here
+  /// unchanged from the retired CheckinService.
+  static bool needsCoachAttention({required int energy, required int stress}) {
+    return energy <= 2 || stress >= 4;
+  }
+
+  /// Consecutive submitted WEEKS — see [weeklyStreak]. `null` when the read
+  /// failed, never `0`: a failed read reported as 0 is a number the screen cannot
+  /// support (F-15). Signed out is a real answer, so it is 0.
+  Future<int?> getCheckinStreak() async {
+    final userId = _supabase.auth.currentUser?.id;
+    if (userId == null) return 0;
+    try {
+      final data = await _supabase
+          .from('weekly_checkins')
+          .select('week_start_date')
+          .eq('user_id', userId)
+          .eq('status', 'submitted')
+          .order('week_start_date', ascending: false)
+          .limit(60);
+      return weeklyStreak(
+        [for (final r in data as List) DateTime.parse(r['week_start_date'] as String)],
+        DateTime.now(),
+      );
+    } catch (e) {
+      reportError('WeeklyCheckinService.getCheckinStreak', e);
+      return null;
     }
   }
 

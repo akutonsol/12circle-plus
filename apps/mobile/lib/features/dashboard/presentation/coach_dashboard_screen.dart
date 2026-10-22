@@ -14,6 +14,7 @@ import 'client_detail_screen.dart';
 import '../../../core/widgets/named_icon_button.dart';
 import '../domain/coach_triage_provider.dart';
 import 'widgets/needs_you_today.dart';
+import '../../checkins/domain/checkin_columns.dart';
 import '../domain/session_as_log.dart';
 
 const _bg      = Color(0xFF030303);
@@ -111,14 +112,20 @@ final clientCheckinsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
   {
     final ids = await _coachClientIds();
     if (ids.isEmpty) return []; // no clients → no data (was showing ALL platform check-ins)
+    // PD-B01: there is no daily check-in. This read `checkins`, which has never
+    // existed, so the coach's check-in panel was permanently empty. It now reads
+    // the table the member screen actually writes: check-ins SUBMITTED THIS
+    // WEEK. The stat it feeds is labelled "Checked In", not "today", so no
+    // wording had to change.
     final today = DateTime.now();
-    final start = DateTime(today.year, today.month, today.day);
+    final weekStart = DateTime(today.year, today.month, today.day - (today.weekday - 1));
     final data = await _supabase
-        .from('checkins')
+        .from('weekly_checkins')
         .select()
         .inFilter('user_id', ids)
-        .gte('checked_in_at', start.toIso8601String())
-        .order('checked_in_at', ascending: false);
+        .eq('status', 'submitted')
+        .gte('week_start_date', weekStart.toIso8601String().split('T')[0])
+        .order('submitted_at', ascending: false);
     return List<Map<String, dynamic>>.from(data);
   }
 });
@@ -227,9 +234,9 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
     final workoutList   = workouts is AsyncError ? const <Map<String, dynamic>>[] : (workouts.valueOrNull ?? []);
 
     // Stats
-    final checkedInToday  = checkinList.map((c) => c['user_id']).toSet().length;
+    final checkedInThisWeek = checkinList.map((c) => c['user_id']).toSet().length;
     final needsAttention  = checkinList.where((c) =>
-      (c['energy'] as int? ?? 5) <= 2 || (c['stress_level'] as int? ?? 0) >= 4).length;
+      (checkinEnergy(c)?.toInt() ?? 5) <= 2 || (c['stress_level'] as int? ?? 0) >= 4).length;
     final workoutsThisWeek = workoutList.length;
 
     return Scaffold(
@@ -384,7 +391,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
             _SummaryChip(
               icon: Icons.check_circle_outline,
               label: "Checked In",
-              value: "$checkedInToday",
+              value: "$checkedInThisWeek",
               color: _tertiary),
             const SizedBox(width: 8),
             _SummaryChip(
@@ -743,7 +750,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
           final checkin = checkins.where((c) => c['user_id'] == userId).firstOrNull;
           final workoutCount = workouts.where((w) => w['user_id'] == userId).length;
           final hasCheckedIn = checkin != null;
-          final energy = checkin?['energy'] as int? ?? 0;
+          final energy = (checkin == null ? null : checkinEnergy(checkin))?.toInt() ?? 0;
           final stress = checkin?['stress_level'] as int? ?? 0;
           final needsAttention = hasCheckedIn && (energy <= 2 || stress >= 4);
 
@@ -837,7 +844,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                       _MiniStat("Mood",   "${checkin['mood'] ?? '-'}/5",    Icons.sentiment_satisfied_outlined, _primary),
                       _MiniStat("Energy", "${energy}/5",                      Icons.bolt,                         energy <= 2 ? _error : _tertiary),
                       _MiniStat("Stress", "${stress}/5",                      Icons.psychology_outlined,           stress >= 4 ? _error : _muted),
-                      _MiniStat("Sleep",  "${checkin['sleep_hours'] ?? '-'}h",Icons.bedtime_outlined,             _primary),
+                      _MiniStat("Sleep",  "${checkinSleepHours(checkin) ?? '-'}h",Icons.bedtime_outlined,             _primary),
                       _MiniStat("Workouts","$workoutCount",                    Icons.fitness_center_outlined,      _brand),
                     ])),
               ],
@@ -1241,7 +1248,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
         final userId = c['user_id'] as String;
         final client = clients.where((cl) => cl['id'] == userId).firstOrNull;
         final fn = client?['first_name'] ?? ''; final ln = client?['last_name'] ?? ''; final name = '$fn $ln'.trim().isEmpty ? 'Client' : '$fn $ln'.trim();
-        final energy = c['energy'] as int? ?? 0;
+        final energy = checkinEnergy(c)?.toInt() ?? 0;
         final stress = c['stress_level'] as int? ?? 0;
         final needsAttention = energy <= 2 || stress >= 4;
 
@@ -1286,7 +1293,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
               _MiniStat("Mood",   "${c['mood'] ?? '-'}/5",          Icons.sentiment_satisfied_outlined, _primary),
               _MiniStat("Energy", "${energy}/5",                     Icons.bolt,     energy <= 2 ? _error : _tertiary),
               _MiniStat("Stress", "${stress}/5",                     Icons.psychology_outlined, stress >= 4 ? _error : _muted),
-              _MiniStat("Sleep",  "${c['sleep_hours'] ?? '-'}h",    Icons.bedtime_outlined,    _primary),
+              _MiniStat("Sleep",  "${checkinSleepHours(c) ?? '-'}h",    Icons.bedtime_outlined,    _primary),
             ]),
             if (c['notes'] != null && (c['notes'] as String).isNotEmpty) ...[
               const SizedBox(height: 10),
@@ -1392,7 +1399,7 @@ List<String> _generateCoachRecs(
     return !checkins.any((ch) => ch['user_id'] == uid);
   }).length;
   final highStress = checkins.where((c) => (c['stress_level'] as num? ?? 0) >= 7).length;
-  final lowEnergy  = checkins.where((c) => (c['energy'] as num? ?? 10) <= 2).length;
+  final lowEnergy  = checkins.where((c) => (checkinEnergy(c) ?? 10) <= 2).length;
   final programRate = clients.where((c) => c['program_name'] != null).length / total * 100;
 
   if (highRisk > 0) recs.add('$highRisk client${highRisk > 1 ? 's' : ''} are HIGH RISK — review PAR-Q and get medical clearance before programming.');
@@ -1427,7 +1434,7 @@ class _CoachSuccessMetrics extends StatelessWidget {
     final programmed  = clients.where((c) => c['program_name'] != null).length;
     final progRate    = total > 0 ? (programmed / total * 100).toStringAsFixed(0) : '0';
     final avgEnergy   = checkins.isEmpty ? 0.0
-        : checkins.map((c) => (c['energy'] as num?)?.toDouble() ?? 0).reduce((a, b) => a + b) / checkins.length;
+        : checkins.map((c) => checkinEnergy(c)?.toDouble() ?? 0).reduce((a, b) => a + b) / checkins.length;
     final retainedClients = clients.where((c) {
       final created = DateTime.tryParse(c['created_at'] as String? ?? '');
       return created != null && DateTime.now().difference(created).inDays >= 30;

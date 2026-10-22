@@ -62,6 +62,54 @@ void main() {
             'opened the form');
   });
 
+  // ── PD-B01 · the daily check-in is retired, and stays retired ─────────────
+  //
+  // The tests above prove the SCREEN avoids the absent table. They would not
+  // notice a different file reaching it again — which is how the coach panel
+  // came to read `checkins` for months while the member screen had been fixed.
+  // These assert the whole tree, so a new caller fails here, not in production.
+  test('CHK-G2 CheckinService is retired and nothing imports it', () {
+    expect(File('lib/features/checkins/data/checkin_service.dart').existsSync(),
+        isFalse,
+        reason: 'PD-B01 retired CheckinService; it writes to `checkins`, which '
+            'has never existed, so any caller loses its data');
+    final offenders = <String>[];
+    for (final f in Directory('lib').listSync(recursive: true).whereType<File>()) {
+      if (!f.path.endsWith('.dart')) continue;
+      // CODE only. A comment that says "the retired CheckinService" is history,
+      // not a dependency, and a guard that forbade it would punish explaining.
+      final code = f.readAsStringSync().split('\n').map((l) {
+        final i = l.indexOf('//');
+        return i < 0 ? l : l.substring(0, i);
+      }).join('\n');
+      // \b makes WeeklyCheckinService NOT match: no boundary inside one word.
+      if (code.contains('data/checkin_service.dart') ||
+          RegExp(r'\bCheckinService\b').hasMatch(code)) {
+        offenders.add(f.path);
+      }
+    }
+    expect(offenders, isEmpty,
+        reason: 'these files still name the retired CheckinService: '
+            '${offenders.join(', ')}');
+  });
+
+  test('CHK-G2 no file in lib/ reads or writes the absent `checkins` table', () {
+    final offenders = <String>[];
+    for (final f in Directory('lib').listSync(recursive: true).whereType<File>()) {
+      if (!f.path.endsWith('.dart')) continue;
+      final code = f.readAsStringSync().split('\n').map((l) {
+        final i = l.indexOf('//');
+        return i < 0 ? l : l.substring(0, i);
+      }).join('\n');
+      if (RegExp(r'''\.from\(\s*['"]checkins['"]\s*\)''').hasMatch(code)) {
+        offenders.add(f.path);
+      }
+    }
+    expect(offenders, isEmpty,
+        reason: 'these files query `public.checkins`, which does not exist '
+            '(PGRST205): ${offenders.join(', ')}. Use `weekly_checkins`.');
+  });
+
   test('CHK-G1 the honest week status has no swallowing arm', () {
     final svc = File('lib/features/checkins/data/weekly_checkin_service.dart')
         .readAsStringSync();

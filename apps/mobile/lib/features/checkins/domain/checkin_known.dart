@@ -63,3 +63,32 @@ bool mayShowAlreadyDone(CheckinKnown k) => k == CheckinKnown.done;
 /// alone rather than as a zero, which is F-15's em-dash rule reached by the
 /// layout that was already there.
 int? knownStreak(int? streak) => (streak != null && streak > 0) ? streak : null;
+
+/// Consecutive WEEKS, ending this week, that have a submitted check-in.
+///
+/// PD-B01 retired the daily check-in. The old streak counted consecutive DAYS,
+/// which a weekly cadence can never satisfy, so it could only ever read 0 or 1
+/// — and it read a table that does not exist, so it never read anything.
+///
+/// If this week has no submission yet the count starts from LAST week rather than
+/// reading 0: on a Tuesday, a member who has checked in for six weeks running has
+/// not broken their streak by not having done this week's yet. A missed week
+/// ends it.
+///
+/// Every step is built with the `DateTime(y, m, d - n)` constructor and not by
+/// subtracting a `Duration`: subtracting seven 24-hour days across a clock
+/// change lands at 23:00 the previous day and the set lookup then misses.
+int weeklyStreak(Iterable<DateTime> weekStarts, DateTime now) {
+  DateTime monday(DateTime d) => DateTime(d.year, d.month, d.day - (d.weekday - 1));
+  final have = weekStarts.map(monday).toSet();
+  var cursor = monday(now);
+  if (!have.contains(cursor)) {
+    cursor = DateTime(cursor.year, cursor.month, cursor.day - 7);
+  }
+  var streak = 0;
+  while (have.contains(cursor)) {
+    streak++;
+    cursor = DateTime(cursor.year, cursor.month, cursor.day - 7);
+  }
+  return streak;
+}

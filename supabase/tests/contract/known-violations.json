@@ -13,10 +13,6 @@
   ],
   "missingRelation": [
     {
-      "table": "checkins",
-      "finding": "I-CHK-01"
-    },
-    {
       "table": "coach_tips",
       "finding": "I-LEG-03"
     }
