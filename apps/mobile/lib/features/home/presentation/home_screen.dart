@@ -218,7 +218,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 const SizedBox(height: 11),
                 // Mode-specific bottom card
                 if (mode == CoachingMode.coachGuided) ...[
-                  _CoachTipCard(),
+                  _CoachCard(),
                   const SizedBox(height: 10),
                 ] else if (mode == CoachingMode.aiGuided) ...[
                   _AIInsightCard(),
@@ -1172,19 +1172,20 @@ class _SessionBadge extends StatelessWidget {
     ]));
 }
 
-// ── Coach Tip Card ────────────────────────────────────────────────────────────
-class _CoachTipCard extends ConsumerWidget {
+// ── Coach Card ────────────────────────────────────────────────────────────────
+// Shows the member's assigned coach and the Rate entry point. It used to carry
+// a "tip" attributed to that coach; `coach_tips` has never existed, so the card
+// always showed a hard-coded sentence under the coach's name and avatar — text
+// the coach never wrote. The tip was retired (PD-B20, I-LEG-03; decision-log
+// 2026-10-21); a real tip returns only with a table and an authoring surface.
+class _CoachCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final coachAsync = ref.watch(assignedCoachProvider);
-    final tipAsync   = ref.watch(coachTipProvider);
     final coach      = coachAsync.valueOrNull;
-    final tip        = tipAsync.valueOrNull;
     final coachName  = coach == null ? null
         : '${coach['first_name'] ?? ''} ${coach['last_name'] ?? ''}'.trim();
     final avatarUrl  = coach?['avatar_url'] as String?;
-    final tipText    = tip?['content'] as String?
-        ?? 'Stay consistent. Small daily actions create lasting results.';
 
     if (coachAsync.isLoading || coach == null) return const SizedBox.shrink();
 
@@ -1220,15 +1221,6 @@ class _CoachTipCard extends ConsumerWidget {
                       maxLines: 1, overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Colors.white,
                         fontSize: 14.5, fontWeight: FontWeight.w700))),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: _C.brand.withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(10)),
-                      child: const Text('TIP',
-                        style: TextStyle(color: _C.primary, fontSize: 10,
-                          fontWeight: FontWeight.w700, letterSpacing: 0.5))),
                   ])),
                   const SizedBox(width: 8),
                   GestureDetector(
@@ -1246,11 +1238,6 @@ class _CoachTipCard extends ConsumerWidget {
                           fontSize: 12.5, fontWeight: FontWeight.w600)),
                       ]))),
                 ]),
-                const SizedBox(height: 10),
-                Text('"$tipText"',
-                  style: TextStyle(
-                    color: _C.onSurfVar.withValues(alpha: 0.72),
-                    fontSize: 12.5, height: 1.4, fontStyle: FontStyle.italic)),
               ]),
             )),
           ]),

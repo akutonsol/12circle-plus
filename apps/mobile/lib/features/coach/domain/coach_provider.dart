@@ -56,24 +56,6 @@ final pendingCoachProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
   } catch (_) { return null; }
 });
 
-// ── Today's tip from the assigned coach (rotates daily) ──────────────────────
-final coachTipProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
-  final coach = ref.watch(assignedCoachProvider).valueOrNull;
-  final coachId = coach?['id'] as String?;
-  if (coachId == null) return null;
-  try {
-    final tips = await _db
-        .from('coach_tips')
-        .select('id, content, category')
-        .eq('coach_id', coachId)
-        .eq('active', true)
-        .order('created_at');
-    if (tips.isEmpty) return null;
-    final idx = DateTime.now().difference(DateTime(DateTime.now().year)).inDays;
-    return tips[idx % tips.length];
-  } catch (_) { return null; }
-});
-
 // ── All of the client's active coaches (multi-coach support) ──────────────────
 final myCoachesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   ref.watch(currentUserProvider);
