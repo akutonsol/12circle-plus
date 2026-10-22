@@ -1,5 +1,5 @@
 # V5 · Consolidated blocker and decision packet
-**2026-10-21 · branch `feat/v5-autonomous-team` · HEAD `08b3543` · uncommitted, unpushed**
+**2026-10-21 · branch `feat/v5-autonomous-team` · HEAD `08b3543` · written at that HEAD; since MERGED to `main` (PR #1, merge commit `d57dfa8`)**
 
 **This document decides nothing.** It consolidates every blocker found across the autonomous phases
 into one prioritised set. Authoritative records remain `MASTER_PRODUCT_DECISIONS.md`,
@@ -10,6 +10,30 @@ into one prioritised set. Authoritative records remain `MASTER_PRODUCT_DECISIONS
 **Queue at the time of writing:** 41 tasks — **16 VERIFIED**, 18 `BLOCKED_OWNER`,
 5 `BLOCKED_GOVERNANCE`, 2 `BLOCKED_EXTERNAL`, **0 eligible**. **No authorized implementation work
 remains.** Everything below is prepared to resume on an answer.
+
+## State update — later the same day (2026-10-21)
+
+Written after the packet below, and **in addition to it, not instead of it**. Everything under this
+heading was verified by command; the packet's own claims are left as written except where a header or
+a retraction says otherwise.
+
+* **The trunk exists.** PR #2 (555 commits) and PR #1 (65 commits) were merged to `main` with merge
+  commits, so no history was rewritten. `main` is no longer frozen at `9dc7515`; CI on `main` was
+  green on all 7 jobs at `d57dfa8`. The "0 merged PRs" figures below describe the repository *before*
+  that date.
+* **B-12 is retracted** (see its own entry): Helix's CI billing is not this repository's. CI works here.
+* **The progress metric was decided** (findings §16): FIT interaction coverage is demoted, and six
+  repository-derivable metrics replace it. **B-18 (`state.json` does not survive a clone) is mitigated for
+  reporting only** — a fresh clone now derives blocked statuses from `tasks.json` — but completion is
+  still not recoverable from the repository.
+* **The check-in cluster was confirmed and built, but is NOT recorded.** The owner confirmed PD-B01,
+  PD-B02 and PD-B03 in conversation on 2026-10-21. PR #4 implements two of the three, with no migration,
+  and is **held**: by GOV-AUTH-1 a direction is not effective until recorded through
+  `MASTER_PRODUCT_DECISIONS.md` §2. Four questions it did not settle are now queue items
+  (`V5-PROD-008` to `V5-PROD-011`): the recording act, the weight field on locked anchor FIT-004,
+  `hunger_level`/`compliance_percent` and `coach_tips`, and the `ai_adjust_nutrition` migration.
+* **Unchanged by any of this:** `OD-QAX-2`, `OD-14` and `GOV-AUTH-1` are still `proposed`; no
+  migration was applied (QA frontier 181, pending 182 and 183); no protected governance file was edited.
 
 ## Priority — by authorized work unlocked, not by severity
 
