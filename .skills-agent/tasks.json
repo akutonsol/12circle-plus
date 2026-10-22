@@ -1960,6 +1960,160 @@
           "action": "owner rules per route; retiring is a route-table change the preservation guard will surface"
         }
       ]
+    },
+    {
+      "id": "V5-PROD-008",
+      "role": "owner-decision",
+      "workstream": "product",
+      "wave": "n/a",
+      "risk": "recording-act",
+      "summary": "Record PD-B01, PD-B02 and PD-B03 as ANSWERED; PR #4 (the check-in fix) is held until then",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "PD-B01, PD-B02 and PD-B03 are marked ANSWERED with date and owner through all five steps of section 2",
+        "PD-B02 is recorded with its hunger_level / compliance_percent sub-question marked UNANSWERED, not resolved",
+        "PD-B03 is recorded scoped to its two halves, with the form half marked pending the FIT-004 ruling",
+        "The registry moves I-CHK-01 and I-CHK-03 to code-remediated, NOT closed: the ladder still needs VERIFIED END-TO-END",
+        "Only then may PR #4 merge"
+      ],
+      "verification": [
+        "git diff on the four section-2 files shows the five steps",
+        "gh pr view 4 shows the hold lifted"
+      ],
+      "evidenceRequired": [
+        "the commit that records the decisions"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "apps/mobile/lib/features/checkins/data/weekly_checkin_service.dart"
+      ],
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "record the three confirmed check-in decisions through MASTER_PRODUCT_DECISIONS.md section 2, in four files that refuse tool writes",
+          "evidence": "the owner confirmed \"Confirm all three recommendations\" in conversation on 2026-10-21; by GOV-AUTH-1 a direction is intent, not an effective decision, until recorded. PR #4 carries the exact proposed text and is held.",
+          "action": "owner performs the section-2 edits, or authorizes a narrow protected-path exception for those files; the draft text is in the PR #4 body"
+        }
+      ]
+    },
+    {
+      "id": "V5-PROD-009",
+      "role": "owner-decision",
+      "workstream": "product",
+      "wave": "n/a",
+      "risk": "locked-screen",
+      "summary": "PD-B03 asks for a weight field on /daily-checkin, which is locked anchor FIT-004 and draws none",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "The owner chooses one of: edit the locked frame, commission a design frame first, or skip the form field",
+        "If skipped, the existing weigh-in (progress_screen.dart LogWeightSheet, kg canonical, kg/lbs toggle, factor 2.20462) is the recorded source of body weight",
+        "If built, the field uses kg as canonical and converts pounds with the same factor, and is OPTIONAL so a re-submit never overwrites a stored weight with NULL"
+      ],
+      "verification": [
+        "node -e on FINAL_SCREEN_INVENTORY.json shows FIT-004 locked=true"
+      ],
+      "evidenceRequired": [
+        "the recorded ruling"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/FINAL_SCREEN_INVENTORY.json",
+        "docs/FIT_INTERACTION_COVERAGE.md",
+        "apps/mobile/lib/features/checkins/presentation/daily_checkin_screen.dart",
+        "apps/mobile/lib/features/progress/presentation/progress_screen.dart"
+      ],
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "whether the approved check-in frame may gain a weight field, be redesigned first, or stay as drawn",
+          "evidence": "/daily-checkin is FIT-004, locked (8 of 11 interactions); the design package draws no weight field; the owner confirmed PD-B03 without addressing the lock. A duplicate widgets/log_weight_sheet.dart is dead and writes hard-coded sample data.",
+          "action": "owner picks (a) edit the locked frame, (b) commission a design frame, or (c) skip the field and rely on the existing weigh-in"
+        }
+      ]
+    },
+    {
+      "id": "V5-PROD-010",
+      "role": "owner-decision",
+      "workstream": "product",
+      "wave": "n/a",
+      "risk": "unanswered-subquestions",
+      "summary": "Two questions the check-in confirmation never answered: hunger_level/compliance_percent in the form, and coach_tips",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "Whether hunger_level and compliance_percent belong in the weekly form is answered (hunger_level has no reader anywhere)",
+        "What happens to the coach_tips relation (I-LEG-03) is answered: create it, or retire its one caller at coach_provider.dart",
+        "The remaining known-violations.json entry is removed as the last step of fixing its finding"
+      ],
+      "verification": [
+        "node supabase/tests/contract/run.mjs lists no known relation once coach_tips is resolved"
+      ],
+      "evidenceRequired": [
+        "the recorded answers"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        "docs/MASTER_PRODUCT_DECISIONS.md",
+        "supabase/tests/contract/known-violations.json",
+        "apps/mobile/lib/features/coach/domain/coach_provider.dart"
+      ],
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "hunger_level / compliance_percent in the form, and the disposition of the phantom coach_tips relation",
+          "evidence": "PD-B02 title asks the first and its recommendation does not answer it; PD-B01 lists I-LEG-03 under Blocks but recommends nothing about it. coach_tips is the last phantom relation, read at coach_provider.dart:66.",
+          "action": "owner answers both; neither was inferred"
+        }
+      ]
+    },
+    {
+      "id": "V5-PROD-011",
+      "role": "implementer",
+      "workstream": "product",
+      "wave": "n/a",
+      "risk": "migration",
+      "summary": "Point ai_adjust_nutrition at weight_logs as a fallback (PD-B03, fallback half): a migration",
+      "dependsOn": [
+        "V5-PROD-008"
+      ],
+      "paths": [
+        "supabase/migrations/",
+        "supabase/expected_applied.json"
+      ],
+      "acceptance": [
+        "The function is replaced per the Function Replacement Rule: search_path, grants and COMMENT preserved, since CREATE OR REPLACE keeps ACL and owner but not proconfig or body",
+        "weekly_checkins.weight_kg is read first and weight_logs.weight_kg is the fallback",
+        "The migration takes the next contiguous number AT WAVE ENTRY and is declared pending with a reason and a gate in the same change",
+        "It is not applied; QA application needs an owner-approved window"
+      ],
+      "verification": [
+        "node supabase/scripts/check-function-posture.mjs",
+        "node supabase/scripts/check-migration-manifest.mjs",
+        "npm run check:guards"
+      ],
+      "evidenceRequired": [
+        "the committed migration and its atomic pending declaration"
+      ],
+      "maxRetries": 2,
+      "runnerIndependent": true,
+      "sources": [
+        "supabase/migrations/079_nutrition_autoadjust_and_coach_signals.sql",
+        "supabase/expected_applied.json"
+      ],
+      "blockers": [
+        {
+          "kind": "governance",
+          "what": "depends on PD-B03 being recorded, and a migration number is assigned only at wave entry, never ahead of it",
+          "evidence": "MASTER_REMEDIATION_WAVES.md section 0.2 row \"132+ | Assigned at wave entry, never before\"; the 2026-08-31 amendment says each takes the next contiguous number at the time",
+          "action": "record PD-B03 (V5-PROD-008), then enter the wave and take the next contiguous number"
+        }
+      ]
     }
   ]
 }

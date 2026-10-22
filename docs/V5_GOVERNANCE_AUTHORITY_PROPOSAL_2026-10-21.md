@@ -1,5 +1,5 @@
 # V5 · Governance authority — approval rule, B-01 amendment, `Owner?` definition
-**2026-10-21 · `feat/v5-autonomous-team` · HEAD `08b3543` · uncommitted, unpushed**
+**2026-10-21 · `feat/v5-autonomous-team` · HEAD `08b3543` · written at that HEAD; since MERGED to `main` (PR #1, merge commit `d57dfa8`)**
 
 **Nothing here is approved and no protected file was modified.** Every conclusion is labelled
 **VERIFIED**, **PROPOSED**, **BLOCKED** or **UNVERIFIED**. Drafts are given as exact text for review,

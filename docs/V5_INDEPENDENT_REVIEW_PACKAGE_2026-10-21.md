@@ -9,7 +9,7 @@ be described as such.**
 
 * Branch `feat/v5-autonomous-team` · HEAD **`08b354391664f638e0c2fc6b7c20f18f4fb3e4b1`**
 * Ahead 11 / behind 0 · **0 staged** · no stash · no in-progress git operation
-* **Nothing committed, nothing pushed.** All work is in the working tree.
+* **Nothing committed, nothing pushed.** All work is in the working tree. *(True when written, at HEAD `08b3543`. Since committed and MERGED to `main` via PR #1, merge commit `d57dfa8`; the review package itself was never independently reviewed.)*
 
 ## 2 · Diff to review (12 files)
 

@@ -1,6 +1,6 @@
 # V5 · Owner authority direction — received, recorded as PROPOSED
 
-**Received 2026-10-21 · branch `feat/v5-autonomous-team` · HEAD `08b3543` · uncommitted, unpushed**
+**Received 2026-10-21 · branch `feat/v5-autonomous-team` · HEAD `08b3543` · written at that HEAD; since MERGED to `main` (PR #1, merge commit `d57dfa8`)**
 
 **STATUS: PROPOSED — NOT YET EFFECTIVE.** This file is the auditable artifact of what the owner
 supplied. It is **not** a governance register, and creating it does not make the direction effective.
