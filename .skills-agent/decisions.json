@@ -38,11 +38,11 @@
     },
     "OD-QAX-2": {
       "question": "May a coach assign plans or programs to a `pending` client?",
-      "state": "proposed",
+      "state": "recorded",
       "proposedAnswer": "Option A - an active coach_client_relationships row is required",
-      "owner": null,
-      "answeredAt": null,
-      "record": null,
+      "owner": "Julia (product owner) delegated the determination to Claude in chat on 2026-10-21; the determination is Claude's, not hers",
+      "answeredAt": "2026-10-21",
+      "record": "docs/V5_DELEGATED_DETERMINATIONS_2026-10-21.md",
       "source": "docs/QA_AUTONOMOUS_EXHAUSTION_FINAL_REPORT.md:179",
       "conflictCheck": {
         "performed": true,
@@ -56,11 +56,11 @@
     },
     "OD-14": {
       "question": "Programme creation authority; is is_coach_profile sufficient or is an active coach_client_relationships row required; and what happens to existing non-conforming rows?",
-      "state": "proposed",
+      "state": "recorded",
       "proposedAnswer": "only an active-relationship coach may create; an active row is required; existing non-conforming rows are quarantined pending review, not mutated",
-      "owner": null,
-      "answeredAt": null,
-      "record": null,
+      "owner": "Julia (product owner) delegated the determination to Claude in chat on 2026-10-21; the determination is Claude's, not hers",
+      "answeredAt": "2026-10-21",
+      "record": "docs/V5_DELEGATED_DETERMINATIONS_2026-10-21.md",
       "source": "docs/F21_BLAST_RADIUS.md:181",
       "conflictCheck": {
         "performed": true,
