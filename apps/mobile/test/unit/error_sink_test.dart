@@ -134,8 +134,11 @@ void main() {
     test('the sanctioned swallows named by §5.1 report through the sink', () {
       final wired = <String, String>{
         'features/scoring/data/score_engine.dart': 'ScoreEngine._award',
-        'features/checkins/data/checkin_service.dart':
-            'CheckinService.saveDailyCheckin',
+        // Was checkin_service.dart / CheckinService.saveDailyCheckin. That file
+        // was retired under PD-B01; the obligation to report a failed save moved
+        // to the writer that is live.
+        'features/checkins/data/weekly_checkin_service.dart':
+            'WeeklyCheckinService.submitWeeklyCheckin',
         'features/messaging/data/messaging_service.dart':
             'MessagingService.getConversations',
       };

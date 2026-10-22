@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/domain/auth_provider.dart';
-
+import '../../checkins/domain/checkin_columns.dart';
 /// Aggregated, real performance data for the Insights screen.
 class InsightsData {
   final int todayScore;            // today's 12 Circle total (0-100)
@@ -75,7 +75,10 @@ final insightsProvider = FutureProvider<InsightsData>((ref) async {
 
     final checkin = await db
         .from('weekly_checkins')
-        .select('energy_level, sleep_hours, stress_level, weight_kg, created_at')
+        // Both families are selected: new rows carry the canonical 001 columns,
+        // rows written before PD-B02 carry only the baseline pair. See
+        // checkins/domain/checkin_columns.dart.
+        .select('energy_level, energy, sleep_hours, sleep_hours_avg, stress_level, weight_kg, created_at')
         .eq('user_id', uid)
         .order('created_at', ascending: false)
         .limit(1)
@@ -99,8 +102,8 @@ final insightsProvider = FutureProvider<InsightsData>((ref) async {
       checkinPts: t(ref0, 'checkin_points'),
       communityPts: t(ref0, 'community_points'),
       workoutsThisWeek: (workouts as List).length,
-      energy: (checkin?['energy_level'] as num?)?.toInt(),
-      sleepHours: (checkin?['sleep_hours'] as num?)?.toDouble(),
+      energy: checkin == null ? null : checkinEnergy(checkin)?.toInt(),
+      sleepHours: checkin == null ? null : checkinSleepHours(checkin)?.toDouble(),
       stress: (checkin?['stress_level'] as num?)?.toInt(),
       weightKg: (checkin?['weight_kg'] as num?)?.toDouble(),
       lastCheckin: checkin?['created_at'] != null

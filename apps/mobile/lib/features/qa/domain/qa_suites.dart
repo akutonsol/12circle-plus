@@ -804,7 +804,7 @@ List<QaSuite> journeySuites() => [
     _mHasRow('Workout assigned', 'workout_program_assignments', 'client_id'),
     _mCapability('Messaging unlocked', (p) => p.canMessageCoach),
     _mHasRow('Session booked', 'coaching_calls', 'client_id'),
-    _mHasRow('Check-in submitted', 'checkins', 'client_id'),
+    _mHasRow('Check-in submitted', 'weekly_checkins', 'user_id', statusEq: 'submitted'),
   ]),
   JourneySuite('Journey · Coach', [
     _mRoleIs('Registered as coach', {'coach'}),

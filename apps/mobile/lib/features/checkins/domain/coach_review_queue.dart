@@ -30,6 +30,7 @@
 /// one is omitted rather than invented. Recorded as **OD-24**.
 library;
 
+import 'checkin_columns.dart';
 /// Where the open check-in sits in the coach's pending queue.
 class ReviewPosition {
   /// Zero-based.
@@ -127,8 +128,7 @@ List<ReviewStat> reviewStats(Map<String, dynamic> row) {
   // is an open owner decision about what a coach is being TOLD, so the value
   // is stated and not interpreted. Identical treatment to FIT-004 and
   // FIT-023, and a test asserts the three words are not produced.
-  final energy = row['energy_level'] ?? row['energy'];
-  final e = energy is num ? energy : num.tryParse('${energy ?? ''}');
+  final e = checkinEnergy(row);
   if (e != null && e >= 1 && e <= 5) {
     out.add(ReviewStat(label: 'Energy', value: '${e.round()} of 5'));
   }
@@ -136,8 +136,7 @@ List<ReviewStat> reviewStats(Map<String, dynamic> row) {
   // `Sleep 5/7` on the board — nights. The schema stores average hours, which
   // is a different statistic and cannot be converted into it. What exists is
   // shown, labelled for what it is.
-  final sleep = row['sleep_hours'] ?? row['sleep_hours_avg'];
-  final s = sleep is num ? sleep : num.tryParse('${sleep ?? ''}');
+  final s = checkinSleepHours(row);
   if (s != null && s > 0) {
     final txt = s == s.roundToDouble()
         ? s.round().toString()

@@ -9,7 +9,7 @@ import '../../coach/data/coach_relationship_service.dart';
 import '../../coach/domain/package_provider.dart';
 import '../../scoring/domain/score_provider.dart';
 import '../../../core/widgets/named_icon_button.dart';
-
+import '../../checkins/domain/checkin_columns.dart';
 const _bg    = Color(0xFF030303);
 const _card  = Color(0xFF0E0B16);
 const _brd   = Color(0xFF1A1020);
@@ -1008,13 +1008,13 @@ class _ProgressTab extends StatelessWidget {
     String energyTrend = '—', stressTrend = '—';
     final allCheckins = List<Map<String, dynamic>>.from(checkins);
     if (allCheckins.isNotEmpty) {
-      avgEnergy = allCheckins.map((c) => (c['energy'] as num?)?.toDouble() ?? 0).reduce((a, b) => a + b) / allCheckins.length;
+      avgEnergy = allCheckins.map((c) => checkinEnergy(c)?.toDouble() ?? 0).reduce((a, b) => a + b) / allCheckins.length;
       avgStress = allCheckins.map((c) => (c['stress_level'] as num?)?.toDouble() ?? 0).reduce((a, b) => a + b) / allCheckins.length;
       avgMood   = allCheckins.map((c) => (c['mood'] as num?)?.toDouble() ?? 0).reduce((a, b) => a + b) / allCheckins.length;
     }
     if (allCheckins.length >= 2) {
-      final e1 = (allCheckins.first['energy'] as num?)?.toDouble() ?? 0;
-      final e2 = (allCheckins.last['energy'] as num?)?.toDouble() ?? 0;
+      final e1 = checkinEnergy(allCheckins.first)?.toDouble() ?? 0;
+      final e2 = checkinEnergy(allCheckins.last)?.toDouble() ?? 0;
       energyTrend = e1 > e2 ? '↑ Improving' : e1 < e2 ? '↓ Declining' : '→ Stable';
       final s1 = (allCheckins.first['stress_level'] as num?)?.toDouble() ?? 0;
       final s2 = (allCheckins.last['stress_level'] as num?)?.toDouble() ?? 0;
@@ -1190,7 +1190,7 @@ class _ProgressTab extends StatelessWidget {
             const SizedBox(height: 6),
             ...allCheckins.take(4).map((c) {
               final dateStr = (c['week_start_date'] as String? ?? c['submitted_at'] as String? ?? '').split('T')[0];
-              final energy  = c['energy'] as int?;
+              final energy  = checkinEnergy(c)?.toInt();
               final stress  = c['stress_level'] as int?;
               final mood    = c['mood'] as int?;
               return Padding(

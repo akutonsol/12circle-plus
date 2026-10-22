@@ -3614,3 +3614,35 @@ Verification run at the commit: `check:functions` 5/5 OK (19 functions); `check:
 The `REMEDIATED` **status text** moved; the **status counts** in [`REMEDIATION_PROGRESS.md`](REMEDIATION_PROGRESS.md) §3 did **not**. That is the same choice §7.16 made, and §3 records the consequence in its own words: the `READY_TO_REMEDIATE` figure *"had been carrying `UIX-1` since §7.16 moved its status text to `REMEDIATED` without moving the count"*. The count composition is not enumerable from the document, so moving it here would be a guess rather than a correction. **Flagged for the owner rather than repeated silently:** which status count, if any, should move for `E-01` — and this paragraph deliberately names **no** bucket for it.
 
 *Correction, 2026-10-19 — this paragraph originally named `READY_TO_REMEDIATE` (177) and `REMEDIATED` (4) as the buckets at issue. That was **not established and is withdrawn.** The verified facts are these. **`PD-A13` option (a) is answered** and the source half is complete at `0572cef`. `E-01`’s pre-ruling status line read `READY_TO_REMEDIATE` **(as deletion)** / `BLOCKED_DECISION` **(as fix)**, so it was a **split row**: ready in its mechanical half, decision-gated in the other. §3’s `BLOCKED_DECISION` note accounts for rows of exactly that shape — *"31 have a mechanical half that is **not** blocked"* — while §3’s table is single-bucket and sums to the canonical 319, so `E-01` occupies exactly one bucket. **Which one cannot be established from these documents:** no bucket’s membership is enumerated anywhere, and only **43 of 319** findings carry an explicit status label at all — the `VERIFIED_CLOSED` note in [`REMEDIATION_PROGRESS.md`](REMEDIATION_PROGRESS.md) §3 makes the same point about the §7 P1 register having *"no per-row status field"*. Replacing one unproven bucket assignment with another would repeat the original error, so neither is asserted here. What needs no count to express it, and is stated on the row itself: **`E-01` remains open pending resolution of its deployed status**, which is still not deployed to QA and still UNVERIFIABLE for production.*
+
+### 7.27 `PD-B01`, `PD-B02`, `PD-B03` recorded — the check-in cluster — 2026-10-21 · owner confirmation + code remediation
+
+Three owner confirmations and the code that carries two of them. **No migration, schema, RLS, policy, grant, role, credential, secret or CI-workflow change; production not contacted; no QA read and no QA write.** No finding status **count** was moved.
+
+#### The rulings and their provenance
+
+- The product owner replied **"Confirm all three recommendations"** in chat on 2026-10-21 to Claude's written recommendations for `PD-B01`, `PD-B02` and `PD-B03` (the recommendations are the ones already printed in `MASTER_PRODUCT_DECISIONS.md` rows 159–161). Under the owner-authority rule (`V5_OWNER_AUTHORITY_DIRECTION_2026-10-21.md`) that chat reply is the owner's intent; this section and the two `decision-log.md` rows are what record it through §2. The recommendations were Claude's; the confirmation is the owner's.
+- **`PD-B01` — answered, implemented.** There is one check-in, the weekly one. `CheckinService` (which wrote the never-created `checkins` table) is deleted; every caller reads and writes `weekly_checkins`; the streak is a calendar-day **week** streak (`weeklyStreak`). Commit `3df6439`.
+- **`PD-B02` — first half answered, implemented; second half open.** The `001` column family is canonical (`energy_level`, `sleep_hours`); the baseline names are read only as a fallback through `checkin_columns.dart`. Commit `f89982e`. Whether `hunger_level` and `compliance_percent` belong in the form was **not** answered by the confirmation and stays open; they remain unwritten and unread.
+- **`PD-B03` — confirmed in principle, not implemented.** The form half (add weight to the weekly check-in) conflicts with `FIT-004`, an **owner-locked** design anchor whose frame draws no weight field. Two owner-originated sources disagree, so under the "preserve, identify, ask" rule nothing was changed and the question is returned to the owner. The fallback half (`ai_adjust_nutrition` reads `weight_logs`) needs a numbered migration; none is written, none applied, and the number is assigned at wave entry.
+
+#### What changed in source
+
+PR #4 (`feat/checkin-column-contract`): 20 files (+535 / −254) in the code commits, including the writer, the helper, the coach dashboard (`checkins` → `weekly_checkins`), `insights_provider`, `client_detail_screen`, `coach_review_queue`, the deletion of `checkin_service.dart`, one new guard (`checkin_column_contract_guard_test.dart`, mutation-tested), retargeted guards and `ec23_negative_control.sh`, and the removal of the `checkins` entry from `supabase/tests/contract/known-violations.json` (only `coach_tips` remains). Local: 2,056 passed / 5 skipped / 0 failed; analyzer 0 errors; no file under a protected root touched by the code commits. CI run `39699494561` on the branch: all 7 jobs green.
+
+#### §2 step-by-step disposition
+
+| Step | Disposition |
+|---|---|
+| 1 · decision log | **Done** — two dated rows in [`decision-log.md`](decision-log.md); the second records `PD-B03`'s gated state rather than a clean answer |
+| 2 · register row | **Done** — rows 159–161 marked `ANSWERED` 2026-10-21 in place, each with its own qualification; a fourth additive amendment block added. Original **Proceed?** cells preserved unedited |
+| 3 · registry status | **Done, deliberately narrow** — see "Deliberately NOT promoted" below |
+| 4 · progress board | **Done** — decision board moved to **Answered: 9 / Open: 67** (B:24), the Wave 4 prerequisite row annotated, and a change-log entry added |
+| 5 · supersession | **No-op, verified not assumed** — no earlier `decision-log.md` entry concerns check-ins; its *"Superseded / revised"* section stays empty |
+
+#### Deliberately NOT promoted
+
+- **`I-CHK-01` and `I-CHK-03` are code-remediated, not closed.** Their ladder terminates at VERIFIED END-TO-END, which needs a live read of a saved check-in through the coach and AI paths on QA. Nothing here did that. The offline guards prove the writer and readers agree on column names; they do not prove a row survives RLS and the authorship trigger on a real database.
+- **`E-CHK-04` / `I-NUT-02` stay open** — they are the weight path (`PD-B03`).
+- **`I-LEG-03` stays open** — `coach_tips` is still read by `coachTipProvider` and the table does not exist; the offered fix is outside this decision. Separately, the Home tip card (`FIT-001`, locked) falls back to a hard-coded sentence shown under the assigned coach's name; that is raised to the owner, not changed.
+- **`PD-B04`, `PD-B21` and the rest of Wave 4's prerequisites are untouched**; Wave 4 stays blocked on them.

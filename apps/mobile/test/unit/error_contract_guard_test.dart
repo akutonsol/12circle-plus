@@ -168,9 +168,11 @@ void main() {
   // shrinking allowlist: closing CON-01 means deleting an entry, and a NEW
   // phantom table fails immediately instead of shipping as a dead feature.
   group('EC-G2 every table the client uses has a backing migration', () {
-    // Known-missing, tracked as CON-01 (`checkins`) and its twin (`coach_tips`).
-    // Remove an entry when the table is created or its caller is retired.
-    const knownMissing = {'checkins', 'coach_tips'};
+    // Known-missing: `coach_tips` (I-LEG-03). `checkins` (CON-01 / I-CHK-01) was
+    // removed when PD-B01 retired CheckinService and moved every caller to
+    // `weekly_checkins`. Remove an entry when the table is created or its caller
+    // is retired.
+    const knownMissing = {'coach_tips'};
 
     test('no phantom table outside the recorded allowlist', () {
       final referenced = <String, Set<String>>{};

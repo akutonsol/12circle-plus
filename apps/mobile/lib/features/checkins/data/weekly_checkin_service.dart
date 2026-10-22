@@ -3,6 +3,8 @@ import 'models/checkin_model.dart';
 import '../../notifications/data/notification_service.dart';
 import '../../coach/data/score_service.dart';
 import '../../scoring/data/score_engine.dart';
+import '../../../core/observability/app_failure.dart';
+import '../domain/checkin_columns.dart';
 import '../domain/checkin_known.dart';
 
 class WeeklyCheckinService {
@@ -120,9 +122,13 @@ class WeeklyCheckinService {
         'week_start_date': info.weekStart.toIso8601String().split('T')[0],
         'status': 'submitted',
         'mood': mood,
-        'energy': energy,
+        // PD-B02: the 001 family is canonical. These were 'energy' and
+        // 'sleep_hours_avg' — real columns, but not the ones ai-coach,
+        // insights_provider or the coach review queue read, so a saved check-in
+        // reached the AI as "Energy: undefined/5". See checkin_columns.dart.
+        'energy_level': energy,
         'stress_level': stress,
-        'sleep_hours_avg': sleepHoursAvg,
+        'sleep_hours': sleepHoursAvg,
         'notes': notes ?? '',
         'overall_score': score,
         'submitted_at': now.toIso8601String(),
@@ -134,7 +140,41 @@ class WeeklyCheckinService {
       // trg_notify_coach_on_checkin DB trigger, so no Dart-side insert here.
       return true;
     } catch (e) {
+      // Rule O: this was a silent `return false`. The retired CheckinService
+      // reported its save failure through the sink; that obligation moves to the
+      // writer that is actually live, instead of vanishing with the old file.
+      reportError('WeeklyCheckinService.submitWeeklyCheckin', e);
       return false;
+    }
+  }
+
+  /// Whether a check-in tells the coach to look at this client. Pure; moved here
+  /// unchanged from the retired CheckinService.
+  static bool needsCoachAttention({required int energy, required int stress}) {
+    return energy <= 2 || stress >= 4;
+  }
+
+  /// Consecutive submitted WEEKS — see [weeklyStreak]. `null` when the read
+  /// failed, never `0`: a failed read reported as 0 is a number the screen cannot
+  /// support (F-15). Signed out is a real answer, so it is 0.
+  Future<int?> getCheckinStreak() async {
+    final userId = _supabase.auth.currentUser?.id;
+    if (userId == null) return 0;
+    try {
+      final data = await _supabase
+          .from('weekly_checkins')
+          .select('week_start_date')
+          .eq('user_id', userId)
+          .eq('status', 'submitted')
+          .order('week_start_date', ascending: false)
+          .limit(60);
+      return weeklyStreak(
+        [for (final r in data as List) DateTime.parse(r['week_start_date'] as String)],
+        DateTime.now(),
+      );
+    } catch (e) {
+      reportError('WeeklyCheckinService.getCheckinStreak', e);
+      return null;
     }
   }
 
@@ -237,14 +277,18 @@ class WeeklyCheckinService {
     if (row['mood'] != null) {
       responses.add(CheckinResponse(questionId: 'mood', answer: row['mood']));
     }
-    if (row['energy'] != null) {
-      responses.add(CheckinResponse(questionId: 'energy', answer: row['energy']));
+    // questionId stays 'energy' / 'sleep_hours_avg': the history screen and
+    // checkin_detail_test key on them. Only the SOURCE column follows the ruling.
+    final energyValue = checkinEnergy(row);
+    if (energyValue != null) {
+      responses.add(CheckinResponse(questionId: 'energy', answer: energyValue));
     }
     if (row['stress_level'] != null) {
       responses.add(CheckinResponse(questionId: 'stress_level', answer: row['stress_level']));
     }
-    if (row['sleep_hours_avg'] != null) {
-      responses.add(CheckinResponse(questionId: 'sleep_hours_avg', answer: row['sleep_hours_avg']));
+    final sleepValue = checkinSleepHours(row);
+    if (sleepValue != null) {
+      responses.add(CheckinResponse(questionId: 'sleep_hours_avg', answer: sleepValue));
     }
     if (row['notes'] != null && (row['notes'] as String).isNotEmpty) {
       responses.add(CheckinResponse(questionId: 'notes', answer: row['notes']));

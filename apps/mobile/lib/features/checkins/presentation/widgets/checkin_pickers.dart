@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 /// The weekly check-in's two choice rows.
 ///
 /// Extracted from `daily_checkin_screen.dart` so their accessibility can be
-/// asserted — the screen constructs a `CheckinService` in a field initializer
+/// asserted — the screen constructs a `WeeklyCheckinService` in a field initializer
 /// and loads from Supabase in `initState`, which no widget test can satisfy.
 /// The same reason `plan_summary.dart`, `extendRest()`, `ZoneAction` and
 /// `weekProgressFrom` were extracted.

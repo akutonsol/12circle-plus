@@ -45,7 +45,7 @@ class AppFailure {
     this.context,
   });
 
-  /// `'CheckinService.saveDailyCheckin'` — where the failure was caught.
+  /// `'WeeklyCheckinService.submitWeeklyCheckin'` — where the failure was caught.
   final String origin;
 
   /// The caught object, unmodified. Never re-wrapped, never stringified early:

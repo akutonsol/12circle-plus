@@ -25,7 +25,13 @@ set -euo pipefail
 # passes. One variable moves, and exactly one assertion is required to break.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../" && pwd)"
-CHECKIN="$ROOT/apps/mobile/lib/features/checkins/data/checkin_service.dart"
+# PD-B01 retired checkin_service.dart, which carried two of the seven sites. Its
+# replacement, weekly_checkin_service.dart, now carries exactly two reportError
+# anchors of its own (the save and the streak), so the total stays seven and
+# EXPECTED_OFFENDERS below is unchanged. If it ever moves, the mutation-anchor
+# count check in the python block refuses to assert against a tree it did not
+# mutate as declared — which is how this harness caught the retirement.
+CHECKIN="$ROOT/apps/mobile/lib/features/checkins/data/weekly_checkin_service.dart"
 MESSAGING="$ROOT/apps/mobile/lib/features/messaging/data/messaging_service.dart"
 TEST="$ROOT/apps/mobile/test/unit/error_sink_test.dart"
 EXPECTED_OFFENDERS=7

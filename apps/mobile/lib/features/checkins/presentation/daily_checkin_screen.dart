@@ -7,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../domain/checkin_known.dart';
-import '../data/checkin_service.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const _bg      = Color(0xFF050308);
@@ -28,7 +27,6 @@ class DailyCheckinScreen extends ConsumerStatefulWidget {
 }
 
 class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
-  final _service    = CheckinService();
   /// CON-01 (live): `public.checkins` does not exist — verified against the QA
   /// database, where it answers PGRST205 exactly as a nonsense table does. The
   /// submission below wrote there, so every weekly check-in this screen took
@@ -60,7 +58,7 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
 
   Future<void> _load() async {
     final done = await _weekly.weekStatus();
-    final streak = await _service.getCheckinStreak();
+    final streak = await _weekly.getCheckinStreak();
     if (mounted) setState(() {
       _alreadyDone = done;
       _streak      = streak;
@@ -85,7 +83,7 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
     setState(() => _saving = false);
     if (!mounted) return;
     if (ok) {
-      _showSuccess(_service.needsCoachAttention(energy: _energy, stress: _stress));
+      _showSuccess(WeeklyCheckinService.needsCoachAttention(energy: _energy, stress: _stress));
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Failed to save. Please try again.')));
@@ -328,7 +326,9 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
                   fontWeight: FontWeight.w700)),
                 const SizedBox(width: 4),
               ],
-              const Text('Streak', style: TextStyle(
+              // Weeks, not days: PD-B01 retired the daily check-in, so a bare
+              // "Streak" beside a weekly count would say something untrue.
+              const Text('Week streak', style: TextStyle(
                 color: _primary, fontSize: 11,
                 fontWeight: FontWeight.w600)),
             ]))),
