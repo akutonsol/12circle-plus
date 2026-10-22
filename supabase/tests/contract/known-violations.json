@@ -11,11 +11,6 @@
     "Removing an entry is the last step of fixing its finding. Nothing may be",
     "added here without a finding ID."
   ],
-  "missingRelation": [
-    {
-      "table": "coach_tips",
-      "finding": "I-LEG-03"
-    }
-  ],
+  "missingRelation": [],
   "missingColumn": []
 }

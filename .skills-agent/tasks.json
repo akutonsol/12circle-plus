@@ -2032,7 +2032,7 @@
           "kind": "owner",
           "what": "whether the approved check-in frame may gain a weight field, be redesigned first, or stay as drawn",
           "evidence": "/daily-checkin is FIT-004, locked (8 of 11 interactions); the design package draws no weight field; the owner confirmed PD-B03 without addressing the lock. A duplicate widgets/log_weight_sheet.dart is dead and writes hard-coded sample data.",
-          "action": "owner picks (a) edit the locked frame, (b) commission a design frame, or (c) skip the field and rely on the existing weigh-in"
+          "action": "DETERMINED 2026-10-21 by Claude under the owner's written delegation (not the owner's own answer): option (c), skip the field, weight_logs is the canonical source. The owner may overturn; if she asks for the field, the frame is re-locked first"
         }
       ]
     },
@@ -2068,7 +2068,7 @@
           "kind": "owner",
           "what": "hunger_level / compliance_percent in the form, and the disposition of the phantom coach_tips relation",
           "evidence": "PD-B02 title asks the first and its recommendation does not answer it; PD-B01 lists I-LEG-03 under Blocks but recommends nothing about it. coach_tips is the last phantom relation, read at coach_provider.dart:66. Its one consumer, _CoachTipCard on the owner-locked Home frame (FIT-001, home_screen.dart), falls back to the hard-coded sentence \"Stay consistent. Small daily actions create lasting results.\" shown under the assigned coach's name and avatar, so every member sees a tip attributed to their coach that the coach never wrote. Options: (A) retire the card and coachTipProvider, which empties the contract allowlist but edits a locked frame; (B) create the table plus a coach authoring surface. Claude recommends (A) with the card removed only after the owner approves a FIT-001 change. Nothing changed.",
-          "action": "owner answers both; neither was inferred"
+          "action": "coach_tips part DETERMINED 2026-10-21 under the owner's written delegation: not a feature, tip and read retired, allowlist empty. hunger_level / compliance_percent is still unanswered and still the owner's"
         }
       ]
     },
@@ -2088,7 +2088,7 @@
       ],
       "acceptance": [
         "The function is replaced per the Function Replacement Rule: search_path, grants and COMMENT preserved, since CREATE OR REPLACE keeps ACL and owner but not proconfig or body",
-        "weekly_checkins.weight_kg is read first and weight_logs.weight_kg is the fallback",
+        "weight_logs.weight_kg is read first (canonical, per the 2026-10-21 determination made under the owner's delegation) and weekly_checkins.weight_kg, which nothing writes, is only a legacy fallback",
         "The migration takes the next contiguous number AT WAVE ENTRY and is declared pending with a reason and a gate in the same change",
         "It is not applied; QA application needs an owner-approved window"
       ],

@@ -3646,3 +3646,22 @@ PR #4 (`feat/checkin-column-contract`): 20 files (+535 / −254) in the code com
 - **`E-CHK-04` / `I-NUT-02` stay open** — they are the weight path (`PD-B03`).
 - **`I-LEG-03` stays open** — `coach_tips` is still read by `coachTipProvider` and the table does not exist; the offered fix is outside this decision. Separately, the Home tip card (`FIT-001`, locked) falls back to a hard-coded sentence shown under the assigned coach's name; that is raised to the owner, not changed.
 - **`PD-B04`, `PD-B21` and the rest of Wave 4's prerequisites are untouched**; Wave 4 stays blocked on them.
+
+### 7.28 Four items determined by Claude under the owner's written delegation — 2026-10-21
+
+**Read this first: these are not owner answers.** The product owner wrote *"i am realying on you to determin 1,3,5,7"*; Claude made the determinations in [`V5_DELEGATED_DETERMINATIONS_2026-10-21.md`](V5_DELEGATED_DETERMINATIONS_2026-10-21.md) and recorded them in [`decision-log.md`](decision-log.md) under that attribution. The owner may overturn any of them. **No migration, schema, RLS, policy, grant, role, credential or CI-workflow change; production not contacted; no QA read or write.** No status **count** moved. This section is additive; it supersedes one sentence of §7.27, named below, without editing it.
+
+| Item | Determination | Code in this change | Status effect |
+|---|---|---|---|
+| Weight on the weekly form (`PD-B03`, form half) | No field added to locked `FIT-004`; `weight_logs` is the one canonical source | none | `E-CHK-04` / `I-NUT-02` **stay open**: the readers' move and the `ai_adjust_nutrition` migration are unwritten |
+| Home tip (`PD-B20` coach-tips part; `I-LEG-03`) | Coach tips are not a shipped feature | tip text, `TIP` badge and `coachTipProvider` removed; `coach_tips` leaves the contract allowlist (now empty); `home_coach_card_honesty_test.dart` added and mutation-tested | `I-LEG-03` is **code-remediated and offline-verified, not closed**. *Supersedes §7.27's bullet that said `coach_tips` "is still read by `coachTipProvider`".* The Wave 3A allowlist-empty exit condition is met offline. |
+| Orphan routes | `/pods` wired; `/log-meal`, `/food-search`, `/nutrition-overview`, `/coach`, `/coach-business` left as they are; `/onboarding` preserved and returned to the owner | Community → Groups card; `orphan_route_guard_test` allowlist 7 → 6 | none |
+| `OD-QAX-2` | Option A, with `Q-A1`–`Q-A5` answered | none | `QAX-SEC-01` (**P0**) **remains OPEN with no remediation** |
+| `OD-14` | Every client-naming write on the six `QAX-SEC-03` tables needs an active relationship; template authoring does not; `coach_video_responses` in scope; existing rows preserved and listed, reviewer = platform `admin` | none | `F-21` and `QAX-SEC-03` **remain OPEN with no remediation** |
+
+#### Deliberately NOT done or claimed
+
+- **`OD-QAX-2` and `OD-14` are not `implementation_authorized`.** `.skills-agent/decisions.json` records them `recorded` and names the delegation; the last gate is the owner's one sentence after reading the determination. A delegation is not the owner's verbatim acceptance, and the ledger's state chain says each step is a separate act.
+- **Who holds the `admin` role in production is unknown** to Claude and unverified; it is the one fact the quarantine contract needs from the owner.
+- **`/onboarding` is not ruled.** Locked `FIT-006` against a different shipped flow (`OD-31`) is a conflict between two owner-originated sources; the rule is preserve, identify, ask.
+- **Whether the locked `FIT-001` frame draws tip text is unverified** (the design package was not re-read for it); if it does, the shipped card now differs from the frame.

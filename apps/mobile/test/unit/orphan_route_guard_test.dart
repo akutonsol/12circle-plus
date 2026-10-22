@@ -37,6 +37,7 @@ import '../../tool/orphan_route_sweep.dart'
 /// cannot leave a stale excuse behind.
 void main() {
   /// Measured 2026-09-23. Each is a registered route nothing navigates to.
+  /// `/pods` left this list on 2026-10-21: the Community Groups tab now links to it.
   const known = <String, String>{
     '/coach': 'a duplicate alias of /train — both build TrainHubScreen',
     '/coach-business': 'CoachBusinessScreen, no entry point',
@@ -44,7 +45,6 @@ void main() {
     '/log-meal': 'a redirect stub to /meals-dashboard (FIT-019, locked)',
     '/nutrition-overview': 'NutritionScreen, no entry point',
     '/onboarding': 'FIT-006 Welcome — locked, and OD-31',
-    '/pods': 'PodsScreen — FIT-071..074, all non-locked',
   };
 
   late List<String> routes;

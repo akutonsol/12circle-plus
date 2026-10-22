@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/theme/app_background.dart';
 import '../../../core/animations/app_animations.dart';
@@ -190,6 +191,42 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
               ListView(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 children: [
+                  // The way in to /pods (PodsScreen, FIT-071..074). The screen,
+                  // its tables and its route already existed; nothing led there.
+                  GestureDetector(
+                    onTap: () => context.push('/pods'),
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceDark,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppColors.surfaceDarkElevated),
+                      ),
+                      child: Row(children: [
+                        Container(
+                          width: 52, height: 52,
+                          decoration: BoxDecoration(
+                            color: AppColors.purple.withValues(alpha:0.2),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: const Icon(Icons.groups_rounded, color: AppColors.white),
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Accountability Pods', style: TextStyle(color: AppColors.white, fontSize: 15, fontWeight: FontWeight.w600)),
+                              SizedBox(height: 2),
+                              Text('Small groups that keep each other on track', style: TextStyle(color: AppColors.textSecondary, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.chevron_right_rounded, color: AppColors.textTertiary),
+                      ]),
+                    ),
+                  ),
                   ...groups.map((group) => Container(
                     margin: const EdgeInsets.only(bottom: 12),
                     padding: const EdgeInsets.all(16),
