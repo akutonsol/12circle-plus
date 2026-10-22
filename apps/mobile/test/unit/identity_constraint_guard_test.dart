@@ -70,6 +70,32 @@ Iterable<File> _migrations() sync* {
   }
 }
 
+/// The LAST migration that defines [fn], and its executable SQL.
+///
+/// I-G2 used to read migration 131 only. That was right until a later migration
+/// redefined a writer — and `CREATE OR REPLACE` replaces the WHOLE body, so the
+/// definition that is enforced is the last one, not the first. Migration 184
+/// (OD-QAX-2 / QAX-SEC-01) redefines `assign_nutrition_plan`; asserting 131's
+/// body would be asserting a function that no longer exists.
+({String file, String sql}) _lastDefinition(String fn) {
+  final def = RegExp(
+      'create\\s+or\\s+replace\\s+function\\s+(public\\.)?$fn\\s*\\(',
+      caseSensitive: false);
+  final files = _migrations().toList()
+    ..sort((a, b) => a.path.compareTo(b.path));
+  ({String file, String sql})? found;
+  for (final f in files) {
+    final sql = _sqlExecutable(f.readAsStringSync());
+    if (def.hasMatch(sql)) {
+      found = (file: f.path.split('/').last, sql: sql);
+    }
+  }
+  if (found == null) {
+    throw StateError('no migration defines $fn');
+  }
+  return found;
+}
+
 void main() {
   late final String m131raw = _read('supabase/migrations/131_identity_constraints.sql');
   late final String m131 = _sqlExecutable(m131raw);
@@ -151,13 +177,19 @@ void main() {
   // safety. Gate 0.14 and migration 122's convention: definer, pinned
   // search_path, revoked from PUBLIC and anon, granted only to authenticated.
   group('I-G2 the atomic writers keep their security posture', () {
+    final assignSrc = _lastDefinition('assign_nutrition_plan').sql;
     for (final fn in ['assign_nutrition_plan', 'get_or_create_conversation']) {
+      // The EFFECTIVE definition: the last migration that defines the function.
+      // For get_or_create_conversation that is still 131; for
+      // assign_nutrition_plan it is 184 (OD-QAX-2).
+      final eff = _lastDefinition(fn);
+      final src = eff.sql;
       test('$fn is SECURITY DEFINER with a pinned search_path', () {
         final body = RegExp(
                 'CREATE OR REPLACE FUNCTION public\\.$fn\\([\\s\\S]*?\\n\\\$\\\$;')
-            .firstMatch(m131)
+            .firstMatch(src)
             ?.group(0);
-        expect(body, isNotNull, reason: '$fn must be defined in 131');
+        expect(body, isNotNull, reason: '$fn must be defined in ${eff.file}');
         expect(body, contains('SECURITY DEFINER'));
         expect(body, contains('SET search_path = public, pg_temp'),
             reason: 'a definer function with a mutable search_path resolves '
@@ -170,15 +202,15 @@ void main() {
       });
 
       test('$fn is revoked from PUBLIC and anon, granted to authenticated', () {
-        expect(m131, contains(RegExp('REVOKE ALL ON FUNCTION public\\.$fn')));
-        expect(m131, contains('FROM PUBLIC, anon;'));
-        expect(m131, contains(RegExp('GRANT EXECUTE ON FUNCTION public\\.$fn')));
-        expect(m131, contains('TO authenticated;'));
+        expect(src, contains(RegExp('REVOKE ALL ON FUNCTION public\\.$fn')));
+        expect(src, contains('FROM PUBLIC, anon;'));
+        expect(src, contains(RegExp('GRANT EXECUTE ON FUNCTION public\\.$fn')));
+        expect(src, contains('TO authenticated;'));
       });
 
       test('$fn uses no dynamic SQL', () {
-        expect(m131, isNot(contains('EXECUTE format')));
-        expect(m131, isNot(contains('EXECUTE \'')));
+        expect(src, isNot(contains('EXECUTE format')));
+        expect(src, isNot(contains('EXECUTE \'')));
       });
     }
 
@@ -186,13 +218,36 @@ void main() {
         () {
       final sig = RegExp(
               r'CREATE OR REPLACE FUNCTION public\.assign_nutrition_plan\(([\s\S]*?)\)\s*\nRETURNS')
-          .firstMatch(m131)!
+          .firstMatch(assignSrc)!
           .group(1)!;
       expect(sig, isNot(contains('coach')),
           reason: 'a coach_id parameter would let a caller attribute a plan '
               'to another coach; taking it from auth.uid() satisfies the '
               '"coach client nutrition" policy by construction');
-      expect(m131, contains('v_coach uuid := (SELECT auth.uid())'));
+      expect(assignSrc, contains('v_coach uuid := (SELECT auth.uid())'));
+    });
+
+    test('assign_nutrition_plan refuses a non-coach BEFORE it changes anything '
+        '(OD-QAX-2 Option A, migration 184)', () {
+      final eff = _lastDefinition('assign_nutrition_plan');
+      expect(eff.file, startsWith('184_'),
+          reason: 'the winning definition moved to ${eff.file}. That is allowed, '
+              'but a human must re-read it: CREATE OR REPLACE replaces the whole '
+              'body, the authorization guard included.');
+      final sql = eff.sql;
+      final guard = sql.indexOf('IF NOT public.is_active_coach_of(p_client_id)');
+      final supersede = sql.indexOf('UPDATE public.client_nutrition_plans');
+      expect(guard, greaterThan(-1),
+          reason: 'assign_nutrition_plan no longer requires an ACTIVE '
+              'relationship. It is SECURITY DEFINER, so without this check any '
+              'authenticated caller supersedes any client\'s plan (QAX-SEC-01, P0).');
+      expect(supersede, greaterThan(-1));
+      expect(guard, lessThan(supersede),
+          reason: 'the guard must come BEFORE the supersede UPDATE, or a refused '
+              'call has already deactivated the victim\'s plan');
+      expect(sql, contains("RAISE EXCEPTION 'not authorized' USING ERRCODE = '42501'"),
+          reason: 'one message, one code, for every refusal reason — the function '
+              'must not be an oracle for whether a relationship exists');
     });
 
     test('get_or_create_conversation takes participant_1 from auth.uid()', () {
@@ -412,9 +467,20 @@ void main() {
       }
     });
 
+    // Redefinitions a human has re-proven against I-G2. Adding to this map is the
+    // review the failure message below demands, not a way to silence it.
+    //   184 · assign_nutrition_plan · OD-QAX-2 Option A (QAX-SEC-01). I-G2 now
+    //         reads the EFFECTIVE definition and asserts the guard precedes the
+    //         supersede UPDATE.
+    const reviewedRedefinitions = <String, String>{
+      '184_assign_nutrition_plan_requires_active_relationship.sql':
+          'assign_nutrition_plan',
+    };
+
     test('a later redefinition of an atomic writer must be reviewed here', () {
       for (final (name, sql) in later()) {
         for (final fn in atomicWriters) {
+          if (reviewedRedefinitions[name] == fn) continue;
           expect(
               RegExp('create\\s+(or\\s+replace\\s+)?function\\s+(public\\.)?$fn\\b',
                       caseSensitive: false)
@@ -423,7 +489,7 @@ void main() {
               reason: '$name redefines $fn. Re-prove every property I-G2 pins '
                   '(SECURITY DEFINER, pinned search_path, grants, auth.uid() '
                   'identity) against the NEW body, then extend I-G2 to read it '
-                  'and update this test. (QAX-SEC-01 will need exactly this.)');
+                  'and update this test. (QAX-SEC-01 needed exactly this; see reviewedRedefinitions.)');
         }
       }
     });
