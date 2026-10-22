@@ -1,14 +1,14 @@
 {
   "summary": {
-    "authored": 184,
-    "range": "000–183",
+    "authored": 186,
+    "range": "000–185",
     "planAssignedRange": "123-131",
     "planFloor": 132,
     "qaRef": "eyqtldjqpgpljlqvpowh",
     "appliedThrough": 181,
     "preProgramme": 123,
     "preAssigned": 9,
-    "outsideByRule": 52,
+    "outsideByRule": 54,
     "unexplained": 0,
     "contiguous": true,
     "allDeclared": true
@@ -1299,6 +1299,20 @@
     {
       "migration": "183",
       "file": "supabase/migrations/183_restore_materialize_program_week_empty_selection_guard.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "184",
+      "file": "supabase/migrations/184_assign_nutrition_plan_requires_active_relationship.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "185",
+      "file": "supabase/migrations/185_coach_write_arms_require_active_relationship.sql",
       "inManifest": true,
       "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
       "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"

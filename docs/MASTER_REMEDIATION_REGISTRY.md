@@ -3665,3 +3665,27 @@ PR #4 (`feat/checkin-column-contract`): 20 files (+535 / −254) in the code com
 - **Who holds the `admin` role in production is unknown** to Claude and unverified; it is the one fact the quarantine contract needs from the owner.
 - **`/onboarding` is not ruled.** Locked `FIT-006` against a different shipped flow (`OD-31`) is a conflict between two owner-originated sources; the rule is preserve, identify, ask.
 - **Whether the locked `FIT-001` frame draws tip text is unverified** (the design package was not re-read for it); if it does, the shipped card now differs from the frame.
+
+### 7.29 `OD-QAX-2` / `OD-14` authorized and implemented as migrations 184 and 185 — authored, NOT applied — 2026-10-21
+
+The product owner wrote *"authorize OD-QAX-2 / OD-14"* in chat on 2026-10-21, after the determination in [`V5_DELEGATED_DETERMINATIONS_2026-10-21.md`](V5_DELEGATED_DETERMINATIONS_2026-10-21.md) §4 was put to her. The determination's **content** is Claude's (made under her earlier delegation, §7.28); **the authorization to implement it is hers.** This section supersedes §7.28's statement that the two were not `implementation_authorized`. **Nothing was applied to QA or production; no credential, secret or CI-workflow change; no QA read or write.** No status **count** moved.
+
+| Finding | What was written | Status |
+|---|---|---|
+| `QAX-SEC-01` (**P0**) | Migration **184** — `assign_nutrition_plan` refuses `42501 'not authorized'` unless the caller is the coach of an **active** relationship (`is_active_coach_of`); guard before the supersede `UPDATE`; `search_path`, grants and `COMMENT` restated | **LOCAL-REPLAY VERIFIED, NOT APPLIED. Still OPEN.** Needs *FIXED ON QA* → *VERIFIED LIVE* → *VERIFIED IN CI*. |
+| `QAX-SEC-03` (P1) | Migration **185** — `ALTER POLICY` on six policies (`client_habits`, `action_items`, `coaching_calls` ×2, `coach_video_responses`, `client_nutrition_plans`, `workout_program_assignments`) adds `is_active_coach_of(client_id)` to the coach arm; one narrow `SELECT` policy per table keeps authored rows readable; existing rows untouched | **LOCAL-REPLAY VERIFIED, NOT APPLIED. Still OPEN.** |
+| `F-21` | **Not closed.** `workout_programs` "coaches manage programs" — where `F-21` was first proven — is deliberately **not** altered: requiring a coach profile could break self-guided users who create their own programmes, and that flow was not verified | **OPEN** |
+
+#### Evidence, and its limits
+
+- **Replay:** a scratch PostgreSQL 18 cluster on loopback, `supabase/tests/local/shim.sql`, Supabase default privileges, then migrations 000–185 unmodified. `supabase/tests/local/od_qax2_od14_replay.sh` runs **47 assertions**: **31 FAIL on the schema without 184/185, all 47 PASS with them.** Every denial must be `42501` and every denied statement has an **active-coach positive control** (the older `qa_exhaustion` probes counted *any* error as a refusal, so a malformed statement passed as a denial). The older probes also flip: `QAX-SEC-01` and all six `QAX-SEC-03.*` go from FAIL to PASS.
+- **Guards:** `SEC-G1` / `SEC-G2` in `rls_policy_shape_guard_test.dart` now read the **effective** policy after every `ALTER` / `DROP` — previously they read only `CREATE POLICY` and would have kept reporting a fixed policy. Baselines **15 → 9** and **5 → 0**; baseline 9 verified exact; mutation-tested (reverting one `ALTER` fails `SEC-G1`, `SEC-G2` and the new positive assertion).
+- **Limits (the replay's, not hedges):** `auth.uid()` is the shim's claim reader, not GoTrue; PostgREST and the storage API are not running; **QA may diverge from the committed migrations**. The replay is **not CI-wired** — CI's negative-control harness replays 000–121 only — so the 47 assertions are a recorded local result, not a standing gate.
+- **Declared:** both migrations are in `expected_applied.json` under `environments.qa.pending` (`184`, `185`) with reason and gate, atomic with the files; frontier stays `181`.
+
+#### Deliberately NOT done or claimed
+
+- **Apply to QA.** Gate: an owner-approved window with the pre-application state check, then the live QA suites. `185` additionally requires the **read-only audit** of rows that fail the new write test (queries in its header; reviewer = the platform `admin` role, whose production holders are unknown to Claude).
+- **Product consequence to accept at apply time:** a coach can no longer assign a nutrition plan to a client who has not accepted. Whether the coach client-detail view can be opened for a `pending` invitee is unverified; if it can, that screen will now surface a refusal and should say so plainly.
+- **A client can still write a row naming an arbitrary `coach_id`** on the `client_id = auth.uid()` arm. That attributes content to a coach rather than reaching a victim; it is a different defect, recorded here and not fixed.
+- **`SECURITY DEFINER` functions that write these tables** bypass RLS and were not audited.
