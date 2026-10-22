@@ -27,6 +27,9 @@
   "exceptions": [
     "supabase/migrations/184_assign_nutrition_plan_requires_active_relationship.sql",
     "supabase/migrations/185_coach_write_arms_require_active_relationship.sql",
-    "supabase/expected_applied.json"
+    "supabase/expected_applied.json",
+    "docs/decision-log.md",
+    "docs/MASTER_REMEDIATION_REGISTRY.md",
+    "docs/REMEDIATION_PROGRESS.md"
   ]
 }

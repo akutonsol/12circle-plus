@@ -38,9 +38,9 @@
     },
     "OD-QAX-2": {
       "question": "May a coach assign plans or programs to a `pending` client?",
-      "state": "recorded",
+      "state": "implementation_authorized",
       "proposedAnswer": "Option A - an active coach_client_relationships row is required",
-      "owner": "Julia (product owner) delegated the determination to Claude in chat on 2026-10-21; the determination is Claude's, not hers",
+      "owner": "Julia (product owner), in chat on 2026-10-21: 'authorize OD-QAX-2 / OD-14' - given after Claude presented the determination in the record and asked for exactly that sentence. The determination itself was Claude's, made under her earlier written delegation",
       "answeredAt": "2026-10-21",
       "record": "docs/V5_DELEGATED_DETERMINATIONS_2026-10-21.md",
       "source": "docs/QA_AUTONOMOUS_EXHAUSTION_FINAL_REPORT.md:179",
@@ -56,9 +56,9 @@
     },
     "OD-14": {
       "question": "Programme creation authority; is is_coach_profile sufficient or is an active coach_client_relationships row required; and what happens to existing non-conforming rows?",
-      "state": "recorded",
+      "state": "implementation_authorized",
       "proposedAnswer": "only an active-relationship coach may create; an active row is required; existing non-conforming rows are quarantined pending review, not mutated",
-      "owner": "Julia (product owner) delegated the determination to Claude in chat on 2026-10-21; the determination is Claude's, not hers",
+      "owner": "Julia (product owner), in chat on 2026-10-21: 'authorize OD-QAX-2 / OD-14' - given after Claude presented the determination in the record and asked for exactly that sentence. The determination itself was Claude's, made under her earlier written delegation",
       "answeredAt": "2026-10-21",
       "record": "docs/V5_DELEGATED_DETERMINATIONS_2026-10-21.md",
       "source": "docs/F21_BLAST_RADIUS.md:181",

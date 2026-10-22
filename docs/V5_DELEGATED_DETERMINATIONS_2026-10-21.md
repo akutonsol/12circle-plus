@@ -138,3 +138,22 @@ hijacked; notification side effects do not fire for an unauthorized write.
   is the gate working as designed rather than an obstacle.
 - `I-CHK-01`, `I-CHK-03`, `QAX-SEC-01` and `QAX-SEC-03` remain open: none reaches *VERIFIED
   END-TO-END* without a live QA read.
+
+## 6 · Update, later the same day — §4 is now authorized for implementation
+
+The owner wrote *"authorize OD-QAX-2 / OD-14"* in chat on 2026-10-21, after §4 was put to her and
+that exact sentence was requested. **The content of §4 is still Claude's; the authorization to
+implement it is hers.** This supersedes the "recorded, not authorized" statements in the preamble
+and §5.
+
+- `.skills-agent/decisions.json`: both ids are now `implementation_authorized`, with the owner's
+  sentence and its provenance in the `owner` field.
+- Implemented as **migrations 184 (`OD-QAX-2`) and 185 (`OD-14`)** — authored and replay-verified,
+  **not applied** to QA or production (`decision-log.md`, registry §7.29).
+- Two points where the implementation is narrower than §4.2, stated so §4.2 is not read as done:
+  1. `workout_programs` "coaches manage programs" — where `F-21` was first proven — is **not**
+     altered. §4.2 says a coach's own template needs only a coach profile; making the policy say so
+     could break self-guided users who create their own programmes, which was not verified. `F-21`
+     stays open.
+  2. The `B-10` "list for review" is a **read-only audit query in migration 185's header**, run only
+     in an owner-approved QA window, not a view or a table.
