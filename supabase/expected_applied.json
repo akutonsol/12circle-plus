@@ -43,6 +43,14 @@
         "183": {
           "reason": "Restores the empty-selection guard that migration 119 added to materialize_program_week and migration 124 discarded when it replaced that body with a wrapper over the pre-119 materialize_program_week_engine. The guard is placed in the engine, where the INSERT into program_workouts actually happens, and uses 119's exact exception message. Locally replay-verified: pre-fix the call persists 4 zero-exercise program days and reports sessions_created=4 with no error; post-fix it raises P0001 with 119's message and persists 0 rows. NOT applied to QA.",
           "gate": "Review of the guard's placement in the engine rather than the 124 wrapper, plus a decision on the separate canonicalizer/validator defect that currently makes any NON-empty materialization fail with 23514 and blocks this migration's positive control (PD-A01). Then a QA apply window."
+        },
+        "184": {
+          "reason": "QAX-SEC-01 (P0), decision OD-QAX-2 Option A: assign_nutrition_plan (SECURITY DEFINER, migration 131) now refuses with 42501 'not authorized' unless the caller is the coach of an ACTIVE coach_client_relationships row for p_client_id (is_active_coach_of). pending, cancelled, ended and no-row do not authorize; one message for every refusal. search_path pin, REVOKE/GRANT and COMMENT restated. Locally replay-verified on a scratch cluster (supabase/tests/local/od_qax2_od14_replay.sh): pre-fix 31 of 47 assertions FAIL, post-fix all 47 PASS, including the active-coach positive control. NOT applied to QA.",
+          "gate": "An owner-approved QA apply window with the pre-application state check, then the live QA suites (VERIFIED LIVE) and CI (VERIFIED IN CI). Product consequence to be accepted at apply time: a coach can no longer assign a plan to a client who has not yet accepted."
+        },
+        "185": {
+          "reason": "QAX-SEC-03 (P1) and the policy half of F-21, decision OD-14: the coach write arm of six policies (client_habits, action_items, coaching_calls x2, coach_video_responses, client_nutrition_plans, workout_program_assignments) now also requires is_active_coach_of(client_id) via ALTER POLICY; a narrow SELECT policy per table keeps existing rows readable by the coach who authored them. Existing rows are preserved, not mutated. workout_programs 'coaches manage programs' is deliberately NOT altered (F-21 stays open). Locally replay-verified together with 184: 47 assertions, with a positive control per table. NOT applied to QA.",
+          "gate": "An owner-approved QA apply window, preceded by the read-only audit of rows that fail the new write test (queries in the migration header; reviewer = the platform admin role), then the live QA suites and CI. Apply after 184."
         }
       }
     }
