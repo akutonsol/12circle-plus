@@ -3,6 +3,7 @@ import 'models/checkin_model.dart';
 import '../../notifications/data/notification_service.dart';
 import '../../coach/data/score_service.dart';
 import '../../scoring/data/score_engine.dart';
+import '../domain/checkin_columns.dart';
 import '../domain/checkin_known.dart';
 
 class WeeklyCheckinService {
@@ -120,9 +121,13 @@ class WeeklyCheckinService {
         'week_start_date': info.weekStart.toIso8601String().split('T')[0],
         'status': 'submitted',
         'mood': mood,
-        'energy': energy,
+        // PD-B02: the 001 family is canonical. These were 'energy' and
+        // 'sleep_hours_avg' — real columns, but not the ones ai-coach,
+        // insights_provider or the coach review queue read, so a saved check-in
+        // reached the AI as "Energy: undefined/5". See checkin_columns.dart.
+        'energy_level': energy,
         'stress_level': stress,
-        'sleep_hours_avg': sleepHoursAvg,
+        'sleep_hours': sleepHoursAvg,
         'notes': notes ?? '',
         'overall_score': score,
         'submitted_at': now.toIso8601String(),
@@ -237,14 +242,18 @@ class WeeklyCheckinService {
     if (row['mood'] != null) {
       responses.add(CheckinResponse(questionId: 'mood', answer: row['mood']));
     }
-    if (row['energy'] != null) {
-      responses.add(CheckinResponse(questionId: 'energy', answer: row['energy']));
+    // questionId stays 'energy' / 'sleep_hours_avg': the history screen and
+    // checkin_detail_test key on them. Only the SOURCE column follows the ruling.
+    final energyValue = checkinEnergy(row);
+    if (energyValue != null) {
+      responses.add(CheckinResponse(questionId: 'energy', answer: energyValue));
     }
     if (row['stress_level'] != null) {
       responses.add(CheckinResponse(questionId: 'stress_level', answer: row['stress_level']));
     }
-    if (row['sleep_hours_avg'] != null) {
-      responses.add(CheckinResponse(questionId: 'sleep_hours_avg', answer: row['sleep_hours_avg']));
+    final sleepValue = checkinSleepHours(row);
+    if (sleepValue != null) {
+      responses.add(CheckinResponse(questionId: 'sleep_hours_avg', answer: sleepValue));
     }
     if (row['notes'] != null && (row['notes'] as String).isNotEmpty) {
       responses.add(CheckinResponse(questionId: 'notes', answer: row['notes']));
