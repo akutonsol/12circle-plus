@@ -5,6 +5,7 @@ import '../../coach/data/score_service.dart';
 import '../../scoring/data/score_engine.dart';
 import '../../../core/observability/app_failure.dart';
 import '../domain/checkin_columns.dart';
+import '../domain/nutrition_compliance.dart';
 import '../domain/checkin_known.dart';
 
 class WeeklyCheckinService {
@@ -100,6 +101,42 @@ class WeeklyCheckinService {
     }
   }
 
+  /// Nutrition adherence for the check-in week, or null when it cannot be told.
+  /// A failure here must never block the check-in itself, so it is reported and
+  /// swallowed into null — the readers already render null honestly.
+  Future<int?> _derivedCompliance(String userId, DateTime weekStart, DateTime now) async {
+    try {
+      final plan = await _supabase
+          .from('client_nutrition_plans')
+          .select('calories_target')
+          .eq('client_id', userId)
+          .eq('is_active', true)
+          .maybeSingle();
+      final target = (plan?['calories_target'] as num?);
+      if (target == null) return null;
+      final weekEnd = DateTime(weekStart.year, weekStart.month, weekStart.day + 7);
+      final rows = await _supabase
+          .from('nutrition_logs')
+          .select('calories, logged_at')
+          .eq('user_id', userId)
+          .gte('logged_at', weekStart.toIso8601String())
+          .lt('logged_at', weekEnd.toIso8601String());
+      final logs = [
+        for (final r in (rows as List))
+          if (DateTime.tryParse('${r['logged_at']}') != null)
+            (
+              at: DateTime.parse('${r['logged_at']}').toLocal(),
+              calories: (r['calories'] as num?) ?? 0,
+            ),
+      ];
+      return nutritionCompliancePercent(
+          logs: logs, target: target, weekStart: weekStart, now: now);
+    } catch (e) {
+      reportError('WeeklyCheckinService._derivedCompliance', e);
+      return null;
+    }
+  }
+
   Future<bool> submitWeeklyCheckin({
     required int mood,
     required int energy,
@@ -114,6 +151,7 @@ class WeeklyCheckinService {
     final info = _weekInfo(now);
     final score = _computeScore(
       mood: mood, energy: energy, stress: stress, sleepHoursAvg: sleepHoursAvg);
+    final compliance = await _derivedCompliance(userId, info.weekStart, now);
 
     try {
       await _supabase.from('weekly_checkins').upsert({
@@ -131,6 +169,9 @@ class WeeklyCheckinService {
         'sleep_hours': sleepHoursAvg,
         'notes': notes ?? '',
         'overall_score': score,
+        // Derived, never asked (see nutrition_compliance.dart). Omitted when it
+        // cannot be computed, so a re-submit never overwrites a stored value with NULL.
+        if (compliance != null) 'compliance_percent': compliance,
         'submitted_at': now.toIso8601String(),
       }, onConflict: 'user_id,week_start_date');
       // Award 12 Circle Score check-in points (SCR-004) — idempotent.

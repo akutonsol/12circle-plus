@@ -182,6 +182,25 @@ try {
   // ═══ 2 · I-NUT-04 ════════════════════════════════════════════════════════
   section('2. I-NUT-04 — at most one ACTIVE nutrition plan per client');
   {
+    // OD-QAX-2 (migration 184): assign_nutrition_plan requires the caller to be
+    // the coach of an ACTIVE relationship with the client. This section used to
+    // assign a plan with NO relationship at all — it only passed because the RPC
+    // authorized nobody, i.e. it encoded the hole 184 closes — so it now creates
+    // the relationship it depends on, as the service role (clients cannot make
+    // one active for a coach), and removes it in cleanup.
+    const REL = 'coach_client_relationships';
+    if (SERVICE) {
+      await svc(`${REL}?coach_id=eq.${A.uid}&client_id=eq.${B.uid}`, { method: 'DELETE', prefer: 'return=minimal' });
+      const rel = await svc(REL, { method: 'POST', prefer: 'return=minimal',
+        body: { coach_id: A.uid, client_id: B.uid, status: 'active',
+                initiated_by: 'client', activated_at: new Date().toISOString() } });
+      check('fixture: an ACTIVE coach–client relationship exists for the plan assignment',
+        ok(rel), `${rel.status} ${(rel.text || '').slice(0, 90)}`);
+      cleanup.push([REL, `coach_id=eq.${A.uid}&client_id=eq.${B.uid}`]);
+    } else {
+      console.log('  SKIP  no QA_SERVICE: the active-relationship fixture cannot be created,');
+      console.log('        so the assignment checks below are expected to be REFUSED, not passed.');
+    }
     const r1 = await rpc(A.jwt, 'assign_nutrition_plan', {
       p_client_id: B.uid, p_calories_target: 2100, p_protein_g: 150,
       p_carbs_g: 200, p_fat_g: 70, p_water_target_oz: 100, p_notes: `d08-${stamp}`,
@@ -228,6 +247,71 @@ try {
       !ok(attributed) || !Array.isArray(attributed.body) ||
         attributed.body.every((r) => r.coach_id !== C.uid),
       `${attributed.status}`);
+
+    // ── OD-QAX-2 refusals: only an ACTIVE coach may assign ─────────────────
+    // GATED ON THE DECLARED MIGRATION STATE, not on what the server happens to do.
+    // Migration 184 is authored but not yet applied to QA, so until the
+    // manifest stops listing it as pending these refusals would FAIL — by design,
+    // because that is exactly the hole 184 closes. Asserting them early would turn
+    // CI red for a state everyone already knows; skipping silently would hide the
+    // checks. So: while 184 is pending this block says so LOUDLY and counts as a
+    // skip, NOT a pass; the change that moves the frontier past 184 flips it to
+    // strict in the same diff, because the gate reads the same manifest.
+    const manifest = JSON.parse(
+      (await import('node:fs')).readFileSync(
+        new URL('../../expected_applied.json', import.meta.url), 'utf8'));
+    const pending184 = Object.hasOwn(manifest.environments?.qa?.pending ?? {}, '184');
+    if (pending184) {
+      console.log('  SKIP  OD-QAX-2 refusals: migration 184 is declared PENDING for QA');
+      console.log('        (supabase/expected_applied.json). This is NOT a pass. They become');
+      console.log('        strict in the change that applies 184 and moves the frontier.');
+    } else {
+    // Each is a REAL attempt by C (not a coach of B) and each must (a) be refused
+    // with SQLSTATE 42501 and (b) leave B's active plan exactly as it was. The
+    // positive control is r1/r2 above: the ACTIVE coach A still assigns.
+    const planNow = async () => {
+      const r = await rest(B.jwt,
+        `client_nutrition_plans?select=id,calories_target,coach_id&client_id=eq.${B.uid}&is_active=eq.true`);
+      return Array.isArray(r.body) ? r.body : [];
+    };
+    const before = await planNow();
+    const attempt = (label, params = {}) => rpc(C.jwt, 'assign_nutrition_plan', {
+      p_client_id: B.uid, p_calories_target: 1, p_protein_g: 1, p_carbs_g: 1, p_fat_g: 1,
+      p_notes: `d08-${stamp}-${label}`, ...params });
+    const refused = (r) => !ok(r) && /42501|not authorized/i.test(r.text || '');
+
+    const stranger = await attempt('unrelated');
+    check('an UNRELATED user is refused (42501)', refused(stranger),
+      `${stranger.status} ${(stranger.text || '').slice(0, 80)}`);
+    const after1 = await planNow();
+    check("…and the victim's active plan is untouched",
+      after1.length === 1 && after1[0].id === before[0]?.id, `n=${after1.length}`);
+
+    if (SERVICE) {
+      const REL2 = 'coach_client_relationships';
+      cleanup.push([REL2, `coach_id=eq.${C.uid}&client_id=eq.${B.uid}`]);
+      await svc(`${REL2}?coach_id=eq.${C.uid}&client_id=eq.${B.uid}`, { method: 'DELETE', prefer: 'return=minimal' });
+      const pend = await svc(REL2, { method: 'POST', prefer: 'return=minimal',
+        body: { coach_id: C.uid, client_id: B.uid, status: 'pending', initiated_by: 'coach' } });
+      check('fixture: a PENDING relationship C→B exists', ok(pend), `${pend.status}`);
+      const pr = await attempt('pending');
+      check('a PENDING coach is refused (42501) — an invite is not consent', refused(pr),
+        `${pr.status} ${(pr.text || '').slice(0, 80)}`);
+
+      await svc(`${REL2}?coach_id=eq.${C.uid}&client_id=eq.${B.uid}`,
+        { method: 'PATCH', prefer: 'return=minimal',
+          body: { status: 'cancelled', cancelled_by: 'client', cancelled_at: new Date().toISOString() } });
+      const cr = await attempt('cancelled');
+      check('a CANCELLED coach is refused (42501)', refused(cr),
+        `${cr.status} ${(cr.text || '').slice(0, 80)}`);
+
+      const after2 = await planNow();
+      check("…and the victim's active plan is still untouched",
+        after2.length === 1 && after2[0].id === before[0]?.id, `n=${after2.length}`);
+    } else {
+      console.log('  SKIP  pending/cancelled refusals need QA_SERVICE to create the relationship rows.');
+    }
+    }   // end: 184 applied
   }
 
   // ═══ 3 · I-WMH-01 ════════════════════════════════════════════════════════

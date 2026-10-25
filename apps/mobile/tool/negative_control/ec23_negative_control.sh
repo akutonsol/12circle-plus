@@ -27,14 +27,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../" && pwd)"
 # PD-B01 retired checkin_service.dart, which carried two of the seven sites. Its
 # replacement, weekly_checkin_service.dart, now carries exactly two reportError
-# anchors of its own (the save and the streak), so the total stays seven and
-# EXPECTED_OFFENDERS below is unchanged. If it ever moves, the mutation-anchor
+# anchors of its own (the save and the streak), so the total stayed seven.
+# 2026-10-25: nutrition-compliance derivation added a third (_derivedCompliance,
+# which reports and returns null so a failure there never blocks a check-in), so
+# the total is EIGHT. If it ever moves, the mutation-anchor
 # count check in the python block refuses to assert against a tree it did not
 # mutate as declared — which is how this harness caught the retirement.
 CHECKIN="$ROOT/apps/mobile/lib/features/checkins/data/weekly_checkin_service.dart"
 MESSAGING="$ROOT/apps/mobile/lib/features/messaging/data/messaging_service.dart"
 TEST="$ROOT/apps/mobile/test/unit/error_sink_test.dart"
-EXPECTED_OFFENDERS=7
+EXPECTED_OFFENDERS=8
 
 die() {
   echo "ERROR: $*" >&2

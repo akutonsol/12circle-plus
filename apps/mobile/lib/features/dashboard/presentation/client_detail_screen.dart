@@ -1,6 +1,7 @@
 import '../../../core/observability/app_failure.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 import '../../coach/domain/coach_ecosystem_provider.dart';
 import '../../coach/presentation/coach_video_response_screen.dart';
 import '../../action_items/presentation/assign_action_item_sheet.dart';
@@ -1814,6 +1815,10 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
             borderSide: const BorderSide(color: _brand)))),
     ]);
 
+  /// `assign_nutrition_plan` raises SQLSTATE 42501 for every refusal (migration 184).
+  static bool _isNotAuthorized(Object e) =>
+      e is PostgrestException && e.code == '42501';
+
   Future<void> _save() async {
     final cal  = int.tryParse(_cal.text);
     final pro  = int.tryParse(_pro.text);
@@ -1821,11 +1826,26 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
     final fat  = int.tryParse(_fat.text);
     if (cal == null || pro == null || carb == null || fat == null) return;
     setState(() => _saving = true);
-    await ref.read(coachProgramServiceProvider).assignNutritionPlan(
-      widget.clientId,
-      calories: cal, protein: pro, carbs: carb, fat: fat,
-      waterOz: int.tryParse(_water.text),
-      notes: _notes.text.isEmpty ? null : _notes.text);
+    try {
+      await ref.read(coachProgramServiceProvider).assignNutritionPlan(
+        widget.clientId,
+        calories: cal, protein: pro, carbs: carb, fat: fat,
+        waterOz: int.tryParse(_water.text),
+        notes: _notes.text.isEmpty ? null : _notes.text);
+    } catch (e, s) {
+      // This used to have no handler: a failed save left the sheet spinning and the
+      // coach told nothing. Since migration 184 the RPC also refuses (42501) when
+      // the relationship is no longer active, e.g. the client cancelled while this
+      // sheet was open — that case gets its own plain sentence.
+      reportError('AssignNutritionSheet._save', e, s);
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+          _isNotAuthorized(e)
+              ? "This client isn't active with you any more, so the plan wasn't saved."
+              : "Couldn't save the plan — check your connection and try again.")));
+      return;
+    }
     if (mounted) {
       Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(

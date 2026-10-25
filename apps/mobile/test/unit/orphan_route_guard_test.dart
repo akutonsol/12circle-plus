@@ -38,13 +38,13 @@ import '../../tool/orphan_route_sweep.dart'
 void main() {
   /// Measured 2026-09-23. Each is a registered route nothing navigates to.
   /// `/pods` left this list on 2026-10-21: the Community Groups tab now links to it.
+  /// `/onboarding` left it on 2026-10-25: the splash's Get Started hands off to it.
   const known = <String, String>{
     '/coach': 'a duplicate alias of /train — both build TrainHubScreen',
     '/coach-business': 'CoachBusinessScreen, no entry point',
     '/food-search': 'gated screen, no entry point',
     '/log-meal': 'a redirect stub to /meals-dashboard (FIT-019, locked)',
     '/nutrition-overview': 'NutritionScreen, no entry point',
-    '/onboarding': 'FIT-006 Welcome — locked, and OD-31',
   };
 
   late List<String> routes;

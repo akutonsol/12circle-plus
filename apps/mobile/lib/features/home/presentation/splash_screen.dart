@@ -8,6 +8,11 @@ import 'package:go_router/go_router.dart';
 /// cycling headline (Train like you mean it → Push past your limits → Stronger
 /// every rep), and a glowing slide-free Get Started CTA into the create-account
 /// flow. "Already a member? Sign In" → login.
+///
+/// Get Started now hands off to `/onboarding` (the locked FIT-006 Welcome frame),
+/// which owns the Create-account / Sign-in choice — the router's own comment has
+/// always said the splash "hands off to /onboarding itself". Welcome had no way in
+/// before (OD-31). The Sign In link is kept as a shortcut for returning members.
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
   @override
@@ -138,7 +143,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
               const SizedBox(height: 26),
 
               // Get Started CTA
-              FadeTransition(opacity: _fade(0.55), child: _ctaButton(() => context.go('/signup'))),
+              FadeTransition(opacity: _fade(0.55), child: _ctaButton(() => context.go('/onboarding'))),
               const SizedBox(height: 18),
 
               // Sign In
