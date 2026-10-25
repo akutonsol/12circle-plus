@@ -76,9 +76,18 @@ const check = lib ? lib.check : (name, pass, detail) => {
   return pass;
 };
 const section = lib ? lib.section : (t) => console.log(`\n── ${t} ${'─'.repeat(Math.max(2, 68 - t.length))}`);
+// A deliberately NOT-made assertion (see lib.mjs skip()). Recorded, never a pass.
+const skip = lib ? lib.skip : (name, reason) => {
+  localResults.push({ name, pass: null, skipped: true, detail: reason });
+  console.log(`  SKIP  ${name}${reason ? `  — ${reason}` : ''}  (NOT a pass)`);
+  return null;
+};
 const summary = lib ? lib.summary : (label) => {
-  const f = localResults.filter(r => !r.pass);
-  console.log(`\n${'='.repeat(74)}\n${label}: ${localResults.length - f.length}/${localResults.length} passed`);
+  const skipped = localResults.filter(r => r.skipped);
+  const asserted = localResults.filter(r => !r.skipped);
+  const f = asserted.filter(r => !r.pass);
+  console.log(`\n${'='.repeat(74)}\n${label}: ${asserted.length - f.length}/${asserted.length} passed` +
+    (skipped.length ? `, ${skipped.length} SKIPPED (not passes)` : ''));
   if (f.length) { console.log('FAILURES:'); f.forEach(r => console.log(`  x ${r.name} — ${r.detail || ''}`)); }
   return f.length;
 };
@@ -257,14 +266,15 @@ try {
     // checks. So: while 184 is pending this block says so LOUDLY and counts as a
     // skip, NOT a pass; the change that moves the frontier past 184 flips it to
     // strict in the same diff, because the gate reads the same manifest.
-    const manifest = JSON.parse(
-      (await import('node:fs')).readFileSync(
-        new URL('../../expected_applied.json', import.meta.url), 'utf8'));
-    const pending184 = Object.hasOwn(manifest.environments?.qa?.pending ?? {}, '184');
-    if (pending184) {
-      console.log('  SKIP  OD-QAX-2 refusals: migration 184 is declared PENDING for QA');
-      console.log('        (supabase/expected_applied.json). This is NOT a pass. They become');
-      console.log('        strict in the change that applies 184 and moves the frontier.');
+    const { migrationApplied } = await import('./migration-state.mjs');
+    if (!migrationApplied('184')) {
+      const why = 'migration 184 is declared PENDING for QA (supabase/expected_applied.json); ' +
+        'strict in the change that applies 184 and moves the frontier';
+      skip('an UNRELATED user is refused (42501)', why);
+      skip("…and the victim's active plan is untouched", why);
+      skip('a PENDING coach is refused (42501) — an invite is not consent', why);
+      skip('a CANCELLED coach is refused (42501)', why);
+      skip("…and the victim's active plan is still untouched", why);
     } else {
     // Each is a REAL attempt by C (not a coach of B) and each must (a) be refused
     // with SQLSTATE 42501 and (b) leave B's active plan exactly as it was. The
