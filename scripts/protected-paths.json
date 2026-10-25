@@ -24,8 +24,5 @@
     "docs/REMEDIATION_PROGRESS.md",
     "docs/adr"
   ],
-  "exceptions": [
-    "supabase/migrations/186_restore_program_engine_prescription.sql",
-    "supabase/expected_applied.json"
-  ]
+  "exceptions": []
 }
