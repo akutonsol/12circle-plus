@@ -226,6 +226,23 @@ export function check(name, pass, detail) {
 }
 
 /**
+ * An assertion that was deliberately NOT made — recorded, never counted as a pass.
+ *
+ * Use it ONLY when the thing under test is known not to exist yet on QA (e.g. its
+ * migration is declared pending — see migration-state.mjs), so asserting it would
+ * fail on intent rather than on a defect, and running the probe would itself
+ * write the defect into QA. Before this helper, gated checks were a console line
+ * and the suite still printed "25/25 passed": the skipped scenarios were invisible
+ * in the score. A skip is now part of the result set, is excluded from the pass
+ * count, and is printed by `summary()` and by run.mjs on its own line.
+ */
+export function skip(name, reason) {
+  results.push({ name, pass: null, skipped: true, detail: reason });
+  console.log(`  SKIP  ${name}${reason ? `  — ${reason}` : ''}  (NOT a pass)`);
+  return null;
+}
+
+/**
  * A DENIAL assertion that cannot pass for want of data.
  *
  * V5 §139.5. Four assertions in this programme passed for the wrong reason, and
@@ -302,11 +319,20 @@ export function section(t) {
 
 export function summary(label) {
   const suiteResults = results.slice(suiteStart);
-  const f = suiteResults.filter(r => !r.pass);
+  // A SKIP is neither a pass nor a failure (see skip()). The headline counts only
+  // assertions actually made, and the skips are named on their own.
+  const skipped = suiteResults.filter(r => r.skipped);
+  const asserted = suiteResults.filter(r => !r.skipped);
+  const f = asserted.filter(r => !r.pass);
 
   console.log(
-    `\n${'='.repeat(74)}\n${label}: ${suiteResults.length - f.length}/${suiteResults.length} passed`
+    `\n${'='.repeat(74)}\n${label}: ${asserted.length - f.length}/${asserted.length} passed` +
+    (skipped.length ? `, ${skipped.length} SKIPPED (not passes)` : '')
   );
+  if (skipped.length) {
+    console.log('SKIPPED (not asserted — each is a gap in the evidence, not a pass):');
+    skipped.forEach(r => console.log(`  - ${r.name} — ${r.detail || ''}`));
+  }
 
   if (f.length) {
     console.log('FAILURES:');

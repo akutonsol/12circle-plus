@@ -134,6 +134,15 @@ const SUITES = [
   ['D21   admin search filters (§199)',         './d21-admin-search.mjs'],
   ['D22   activity role split Q2 (181)',        './d22-activity-role-split-lab.mjs'],
   ['D23   FG-3 positive legs (owner-assigned)', './d23-fg3-positive-legs.mjs'],
+  // D24 / D25 · migrations 185 and 186, registered BEFORE they are applied — a
+  // deliberate departure from the D13 practice of holding such suites out as
+  // unregistered labs, and safe for the same reason that practice exists: both
+  // gate on migration-state.mjs, so while 185/186 are declared pending they make
+  // NO request and record every assertion as SKIPPED (never as a pass), which
+  // this runner prints as its own verdict. The change that applies them and moves
+  // the frontier turns them strict without touching this list.
+  ['D24   coach write arms (185, gated)',  './d24-coach-write-arms.mjs'],
+  ['D25   programme engine (186, gated)',  './d25-program-engine.mjs'],
 ];
 
 let totalFailures = 0;
@@ -153,6 +162,9 @@ for (const [label, path] of SUITES) {
     aborted = true;
   }
   const ran = results.length - before;
+  // Deliberately not-asserted checks (lib.mjs skip()). Never passes, never failures.
+  const skipped = results.slice(before).filter(r => r.skipped).length;
+  const asserted = ran - skipped;
   // V5 §205. A suite that registered ZERO assertions has not passed -- whatever it
   // returned. This must be scored HERE, before `totalFailures` is summed: an earlier
   // version of this guard set the flag in the printing loop below, which fixed the
@@ -160,8 +172,11 @@ for (const [label, path] of SUITES) {
   // still went green. A guard that reports without failing is not a guard.
   const empty = !aborted && ran === 0;
   if (empty) failures = Math.max(failures, 1);
+  // A suite that made NO assertion but recorded skips is not EMPTY and not a pass:
+  // it is ALL-SKIPPED, printed as such, and its skips are totalled below.
+  const allSkipped = !aborted && ran > 0 && asserted === 0;
   totalFailures += failures;
-  summary.push({ label, ran, failures, aborted, empty });
+  summary.push({ label, ran: asserted, skipped, failures, aborted, empty, allSkipped });
 }
 
 console.log(`\n${'█'.repeat(74)}\n██  PHASE 1 SECURITY REGRESSION SUMMARY\n${'█'.repeat(74)}`);
@@ -179,12 +194,16 @@ console.log(`\n${'█'.repeat(74)}\n██  PHASE 1 SECURITY REGRESSION SUMMARY\
 // missing default export as `failures = 0`. Two independent silences agreeing on a
 // green. EMPTY is now a named state, like ABORT at §28.9, and it fails the run.
 for (const s of summary) {
-  const verdict = s.aborted ? 'ABORT' : s.empty ? 'EMPTY' : s.failures === 0 ? 'PASS' : 'FAIL';
+  const verdict = s.aborted ? 'ABORT' : s.empty ? 'EMPTY' : s.allSkipped ? 'SKIP'
+    : s.failures === 0 ? 'PASS' : 'FAIL';
   const score = s.aborted
     ? `${String(s.ran).padStart(3)} ran, DID NOT FINISH`
     : s.empty
       ? '  0 assertions — REGISTERED NOTHING'
-      : `${String(s.ran - s.failures).padStart(3)}/${String(s.ran).padEnd(3)}`;
+      : s.allSkipped
+        ? `  0 asserted, ${s.skipped} SKIPPED — NOT A PASS`
+        : `${String(s.ran - s.failures).padStart(3)}/${String(s.ran).padEnd(3)}` +
+          (s.skipped ? ` (+${s.skipped} SKIPPED)` : '');
   console.log(`  ${verdict.padEnd(5)} ${s.label.padEnd(36)} ${score}`);
 }
 const total = summary.reduce((a, s) => a + s.ran, 0);
@@ -196,6 +215,11 @@ const emptySuites = summary.filter(s => s.empty);
 // lines below so neither disappears from the record.
 const assertionFailures = totalFailures - abortedSuites.length - emptySuites.length;
 console.log(`\n  ${total - assertionFailures}/${total} assertions passed across ${SUITES.length} suites`);
+const totalSkipped = summary.reduce((a, s) => a + (s.skipped || 0), 0);
+if (totalSkipped) {
+  console.log(`  ${totalSkipped} assertion(s) SKIPPED — not passes. They are gated on migrations ` +
+    `declared pending (supabase/expected_applied.json) and are listed under each suite above.`);
+}
 if (emptySuites.length) {
   console.log(
     `\n  ⚠  ${emptySuites.length} suite(s) REGISTERED NO ASSERTIONS: ` +
