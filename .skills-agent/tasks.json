@@ -2114,6 +2114,48 @@
           "action": "record PD-B03 (V5-PROD-008), then enter the wave and take the next contiguous number"
         }
       ]
+    },
+    {
+      "id": "V5-PROD-012",
+      "role": "owner-decision",
+      "workstream": "product",
+      "wave": "n/a",
+      "risk": "program-lifecycle",
+      "summary": "Nothing advances a client's current_week, so an assigned programme shows its week-1 days forever",
+      "dependsOn": [],
+      "paths": [],
+      "acceptance": [
+        "The rule for advancing workout_program_assignments.current_week is decided by the owner and recorded (e.g. calendar weeks since activation, completion of the week's sessions, or the coach advancing it) — including what happens at the last week and on a deload week",
+        "A client whose programme is in week N sees week N's days on Activity (todaysWorkoutProvider) and in the workout tab (assignedWorkoutsProvider), matched by week_number and full English day name",
+        "When week N has no training days yet, the client sees an explicit 'your coach hasn't released week N yet' state, never week 1 again and never an empty success",
+        "The coach client-detail view shows the same week the client sees (client_detail_screen.dart 'Week X of Y')",
+        "Generating a later week uses the existing engine (materialize_program_week with p_week = N), never a second generator; it is not wired until migration 186 is applied and verified",
+        "Covered by tests that fail on today's behaviour (current_week stuck at 1) and pass after"
+      ],
+      "verification": [
+        "cd apps/mobile && flutter test",
+        "a live QA walk-through: a client assigned a 2+-week programme sees week 2 after the agreed trigger"
+      ],
+      "evidenceRequired": [
+        "the recorded lifecycle rule",
+        "before/after tests",
+        "the live walk-through"
+      ],
+      "maxRetries": 0,
+      "runnerIndependent": true,
+      "sources": [
+        "apps/mobile/lib/features/coach/data/coach_program_service.dart",
+        "apps/mobile/lib/features/dashboard/presentation/client_detail_screen.dart",
+        "apps/mobile/lib/features/workout/domain/workout_provider.dart"
+      ],
+      "blockers": [
+        {
+          "kind": "owner",
+          "what": "how a programme week advances, and whether the coach releases each week or the system does",
+          "evidence": "current_week is only ever WRITTEN as 1 (coach_program_service.dart:206; generate_client_plan in 121) and only READ elsewhere (coach_program_service.dart:239, client_detail_screen.dart:331); no app code, trigger or migration increments it (grep, 2026-10-25). Program Builder can generate week 1 only.",
+          "action": "owner decides the lifecycle rule after a review of the existing programme lifecycle; implementation is a separate authorization"
+        }
+      ]
     }
   ]
 }
