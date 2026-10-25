@@ -6,7 +6,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/coach_program_service.dart';
+import '../domain/coach_ecosystem_provider.dart';
+import '../domain/engine_generation.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../../core/observability/app_failure.dart';
 
 const _bg     = Color(0xFF0A0A0B);
 const _panel  = Color(0xFF14101E);
@@ -16,15 +19,26 @@ const _text   = Color(0xFFEDE7F3);
 const _muted  = Color(0xFF9A93A6);
 const _pass   = Color(0xFF10B981);
 const _warn   = Color(0xFFF59E0B);
+const _fail   = Color(0xFFEF4444);
 
 class DynamicProgramBuilderScreen extends ConsumerStatefulWidget {
-  const DynamicProgramBuilderScreen({super.key});
+  const DynamicProgramBuilderScreen({
+    super.key,
+    this.engineWeekGeneration = kEngineWeekGeneration,
+  });
+
+  /// Shows the "Generate week 1" step. Defaults to the build-time flag, which is
+  /// OFF until the target database has migration 186 (engine_generation.dart).
+  final bool engineWeekGeneration;
+
   @override
   ConsumerState<DynamicProgramBuilderScreen> createState() => _State();
 }
 
 class _State extends ConsumerState<DynamicProgramBuilderScreen> {
-  final _svc = CoachProgramService();
+  // Through the provider (not `CoachProgramService()`) so the screen can be
+  // exercised in a widget test with a fake service.
+  CoachProgramService get _svc => ref.read(coachProgramServiceProvider);
   String _type = 'Hypertrophy';
   int _duration = 12;
   int _frequency = 4;
@@ -33,6 +47,15 @@ class _State extends ConsumerState<DynamicProgramBuilderScreen> {
   bool _busy = false, _saving = false;
   Map<String, dynamic>? _plan;
   String? _status;
+
+  // "Generate week 1" — only after the programme is saved.
+  String? _programId;
+  // The programme type the saved programme was CREATED with. The chips stay
+  // editable after saving, so generation must not read the live selection.
+  String? _programType;
+  bool _generating = false;
+  String? _genStatus;
+  bool _genOk = false;
 
   static const _types = ['Strength', 'Hypertrophy', 'Fat Loss', 'General Fitness', 'Athletic'];
   static const _durations = [4, 8, 12, 16, 24];
@@ -59,16 +82,98 @@ class _State extends ConsumerState<DynamicProgramBuilderScreen> {
     if (!mounted) return;
     setState(() {
       _saving = false;
+      _programId = id;
+      _programType = id == null ? null : _type;
+      _genStatus = null;
       _status = id == null
           ? 'Save failed — apply migration 093.'
           // This used to tell the coach to "materialize week 1 from Coach Copilot /
           // the client program view". No screen does that: the program is saved
           // with its plan and NO training days, and it cannot be assigned until it
           // has some (program_readiness.dart).
-          : 'Program saved (v1) with its ${_duration}-week plan. It has no training days yet — '
-            'add workouts to it in Programs before assigning it to a client.';
+          : widget.engineWeekGeneration
+              ? 'Program saved (v1) with its ${_duration}-week plan. Generate week 1 below to fill '
+                'its training days, or add workouts by hand in Programs.'
+              : 'Program saved (v1) with its ${_duration}-week plan. It has no training days yet — '
+                'add workouts to it in Programs before assigning it to a client.';
     });
   }
+
+  /// Asks the engine to fill week 1. Never replaces existing days without the
+  /// coach confirming it in words (the engine itself refuses unless told to).
+  Future<void> _generateWeek({bool replace = false}) async {
+    final id = _programId;
+    if (id == null || _generating) return;
+    setState(() { _generating = true; _genStatus = null; });
+    try {
+      final res = await _svc.materializeWeek(
+          id, 1, engineContextFor(programType: _programType ?? _type, replaceExisting: replace));
+      if (!mounted) return;
+      final summary = summarizeMaterialization(res);
+      setState(() {
+        _generating = false;
+        _genOk = summary != null;
+        _genStatus = summary == null
+            ? coachMessageFor(EngineFailure.outdatedEngine)
+            : 'Week 1 is ready — ${summary.days} training days, ${summary.exercises} exercises. '
+              'Review or edit them in Programs before assigning the program.';
+      });
+    } catch (e, s) {
+      final failure = classifyEngineError(e);
+      if (failure == EngineFailure.unknown || failure == EngineFailure.noPlan) {
+        reportError('DynamicProgramBuilder._generateWeek', e, s);
+      }
+      if (!mounted) return;
+      setState(() { _generating = false; _genOk = false; _genStatus = coachMessageFor(failure); });
+      if (failure == EngineFailure.weekExists && !replace) {
+        final ok = await _confirmReplace();
+        if (ok == true && mounted) await _generateWeek(replace: true);
+      }
+    }
+  }
+
+  Future<bool?> _confirmReplace() => showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: _panel,
+      title: const Text('Replace week 1?', style: TextStyle(color: _text)),
+      content: const Text(
+        'Week 1 already has training days. Replacing it deletes all of them — including '
+        'any changes you made by hand — and generates new ones. This cannot be undone.',
+        style: TextStyle(color: _muted)),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep week 1')),
+        TextButton(onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Replace', style: TextStyle(color: _fail))),
+      ],
+    ),
+  );
+
+  Widget _generateWeekCard() => Container(
+    margin: const EdgeInsets.only(top: 12),
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(16)),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('WEEK 1', style: TextStyle(color: _muted, fontSize: 11,
+          fontWeight: FontWeight.w800, letterSpacing: 1.2)),
+      const SizedBox(height: 8),
+      SizedBox(width: double.infinity, child: ElevatedButton(
+        key: const ValueKey('generate-week-1'),
+        onPressed: _generating ? null : () => _generateWeek(),
+        style: ElevatedButton.styleFrom(backgroundColor: _brand, foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+        child: _generating
+            ? const SizedBox(width: 18, height: 18,
+                child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+            : const Text('Generate week 1', style: TextStyle(fontWeight: FontWeight.w800)),
+      )),
+      if (_genStatus != null) Padding(padding: const EdgeInsets.only(top: 10),
+        child: Text(_genStatus!, style: TextStyle(color: _genOk ? _pass : _warn,
+            fontSize: 13, fontWeight: FontWeight.w700))),
+    ]),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -89,6 +194,7 @@ class _State extends ConsumerState<DynamicProgramBuilderScreen> {
         if (_status != null) Padding(padding: const EdgeInsets.only(top: 12),
           child: Text(_status!, style: TextStyle(
               color: _status!.contains('failed') ? _warn : _pass, fontSize: 13, fontWeight: FontWeight.w700))),
+        if (widget.engineWeekGeneration && _programId != null) _generateWeekCard(),
       ]),
     );
   }

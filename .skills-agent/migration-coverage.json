@@ -1,14 +1,14 @@
 {
   "summary": {
-    "authored": 186,
-    "range": "000–185",
+    "authored": 187,
+    "range": "000–186",
     "planAssignedRange": "123-131",
     "planFloor": 132,
     "qaRef": "eyqtldjqpgpljlqvpowh",
     "appliedThrough": 181,
     "preProgramme": 123,
     "preAssigned": 9,
-    "outsideByRule": 54,
+    "outsideByRule": 55,
     "unexplained": 0,
     "contiguous": true,
     "allDeclared": true
@@ -1313,6 +1313,13 @@
     {
       "migration": "185",
       "file": "supabase/migrations/185_coach_write_arms_require_active_relationship.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "186",
+      "file": "supabase/migrations/186_restore_program_engine_prescription.sql",
       "inManifest": true,
       "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
       "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
