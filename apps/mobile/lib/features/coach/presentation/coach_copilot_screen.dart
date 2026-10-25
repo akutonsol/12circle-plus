@@ -68,7 +68,13 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     setState(() { _busy = true; _rec = null; _explanation = null; _status = null; });
     final r = await _svc.generateWorkout(_context(c), subjectId: c['id'] as String);
     if (!mounted) return;
-    setState(() { _busy = false; _rec = r; });
+    // A failed call used to leave the panel blank — the error went into
+    // `lastError` and nothing said so.
+    setState(() {
+      _busy = false;
+      _rec = r;
+      if (r == null) _status = "Couldn't generate a recommendation — try again.";
+    });
   }
 
   Future<void> _explain() async {
@@ -137,6 +143,12 @@ class _State extends ConsumerState<CoachCopilotScreen> {
           const SizedBox(height: 12),
           _generateButton(),
           if (_rec != null) ..._recommendation(_rec!),
+          // The status line normally renders inside the recommendation; with no
+          // recommendation (a failed call) it needs its own place, or it is lost.
+          if (_rec == null && _status != null) Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Text(_status!, style: const TextStyle(
+                color: _fail, fontSize: 13, fontWeight: FontWeight.w700))),
         ],
       ]),
     );
@@ -274,7 +286,11 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     final vol = (r['volume_factor'] as num?)?.toDouble() ?? 1.0;
     if (selected.isEmpty) {
       return [const SizedBox(height: 14), _banner(
-        'Engine returned no session — ensure the MIE migrations are applied and intelligence profiles are enriched/approved.')];
+        // Was developer copy ("ensure the MIE migrations are applied …") shown to
+        // coaches. The engine returns nothing when its exercise intelligence data
+        // is not populated yet (registry EB-4); say what that means for the coach.
+        'No recommendation yet — the exercise library behind Copilot is still being set up. '
+        'Build this session by hand in Programs for now.')];
     }
     final volPct = ((vol - 1) * 100).round();
     return [

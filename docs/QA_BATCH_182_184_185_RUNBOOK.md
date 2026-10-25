@@ -1,100 +1,97 @@
-# QA apply runbook — migrations 182, 184, 185 (183 deliberately held back)
+# QA migration batch — PROPOSAL, HELD
 
-> **For the owner to run.** This session has no QA database credential and no linked CLI, so it
-> cannot apply migrations; it can only read through the QA service key already in the shell. Everything
-> here changes the **shared QA project** (`eyqtldjqpgpljlqvpowh`). **Nothing in this runbook has been run.**
-> Written 2026-10-25 after the read-only pre-checks in §1.
+> **Status: HELD by the owner (2026-10-25).** *"Do not apply the migration batch yet … hold the QA
+> migration runbook as a proposal."* Nothing in this document has been run. It changes nothing on QA
+> or production, and it does not authorize a change to `supabase/expected_applied.json`.
+>
+> **This revision corrects the first version (merged in PR #10).** Two of its claims were wrong and
+> are withdrawn — see §1. Everything below was re-verified on **local replays only** (a scratch
+> PostgreSQL on loopback, the repo shim, the committed migrations unmodified); none of it is QA
+> evidence.
 
-## 0 · What changes, in one table
+## 1 · Corrections to the first version
 
-| Migration | Closes | What it does | Rollback |
-|---|---|---|---|
-| **182** | `QAX-SEC-06` (cert half) | Scopes `exercise_certifications` and `exercise_certification(uuid)` to `exercise_readable(id) OR is_content_editor()` | restore the captured pre-change definitions (§4) |
-| **184** | `QAX-SEC-01` (**P0**) | `assign_nutrition_plan` refuses unless the caller is the coach of an **active** relationship | re-run the `CREATE OR REPLACE` from migration `131` |
-| **185** | `QAX-SEC-03` | Six coach write policies also require an active relationship; four narrow `SELECT` policies keep authored rows readable | `ALTER POLICY` back to the old `USING`; `DROP POLICY` the four new ones (§4) |
-| **183** | — | **NOT in this batch.** See §2. | n/a |
-
-## 1 · Pre-check results (read-only, QA, 2026-10-25)
-
-| Check | Result | Meaning |
+| First version said | What is verified | Source |
 |---|---|---|
-| Rows 185 would stop a coach editing (`coach_id` set, no **active** relationship) across the six tables | **0** of 17 (`client_habits` 10, `coaching_calls` 3, `client_nutrition_plans` 2, `workout_program_assignments` 2, `action_items` 0, `coach_video_responses` 0) | 185 changes no existing coach's ability to edit. The quarantine arm of `OD-14` is **moot on QA**. |
-| QA relationships | 288 rows: 287 `active`, 1 `cancelled`, 0 `pending` | The live suites' coaches have active relationships; nothing depends on a pending one. |
-| `exercise_intelligence` rows | **0** (621 exercises) | **This is why 183 is held back — §2.** |
-| Ledger frontier | **not read** (the ledger is not exposed over the REST API). CI's `ENV-3 · declared vs observed vs authored` has been green at frontier `181`, and is the evidence. | Re-confirm with `supabase migration list --linked` before applying (§3 step 2). |
+| *"Every programme materialization on QA already writes empty training days"*, and *"if production matches, real members may be getting empty training days"* | **Withdrawn.** Members' plans come from `generate_client_plan`, whose exercises are a fixed list per training split (`_plan_day_exercises`, migration 119) and **do not touch the intelligence substrate**. On a 000–181 replay with 0 profiles, a member plan has 4 days with 6/5/6/5 exercises. | replay probe E1 |
+| 183 must be held back because applying it *"would make programme generation fail visibly on QA and the live workout checks go red"* | **Withdrawn.** `materialize_program_week` — the only function 183 changes — has **no caller** in the app, the edge functions, the live security/AI suites or CI. Applying 183 cannot break a user flow or a live check today. | `grep` across `apps/mobile/lib`, `supabase/functions`, `supabase/tests`, `.github` |
+| Apply 182, 184, 185 by hand and record them with `supabase migration repair` | **Withdrawn as the recommendation.** `migration repair` writes the ledger without proving the SQL ran; it is only defensible after a catalog check, and with 183 no longer a blocker it is unnecessary (§4). | owner instruction 2026-10-25 |
 
-## 2 · Why 183 is held back — and what that means for the batch
+## 2 · What the coaching engine actually does (000–181 replay, i.e. QA's declared state)
 
-`build_workout` selects candidates by an **inner join** of `exercises` and `exercise_intelligence`
-(`087`/`127`). With **0** profiles the candidate pool is empty **today**, so every programme
-materialization on QA already writes **empty training days and reports them as created**. Migration 183
-turns that into an error. That is the correct behaviour — and it would make programme generation fail
-visibly on QA (and the live workout checks go red) until the substrate is populated, which is registry
-item `EB-4`, a Wave 5 prerequisite owned by the content owner with decision `D-1`.
+| Case | Result |
+|---|---|
+| Member plan (`generate_client_plan`, called by onboarding and the coaching-mode switch) | **Works** — real exercises, independent of the substrate |
+| Coach Copilot (`generate_workout`), substrate empty (QA has **0** `exercise_intelligence` rows — read-only count, 2026-10-25) | 0 exercises selected; the app shows a banner and refuses to assign |
+| Coach Copilot, substrate populated (one default profile per exercise) | 5 exercises selected — works |
+| Program engine (`materialize_program_week`), substrate **empty** | writes 3 days with **0** exercises and reports `sessions_created: 3` |
+| Program engine, substrate **populated** | **fails** with `23514` — the engine writes `{id, name, pattern, score}` with no sets/reps, which the canonical-prescription `CHECK` on `program_workouts` rejects |
 
-So 183 waits for `EB-4`, and the batch is **182, 184, 185** — which is supported by the repo's own
-model: `expected_applied.json` has an `excluded` bucket for *"authored versions at or below the
-frontier that are deliberately not applied here"*, each with a reason and the gate that releases it.
+**Why — a code defect AND a data gap, independently.** 093 wrote the engine; 116 renamed it to
+`materialize_program_week_engine` behind an authorization wrapper; **119** replaced the public function
+with a body that raised on an empty selection *and* mapped the selection into the canonical
+prescription; **124** restored 116's wrapper, which delegates to the engine — still **093's body** — so
+both of 119's fixes were lost. Populating the substrate (registry `EB-4`) turns "empty days" into
+"`23514`". It does not make the engine work.
 
-> **Separate product finding, for the owner:** until `EB-4` is resolved, the workout engine selects
-> nothing on QA, and (if production matches) for real members too. The empty days it writes are
-> exactly what 183 would stop. This is not caused or fixed by this batch.
+**Who can reach it today: nobody.** The coach Program Builder (`/program-designer`) saves a programme
+with a plan and **no days**, and until this change told coaches to *"materialize week 1 from Coach
+Copilot / the client program view"* — a step no screen performs. That is the reachable product defect,
+and it is fixed in app code (see the product changes in the same PR): the message now says the
+programme has no training days, and the Assign Program sheet will not offer a programme known to have
+none.
 
-## 3 · Steps
+## 3 · Migration 183 — what it does, what it does not, and its real prerequisites
 
-Do not push, merge or rerun CI on **any** branch between step 1 and step 8 — QA is shared and an
-overlapping run collides with the apply.
+- **Does:** restores 119's empty-selection guard inside the engine, where the `INSERT` happens.
+- **Does not:** restore 119's canonical prescription mapping. With 183 alone, an empty substrate
+  raises (correct) and a populated one still fails `23514`.
+- **Safe to apply?** Yes — nothing calls the function it changes (§1).
+- **Prerequisites for a WORKING program engine** (none of which 183 provides):
+  1. a new migration that restores the prescription mapping into the engine (structure only,
+     `weight_kg: null`, per PD-A01's interim contract), verified with a populated-substrate positive
+     control;
+  2. `EB-4` — the substrate populated through the Content Center's intelligence enrichment
+     (`beta-readiness.md` §0–§1), a content-owner task with decision `D-1`;
+  3. a product decision on whether the Program Builder materializes at all, and from which screen —
+     today no screen does.
 
-1. **Verify the target.** `supabase/scripts/qa-db-reset.sh --check-only` (it only verifies the link and
-   stops), or confirm `supabase/.temp/project-ref` reads `eyqtldjqpgpljlqvpowh`. Never run
-   `supabase db reset` or `supabase db push` here.
-2. **Confirm the ledger.** `supabase migration list --linked` → applied through **181**, and 182–185
-   shown as local-only. If it shows anything else, stop.
-3. **Capture the before state** (this is what makes §4 possible):
-   `supabase db dump --linked --schema public -f qa_before_182_184_185.sql`
-   (read-only), and keep the file.
-4. **Apply the three files, each as one transaction, in order**, with the QA connection string:
-   `psql "$QA_DB_URL" -v ON_ERROR_STOP=1 -1 -f supabase/migrations/182_scope_exercise_certifications.sql`
-   then `…/184_assign_nutrition_plan_requires_active_relationship.sql`, then
-   `…/185_coach_write_arms_require_active_relationship.sql`. (182 has no `BEGIN`/`COMMIT` of its own,
-   hence `-1`; 184 and 185 carry their own.) **Do not use `db push`** — it would also apply 183.
-5. **Record them in the ledger:** `supabase migration repair --status applied 182 184 185 --linked`.
-   This is a ledger write only — the same operation the repo used for 113–122 (registry §7).
-   **Leave 183 unrecorded.**
-6. **Update the manifest and merge it immediately** — a PR touching `supabase/expected_applied.json`
-   (a protected file, so Claude edits it under the sanctioned `exceptions` mechanism on request):
-   `applied_through: "185"`; `pending: {}`; and add
-   `excluded: {"183": {reason: "empty-selection guard; QA has 0 exercise_intelligence profiles, so applying it would make every programme generation fail", gate: "EB-4 — the intelligence substrate is populated"}}`.
-   The live `ENV-3` check compares the manifest with the real ledger, so **until this merges a CI run
-   is red** (applied but undeclared) — which is why nothing else runs in the meantime.
-7. **That same manifest change makes the `d08` OD-QAX-2 refusal checks strict**: they are gated on the
-   manifest no longer listing `184` as pending (`d08-identity-constraints.mjs`).
-8. **Verify, alone:** let CI run the live suites on the manifest PR. Expect `d08` to pass with the
-   refusals now asserted (unrelated, pending and cancelled coaches refused `42501`, victim's plan
-   untouched), `d01`/`d17`/`d05` unchanged, and no other run in flight. A red `Live QA suites` job is
-   the signal to roll back (§4).
+## 4 · 182, 184, 185 — independence, order, rollback (verified on replay)
 
-## 4 · Rollback
+Starting from a 000–181 replay (`lr_q`) and applying each file **as one transaction** in the order
+182 → 184 → 185, **without 183**:
 
-- **184:** `CREATE OR REPLACE FUNCTION public.assign_nutrition_plan(…)` with the body from
-  `supabase/migrations/131_identity_constraints.sql` §5 (the version with no relationship check), then
-  its `REVOKE`/`GRANT`/`COMMENT` lines.
-- **185:** for each of `client_habits "coach client habits"`, `coaching_calls "Coach and client can see
-  calls"` and `"calls_participant_access"`, `client_nutrition_plans "coach client nutrition"` and
-  `workout_program_assignments "coaches manage assignments"`: `ALTER POLICY … USING (coach_id =
-  auth.uid() OR client_id = auth.uid())`; `action_items "coach manages assigned action items"`:
-  `USING (coach_id = auth.uid())`; `coach_video_responses "Coach can insert video responses"`:
-  `WITH CHECK (coach_id = auth.uid())`. Then `DROP POLICY` the four added `SELECT` policies
-  (`authoring coach reads own client habits / coaching calls / client nutrition plans / program
-  assignments`).
-- **182:** the original `exercise_certifications` view and `exercise_certification(uuid)` definitions
-  are in `qa_before_182_184_185.sql` (step 3).
-- After any rollback: `supabase migration repair --status reverted <versions> --linked`, and restore
-  the manifest.
+| Check | Result |
+|---|---|
+| All three apply | **yes** |
+| `od_qax2_od14_replay.sh` (47 assertions) | **47/47 PASS** |
+| QA-exhaustion probes `QAX-SEC-01`, `QAX-SEC-03.*` (6) | **PASS** |
+| `QAX-SEC-06` certification probes (view, RPC, anon, summary, sweep) | **PASS** |
+| `QAX-SEC-06` **`exercises` view** probe | **FAIL — not covered by 182.** The registry row for `QAX-SEC-06` is about the `exercises` view; 182 closes only the certification half. No migration closes the main half. |
+| Rollback 185 (`ALTER POLICY` back + `DROP` the four new policies) | **policies identical** to the 000–181 state |
+| Rollback 184 (re-run the captured pre-change definition) | relationship check gone; `anon` no / `authenticated` yes — as before |
+| Rollback 182 (re-run the captured view and RPC definitions) | **view and RPC bodies identical** to pre-change |
 
-## 5 · After the batch
+**Dependencies:** 184 needs `is_active_coach_of(uuid)` (100, disambiguated by 137) and 131's partial
+unique index; 185 needs the exact policy names listed in it; 182 needs `exercise_readable()` and
+`is_content_editor()` (058/083). All are ≤ 181. 184 and 185 do not depend on each other or on 182.
 
-`QAX-SEC-01` (P0), `QAX-SEC-03` and `QAX-SEC-06` move from *LOCAL-REPLAY VERIFIED* to *FIXED ON QA*,
-and to *VERIFIED LIVE* once step 8 is green; *VERIFIED IN CI* is the green run itself. They stay open
-until the evidence is recorded in the registry. **Production is not touched**, and its migration
-ledger is still unreconciled (`REL-21`).
+**Rollback limitations:** `COMMENT` texts set by 182 and 184 stay changed unless restored separately;
+184's rollback reopens the P0; rollbacks need the pre-change definitions captured **before** applying
+(`pg_get_viewdef` / `pg_get_functiondef`, or a schema-only dump).
+
+**What could not be verified from here:** that QA's catalog matches the committed migrations (ENV-2/3
+history). The CI `ENV-3` step compares the declared frontier with the live ledger and has been green
+at **181**; it does not compare function or policy bodies.
+
+## 5 · Proposed batch, when the owner chooses to release it
+
+1. **182 → 183 → 184 → 185 via `supabase db push`**, which needs no ledger repair because all four are
+   applied for real. (183 is included because it is safe and because leaving it out is what forced the
+   repair step.) Capture pre-change definitions first.
+2. Verify the catalog, not just the ledger: function bodies and the six policies, read back.
+3. Update `expected_applied.json` (frontier 185, nothing pending) — **on the owner's explicit
+   authorization**, as a protected edit — which also makes `d08`'s refusal checks strict.
+4. Run the live suites alone and record *VERIFIED LIVE*.
+
+Not proposed until the owner says so. **Production is not part of any of this.**
