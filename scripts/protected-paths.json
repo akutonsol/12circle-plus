@@ -24,5 +24,7 @@
     "docs/REMEDIATION_PROGRESS.md",
     "docs/adr"
   ],
-  "exceptions": []
+  "exceptions": [
+    "docs/decision-log.md"
+  ]
 }
