@@ -290,12 +290,31 @@ try {
       p_notes: `d08-${stamp}-${label}`, ...params });
     const refused = (r) => !ok(r) && /42501|not authorized/i.test(r.text || '');
 
-    const stranger = await attempt('unrelated');
-    check('an UNRELATED user is refused (42501)', refused(stranger),
-      `${stranger.status} ${(stranger.text || '').slice(0, 80)}`);
-    const after1 = await planNow();
-    check("…and the victim's active plan is untouched",
-      after1.length === 1 && after1[0].id === before[0]?.id, `n=${after1.length}`);
+    // "Unrelated" must be TRUE when the attempt is made: a stale C→B row from a
+    // crashed earlier run would turn this into a refusal-by-the-wrong-identity.
+    // Verified through the service reader, never assumed (fixture-state.mjs).
+    const { verifyRelationship, failDependents } = await import('./fixture-state.mjs');
+    const REL0 = 'coach_client_relationships';
+    const unrelatedNames = ['an UNRELATED user is refused (42501)', "…and the victim's active plan is untouched"];
+    if (!SERVICE) {
+      for (const n of unrelatedNames)
+        skip(n, 'cannot verify the unrelated-user precondition without QA_SERVICE; not asserted rather than assumed');
+    } else {
+      const none = await svc(`${REL0}?coach_id=eq.${C.uid}&client_id=eq.${B.uid}&select=status`);
+      const unrelatedOk = Array.isArray(none.body) && none.body.length === 0;
+      check('fixture: the unrelated user has NO relationship with the victim', unrelatedOk,
+        `persisted: ${Array.isArray(none.body) ? (none.body.map((x) => x.status).join(',') || 'no row') : `unreadable (status ${none.status})`}`);
+      if (!unrelatedOk) {
+        failDependents(check, unrelatedNames, 'a relationship row exists for the "unrelated" user');
+      } else {
+        const stranger = await attempt('unrelated');
+        check('an UNRELATED user is refused (42501)', refused(stranger),
+          `${stranger.status} ${(stranger.text || '').slice(0, 80)}`);
+        const after1 = await planNow();
+        check("…and the victim's active plan is untouched",
+          after1.length === 1 && after1[0].id === before[0]?.id, `n=${after1.length}`);
+      }
+    }
 
     if (SERVICE) {
       const REL2 = 'coach_client_relationships';
@@ -303,21 +322,40 @@ try {
       await svc(`${REL2}?coach_id=eq.${C.uid}&client_id=eq.${B.uid}`, { method: 'DELETE', prefer: 'return=minimal' });
       const pend = await svc(REL2, { method: 'POST', prefer: 'return=minimal',
         body: { coach_id: C.uid, client_id: B.uid, status: 'pending', initiated_by: 'coach' } });
-      check('fixture: a PENDING relationship C→B exists', ok(pend), `${pend.status}`);
-      const pr = await attempt('pending');
-      check('a PENDING coach is refused (42501) — an invite is not consent', refused(pr),
-        `${pr.status} ${(pr.text || '').slice(0, 80)}`);
+      // The POST status alone proves nothing (a 201 can carry no row; a 409 leaves a
+      // stale one). The PERSISTED row must say 'pending'.
+      const pendingOk = await verifyRelationship({ read: svc, check, coachUid: C.uid, clientUid: B.uid,
+        expected: 'pending', label: 'the PENDING-coach case' });
+      if (!pendingOk) {
+        failDependents(check, ['a PENDING coach is refused (42501) — an invite is not consent'],
+          `the PENDING relationship fixture did not persist as pending (POST ${pend.status})`);
+      } else {
+        const pr = await attempt('pending');
+        check('a PENDING coach is refused (42501) — an invite is not consent', refused(pr),
+          `${pr.status} ${(pr.text || '').slice(0, 80)}`);
+      }
 
-      await svc(`${REL2}?coach_id=eq.${C.uid}&client_id=eq.${B.uid}`,
+      const cancelPatch = await svc(`${REL2}?coach_id=eq.${C.uid}&client_id=eq.${B.uid}`,
         { method: 'PATCH', prefer: 'return=minimal',
           body: { status: 'cancelled', cancelled_by: 'client', cancelled_at: new Date().toISOString() } });
-      const cr = await attempt('cancelled');
-      check('a CANCELLED coach is refused (42501)', refused(cr),
-        `${cr.status} ${(cr.text || '').slice(0, 80)}`);
+      // THE FIX (D24 review, documented limitation of PR #13): this PATCH used to be
+      // fire-and-forget, so a cancel that did not persist left C as a PENDING coach
+      // and "a CANCELLED coach is refused" passed against the wrong state.
+      const cancelledOk = await verifyRelationship({ read: svc, check, coachUid: C.uid, clientUid: B.uid,
+        expected: 'cancelled', label: 'the CANCELLED-coach case' });
+      if (!cancelledOk) {
+        failDependents(check,
+          ['a CANCELLED coach is refused (42501)', "…and the victim's active plan is still untouched"],
+          `the relationship did not persist as cancelled (PATCH ${cancelPatch.status})`);
+      } else {
+        const cr = await attempt('cancelled');
+        check('a CANCELLED coach is refused (42501)', refused(cr),
+          `${cr.status} ${(cr.text || '').slice(0, 80)}`);
 
-      const after2 = await planNow();
-      check("…and the victim's active plan is still untouched",
-        after2.length === 1 && after2[0].id === before[0]?.id, `n=${after2.length}`);
+        const after2 = await planNow();
+        check("…and the victim's active plan is still untouched",
+          after2.length === 1 && after2[0].id === before[0]?.id, `n=${after2.length}`);
+      }
     } else {
       console.log('  SKIP  pending/cancelled refusals need QA_SERVICE to create the relationship rows.');
     }
