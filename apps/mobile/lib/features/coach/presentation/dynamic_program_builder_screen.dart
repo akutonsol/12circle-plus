@@ -61,7 +61,12 @@ class _State extends ConsumerState<DynamicProgramBuilderScreen> {
       _saving = false;
       _status = id == null
           ? 'Save failed — apply migration 093.'
-          : 'Program created (v1). Assign it to a client, then materialize week 1 from Coach Copilot / the client program view.';
+          // This used to tell the coach to "materialize week 1 from Coach Copilot /
+          // the client program view". No screen does that: the program is saved
+          // with its plan and NO training days, and it cannot be assigned until it
+          // has some (program_readiness.dart).
+          : 'Program saved (v1) with its ${_duration}-week plan. It has no training days yet — '
+            'add workouts to it in Programs before assigning it to a client.';
     });
   }
 

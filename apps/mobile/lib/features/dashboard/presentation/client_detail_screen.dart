@@ -11,6 +11,7 @@ import '../../coach/domain/package_provider.dart';
 import '../../scoring/domain/score_provider.dart';
 import '../../../core/widgets/named_icon_button.dart';
 import '../../checkins/domain/checkin_columns.dart';
+import '../../coach/domain/program_readiness.dart';
 const _bg    = Color(0xFF030303);
 const _card  = Color(0xFF0E0B16);
 const _brd   = Color(0xFF1A1020);
@@ -1660,8 +1661,13 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
           data: (programs) => programs.isEmpty
             ? const Text('No programs yet. Create a program first.',
                 style: TextStyle(color: _mut))
-            : Column(children: programs.map((p) => GestureDetector(
-                onTap: () => setState(() => _selectedProgramId = p['id'] as String),
+            : Column(children: programs.map((p) {
+                // A program KNOWN to have no training days cannot be assigned:
+                // the client would own a program with nothing in it. See
+                // program_readiness.dart for how one comes to exist.
+                final empty = isKnownEmptyProgram(p);
+                return Opacity(opacity: empty ? 0.45 : 1, child: GestureDetector(
+                onTap: empty ? null : () => setState(() => _selectedProgramId = p['id'] as String),
                 child: Container(
                   margin: const EdgeInsets.only(bottom: 8),
                   padding: const EdgeInsets.all(14),
@@ -1675,12 +1681,15 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text(p['name'] as String,
                         style: const TextStyle(color: _wht, fontSize: 14, fontWeight: FontWeight.w600)),
-                      Text('${p['duration_weeks']} weeks • ${p['goal'] ?? ''}',
+                      Text(empty
+                          ? 'No training days yet — add workouts in Programs before assigning'
+                          : '${p['duration_weeks']} weeks • ${p['goal'] ?? ''}',
                         style: const TextStyle(color: _mut, fontSize: 12)),
                     ])),
                     if (_selectedProgramId == p['id'])
                       const Icon(Icons.check_circle, color: _brand, size: 20),
-                  ])))).toList()),
+                  ]))));
+              }).toList()),
         ),
         const SizedBox(height: 20),
         SizedBox(
@@ -1701,8 +1710,19 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
 
   Future<void> _assign() async {
     setState(() => _saving = true);
-    await ref.read(coachProgramServiceProvider)
-        .assignProgram(_selectedProgramId!, widget.clientId);
+    try {
+      await ref.read(coachProgramServiceProvider)
+          .assignProgram(_selectedProgramId!, widget.clientId);
+    } catch (e, s) {
+      // Same defect class as the nutrition save: this had no handler, so a
+      // failure left the sheet spinning and the coach told nothing.
+      reportError('AssignProgramSheet._assign', e, s);
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text("Couldn't assign the program — check your connection and try again.")));
+      return;
+    }
     if (mounted) {
       Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(

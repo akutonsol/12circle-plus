@@ -47,9 +47,12 @@ section('J-03B  an unplannable request succeeds with nothing in it');
     `trace=${(r.body?.trace ?? []).length} entries, rules_triggered=${JSON.stringify(r.body?.rules_triggered)} — ` +
     'no status field, no error: the caller cannot tell "nothing suits you" from "the engine has no library"');
 
-  // Downstream, migration 119 made materialize_program_week RAISE on an empty
-  // selection rather than write four empty days. That is the fail-closed half
-  // and it holds; build_workout itself still answers 200.
+  // Downstream: migration 119 made materialize_program_week RAISE on an empty
+  // selection, but 124 restored the pre-119 engine body behind the wrapper, so
+  // on the declared QA state (frontier 181) the engine again writes empty days
+  // and reports them as created — reproduced on a 000-181 local replay
+  // 2026-10-25. Migration 183 restores the guard (authored, not applied). No app
+  // screen, edge function or live suite calls materialize_program_week today.
   invariant('the empty selection carries no rules_triggered to explain itself',
     Array.isArray(r.body?.rules_triggered) && r.body.rules_triggered.length === 0,
     'rules_triggered=[] — nothing in the response says why the plan is empty');
