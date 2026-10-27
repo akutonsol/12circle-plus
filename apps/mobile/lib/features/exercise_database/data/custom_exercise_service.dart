@@ -457,12 +457,17 @@ class CustomExerciseService {
   }
 
   /// Approve / reject / flag-for-edit a single attribute.
+  ///
+  /// An approval must send the `fingerprint` that [attributeReviewState] returned
+  /// with the value the reviewer was shown (migration 187); the database refuses
+  /// it if the value has changed since (INTEL_REVIEW_VALUE_CHANGED).
   Future<bool> reviewAttribute(String exerciseId, String attribute, String status,
-      {String? note}) async {
+      {String? note, String? fingerprint}) async {
     try {
       await _db.rpc('review_attribute', params: {
         'p_exercise_id': exerciseId, 'p_attribute': attribute, 'p_status': status,
         if (note != null) 'p_note': note,
+        if (fingerprint != null) 'p_reviewed_fingerprint': fingerprint,
       });
       return true;
     } catch (e) { lastError = e; return false; }

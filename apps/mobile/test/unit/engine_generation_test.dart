@@ -22,6 +22,25 @@ void main() {
       expect(classifyEngineError(_PgLike('ENGINE_NO_WEEK: week 9 is not in the plan', 'P0001')), EngineFailure.noPlan);
     });
 
+    test('188: an unknown session label is unsupportedSplit; an unknown module is never success', () {
+      expect(classifyEngineError(_PgLike('ENGINE_UNKNOWN_FOCUS: the engine has no movement-pattern mapping for session "Arms"', '22023')),
+          EngineFailure.unsupportedSplit);
+      expect(classifyEngineError(_PgLike('ENGINE_UNKNOWN_MODULE: build_workout needs "module" …', '22023')),
+          EngineFailure.unknown);
+      expect(classifyEngineError(_PgLike(
+              'ENGINE_NO_SELECTION: … (status NO_ELIGIBLE_EXERCISES, rejected {"NOT_CERTIFIED_FOR_MODULE": 604})', 'P0001')),
+          EngineFailure.noSelection);
+    });
+
+    test('188/189: insufficient compound and an uncleared assigned client have their own failures', () {
+      expect(classifyEngineError(_PgLike('ENGINE_INSUFFICIENT_ELIGIBLE: week 1, session "Push" … has no eligible compound lift', 'P0001')),
+          EngineFailure.insufficientEligible);
+      // Raised as 42501 — must not be mistaken for "you can't act on this programme".
+      expect(classifyEngineError(_PgLike('ENGINE_CLIENT_NOT_CLEARED: programme x is assigned to a client who is not cleared', '42501')),
+          EngineFailure.clientNotCleared);
+      expect(classifyEngineError(_PgLike('not authorized for this program', '42501')), EngineFailure.notAuthorized);
+    });
+
     test('42501 from the authorization wrapper is notAuthorized, whatever the text', () {
       expect(classifyEngineError(_PgLike('not authorized for this program', '42501')), EngineFailure.notAuthorized);
     });
@@ -69,6 +88,12 @@ void main() {
       expect(engineContextFor(programType: 'Hypertrophy')['goal'], 'hypertrophy');
       expect(engineContextFor(programType: 'General Fitness')['goal'], 'hypertrophy');
       expect(engineContextFor(programType: 'Strength').containsKey('equipment'), isFalse);
+    });
+
+    test('never sends a module or focus: the engine sets both, so a caller cannot widen the gate', () {
+      final c = engineContextFor(programType: 'Strength');
+      expect(c.containsKey('module'), isFalse);
+      expect(c.containsKey('focus'), isFalse);
     });
 
     test('replace_existing is absent by default and a JSON true only when asked', () {

@@ -12,6 +12,7 @@ import '../../scoring/domain/score_provider.dart';
 import '../../../core/widgets/named_icon_button.dart';
 import '../../checkins/domain/checkin_columns.dart';
 import '../../coach/domain/program_readiness.dart';
+import '../../coach/domain/engine_client_clearance.dart';
 const _bg    = Color(0xFF030303);
 const _card  = Color(0xFF0E0B16);
 const _brd   = Color(0xFF1A1020);
@@ -1719,8 +1720,12 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
       reportError('AssignProgramSheet._assign', e, s);
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("Couldn't assign the program — check your connection and try again.")));
+      // 189: the database refuses an engine-selected programme for a client who is
+      // not cleared for generated training. Say so, rather than blaming the network.
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(isNotClearedError(e)
+              ? kAssignNotClearedMessage
+              : "Couldn't assign the program — check your connection and try again.")));
       return;
     }
     if (mounted) {

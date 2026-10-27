@@ -9,6 +9,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../exercise_database/data/custom_exercise_service.dart';
 import '../data/coach_program_service.dart';
+import '../domain/engine_client_clearance.dart';
+import '../domain/engine_instance_id.dart';
 import '../../dashboard/presentation/coach_dashboard_screen.dart' show coachClientsProvider;
 import '../../auth/domain/auth_provider.dart';
 
@@ -52,10 +54,13 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     final equipment = loc.contains('home')
         ? ['dumbbell', 'bodyweight', 'band']
         : ['barbell', 'dumbbell', 'cable', 'machine', 'bodyweight'];
-    final injuries = <String>[
-      if (p['injury_locations'] is List) ...List<String>.from(p['injury_locations'] as List),
-    ];
+    // _run only reaches here for a client the database clears for generated
+    // training — no reported injury among other things (engine_client_clearance.dart),
+    // so this list is empty by contract.
+    const injuries = <String>[];
     return {
+      // Copilot's certification module (migration 188 requires it explicitly).
+      'module': 'workout_builder',
       'goal': goal, 'recovery': _recovery,
       'experience': (p['experience_level'] as String?)?.toLowerCase() ?? 'intermediate',
       'equipment': equipment, 'injuries': injuries, 'size': 5,
@@ -65,6 +70,22 @@ class _State extends ConsumerState<CoachCopilotScreen> {
   Future<void> _run() async {
     final c = _client;
     if (c == null) return;
+    // The initial walkthrough is limited to clients the database clears for
+    // generated training (migration 189: completed intake, no injury, complete
+    // low-risk PAR-Q, no medical advice). The verdict comes from the one server
+    // rule that also guards assignment; the read is logged. Any failure — including
+    // a database without 189 — is "not cleared", never cleared.
+    Object? verdict;
+    try {
+      verdict = await _db.rpc('engine_client_clearance', params: {'p_client': c['id']});
+    } catch (_) {
+      verdict = null;
+    }
+    final refusal = copilotClearanceRefusal(readClearance(verdict));
+    if (refusal != null) {
+      setState(() { _rec = null; _explanation = null; _status = refusal; });
+      return;
+    }
     setState(() { _busy = true; _rec = null; _explanation = null; _status = null; });
     final r = await _svc.generateWorkout(_context(c), subjectId: c['id'] as String);
     if (!mounted) return;
@@ -94,10 +115,18 @@ class _State extends ConsumerState<CoachCopilotScreen> {
       final prog = await _programs.createProgram({
         'name': 'Copilot session · ${DateTime.now().toIso8601String().substring(0, 10)}',
         'description': 'AI-recommended, coach-approved (recovery $_recovery).',
+        // Engine-selected training (189): permanent, and the database will only make
+        // this programme active for a cleared client.
+        'engine_selected': true,
       });
       final exercises = [
         for (final e in selected)
-          {'name': e['name'], 'sets': 3, 'reps': 10, 'rest_seconds': 90},
+          {
+            // A UUID, as the engine mints: migration 192 carries the
+            // engine_selected mark with any verbatim copy of these days.
+            'exercise_instance_id': newEngineInstanceId(),
+            'name': e['name'], 'sets': 3, 'reps': 10, 'rest_seconds': 90,
+          },
       ];
       await _programs.addWorkoutToProgram(prog['id'] as String, {
         'week_number': 1, 'day_of_week': 'monday',
@@ -106,7 +135,7 @@ class _State extends ConsumerState<CoachCopilotScreen> {
       await _programs.assignProgram(prog['id'] as String, c['id'] as String);
       if (mounted) setState(() => _status = 'Assigned to ${c['first_name'] ?? 'client'} ✓');
     } catch (e) {
-      if (mounted) setState(() => _status = 'Assign failed.');
+      if (mounted) setState(() => _status = isNotClearedError(e) ? kAssignNotClearedMessage : 'Assign failed.');
     } finally {
       if (mounted) setState(() => _assigning = false);
     }
@@ -168,7 +197,7 @@ class _State extends ConsumerState<CoachCopilotScreen> {
             onTap: () async {
               // Load full profile for context derivation.
               final full = await _db.from('user_profiles')
-                  .select('id, first_name, fitness_goal, experience_level, training_location, injury_locations')
+                  .select('id, first_name, fitness_goal, experience_level, training_location')
                   .eq('id', c['id']).maybeSingle();
               if (mounted) setState(() { _client = full ?? c; _rec = null; _status = null; _explanation = null; _outlook = null; });
               // Predictive outlook for this client (deterministic).
@@ -287,10 +316,11 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     if (selected.isEmpty) {
       return [const SizedBox(height: 14), _banner(
         // Was developer copy ("ensure the MIE migrations are applied …") shown to
-        // coaches. The engine returns nothing when its exercise intelligence data
-        // is not populated yet (registry EB-4); say what that means for the coach.
-        'No recommendation yet — the exercise library behind Copilot is still being set up. '
-        'Build this session by hand in Programs for now.')];
+        // coaches. Since 188 the engine picks only exercises that are certified for
+        // Copilot AND expert-reviewed; until that library exists it returns nothing
+        // (selection_status NO_ELIGIBLE_EXERCISES). Say what that means for the coach.
+        'No recommendation yet — no exercises have been cleared for Copilot (certified and '
+        'expert-reviewed). Build this session by hand in Programs for now.')];
     }
     final volPct = ((vol - 1) * 100).round();
     return [
