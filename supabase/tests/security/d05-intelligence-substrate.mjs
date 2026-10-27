@@ -254,7 +254,7 @@ section('9. decision_traces read scope — PD-A05 option (a)');
   // the coach while the relationship is active, END the relationship, and read
   // it back: the only arm that can still be granting access is created_by.
   const authoredGen = await rpc(coach, 'generate_workout',
-    { p_context: { size: 2 }, p_subject: ids.victim });
+    { p_context: { size: 2, module: 'workout_builder' }, p_subject: ids.victim });   // module: required by 188
   await clearRel();
   const mine = await rest(coach,
     `decision_traces?select=id,subject_id,created_by&created_by=eq.${ids.coach}`);

@@ -18,6 +18,14 @@
 //
 // Locally verified twin: supabase/tests/local/engine_materialize_replay.sql
 // (28/28 with 186). This suite has NOT yet executed its strict half against QA.
+//
+// MIGRATION 188 (pending) changes what "populated" means: the engine selects only
+// exercises certified for Program Builder WITH human-approved intelligence (187),
+// within each session's focus. Once 188 is declared applied, the branch is chosen
+// by asking build_workout — a STABLE function that writes nothing — whether every
+// session of the plan has an eligible exercise, not by counting rows (draft rows
+// would otherwise demand a success the engine must refuse). Its fail-closed module
+// check is asserted only then, and SKIPPED before.
 
 import { IDENT, signIn, rest, rpc, svc, check, skip, section, summary, beginSuite, countExact }
   from './lib.mjs';
@@ -45,6 +53,7 @@ async function run() {
       'a coach-edited week is never silently overwritten',
       'a malformed prescription is refused and writes nothing',
       'a signed-in non-owner cannot generate for this programme (42501)',
+      '188: build_workout without a module is refused (ENGINE_UNKNOWN_MODULE)',
     ]) skip(name, why);
     skip('a genuine SECOND COACH cannot generate for this programme',
       'not testable: QA has no second coach fixture (only the p1-coach owner and p1-attacker, a client)');
@@ -87,10 +96,24 @@ async function run() {
 
     // The substrate decides which half is asserted. exercise_intelligence is
     // keyed by exercise_id (no id column), so count it directly.
-    const sub = await fetch(`${process.env.QA_URL}/rest/v1/exercise_intelligence?select=exercise_id&limit=1`,
-      { headers: { apikey: process.env.QA_SERVICE, Authorization: `Bearer ${process.env.QA_SERVICE}`, Prefer: 'count=exact' } });
-    const substrate = Number((sub.headers.get('content-range') || '').split('/')[1]);
-    check('the intelligence substrate is measurable', Number.isFinite(substrate), `rows=${substrate}`);
+    let substrate;
+    if (migrationApplied('188')) {
+      let ready = split.length > 0;
+      const status = [];
+      for (const focus of split) {
+        const b = await rpc(coach, 'build_workout', { p_context: { ...CTX, module: 'program_generator', focus } });
+        status.push(`${focus}:${b.status < 300 ? b.body?.selection_status : b.status}`);
+        ready = ready && b.status < 300 && b.body?.selection_status === 'ok';
+      }
+      substrate = ready ? 1 : 0;
+      check('the eligible substrate is measurable (188: certified + approved, per session focus)',
+        status.length === split.length && split.length > 0, status.join(' '));
+    } else {
+      const sub = await fetch(`${process.env.QA_URL}/rest/v1/exercise_intelligence?select=exercise_id&limit=1`,
+        { headers: { apikey: process.env.QA_SERVICE, Authorization: `Bearer ${process.env.QA_SERVICE}`, Prefer: 'count=exact' } });
+      substrate = Number((sub.headers.get('content-range') || '').split('/')[1]);
+      check('the intelligence substrate is measurable', Number.isFinite(substrate), `rows=${substrate}`);
+    }
 
     section(`generation (substrate rows: ${substrate})`);
     const gen = await rpc(coach, 'materialize_program_week', { p_program_id: progA, p_week: 1, p_context: CTX });
@@ -154,6 +177,16 @@ async function run() {
       `${foreign.status} ${foreign.body?.code ?? ''}`);
     skip('a genuine SECOND COACH cannot generate for this programme',
       'not testable: QA has no second coach fixture (only the p1-coach owner and p1-attacker, a client)');
+
+    if (migrationApplied('188')) {
+      const noModule = await rpc(coach, 'build_workout', { p_context: { goal: 'hypertrophy', size: 3 } });
+      check('188: build_workout without a module is refused (ENGINE_UNKNOWN_MODULE)',
+        noModule.status >= 400 && errText(noModule).includes('ENGINE_UNKNOWN_MODULE'),
+        `${noModule.status} ${errText(noModule).slice(0, 80)}`);
+    } else {
+      skip('188: build_workout without a module is refused (ENGINE_UNKNOWN_MODULE)',
+        'migration 188 is not declared applied for QA (supabase/expected_applied.json)');
+    }
   } finally {
     await purge();
     // generate_workout records a decision trace per session it builds.

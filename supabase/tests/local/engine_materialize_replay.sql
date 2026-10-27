@@ -30,14 +30,29 @@ exception when others then
   return jsonb_build_object('err', sqlerrm, 'state', sqlstate);
 end $$;
 grant execute on function pg_temp.mat(uuid,int,jsonb) to authenticated;
+-- Approve one attribute the way the review screen does: send back the fingerprint
+-- attribute_review_state showed (187). On a pre-187 replay there is no fingerprint
+-- and 091's review_attribute is called as before.
+create function pg_temp.approve(e uuid, a text) returns void language plpgsql as $$
+begin
+  if to_regprocedure('public._intel_required_attributes()') is null then
+    perform public.review_attribute(e, a, 'approved');
+  else
+    execute 'select public.review_attribute($1, $2, ''approved'', null, null, $3)'
+      using e, a, public.attribute_review_state(e)->a->>'fingerprint';
+  end if;
+end $$;
+grant execute on function pg_temp.approve(uuid, text) to authenticated;
 
 -- Fixtures ----------------------------------------------------------------
 insert into auth.users(id,email) values
  ('e1000000-0000-0000-0000-000000000001','eng-coach@local'),
  ('e2000000-0000-0000-0000-000000000002','eng-client@local'),
- ('e3000000-0000-0000-0000-000000000003','eng-other-coach@local') on conflict do nothing;
+ ('e3000000-0000-0000-0000-000000000003','eng-other-coach@local'),
+ ('e4000000-0000-0000-0000-000000000004','eng-content-editor@local') on conflict do nothing;
 update public.user_profiles set role='coach' where id in
  ('e1000000-0000-0000-0000-000000000001','e3000000-0000-0000-0000-000000000003');
+update public.user_profiles set role='content_manager' where id='e4000000-0000-0000-0000-000000000004';
 update public.user_profiles set fitness_goal='build_muscle', training_days_per_week=4
  where id='e2000000-0000-0000-0000-000000000002';
 
@@ -63,15 +78,34 @@ reset role;
 insert into res select 'S1 empty substrate: the call FAILS (no false success)',
   (current_setting('eng.r')::jsonb ? 'err'), left(current_setting('eng.r'), 160);
 insert into res select 'S1 …with an actionable ENGINE_NO_SELECTION message',
-  coalesce(current_setting('eng.r')::jsonb->>'err','') like 'ENGINE_NO_SELECTION:%library is not populated%',
+  -- 186 says "library is not populated"; 188 names the status and rejection counts.
+  coalesce(current_setting('eng.r')::jsonb->>'err','') like 'ENGINE_NO_SELECTION:%'
+  and (current_setting('eng.r')::jsonb->>'err' like '%library is not populated%'
+       or current_setting('eng.r')::jsonb->>'err' like '%NO_ELIGIBLE_EXERCISES%'),
   left(coalesce(current_setting('eng.r')::jsonb->>'err','(no error)'), 120);
 insert into res select 'S1 …and NO training day was written',
   count(*) = 0, count(*)||' day(s)' from public.program_workouts where program_id='f1000000-0000-0000-0000-000000000001';
 :KEEP
 rollback to savepoint s; release savepoint s; :RESTORE
 
--- Populate the substrate the way EB-4 would (one default profile per exercise).
-insert into public.exercise_intelligence(exercise_id) select id from public.custom_exercises on conflict do nothing;
+-- Populate the substrate the way EB-4 would — and, since 187/188, the only way the
+-- engine accepts it: every exercise certified for both engine modules (approved
+-- content with instructions, muscle, equipment and alternatives) and every profile
+-- approved by a content editor who reviewed all eight attribute groups. On a
+-- pre-187 replay the same calls approve through 091's path, so this suite still
+-- runs unchanged against 000-186.
+update public.custom_exercises set content_status = 'approved',
+  instructions = case when cardinality(instructions) = 0 then array['Move with control.'] else instructions end,
+  alternatives = case when cardinality(alternatives) = 0 then array['(fixture alternative)'] else alternatives end;
+insert into public.exercise_intelligence(exercise_id, attribute_confidence)
+select id, '{"programming_goals":80,"fatigue":80,"joint_stress":80,"contraindications":80,"rep_ranges":80,"biomechanics":80,"loading":80,"coaching":80}'::jsonb
+  from public.custom_exercises on conflict do nothing;
+select pg_temp.as_user('e4000000-0000-0000-0000-000000000004'); set local role authenticated;
+select count(x::text) from (select pg_temp.approve(e.id, a) as x
+  from public.custom_exercises e, unnest(array['programming_goals','fatigue','joint_stress',
+    'contraindications','rep_ranges','biomechanics','loading','coaching']) a) s;
+select count(public.finalize_intelligence(id)) from public.custom_exercises;
+reset role;
 
 -- ═══ S2 · POPULATED substrate: complete, canonical days ════════════════════
 select pg_temp.as_user('e1000000-0000-0000-0000-000000000001'); set local role authenticated;
@@ -208,7 +242,9 @@ insert into res select 'S5 engine keeps a pinned search_path',
 -- ═══ S6 · the other generators are unchanged ══════════════════════════════
 select pg_temp.as_user('e1000000-0000-0000-0000-000000000001'); set local role authenticated;
 insert into res select 'S6 Copilot (generate_workout) returns exercises with a populated substrate',
-  jsonb_array_length(public.generate_workout(current_setting('eng.ctx')::jsonb)->'selected') > 0, '';
+  -- Copilot names its module (188); a pre-188 build_workout ignores the key.
+  jsonb_array_length(public.generate_workout(current_setting('eng.ctx')::jsonb
+    || '{"module":"workout_builder"}')->'selected') > 0, '';
 reset role;
 select pg_temp.as_user('e2000000-0000-0000-0000-000000000002'); set local role authenticated;
 select public.generate_client_plan();
