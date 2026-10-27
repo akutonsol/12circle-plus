@@ -81,6 +81,7 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     } catch (_) {
       verdict = null;
     }
+    if (!mounted) return;
     final refusal = copilotClearanceRefusal(readClearance(verdict));
     if (refusal != null) {
       setState(() { _rec = null; _explanation = null; _status = refusal; });
