@@ -11,6 +11,12 @@
 >
 > **Remote state, as last reported (not verified here):** CI's ENV-3 check in run `40445378227`
 > (2026-10-27) reported QA's ledger as **000–181**; 182–195 are unapplied.
+>
+> **Current blocker (2026-10-28).** Owner direction C-1 holds migration 183 while QA's exercise substrate is
+> empty. One `db push` cannot skip 183 (§6.0), so **while the substrate is empty no part of Stage 1 can be
+> applied** by this packet — including 184 (P0) and 185 (P1). The substrate was last seen empty
+> (2026-10-25). §4.5 is a hard STOP. Resolving this needs a non-empty substrate (a separately authorized
+> QA content task) or new owner direction; this packet proposes no workaround.
 
 **Labels:** **[VERIFIED]** checked against the repository or local CLI help · **[UNVERIFIED]** not
 checkable without the remote; the operator must confirm it in the window and **stop** if it differs.
@@ -19,27 +25,85 @@ checkable without the remote; the operator must confirm it in the window and **s
 
 ## 1 · Decision record and sign-offs
 
-### 1.1 Sequencing — recorded
+### 1.1 Sequencing and scope — directions given, NOT formally recorded
 
 | Item | Value |
 |---|---|
 | **SEQ-1 (runbook OA-1)** | **Option 1 — Stage 1 (182–186) is applied before PR #14 merges.** Owner direction given in chat, 2026-10-27. |
 | Recording status | Recorded in this packet only. It is **not** yet recorded in `MASTER_PRODUCT_DECISIONS.md` or the decision log; that is a separate governance step. |
+| **C-1** | **Migration 183 is held while QA's exercise substrate is empty** — the condition recorded in `decision-log.md` (2026-10-25, item 4) stands and is not overridden. Owner direction in chat, 2026-10-28. **Not formally recorded.** Effect: §4.5 is a hard STOP and, because of §6.0, it gates the whole batch. The owner accepted that consequence on 2026-10-28 — *"Keep Stage 1 held while `exercise_intelligence` has zero rows. Do not bypass the existing condition or propose a migration workaround."* — also not yet recorded. |
+| **C-2** | **The intended Stage 1 scope is 182–186.** Revises the recorded scope *"182 → 185"* (decision-log 2026-10-25, item 1). Owner direction in chat, 2026-10-28. **Not formally recorded**, and it must be before execution. |
 | Consequence | Stage 1 runs from a checkout of `main` that contains **only** migrations 000–186 (§3). PR #14 (`feat/engine-gate-approval-contract`) is **not** merged before Stage 1 is applied, declared and verified live. |
 
 ### 1.2 Required sign-offs — NONE GRANTED
 
-The SEQ-1 decision above does **not** imply any of these. Execution may not start until all four are signed.
+The directions above do **not** imply any of these.
+
+**Recording requirement (G-1).** Under `V5_OWNER_AUTHORITY_DIRECTION_2026-10-21.md` §1, a direction in chat
+is intent, not authorization. **Execution may not start until SEQ-1, C-1, C-2 and every sign-off below are
+recorded** through `MASTER_PRODUCT_DECISIONS.md` §2 (a decision-log row with the owner's attribution, the
+MPD row where one applies, and the registry and progress updates). Draft text:
+[`GOVERNANCE_RECORDING_DRAFT_SEQ1_C1_C2.md`](GOVERNANCE_RECORDING_DRAFT_SEQ1_C1_C2.md).
+
+**Acceptable evidence for each sign-off** — the "Signature / reference" field must hold **all** of:
+1. the commit SHA on `main` that records it;
+2. the `file:line` of the decision-log row, which quotes the owner's words and gives the date;
+3. for OA-3 only, that row also names the operator and the UTC window.
+
+A chat message, this packet, a PR comment or an unmerged commit is **not** acceptable evidence.
+
+**OA-2 note.** `decision-log.md:48` (2026-10-25, item 4) already records *"182 approved (Option A)"* as a
+determination made by Claude under the owner's delegation, *"not in the owner's wording."* Whether that
+record satisfies OA-2, or an owner-worded approval is required, is the owner's call. Until the owner says,
+OA-2 is unsigned.
+
+Execution may not start until all of OA-2, OA-3, OA-4 and OA-8 are signed **and** recorded.
 
 | ID | Approval | Granted by | Date | Signature / reference |
 |---|---|---|---|---|
 | **OA-2** | 182 Option A trade-off: content managers keep cross-owner visibility of private/draft certifications | ______ | ______ | ______ |
 | **OA-3** | Stage 1 QA apply window (182 → 186): date, time window, named operator, and agreement that no other push, merge or CI run occurs during it | ______ | ______ | ______ |
 | **OA-4** | 184's product consequence: a coach can no longer assign a nutrition plan to a client who has not accepted (no active relationship) | ______ | ______ | ______ |
-| **OA-8** | The Stage 1 manifest declaration: a protected edit to `supabase/expected_applied.json` moving `applied_through` to `"186"` and removing the 182–186 `pending` entries, via the temporary `scripts/protected-paths.json` exception (reverted immediately) | ______ | ______ | ______ |
+| **OA-8** | The Stage 1 manifest declaration — **the protected edit only**: `supabase/expected_applied.json` moves `applied_through` to `"186"` and removes the 182–186 `pending` entries, via the temporary `scripts/protected-paths.json` exception (reverted immediately) | ______ | ______ | ______ |
+| **DP-1** | Separately from OA-8 (G-4): **create and push** the declaration branch and **open** its PR against `main`. Pushing starts a CI run with the standing QA fixture writes; this is §7.2's verification run. | ______ | ______ | ______ |
+| **DP-2** | Separately again: **merge** the declaration PR into `main`, after §7.2 passes | ______ | ______ | ______ |
+
+OA-8, DP-1 and DP-2 are three separate approvals; none implies another.
 
 Not covered, and not to be assumed: Stage 2 (OA-5, OA-6, OA-7, OA-9), any rollback (OA-10), merging PR
 #14, PD-A02, D-1, clinical sign-off, and `ENGINE_WEEK_GENERATION` — it stays **off**.
+
+### 1.3 Operator prerequisites (G-2) — the operator supplies these; no credential is written here
+
+| Prerequisite | How it is shown | Record |
+|---|---|---|
+| `git` with access to `akutonsol/12circle-plus` | `git --version`; `git ls-remote origin` succeeds | ______ |
+| GitHub CLI, authenticated with read access to the repository (C-3, C-11) | `gh --version`; `gh auth status` | ______ |
+| Supabase CLI **2.107.0**. Every flag in this packet was checked against 2.107.0's help. With any other version, re-check `supabase db push --help`, `migration list --help`, `db dump --help` and `db query --help` against §4–§6 first, and record the result. | `supabase --version` | ______ |
+| Node.js (CI pins 20) for C-8/C-9 | `node --version` | ______ |
+| `psql` for the preferred read-only route (§5). Compatibility with the QA server version is **[UNVERIFIED]**. | `psql --version` | ______ |
+| QA database password, for `supabase link` | operator confirms they hold it — **never** written here, in the evidence store's text files, or in shell history | yes / no ______ |
+| QA connection string (`$QA_DB_URL`) for `psql`, set only in the operator's shell | operator confirms it is set; it is **not** echoed | yes / no ______ |
+| No production credential present in the shell | `env \| grep -c nxdbooufqzkpslkcogxc` prints **0** | ______ |
+
+### 1.4 Obtaining this packet and the runbook (G-3)
+
+Both documents live only on PR #14's branch, not on `main`. In the dedicated `main` worktree (§3), **read
+them without checking the branch out:**
+
+```bash
+git fetch origin feat/engine-gate-approval-contract
+git rev-parse origin/feat/engine-gate-approval-contract            # record: the commit the documents came from
+git show origin/feat/engine-gate-approval-contract:docs/QA_STAGE1_182_186_EXECUTION_PACKET.md > <evidence-dir>/packet.md
+git show origin/feat/engine-gate-approval-contract:docs/QA_BATCH_182_184_185_RUNBOOK.md        > <evidence-dir>/runbook.md
+```
+
+| Record | |
+|---|---|
+| Branch commit the documents came from | ______ |
+| The copy used matches the latest PR head (`gh pr view 14 --json headRefOid`) | yes / no ______ |
+
+Never run `git checkout` / `git switch` to that branch in the Stage 1 worktree: it contains 187–195.
 
 | Window details (fill in) | |
 |---|---|
@@ -195,7 +259,7 @@ Last observation: **0 of 17** rows **[2026-10-25, read-only, possibly stale]**. 
 non-zero: those coaches would lose write access to existing rows. The owner must decide before 185 is
 applied.
 
-### 4.5 Informational — intelligence substrate (sets the D25 expectation in §7)
+### 4.5 Substrate gate for 183 — HARD STOP (C-1)
 
 ```sql
 select count(*) as exercise_intelligence_rows from public.exercise_intelligence;
@@ -204,7 +268,14 @@ select count(*) as exercises from public.exercises;
 
 | Expected | Record |
 |---|---|
-| last seen **0** rows / **621** exercises **[2026-10-25]** — not a stop condition | ______ / ______ |
+| `exercise_intelligence_rows` **> 0** — the current threshold (owner direction 2026-10-28, not yet recorded). It counts rows of **any** status and does **not** establish that any exercise is eligible or approved; it satisfies only C-1's condition on 183. Last seen **0** rows / **621** exercises **[2026-10-25]**. | ______ / ______ |
+
+**STOP if `exercise_intelligence_rows` = 0.** Under C-1, 183 may not be applied, and one push cannot skip it
+(§6.0). So the batch does not proceed — none of 182–186 — and the operator **requests further owner
+direction**. This is not the operator's decision to override.
+
+It also decides §7.2's D25 expectation: under C-1 Stage 1 runs only with a non-empty substrate, so D25
+takes its *populated* branch.
 
 ---
 
@@ -230,6 +301,28 @@ read-only here only because the files contain SELECTs.
 
 ## 6 · Execution
 
+### 6.0 One push, no pause — resolve before executing (G-5)
+
+`supabase db push --linked` applies **182, 183, 184, 185 and 186 in one command**. It has no
+"stop after version N" option **[VERIFIED: CLI 2.107.0 help]**, so **there is no point between
+migrations where the operator can stop for an owner decision.** Consequences:
+
+1. **Every condition on any of the five is evaluated before the push**, and only then: §3, §4.1, §4.4,
+   **§4.5 (the 183 substrate gate)** and §6.1. The stop-before-apply gate is the **only** gate.
+2. After the push begins, the only checks are the catalog read-backs (§6.3). They are for **detection**,
+   not decision.
+3. **If any condition cannot be settled before the push, the batch does not run.** This includes 183's
+   substrate, and any new requirement for an owner decision between two of the five. The operator stops
+   and requests direction; **no workaround** (another directory, `--include-all`, applying files by hand)
+   is permitted.
+
+| Operator confirms before §6.2 | Record |
+|---|---|
+| every condition in §3, §4.1, §4.4 and §4.5 evaluated and passing | yes / no ______ |
+| no decision is required between any two of 182–186 | yes / no ______ |
+
+Either answer **no** → **STOP**.
+
 ### 6.1 Dry run — from the verified `main` worktree
 
 ```bash
@@ -242,7 +335,7 @@ supabase db push --linked --dry-run
 
 **STOP** if the list contains anything else, is in a different order, or cannot be read with certainty.
 
-### 6.2 Apply — only after OA-2, OA-3, OA-4 and OA-8 are signed (§1.2)
+### 6.2 Apply — only after SEQ-1, C-1, C-2, OA-2, OA-3, OA-4 and OA-8 are recorded (§1.2) and §6.0 is confirmed
 
 ```bash
 supabase db push --linked
@@ -272,7 +365,7 @@ select pg_get_functiondef('public.assign_nutrition_plan(uuid,integer,integer,int
 select d ~ 'ENGINE_NO_SELECTION' as r2a_no_selection, d ~* 'for update' as r2b_for_update
   from (select pg_get_functiondef('public.materialize_program_week_engine(uuid,integer,jsonb)'::regprocedure) d) s;
 
--- R-3 185: the seven altered policies now require an active relationship
+-- R-3 185: the seven altered policies (across six tables; coaching_calls has two) now require an active relationship
 select tablename, policyname,
        coalesce(qual,'') ~ 'is_active_coach_of' or coalesce(with_check,'') ~ 'is_active_coach_of' as r3_active_required
   from pg_policies where schemaname = 'public' and policyname in (
@@ -315,7 +408,7 @@ rollback is a separate decision (§8).
 
 ## 7 · Declare and verify live — two separate steps
 
-### 7.1 Manifest declaration (OA-8)
+### 7.1 Manifest declaration — OA-8 (the edit), DP-1 (create/push/open), DP-2 (merge)
 
 Until the declaration merges, CI's ENV-3 check reports *applied but undeclared* and fails, which is
 expected. That is why rule 3 holds until the end of this section.
@@ -328,7 +421,9 @@ expected. That is why rule 3 holds until the end of this section.
 
 | Field | Record |
 |---|---|
-| declaration PR / commit | ______ |
+| declaration commit (OA-8) | ______ |
+| declaration PR opened and pushed (DP-1) | ______ |
+| merged into `main` after §7.2 passed (DP-2) | ______ |
 | protected-paths.json net diff | none ______ |
 
 ### 7.2 Live verification — that PR's CI run, alone
@@ -338,7 +433,9 @@ expected. That is why rule 3 holds until the end of this section.
 | ENV-3 (Live SQL evidence) | L-1…L-5 pass; ledger rows **187** vs declared expected **187** | ______ |
 | `3A-11` (`d08`) | the 5 OD-QAX-2 checks **asserted and passing**; **0** skipped from the 184 gate | ______ |
 | `D24` (`d24`) | **0 failed, 0 skipped**; all of its assertions executed | ______ |
-| `D25` (`d25`) | the 6 engine checks **asserted**. With an empty substrate (§4.5) the generation check passes on the refusal path (`ENGINE_NO_SELECTION`, 0 days). **Still skipped, correctly:** the 188 `ENGINE_UNKNOWN_MODULE` check (gated on 188) and "a genuine SECOND COACH" (no fixture). | ______ |
+| `D25` (`d25`) — **populated substrate** (the only case in which Stage 1 runs, per §4.5) | **asserted:** generation succeeds with one day per session; every exercise is a canonical prescription; a second generation is refused (`ENGINE_WEEK_EXISTS`); a coach-edited week is never overwritten; a malformed prescription is refused; a signed-in non-owner is refused (42501). **Skipped — not passes:** "EMPTY substrate: … REFUSED" (cannot be exercised while populated), the 188 `ENGINE_UNKNOWN_MODULE` check, and "a genuine SECOND COACH" (no fixture). | ______ |
+| `D25` — **sparse substrate, a risk** | Before 188, D25 takes the populated branch whenever the count is > 0. If the rows cannot fill every session, generation is refused and "generation succeeds with one day per session" **fails**. Meeting the §4.5 threshold does **not** guarantee a green D25. A red result is a STOP (below); it is not grounds to re-run. | ______ |
+| `D25` — **empty substrate** (for reference; §4.5 stops Stage 1 in this case) | Of the eight checks skipped today: **4 asserted** — generation refused with `ENGINE_NO_SELECTION` and no day written, coach-edited week, malformed prescription, non-owner 42501. **4 skipped (not passes)** — canonical prescription and second generation (EB-4), the 188 check, and the second coach. | ______ |
 | Run totals | 0 failed; skipped total recorded, not counted as passed | ______ |
 | `Live AI suite` | passes (pre-188: `module` keys are irrelevant here) | ______ |
 
@@ -387,3 +484,5 @@ confirms it, and only under OA-10. The manifest is then restored (OA-8).
 6. That `db push` applies only versions newer than the remote's latest **[earlier observation,
    2026-10-25]** — the dry run (§6.1) is the control.
 7. Every count in §4.4 and §4.5 — the previous values are dated and may be stale.
+8. The substrate threshold (§4.5) is an owner direction given 2026-10-28 (count > 0; not an eligibility or
+   approval test). It takes effect when recorded with C-1.

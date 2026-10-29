@@ -16,6 +16,18 @@
 > no QA database credential and no linked CLI.
 >
 > The file keeps its original name for link stability. It now covers all fourteen migrations.
+>
+> **Status update 2026-10-28 — owner directions given in chat, NOT formally recorded:**
+> - **SEQ-1 = Option 1** (2026-10-27): Stage 1 is applied before PR #14 merges.
+> - **C-1**: 183 stays held while QA's exercise substrate is empty — the recorded 2026-10-25 condition is
+>   not overridden. Threshold: `exercise_intelligence` count > 0, which is not an eligibility or approval
+>   test. The owner accepts that the whole of Stage 1 stays held meanwhile, with no migration workaround.
+> - **C-2**: the intended Stage 1 scope is 182–186.
+>
+> Because one `db push` cannot skip 183 (§2), **C-1 holds all of Stage 1 — 184 (P0) and 185 (P1) included
+> — while the substrate is empty.** None of these directions takes effect until it is recorded through
+> `MASTER_PRODUCT_DECISIONS.md` §2. Draft text: `GOVERNANCE_RECORDING_DRAFT_SEQ1_C1_C2.md`. Operator
+> checklist: `QA_STAGE1_182_186_EXECUTION_PACKET.md`.
 
 **Evidence labels used below**
 
@@ -31,7 +43,8 @@
 
 ## 1 · The fourteen migrations, in the only valid order
 
-Two stages. **Stage 1** is route A as approved in principle. **Stage 2** is the PR #14 series. Stage 2
+Two stages. **Stage 1** has route A's scope, as approved in principle. Under owner direction C-1 (not yet
+recorded), 183 — and so the whole stage — is conditional on `exercise_intelligence` count > 0 (header). **Stage 2** is the PR #14 series. Stage 2
 depends on Stage 1 (188 extends 186; 189 restates 124's wrapper over 186's engine).
 
 | # | Purpose | Depends on | Stage | Apply-time data change |
@@ -122,9 +135,14 @@ PR #14 cycle differently.
 | OA-5 | **Stage 2 QA apply window** (187 → 195) — separate from OA-3 | Stage 2 |
 | OA-6 | Acceptance of **187's one-way demotion** of the number counted in §7.2 (even if zero), knowing it is not reversible without a further decision (§11) | Stage 2 |
 | OA-7 | Acceptance of the consequences recorded in `expected_applied.json` for 189 (clearance criteria as a walkthrough restriction — **not** clinical), 190 (no client assignment writes), 192 (non-authors lose generate/regenerate/snapshot; new coach loses read of a previous coach's programme), 195 (prior active assignments become `replaced` on the next activation) | Stage 2 |
-| OA-8 | **Manifest declarations** — protected edits to `supabase/expected_applied.json` via the temporary `scripts/protected-paths.json` exception, one per stage | after each stage |
+| OA-8 | **Manifest declarations** — the protected edits only, to `supabase/expected_applied.json` via the temporary `scripts/protected-paths.json` exception, one per stage. **Creating, pushing and opening** each declaration PR (a QA-writing CI run) and **merging** it into `main` are separate authorizations (packet DP-1, DP-2). | after each stage |
 | OA-9 | **Distribution of a paired app build** to QA testers (§6) | Stage 2 |
 | OA-10 | Any **rollback**, and any `migration repair --status reverted` that follows one | §11 only |
+
+**Every approval above, and SEQ-1, C-1 and C-2, must be recorded through `MASTER_PRODUCT_DECISIONS.md` §2
+before the stage it gates is executed.** A direction in chat is intent, not authorization
+(`V5_OWNER_AUTHORITY_DIRECTION_2026-10-21.md` §1). The acceptable evidence for a sign-off is defined in the
+packet, §1.2.
 
 Not decided by any of the above, and not claimed: **PD-A02**, the **D-1** wording conflict, **clinical
 sign-off** (no clinical owner exists — `MASTER_PRODUCT_DECISIONS` §D), and enabling
@@ -136,7 +154,7 @@ sign-off** (no clinical owner exists — `MASTER_PRODUCT_DECISIONS` §D), and en
 
 | # | Prerequisite | Status |
 |---|---|---|
-| TP-1 | The operator has a QA DB credential and a CLI linked to `eyqtldjqpgpljlqvpowh` | **[UNVERIFIED]** |
+| TP-1 | The operator has a QA DB credential and a CLI linked to `eyqtldjqpgpljlqvpowh`. The full tool and access list (git, authenticated `gh`, Supabase CLI 2.107.0 or re-checked flags, Node, `psql`, password and connection string never written down) is in packet §1.3. | **[UNVERIFIED]** |
 | TP-2 | No CI run is in progress on **any** branch for the whole window (shared QA fixtures, `trunk-and-ci` rule) | check on the day |
 | TP-3 | The checkout the push runs from contains exactly the stage's migrations (§2, §3) | check on the day |
 | TP-4 | **The live AI suite must be updated before 188 is declared applied.** `supabase/tests/ai/j03-engine-boundary.mjs` calls `build_workout` **without `module`** and asserts `status < 300` at lines 21, 27, 32 and 39 **[REPO]**; a fifth module-less call, `generate_workout` at line 95, runs only with `AI_ALLOW_WRITES=1`, which `ci.yml` does not set **[REPO]**. After 188 those calls are refused with `ENGINE_UNKNOWN_MODULE`, so the `Live AI suite` step would turn red. `j04-provenance-authz.mjs:228` is a refusal test that should be unaffected, because the subject check precedes the engine **[REPO reading — not executed]**. **Addressed locally:** commit `b2b65e9` (`test(ai): include module in engine boundary calls`, not pushed) adds `module: 'workout_builder'` inside `p_context` at those four calls and at line 95; no assertion changed. The key is ignored by the pre-188 `build_workout` (127) and `score_exercise` (087), which read only named keys **[REPO]**. **Not yet validated against any database with 188 applied, and not yet run by CI.** | **addressed locally — unvalidated** |
@@ -274,18 +292,26 @@ Nothing else may push, merge or rerun CI on **any** branch from step 1 to step 7
 
 1. **Target and ledger** (§7.1): applied through **181**; 182–186 local-only. Anything else → stop.
 2. **Preflight** §7.1 captures and §7.3.
+   **Substrate gate (C-1) — HARD STOP:** `select count(*) from public.exercise_intelligence` must be
+   **> 0** (the current threshold, per owner direction 2026-10-28 — it does **not** establish that any
+   exercise is eligible or approved). If it is 0, 183 may not be applied, and one push cannot skip it, so **the whole batch stops
+   here** and the owner is asked for direction. No workaround.
+   **No pause between migrations:** the push below applies 182–186 in one command, so every condition is
+   settled before step 4 or the batch does not run (packet §6.0).
 3. **Dry run** from the checkout chosen under SEQ-1: `supabase db push --linked --dry-run` must list
    exactly **182, 183, 184, 185, 186**, in that order. Anything else → stop.
 4. **Push**: `supabase db push --linked`. Any error → stop; do not retry blindly (§1, partial apply).
 5. **Read back the catalog, not just the ledger:**
    - `assign_nutrition_plan` body contains `is_active_coach_of(p_client_id)`;
    - `materialize_program_week_engine` body contains `ENGINE_NO_SELECTION` and `FOR UPDATE`;
-   - the six policies' `qual`/`with_check` contain `is_active_coach_of`, and the four
+   - the **seven** altered policies across **six** tables (`coaching_calls` has two) have
+     `qual`/`with_check` containing `is_active_coach_of`, and the four
      `authoring coach reads own …` SELECT policies exist;
    - `exercise_certifications` view definition contains `exercise_readable`;
    - the engine and wrapper still pin `search_path`; `authenticated` cannot execute the engine.
-6. **Declare it** (OA-8): a PR moving `applied_through` to `"186"` and removing the 182–186 pending
-   entries. Until it merges, CI's ENV-3 is red (*applied but undeclared*) — which is why nothing else runs.
+6. **Declare it**: the protected edit (OA-8) moving `applied_through` to `"186"` and removing the 182–186
+   pending entries; its PR is created and pushed under DP-1 and merged under DP-2 — three separate
+   authorizations. Until it merges, CI's ENV-3 is red (*applied but undeclared*) — which is why nothing else runs.
 7. **Verify live, alone** — that PR's CI run (§10, frontier 186). A red `Live QA suites` job → stop;
    rollback is a separate decision (OA-10).
 
@@ -328,7 +354,7 @@ turn strict when the manifest PR merges, not when SQL is applied.
 |---|---|---|---|
 | 184 | `3A-11` (`d08-identity-constraints.mjs:270`) | 5 — unrelated / pending / cancelled coach refused (42501); victim's plan untouched ×2 | all 5 **asserted** |
 | 185 | `D24` (`d24-coach-write-arms.mjs:47`) | 25 — 18 refusals, 6 active-coach positive controls, authored-row check | all **asserted**; expected **0 skipped** in D24 |
-| 186 | `D25` (`d25-program-engine.mjs:45`) | 7 engine checks | the 6 engine checks **asserted**; the 188 check stays skipped at frontier 186 (gate at line 181) |
+| 186 | `D25` (`d25-program-engine.mjs:45`) | 7 engine checks | depends on the substrate (`d25:120–147`). **Populated** (the only case Stage 1 runs in, under C-1): all six engine checks **asserted**; skipped (not passes): the empty-substrate refusal check and the 188 check. **Empty** (reference): **4 asserted** — refusal with no day written, coach-edited week, malformed prescription, non-owner 42501; **4 skipped** — canonical prescription and second generation (EB-4), the 188 check, the second coach. |
 | 188 | `D25` (`d25-program-engine.mjs:100,181`) | *(inside the 186 gate today)* | substrate measured by per-focus `build_workout`; `ENGINE_UNKNOWN_MODULE` **asserted** |
 | — | `D25` | 1 — "a genuine SECOND COACH" | **stays skipped**: QA has no second-coach fixture. Not a pass. |
 
@@ -337,7 +363,8 @@ Also expected at frontier 195:
   replays and negative controls **[LOCAL]**. A green run at frontier 195 does **not** verify them.
 - **`Live AI suite` (`j03`) turns red at 188** unless TP-4 is done first.
 - With the substrate empty (§7.2), D25's generation checks assert the refusal path
-  (`ENGINE_NO_SELECTION` / `ENGINE_INSUFFICIENT_ELIGIBLE`), not a successful week.
+  (`ENGINE_NO_SELECTION` / `ENGINE_INSUFFICIENT_ELIGIBLE`), not a successful week. In that case the
+  canonical-prescription and second-generation checks are **skipped, not passed**.
 
 ---
 
@@ -374,6 +401,9 @@ once the catalog read-back confirms the rollback, and only under OA-10. The mani
   fingerprinted attribute approvals **[LOCAL count on the seed; QA last seen with 0 intelligence rows,
   PRIOR 2026-10-25]**. Reviews recorded **before** 187 do not count after it, so content review belongs
   after Stage 2. Content-owner task.
+  **Compatible with C-1, stated so it is not misread:** C-1's threshold needs `exercise_intelligence` rows to
+  **exist** before Stage 1 (any status, e.g. AI-enriched drafts). **Reviewing and approving** them still
+  belongs after 187, or the approvals are demoted.
 - **Governance and clinical sign-off are unresolved.** PD-A02 is not recorded and D-1 is not resolved;
   the 189 clearance rule is a walkthrough scope restriction, not a clinical assessment.
 - **Production is out of scope.** Its state is unverifiable (`REL-21`, gate 9B.2). No production push until
@@ -414,5 +444,8 @@ separate owner decision.
 - Members' plans (`generate_client_plan`) never depended on the substrate; only the coach engine did.
 - 183 is safe to apply (it only refuses empty selections and nothing reachable calls the engine); the
   earlier "hold 183 for the substrate" reasoning was wrong.
+  **Conflict preserved, 2026-10-28:** that technical view is unchanged, but owner direction **C-1**
+  reaffirms the recorded condition — 183 is held while the substrate is empty. Governance decides
+  execution, so C-1 governs once recorded. Neither text is deleted.
 - This version extends the 182 → 186 proposal to 195, splits it into two stages, and replaces the single
   "push everything pending" step with a stage-scoped push whose scope depends on SEQ-1.
