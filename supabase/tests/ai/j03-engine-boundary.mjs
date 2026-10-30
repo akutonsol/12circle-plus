@@ -3,7 +3,8 @@
 // The architecture's central claim is "the engine decides, the LLM explains".
 // This suite asks whether the engine can actually decide: does it run, does it
 // select anything, and does it fail closed when it cannot?
-import { mark, signIn, rpc, section, characterize, invariant, summary, ALLOW_WRITES } from './lib.mjs';
+import { mark, signIn, rpc, section, characterize, invariant, summary, ALLOW_WRITES,
+         intelligenceSubstrate, whenSubstrateEmpty } from './lib.mjs';
 
 const _from = mark();
 
@@ -38,16 +39,23 @@ section('J-03A  build_workout applies the deload rule whenever recovery is low')
 
 section('J-03B  an unplannable request succeeds with nothing in it');
 {
+  // Both assertions below pin EMPTY-substrate behaviour: with no
+  // exercise_intelligence rows nothing can be planned. Once the table has rows
+  // the request becomes plannable and the defect cannot be exercised, so they
+  // are SKIPPED then (never passed), and FAIL if the state cannot be read
+  // (PRQ-1, 2026-10-28). On an empty table they run exactly as before.
+  const substrate = await intelligenceSubstrate(await signIn('admin'));
   const r = await rpc(victim, 'build_workout', {
     p_context: { goal: 'strength', size: 5, recovery: 100,
                  equipment: ['barbell', 'dumbbell'], experience: 'intermediate', module: 'workout_builder' },
   });
   const selected = r.body?.selected ?? null;
-  characterize('F-J-08  an empty substrate yields HTTP 200 and an empty workout',
-    r.status < 300 && Array.isArray(selected) && selected.length === 0,
-    `HTTP ${r.status}, selected=${Array.isArray(selected) ? selected.length : selected}, ` +
-    `trace=${(r.body?.trace ?? []).length} entries, rules_triggered=${JSON.stringify(r.body?.rules_triggered)} — ` +
-    'no status field, no error: the caller cannot tell "nothing suits you" from "the engine has no library"');
+  whenSubstrateEmpty(substrate, 'F-J-08  an empty substrate yields HTTP 200 and an empty workout', () =>
+    characterize('F-J-08  an empty substrate yields HTTP 200 and an empty workout',
+      r.status < 300 && Array.isArray(selected) && selected.length === 0,
+      `HTTP ${r.status}, selected=${Array.isArray(selected) ? selected.length : selected}, ` +
+      `trace=${(r.body?.trace ?? []).length} entries, rules_triggered=${JSON.stringify(r.body?.rules_triggered)} — ` +
+      'no status field, no error: the caller cannot tell "nothing suits you" from "the engine has no library"'));
 
   // Downstream: migration 119 made materialize_program_week RAISE on an empty
   // selection, but 124 restored the pre-119 engine body behind the wrapper, so
@@ -55,9 +63,10 @@ section('J-03B  an unplannable request succeeds with nothing in it');
   // and reports them as created — reproduced on a 000-181 local replay
   // 2026-10-25. Migration 183 restores the guard (authored, not applied). No app
   // screen, edge function or live suite calls materialize_program_week today.
-  invariant('the empty selection carries no rules_triggered to explain itself',
-    Array.isArray(r.body?.rules_triggered) && r.body.rules_triggered.length === 0,
-    'rules_triggered=[] — nothing in the response says why the plan is empty');
+  whenSubstrateEmpty(substrate, 'the empty selection carries no rules_triggered to explain itself', () =>
+    invariant('the empty selection carries no rules_triggered to explain itself',
+      Array.isArray(r.body?.rules_triggered) && r.body.rules_triggered.length === 0,
+      'rules_triggered=[] — nothing in the response says why the plan is empty'));
 }
 
 section('J-03C  the rejection gates are null-permissive');
