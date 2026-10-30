@@ -28,8 +28,22 @@ const bool kEngineWeekGeneration =
 
 /// Why a generation attempt did not produce a week.
 enum EngineFailure {
-  /// The engine selected no exercises (no intelligence data yet). Nothing saved.
+  /// The engine selected no exercises. Since 188 that means no exercise is both
+  /// certified for Program Builder and expert-reviewed (or none fits the
+  /// session's focus). Nothing saved.
   noSelection,
+
+  /// The plan has a session type the engine has no movement-pattern mapping for
+  /// (ENGINE_UNKNOWN_FOCUS, 188). Nothing saved.
+  unsupportedSplit,
+
+  /// A session has no eligible compound lift, and each needs one
+  /// (ENGINE_INSUFFICIENT_ELIGIBLE, 188). Nothing saved.
+  insufficientEligible,
+
+  /// The programme is already assigned to a client who is not cleared for
+  /// generated training (ENGINE_CLIENT_NOT_CLEARED, 189). Nothing saved.
+  clientNotCleared,
 
   /// The week already has training days; nothing changed. Replacing is explicit.
   weekExists,
@@ -55,9 +69,13 @@ enum EngineFailure {
 /// stable `ENGINE_*` prefixes migration 186 raises, never on free prose.
 EngineFailure classifyEngineError(Object error, {String? sqlState}) {
   final code = sqlState ?? _codeOf(error);
-  if (code == '42501') return EngineFailure.notAuthorized;
   final text = _messageOf(error);
+  // Raised with 42501 too, so it must be told apart BEFORE the generic refusal.
+  if (text.contains('ENGINE_CLIENT_NOT_CLEARED')) return EngineFailure.clientNotCleared;
+  if (code == '42501') return EngineFailure.notAuthorized;
   if (text.contains('ENGINE_NO_SELECTION')) return EngineFailure.noSelection;
+  if (text.contains('ENGINE_UNKNOWN_FOCUS')) return EngineFailure.unsupportedSplit;
+  if (text.contains('ENGINE_INSUFFICIENT_ELIGIBLE')) return EngineFailure.insufficientEligible;
   if (text.contains('ENGINE_WEEK_EXISTS')) return EngineFailure.weekExists;
   if (text.contains('ENGINE_BAD_PRESCRIPTION')) return EngineFailure.badPrescription;
   if (text.contains('ENGINE_NO_PLAN') || text.contains('ENGINE_NO_WEEK')) {
@@ -87,8 +105,17 @@ String _messageOf(Object e) {
 /// their data and what to do next.
 String coachMessageFor(EngineFailure f) => switch (f) {
       EngineFailure.noSelection =>
-        "The engine couldn't pick exercises yet — its exercise library is still being "
-            'set up. Nothing was saved. Build this week by hand in Programs for now.',
+        "Couldn't pick exercises yet — none have been cleared for Program Builder "
+            '(certified and expert-reviewed). Nothing was saved. Build this week by hand in Programs for now.',
+      EngineFailure.insufficientEligible =>
+        "Each training day needs at least one main compound lift, and none is cleared for "
+            'Program Builder yet. Nothing was saved. Build this week by hand in Programs.',
+      EngineFailure.clientNotCleared =>
+        "This programme is assigned to a client who isn't cleared for generated training, so "
+            'nothing was generated. Build their week by hand in Programs.',
+      EngineFailure.unsupportedSplit =>
+        "This programme has a session type that can't be generated yet. Nothing was saved. "
+            'Build this week by hand in Programs.',
       EngineFailure.weekExists =>
         'Week 1 already has training days, so nothing was changed.',
       EngineFailure.badPrescription =>

@@ -8,6 +8,7 @@
 // A safety input that exists but is never read is worse than one that is
 // missing, because the schema makes the system look governed.
 import { mark, signIn, rest, columnExists, rpc, section, characterize, invariant, summary,
+         contentRangeTotal, intelligenceSubstrate,
          URL_, ANON } from './lib.mjs';
 
 const _from = mark();
@@ -120,14 +121,33 @@ section('J-02C  the injury rule can only fire on data nothing populates');
   // to populate the table — writes neither column. Until an AI or a human fills
   // them, injury_compatibility is 100 for every exercise and INJURY_PREVENTION
   // is unreachable.
-  // intelligence_stats is content-editor gated (migration 116 class E).
-  const stats = await rpc(admin, 'intelligence_stats');
-  const profiled = stats.body?.profiled;
-  characterize('F-J-06  the intelligence substrate is unpopulated on this project',
-    stats.status >= 300 || profiled === 0,
-    stats.status >= 300
-      ? `intelligence_stats is admin-gated here (${stats.status}) — run as admin for the count`
-      : `profiled=${profiled} of ${stats.body?.total_exercises} exercises, engine_ready=${stats.body?.engine_ready}`);
+  //
+  // RETARGETED 2026-10-28 (PRQ-1). This used to assert `profiled === 0` — an empty
+  // table — which is a proxy: a rebuild adds rows but still no injury data, so the
+  // proxy would flip while the defect stayed. It now measures the defect itself,
+  // against 087:139-147: the rule fires only on a contraindication matching the
+  // injured area (+60) or a joint_stress value >= 6 for it. True on an empty table
+  // too, so today's result is unchanged. The table is content-editor-only (117):
+  // the probe confirms the admin fixture is one, or the check fails closed.
+  const substrate = await intelligenceSubstrate(admin);
+  const contra = await rest(admin,
+    'exercise_intelligence?select=exercise_id&contraindications=not.is.null&contraindications=neq.{}&limit=0',
+    { Prefer: 'count=exact' });
+  const stress = await rest(admin,
+    'exercise_intelligence?select=joint_stress&joint_stress=not.is.null&joint_stress=neq.{}',
+    { Prefer: 'count=exact' });
+  const nContra = contra.status < 300 ? contentRangeTotal(contra) : null;
+  const nStress = stress.status < 300 ? contentRangeTotal(stress) : null;
+  const rows = Array.isArray(stress.body) ? stress.body : null;
+  const complete = rows !== null && nStress !== null && rows.length === nStress;   // a truncated read decides nothing
+  const firing = complete
+    ? rows.filter(r => Object.values(r.joint_stress ?? {}).some(v => Number(v) >= 6)).length : null;
+  characterize('F-J-06  no intelligence profile carries injury data, so the injury rule cannot fire',
+    substrate.state !== 'unknown' && nContra === 0 && complete && firing === 0,
+    substrate.state === 'unknown'
+      ? `cannot read exercise_intelligence reliably (${substrate.detail})`
+      : `${substrate.detail}; with contraindications=${nContra ?? '?'}; with a joint_stress value >= 6=${firing ?? '?'} ` +
+        `(of ${nStress ?? '?'} with any joint_stress)`);
 }
 
 export default summary('J-02 safety inputs', _from);

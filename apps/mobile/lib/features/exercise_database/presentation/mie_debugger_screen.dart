@@ -40,6 +40,8 @@ class _State extends ConsumerState<MieDebuggerScreen> {
   Future<void> _generate() async {
     setState(() { _busy = true; _error = null; });
     final ctx = {
+      // Copilot's module: the debugger shows what Copilot would decide (188).
+      'module': 'workout_builder',
       'goal': _goal, 'recovery': _recovery, 'experience': _experience,
       'equipment': ['barbell', 'dumbbell', 'cable', 'bodyweight'], 'size': 5,
     };
