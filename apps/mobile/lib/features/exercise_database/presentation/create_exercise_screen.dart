@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../domain/content_review_submission.dart';
 import '../domain/custom_exercise_provider.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../workout/data/models/video_variant_model.dart';
@@ -103,6 +104,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   // Edit mode: id of the exercise being edited (null = creating new).
   String? _editingId;
   String? _editingCoachId;
+  String? _editingContentStatus; // content_status of the exercise being edited
   String? _existingImageUrl;
 
   // Basic info
@@ -167,6 +169,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     _applyNormalized(_normalizeImport({...row, 'exercise_name': row['name']}));
     setState(() {
       _editingCoachId = row['coach_id'] as String?;
+      _editingContentStatus = row['content_status'] as String?;
       _visibility = (row['visibility'] as String?) ?? _visibility;
       _existingImageUrl = row['image_url'] as String?;
       _beginnerCtrl.text = (row['beginner_modification'] as String?) ?? '';
@@ -622,6 +625,25 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
       id = ok ? _editingId : null;
     }
 
+    // A hand-written library draft goes to the editorial review queue
+    // (draft → under_review); a human still approves it there.
+    String? reviewSubmitError;
+    if (id != null &&
+        shouldSubmitForReview(
+          role: role as String?,
+          editingExisting: _editingId != null,
+          mediaOnly: mediaOnly,
+          visibility: _visibility,
+          contentStatus: _editingContentStatus,
+          instructions: _listFrom(_instructionCtrls),
+        )) {
+      if (await svc.reviewExercise(id, 'under_review')) {
+        _editingContentStatus = 'under_review';
+      } else {
+        reviewSubmitError = svc.lastError?.toString() ?? 'unknown error';
+      }
+    }
+
     if (id != null) {
       // Upload picked image + video files.
       String? imageUrl;
@@ -658,6 +680,12 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     setState(() => _saving = false);
     if (!mounted) return;
     if (id != null) {
+      if (reviewSubmitError != null) {
+        // Saved, but not queued: say so rather than leave it invisible to reviewers.
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            duration: const Duration(seconds: 8),
+            content: Text('Saved, but not sent for review: ${_friendlyError(reviewSubmitError)}')));
+      }
       _showSuccess();
     } else {
       final err = svc.lastError;
