@@ -119,9 +119,39 @@ async function run() {
     check('METRIC-02 · a Security-holding role DOES see the sign-in basis',
       num(vw.signin_users_today) !== null && num(vw.signin_users_month) !== null,
       `today=${vw.signin_users_today} month=${vw.signin_users_month}`);
-    check('METRIC-02 · the sign-in basis is non-vacuous (audit_events holds ' +
-          'authentication rows this month)', num(vw.signin_users_month) >= 1,
-      `signin_users_month=${vw.signin_users_month}`);
+    // NON-VACUITY, AS A DELTA LIKE EVERY OTHER ASSERTION HERE. This used to assert
+    // `signin_users_month >= 1` over AMBIENT rows. Nothing produces authentication
+    // rows in real use -- migration 142 records managed authentication events as an
+    // accepted blind spot, "unemittable by any path" -- so the only such row on QA
+    // was D15's scope probe, which is emitted once EVER. The month it was written
+    // this passed; every later month it failed (first seen 2026-11-02, CI run
+    // 41372365496, signin_users_month=0). The basis now gets
+    // its own clearly-marked row for THIS month through the sanctioned producer,
+    // audit_record_event() (A13; audit_events is append-only, so at most one row
+    // per month is ever added), and must move by exactly one when it lands.
+    // The basis counts DISTINCT actors, so a second run in the same month cannot
+    // move it again: there the arranged row is confirmed instead of re-emitted.
+    const m = new Date();
+    const monthStart = new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth(), 1)).toISOString();
+    const mine = await svc(`audit_events?select=id&category=eq.authentication` +
+      `&actor_id=eq.${vUid}&occurred_at=gte.${encodeURIComponent(monthStart)}&limit=1`);
+    if (n(mine.body) === 0) {
+      const e = await rpc(victim, 'audit_record_event', {
+        p_action: 'qa.d16.metric02-signin-basis', p_category: 'authentication',
+        p_outcome: 'success', p_actor_provenance: 'grounded', p_changed_columns: null });
+      // audit_record_event swallows its own failure and returns false with HTTP 200,
+      // so the status alone would pass an emission that wrote nothing.
+      check('arranged: one clearly-marked QA authentication row for this month',
+        e.status < 300 && e.body === true, `status=${e.status} body=${JSON.stringify(e.body)}`);
+      const after = (await view(victim, 'admin_activity_overview')).row;
+      check('METRIC-02 · the sign-in basis COUNTS an authentication row emitted this month',
+        num(after.signin_users_month) === num(vw.signin_users_month) + 1,
+        `${vw.signin_users_month} -> ${after.signin_users_month}`);
+    } else {
+      check('METRIC-02 · the sign-in basis counts this month\'s arranged authentication ' +
+            'row (emitted by an earlier run this month; not re-emitted)',
+        num(vw.signin_users_month) >= 1, `signin_users_month=${vw.signin_users_month}`);
+    }
 
     // ── 176 · SESSIONS ARE NOT USERS, and the design requires both ─────────
     // The data contract (:97) calls DAU and sessions "distinct required measures",
