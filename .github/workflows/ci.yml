@@ -653,7 +653,7 @@ jobs:
   #    what guarantees `setup-identities.mjs` has created the fixture identity.
   wrk01-live:
     name: I-WRK-01 — live progression read path (pre-fix / post-fix)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [live-qa]
     if: needs.live-qa.outputs.creds == 'true'
@@ -754,7 +754,7 @@ jobs:
   #  this job needs no credential gate. It therefore does not depend on live-qa.
   ec04-e2e:
     name: EC-04 — risk badge end-to-end (real font, real dpr)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 30, matching uix1-e2e. The job was CANCELLED at 25 minutes on 3b76981, and a
     # cancelled job is not a pass. The cause was the probe overriding only one provider,
     # so the screen's others made real network calls from inside a device test and the
@@ -788,7 +788,7 @@ jobs:
 
   uix1-e2e:
     name: UIX-1 — booking surface end-to-end (real route, real paywall)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [live-qa]
     if: needs.live-qa.outputs.creds == 'true'
