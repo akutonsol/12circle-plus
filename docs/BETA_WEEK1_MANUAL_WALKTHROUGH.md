@@ -75,5 +75,6 @@ For each step, record ✅ / ❌ / ⚠️, the platform (web / iOS / Android) and
 screenshot of any ❌. One ❌ in steps 1-8 or 10 means the beta can't start on
 this route. Report it and it becomes the next fix.
 
-Side effect: signing in this month also gives QA the authentication rows that
-live check METRIC-02 needs. It fails on a new month until someone signs in.
+Signing in has no effect on the live check METRIC-02: sign-ins are not
+audited (migration 142's accepted blind spot). That check is fixed separately on
+`test/d16-metric02-hermetic`.
