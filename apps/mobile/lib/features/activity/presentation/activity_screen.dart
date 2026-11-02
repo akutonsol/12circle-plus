@@ -11,6 +11,8 @@ import '../../dashboard/domain/dashboard_provider.dart';
 import '../../challenges/domain/challenge_provider.dart';
 import '../../challenges/data/models/challenge_model.dart';
 import '../../community/domain/community_provider.dart';
+import '../../home/domain/home_session_card.dart';
+import '../../workout/domain/workout_provider.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 class _C {
@@ -139,11 +141,15 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
 class _DailyWorkoutCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final workoutAsync = ref.watch(todaysWorkoutProvider);
-    final workout = workoutAsync.valueOrNull;
-    final title = workout?['name'] as String? ?? 'Full Body Strength';
-    final duration = workout?['duration_minutes'] as int? ?? 45;
-    final calories = workout?['calories_burned'] as int? ?? 380;
+    // The same session, described the same way, as Home's Today card — see
+    // `home/domain/home_session_card.dart`. This card read `name`,
+    // `duration_minutes` and `calories_burned` off a program_workouts row, which
+    // has none of them (`title`, `estimated_minutes`, and no energy figure), so
+    // every client — with a plan, on a rest day, or with no coach — was shown
+    // "Full Body Strength · 45 min · ~380 kcal". That is F-20 again.
+    final session = homeSession(ref.watch(assignedWorkoutsProvider));
+    final badges = homeSessionBadges(session.workout);
+    final title = session.title ?? session.emptyLine;
 
     return GestureDetector(
       onTap: () => context.go('/train'),
@@ -174,6 +180,7 @@ class _DailyWorkoutCard extends ConsumerWidget {
               Text(title,
                 style: const TextStyle(color: _C.onSurface, fontSize: 16, fontWeight: FontWeight.w700)),
             ])),
+            if (session.canBegin)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
@@ -182,12 +189,20 @@ class _DailyWorkoutCard extends ConsumerWidget {
                 boxShadow: [BoxShadow(color: _C.brand.withValues(alpha: 0.4), blurRadius: 12)]),
               child: const Text('Start', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700))),
           ]),
+          // Nothing to begin: the title line already says why. No badges, no
+          // progress bar for a session that does not exist.
+          if (session.canBegin) ...[
+          if (badges.isNotEmpty) ...[
           const SizedBox(height: 14),
           Row(children: [
-            _WorkoutBadge(icon: Icons.schedule_rounded, text: '$duration min', color: _C.teal),
-            const SizedBox(width: 10),
-            _WorkoutBadge(icon: Icons.local_fire_department_rounded, text: '~$calories kcal', color: _C.error),
+            for (final (i, b) in badges.indexed) ...[
+              if (i > 0) const SizedBox(width: 10),
+              _WorkoutBadge(
+                icon: b.endsWith(' min') ? Icons.schedule_rounded : Icons.fitness_center_rounded,
+                text: b, color: _C.teal),
+            ],
           ]),
+          ],
           const SizedBox(height: 14),
           ClipRRect(
             borderRadius: BorderRadius.circular(4),
@@ -198,6 +213,7 @@ class _DailyWorkoutCard extends ConsumerWidget {
               valueColor: const AlwaysStoppedAnimation<Color>(_C.brand))),
           const SizedBox(height: 6),
           Text('Not started yet', style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.5), fontSize: 11)),
+          ],
         ]),
       ),
     );
