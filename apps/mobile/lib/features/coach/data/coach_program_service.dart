@@ -231,6 +231,26 @@ class CoachProgramService {
     return {...assignment, 'workouts': workouts};
   }
 
+  /// The client's completed sessions of [program]'s training days — the map
+  /// [getMyAssignedProgram] returns. Which of them count as finishing a day is
+  /// decided in `program_schedule.dart`, not here.
+  Future<List<Map<String, dynamic>>> getMyCompletedProgramSessions(
+      Map<String, dynamic> program) async {
+    final clientId = _db.auth.currentUser?.id;
+    final ids = [
+      for (final w in program['workouts'] as List? ?? [])
+        if (w['id'] is String) w['id'] as String,
+    ];
+    if (clientId == null || ids.isEmpty) return [];
+    final rows = await _db
+        .from('workout_sessions')
+        .select('workout_id, status, completed_at')
+        .eq('user_id', clientId)
+        .eq('status', 'completed')
+        .inFilter('workout_id', ids);
+    return List<Map<String, dynamic>>.from(rows as List);
+  }
+
   // ── Today's workout for client ───────────────────────────
   Future<Map<String, dynamic>?> getTodaysWorkout() async {
     final program = await getMyAssignedProgram();

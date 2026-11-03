@@ -43,7 +43,8 @@ For this walkthrough, assign on the same day you test, and build the workout on
 
 - [ ] A QA build from `main` that **includes the training-day dating fix**
       (`fix/hand-built-week-dates`). Without it, the Home Today card never shows
-      a hand-built workout (step 6 fails).
+      a hand-built workout (step 6 fails). For step 8 it must also include the
+      finished-day fix; without that, Home keeps offering the finished workout.
       `cd apps/mobile && flutter run --dart-define-from-file=dart_defines/qa.json`
       (or the web build from the same file). Never a production build.
 - [ ] Two QA accounts you own: a **coach** and a **client**. Don't use the CI
@@ -115,15 +116,20 @@ For this walkthrough, assign on the same day you test, and build the workout on
        says **Now**). Tap today's row → both exercises are listed.
 8. [ ] **Begin session** (from Home or the workout page) → log at least one set →
        finish.
-       → The session completes with no error.
-       *Known limitation: Home and Workouts keep offering the finished workout
-       for the rest of the day, because a finished session is not yet linked back
-       to its training day. Note it; it's not a failure of this loop.*
+       → The session completes with no error. Close the summary:
+       - **Home**: the Today card no longer offers the workout. It says "No
+         session assigned for today".
+       - **Workouts**: no hero card, and today's row under **THIS WEEK** reads
+         **DONE**.
+
+       A training day counts as done once it's finished under this assignment,
+       on any day. Re-assigning the program starts every day fresh.
 9. [ ] Open **Activity** from Home's **This Week's Progress** section (it has no
        bottom-bar tab). Its "TODAY'S
-       WORKOUT" card must match Home: same title, same badges, a **Start**
-       button, no "Full Body Strength" and no calories (fixed in PR #18). On a
-       day with nothing scheduled it says "No session assigned for today".
+       WORKOUT" card must match Home. Before step 8 that means the same title,
+       the same badges, a **Start** button, no "Full Body Strength" and no
+       calories (fixed in PR #18). After step 8, or on a day with nothing
+       scheduled, it says "No session assigned for today".
 
 **Coach: see the result**
 10. [ ] ↻ Sign in as the coach.

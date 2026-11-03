@@ -730,6 +730,9 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     // restored copy so a later cold start doesn't rebuild a finished workout.
     ref.invalidate(activeSessionProvider);
     ref.invalidate(activeWorkoutRestorationProvider);
+    // Its training day is now done: re-read the program so Home and the
+    // Workouts tab stop offering it.
+    ref.invalidate(assignedWorkoutsProvider);
 
     if (mounted) {
       showDialog(

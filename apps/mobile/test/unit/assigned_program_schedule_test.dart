@@ -247,7 +247,7 @@ void main() {
     final body = src.substring(src.indexOf('final assignedWorkoutsProvider'));
     final provider = body.substring(0, body.indexOf('});'));
     expect(provider, contains('getMyAssignedProgram()'));
-    expect(provider, contains('assignedProgramToWorkouts(program)'));
+    expect(provider, contains('assignedProgramToWorkouts(program,'));
     expect(provider, isNot(contains('map(programWorkoutToWorkout)')));
   });
 }
