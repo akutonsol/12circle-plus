@@ -34,9 +34,12 @@ import 'workout_contract.dart';
 ///
 /// [scheduledDate] is not read from the row: a training day says only "week 2,
 /// Monday". The date comes from the assignment — see `program_schedule.dart`.
+/// So does [isCompleted], from the client's sessions.
 Workout programWorkoutToWorkout(Map<String, dynamic> w,
-        {DateTime? scheduledDate}) =>
-    decodeProgramWorkout(w, scheduledDate: scheduledDate).workout;
+        {DateTime? scheduledDate, bool isCompleted = false}) =>
+    decodeProgramWorkout(w,
+            scheduledDate: scheduledDate, isCompleted: isCompleted)
+        .workout;
 
 /// A decoded workout together with the legacy dialects that had to be
 /// translated to read it.
@@ -50,7 +53,7 @@ class DecodedWorkout {
 }
 
 DecodedWorkout decodeProgramWorkout(Map<String, dynamic> w,
-    {DateTime? scheduledDate}) {
+    {DateTime? scheduledDate, bool isCompleted = false}) {
   final workoutId = (w['id'] as String?) ?? '';
   final title = (w['title'] as String?) ?? 'Workout';
   final location = 'workout "${workoutId.isEmpty ? title : workoutId}"';
@@ -163,6 +166,7 @@ DecodedWorkout decodeProgramWorkout(Map<String, dynamic> w,
       exercises: exercises,
       coachId: w['coach_id'] as String?,
       coachName: (w['coach_name'] as String?) ?? 'Your Coach',
+      isCompleted: isCompleted,
       scheduledDate: scheduledDate,
     ),
     normalized.deviations,

@@ -38,10 +38,16 @@ DateTime? programDayDate(DateTime start, Object? weekNumber, Object? dayOfWeek) 
 /// card would caption it "assigned by Your Coach" — untrue for a client with no
 /// coach.
 ///
+/// [sessions] are the client's `workout_sessions` rows for these training days.
+/// A coach's training day is **done** once one of them is `completed` at or
+/// after this assignment's `assigned_at`, on any day — see [_finishedDays].
+///
 /// Errors propagate exactly as [programWorkoutToWorkout]'s do.
-List<Workout> assignedProgramToWorkouts(Map<String, dynamic> assignment) {
-  final start =
-      assignment['coach_id'] == null ? null : _date(assignment['start_date']);
+List<Workout> assignedProgramToWorkouts(Map<String, dynamic> assignment,
+    {List<Map<String, dynamic>> sessions = const []}) {
+  final coached = assignment['coach_id'] != null;
+  final start = coached ? _date(assignment['start_date']) : null;
+  final done = coached ? _finishedDays(assignment, sessions) : const <String>{};
   final rows =
       List<Map<String, dynamic>>.from(assignment['workouts'] as List? ?? []);
   return [
@@ -49,9 +55,34 @@ List<Workout> assignedProgramToWorkouts(Map<String, dynamic> assignment) {
       programWorkoutToWorkout(w,
           scheduledDate: start == null
               ? null
-              : programDayDate(start, w['week_number'], w['day_of_week'])),
+              : programDayDate(start, w['week_number'], w['day_of_week']),
+          isCompleted: done.contains(w['id'])),
   ];
 }
+
+/// The `program_workouts` ids the client finished under this assignment.
+///
+/// A session names its training day by `workout_id`. Re-assigning a program
+/// reuses those ids, so a session counts only if it was completed at or after
+/// the assignment's `assigned_at` — an earlier assignment's finished days do
+/// not carry over. Two instants are compared, so no time zone is involved.
+///
+/// `in_progress` and `abandoned` sessions are not finished. A missing
+/// `assigned_at` or `completed_at` counts nothing: the day stays on offer
+/// rather than being hidden on a guess.
+Set<String> _finishedDays(
+    Map<String, dynamic> assignment, List<Map<String, dynamic>> sessions) {
+  final since = _instant(assignment['assigned_at']);
+  if (since == null) return const {};
+  return {
+    for (final s in sessions)
+      if (s['status'] == 'completed' && s['workout_id'] is String)
+        if (_instant(s['completed_at']) case final at? when !at.isBefore(since))
+          s['workout_id'] as String,
+  };
+}
+
+DateTime? _instant(Object? v) => v is String ? DateTime.tryParse(v) : null;
 
 /// `start_date` is a Postgres `date` and arrives as `2026-11-04`. Read as the
 /// local calendar day it names, never shifted through UTC.

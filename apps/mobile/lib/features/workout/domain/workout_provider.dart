@@ -198,10 +198,15 @@ final filteredExercisesProvider = Provider<List<Exercise>>((ref) {
 /// A coach's program is dated from the assignment's `start_date`
 /// (`program_schedule.dart`). Undated, none of its workouts was ever "today's",
 /// so Home said "No session assigned for today" to every coached client.
+///
+/// A training day the client finished under this assignment is marked done, so
+/// Home stops offering it. Completing a session invalidates this provider.
 final assignedWorkoutsProvider = FutureProvider<List<Workout>>((ref) async {
-  final program = await CoachProgramService().getMyAssignedProgram();
+  final service = CoachProgramService();
+  final program = await service.getMyAssignedProgram();
   if (program == null) return [];
-  return assignedProgramToWorkouts(program);
+  return assignedProgramToWorkouts(program,
+      sessions: await service.getMyCompletedProgramSessions(program));
 });
 
 /// Generate a one-off, library-grounded AI workout for today (personalized to
