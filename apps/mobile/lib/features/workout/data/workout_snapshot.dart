@@ -31,8 +31,12 @@ import 'workout_contract.dart';
 /// Throws [WorkoutContractViolation] if the row is not canonical and cannot be
 /// unambiguously read as canonical. Callers must surface that: converting it
 /// into an empty workout is indistinguishable from "you have no program".
-Workout programWorkoutToWorkout(Map<String, dynamic> w) =>
-    decodeProgramWorkout(w).workout;
+///
+/// [scheduledDate] is not read from the row: a training day says only "week 2,
+/// Monday". The date comes from the assignment — see `program_schedule.dart`.
+Workout programWorkoutToWorkout(Map<String, dynamic> w,
+        {DateTime? scheduledDate}) =>
+    decodeProgramWorkout(w, scheduledDate: scheduledDate).workout;
 
 /// A decoded workout together with the legacy dialects that had to be
 /// translated to read it.
@@ -45,7 +49,8 @@ class DecodedWorkout {
   const DecodedWorkout(this.workout, this.deviations);
 }
 
-DecodedWorkout decodeProgramWorkout(Map<String, dynamic> w) {
+DecodedWorkout decodeProgramWorkout(Map<String, dynamic> w,
+    {DateTime? scheduledDate}) {
   final workoutId = (w['id'] as String?) ?? '';
   final title = (w['title'] as String?) ?? 'Workout';
   final location = 'workout "${workoutId.isEmpty ? title : workoutId}"';
@@ -158,6 +163,7 @@ DecodedWorkout decodeProgramWorkout(Map<String, dynamic> w) {
       exercises: exercises,
       coachId: w['coach_id'] as String?,
       coachName: (w['coach_name'] as String?) ?? 'Your Coach',
+      scheduledDate: scheduledDate,
     ),
     normalized.deviations,
   );

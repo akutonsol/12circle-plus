@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../coach/data/coach_program_service.dart';
 import '../../../core/realtime/realtime.dart';
+import '../data/program_schedule.dart';
 import '../data/workout_service.dart';
 import '../data/workout_session_store.dart';
 import '../data/workout_snapshot.dart';
@@ -193,12 +194,14 @@ final filteredExercisesProvider = Provider<List<Exercise>>((ref) {
 /// erased the client's entire program. An empty list now means exactly one
 /// thing: there is no assigned program. Anything else is an error state with a
 /// retry, per product bible §4.
+///
+/// A coach's program is dated from the assignment's `start_date`
+/// (`program_schedule.dart`). Undated, none of its workouts was ever "today's",
+/// so Home said "No session assigned for today" to every coached client.
 final assignedWorkoutsProvider = FutureProvider<List<Workout>>((ref) async {
   final program = await CoachProgramService().getMyAssignedProgram();
   if (program == null) return [];
-  final workoutMaps =
-      List<Map<String, dynamic>>.from(program['workouts'] as List? ?? []);
-  return workoutMaps.map(programWorkoutToWorkout).toList();
+  return assignedProgramToWorkouts(program);
 });
 
 /// Generate a one-off, library-grounded AI workout for today (personalized to
