@@ -37,6 +37,19 @@ async function run() {
   let arranged = false;
 
   try {
+    const me = await svc(`user_profiles?select=id&email=eq.${encodeURIComponent(IDENT.victim.email)}`);
+    const uid = Array.isArray(me.body) && me.body[0] ? me.body[0].id : null;
+    check('fixture identity resolved', !!uid, uid ? 'ok' : 'could not resolve victim id');
+
+    // DELETE FIRST, before ANY assertion about this fixture. A cancelled earlier
+    // run never reaches its `finally` (V5 §137), so the victim can still hold the
+    // Viewer role here. This delete used to sit in the arrange step of §2, AFTER
+    // the UNASSIGNED checks of §1 -- so a cancelled run made the next run's §1
+    // read true and fail for a reason unrelated to the code under test (PR #19,
+    // run 41664588135 attempt 1). It also keeps §2's INSERT from hitting the
+    // user_id PRIMARY KEY with a 409.
+    if (uid) await svc(`admin_role_assignments?user_id=eq.${uid}`, { method: 'DELETE' });
+
     // ── 1 · deny-by-default, now against the SEEDED grid ────────────────────
     // UPDATED V5 §125. This section asserted an EMPTY grid, which was correct
     // until migration 155 seeded the owner-approved matrix. Two things had to
@@ -57,7 +70,8 @@ async function run() {
 
     // At this point the caller holds NO Admin-layer assignment, so a populated
     // grid must still give them nothing — the grid grants to ROLES, never to
-    // everyone. This runs before the fixture role is arranged, deliberately.
+    // everyone. This runs after the leftover delete above and before the
+    // fixture role is arranged, deliberately.
     for (const [area, verb] of [['Security', 'view'], ['Audit logs', 'update'], ['Users', 'create']]) {
       const r = await rpc(victim, 'admin_can', { p_area: area, p_verb: verb });
       check(`admin_can('${area}','${verb}') is false for an UNASSIGNED caller`,
@@ -66,18 +80,14 @@ async function run() {
 
     // ── 2 · the Admin layer does NOT confer legacy admin — §113.3 proof ──────
     section('an Admin-layer member is not a legacy admin');
-    const me = await svc(`user_profiles?select=id&email=eq.${encodeURIComponent(IDENT.victim.email)}`);
-    const uid = Array.isArray(me.body) && me.body[0] ? me.body[0].id : null;
-    check('fixture identity resolved', !!uid, uid ? 'ok' : 'could not resolve victim id');
-
     if (uid) {
       // svc() JSON-stringifies opts.body itself — pass an OBJECT, never a string,
       // or the body is double-encoded and the row lands unusable while PostgREST
       // still answers 201. That exact mistake made is_admin_member() read false
       // on this suite's first live run.
-      // DELETE FIRST. admin_role_assignments has user_id as its PRIMARY KEY, so a
-      // bare INSERT returns 409 if ANY row for this fixture survives from an
-      // earlier run -- and this arrange used to be a bare INSERT.
+      // No DELETE here: the leftover row was removed at the top of the suite.
+      // admin_role_assignments has user_id as its PRIMARY KEY, so a bare INSERT
+      // returns 409 if ANY row for this fixture survives from an earlier run.
       //
       // V5 §137: that is not hypothetical. Pushing over an in-flight CI run
       // cancelled it mid-suite; a cancelled process never runs a `finally`, so the
@@ -86,7 +96,6 @@ async function run() {
       // row in place -- so the failure perpetuated itself and every subsequent run
       // would have failed for a reason that had nothing to do with the code under
       // test. A suite must survive the abrupt death of the one before it.
-      await svc(`admin_role_assignments?user_id=eq.${uid}`, { method: 'DELETE' });
       const ins = await svc('admin_role_assignments', {
         method: 'POST', body: { user_id: uid, admin_role: 'viewer' },
       });
