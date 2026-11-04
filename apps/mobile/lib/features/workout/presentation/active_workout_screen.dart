@@ -738,7 +738,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (_) => WorkoutCompleteDialog(
+        builder: (dialogContext) => WorkoutCompleteDialog(
           title: workout.title,
           duration: _elapsedTime,
           calories: log.caloriesBurned ?? 0,
@@ -757,9 +757,10 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
                 weightKg: (st['weight'] as num?)?.toDouble(),
               ),
           ]),
-          // Both exits — Skip and Submit — come through here.
+          // Both exits — Skip and Submit — come through here. The dialog is on
+          // the root navigator; this screen's own context reaches the shell's.
           onDone: () {
-            Navigator.pop(context);
+            Navigator.pop(dialogContext);
             _leaveFinishedWorkout();
             context.go('/home');
           },
