@@ -20,6 +20,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 // which has one navigator. These run the real screen inside a ShellRoute, and only
 // the network is substituted (see ec03_intake_false_completion_e2e_test.dart).
 
+const _leaveTitle = 'Leave this workout?';
+
 /// Answers every request with an empty list, so nothing can reach a real service.
 class _EmptyClient extends http.BaseClient {
   @override
@@ -118,6 +120,38 @@ void main() {
 
         expect(find.byType(WorkoutCompleteDialog), findsNothing);
         expect(find.text('home screen'), findsOneWidget);
+      });
+
+      // "Leave this workout?", raised by the Zone's close control, is on the same
+      // root navigator and had the same exit.
+      group('Leave this workout?', () {
+        Future<void> choose(WidgetTester tester, String action) async {
+          await _openZone(tester, viaPush: viaPush);
+          await tester.tap(find.byIcon(Icons.close).first);
+          await _settle(tester);
+          expect(find.text(_leaveTitle), findsOneWidget);
+
+          await tester.tap(find.text(action));
+          await _settle(tester);
+        }
+
+        testWidgets('Keep Going closes it and stays in the workout',
+            (tester) async {
+          await choose(tester, 'Keep Going');
+
+          expect(find.text(_leaveTitle), findsNothing);
+          expect(find.textContaining('Finish Early'), findsOneWidget);
+          expect(find.text('home screen'), findsNothing);
+        });
+
+        for (final action in ['Leave For Now', 'End Workout']) {
+          testWidgets('$action closes it and lands on Home', (tester) async {
+            await choose(tester, action);
+
+            expect(find.text(_leaveTitle), findsNothing);
+            expect(find.text('home screen'), findsOneWidget);
+          });
+        }
       });
     });
   }
