@@ -87,6 +87,8 @@ class _ResumeWorkoutBannerState extends ConsumerState<ResumeWorkoutBanner> {
             backgroundColor: const Color(0xFFA855F7),
             foregroundColor: Colors.white,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            // The theme's minimumSize is full-width, which a Row cannot give.
+            minimumSize: const Size(0, 32),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
           child: const Text('Resume', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
         ),
