@@ -1626,7 +1626,8 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   void _showEndDialog(BuildContext context) {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      // The dialog is on the root navigator; [context] reaches the shell's.
+      builder: (dialogContext) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('Leave this workout?',
@@ -1639,18 +1640,18 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
           style: TextStyle(color: _muted.withValues(alpha: 0.7))),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('Keep Going', style: TextStyle(color: _primary))),
           TextButton(
             onPressed: () {
-              Navigator.pop(context);
+              Navigator.pop(dialogContext);
               _leaveForNow();
             },
             child: const Text('Leave For Now',
                 style: TextStyle(color: _primary))),
           TextButton(
             onPressed: () {
-              Navigator.pop(context);
+              Navigator.pop(dialogContext);
               _endWorkout();
             },
             child: const Text('End Workout', style: TextStyle(color: _error))),
