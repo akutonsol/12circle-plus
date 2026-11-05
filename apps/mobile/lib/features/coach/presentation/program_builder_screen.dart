@@ -13,6 +13,17 @@ const _accent = Color(0xFFDDB7FF);
 const _days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const _difficulties = ['beginner', 'intermediate', 'advanced'];
 
+/// What a write to a program's workouts makes out of date: the builder's own
+/// list, and the day count the Programs list and the Assign sheet read, which
+/// `myProgramsProvider` otherwise keeps for the life of the app.
+///
+/// Takes the container, read before the write, rather than a `WidgetRef`: a coach
+/// can leave while the write is in flight, and a disposed widget's `ref` throws.
+void _refreshProgramDays(ProviderContainer container, String programId) {
+  container.invalidate(programWorkoutsProvider(programId));
+  container.invalidate(myProgramsProvider);
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Program Library — coach's reusable programs + create new (Module 31 entry)
 // ════════════════════════════════════════════════════════════════════════════
@@ -261,6 +272,7 @@ class ProgramBuilderScreen extends ConsumerWidget {
 
   Future<void> _addWorkout(BuildContext context, WidgetRef ref,
       String programId, int weeks) async {
+    final container = ProviderScope.containerOf(context, listen: false);
     final result = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -271,7 +283,7 @@ class ProgramBuilderScreen extends ConsumerWidget {
     await ref
         .read(coachProgramServiceProvider)
         .addWorkoutToProgram(programId, result);
-    ref.invalidate(programWorkoutsProvider(programId));
+    _refreshProgramDays(container, programId);
   }
 
   Future<bool?> _confirmDelete(BuildContext context) => showDialog<bool>(
@@ -343,6 +355,8 @@ class _WorkoutCard extends ConsumerWidget {
                 icon: const Icon(Icons.more_horiz, color: _muted),
                 onSelected: (v) async {
                   final svc = ref.read(coachProgramServiceProvider);
+                  final container =
+                      ProviderScope.containerOf(context, listen: false);
                   if (v == 'edit') {
                     final res = await showModalBottomSheet<Map<String, dynamic>>(
                       context: context,
@@ -353,11 +367,11 @@ class _WorkoutCard extends ConsumerWidget {
                     );
                     if (res != null) {
                       await svc.updateWorkout(workout['id'] as String, res);
-                      ref.invalidate(programWorkoutsProvider(programId));
+                      _refreshProgramDays(container, programId);
                     }
                   } else if (v == 'delete') {
                     await svc.deleteWorkout(workout['id'] as String);
-                    ref.invalidate(programWorkoutsProvider(programId));
+                    _refreshProgramDays(container, programId);
                   }
                 },
                 itemBuilder: (_) => const [
