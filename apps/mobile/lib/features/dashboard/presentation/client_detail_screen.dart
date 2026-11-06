@@ -1666,6 +1666,7 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
                 // the client would own a program with nothing in it. See
                 // program_readiness.dart for how one comes to exist.
                 final empty = isKnownEmptyProgram(p);
+                final goal = ((p['goal'] as String?) ?? '').trim();
                 return Opacity(opacity: empty ? 0.45 : 1, child: GestureDetector(
                 onTap: empty ? null : () => setState(() => _selectedProgramId = p['id'] as String),
                 child: Container(
@@ -1683,7 +1684,7 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
                         style: const TextStyle(color: _wht, fontSize: 14, fontWeight: FontWeight.w600)),
                       Text(empty
                           ? 'No training days yet — add workouts in Programs before assigning'
-                          : '${p['duration_weeks']} weeks • ${p['goal'] ?? ''}',
+                          : '${p['duration_weeks']} weeks${goal.isEmpty ? '' : ' • $goal'}',
                         style: const TextStyle(color: _mut, fontSize: 12)),
                     ])),
                     if (_selectedProgramId == p['id'])
@@ -1709,10 +1710,18 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
   }
 
   Future<void> _assign() async {
+    // Read before the await: the coach can dismiss the sheet while the write is in
+    // flight, and a disposed State's `ref` throws.
+    final container = ProviderScope.containerOf(context);
     setState(() => _saving = true);
     try {
       await ref.read(coachProgramServiceProvider)
           .assignProgram(_selectedProgramId!, widget.clientId);
+      // The page behind the sheet reads the assignment through these two, and
+      // neither refreshes itself: the Assigned Program card kept naming the
+      // program this one had just replaced.
+      container.invalidate(clientDetailProvider(widget.clientId));
+      container.invalidate(clientScheduleProvider(widget.clientId));
     } catch (e, s) {
       // Same defect class as the nutrition save: this had no handler, so a
       // failure left the sheet spinning and the coach told nothing.
