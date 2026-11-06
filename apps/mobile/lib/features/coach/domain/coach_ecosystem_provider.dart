@@ -27,11 +27,16 @@ final pendingRequestsProvider = FutureProvider<List<Map<String, dynamic>>>((ref)
 });
 
 // ── Programs ─────────────────────────────────────────────────
+// QAX-SES-01: the providers below read the signed-in user inside a service, which
+// the class guard in per_user_provider_scope_test.dart cannot see. Each watches
+// the user so a change of account recomputes it instead of serving the last one's.
 final myProgramsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  ref.watch(currentUserProvider);
   return _programSvc.getMyPrograms();
 });
 
 final myAssignedProgramProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
+  ref.watch(currentUserProvider);
   return _programSvc.getMyAssignedProgram();
 });
 
@@ -42,20 +47,24 @@ final programWorkoutsProvider =
 });
 
 final todaysWorkoutProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
+  ref.watch(currentUserProvider);
   return _programSvc.getTodaysWorkout();
 });
 
 // ── Nutrition plan ───────────────────────────────────────────
 final myNutritionPlanProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
+  ref.watch(currentUserProvider);
   return _programSvc.getMyNutritionPlan();
 });
 
 // ── Habits ───────────────────────────────────────────────────
 final myHabitsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  ref.watch(currentUserProvider);
   return _programSvc.getMyHabits();
 });
 
 final todayHabitLogsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  ref.watch(currentUserProvider);
   return _programSvc.getTodayHabitLogs();
 });
 
@@ -76,10 +85,12 @@ final habitsWithStatusProvider = FutureProvider<List<Map<String, dynamic>>>((ref
 
 // ── Score ────────────────────────────────────────────────────
 final todayScoreProvider = FutureProvider<Map<String, dynamic>>((ref) async {
+  ref.watch(currentUserProvider);
   return _scoreSvc.getTodayScore();
 });
 
 final weekScoresProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  ref.watch(currentUserProvider);
   return _scoreSvc.getWeekScores();
 });
 
