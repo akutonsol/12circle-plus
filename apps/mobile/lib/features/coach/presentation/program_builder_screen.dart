@@ -85,6 +85,9 @@ class ProgramLibraryScreen extends ConsumerWidget {
   }
 
   Future<void> _createProgram(BuildContext context, WidgetRef ref) async {
+    // Read before the awaits: the coach can leave while the insert is in flight,
+    // and a disposed widget's `ref` throws.
+    final container = ProviderScope.containerOf(context);
     final created = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -94,7 +97,7 @@ class ProgramLibraryScreen extends ConsumerWidget {
     if (created == null) return;
     final program =
         await ref.read(coachProgramServiceProvider).createProgram(created);
-    ref.invalidate(myProgramsProvider);
+    container.invalidate(myProgramsProvider);
     if (context.mounted) {
       Navigator.push(
           context,
@@ -193,12 +196,14 @@ class ProgramBuilderScreen extends ConsumerWidget {
             icon: const Icon(Icons.more_vert, color: _white),
             onSelected: (v) async {
               if (v == 'delete') {
+                // As in `_createProgram`: read before the awaits.
+                final container = ProviderScope.containerOf(context);
                 final ok = await _confirmDelete(context);
                 if (ok != true) return;
                 await ref
                     .read(coachProgramServiceProvider)
                     .deleteProgram(programId);
-                ref.invalidate(myProgramsProvider);
+                container.invalidate(myProgramsProvider);
                 if (context.mounted) Navigator.pop(context);
               }
             },
@@ -288,7 +293,7 @@ class ProgramBuilderScreen extends ConsumerWidget {
 
   Future<bool?> _confirmDelete(BuildContext context) => showDialog<bool>(
         context: context,
-        builder: (_) => AlertDialog(
+        builder: (dialogContext) => AlertDialog(
           backgroundColor: _card,
           title: const Text('Delete program?',
               style: TextStyle(color: _white)),
@@ -297,11 +302,11 @@ class ProgramBuilderScreen extends ConsumerWidget {
               style: TextStyle(color: _muted)),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(context, false),
+                onPressed: () => Navigator.pop(dialogContext, false),
                 child: const Text('Cancel',
                     style: TextStyle(color: _muted))),
             TextButton(
-                onPressed: () => Navigator.pop(context, true),
+                onPressed: () => Navigator.pop(dialogContext, true),
                 child: const Text('Delete',
                     style: TextStyle(color: Color(0xFFFFB4AB)))),
           ],

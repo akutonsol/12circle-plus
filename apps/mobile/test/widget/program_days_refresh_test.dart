@@ -20,7 +20,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 // refreshed only the builder's own list, so a coach who had just built a week saw
 // it greyed out as "No training days yet" until they pulled to refresh. Deleting a
 // program's last day was the same defect the other way round: the empty program
-// stayed selectable.
+// stayed selectable. Creating and deleting a whole program refreshed the list only
+// while the coach stayed put: a coach who tapped away before the answer came back
+// hit a disposed `ref`, and the list kept its old answer.
 //
 // These drive the real screens. Only the service is substituted, through the two
 // list providers, which still respond to invalidation.
@@ -36,6 +38,10 @@ class _FakeSvc extends Fake implements CoachProgramService {
 
   /// When set, a workout write waits on this, so a test can act mid-save.
   Completer<void>? writeGate;
+
+  /// The same for the insert of a new program and for a program's deletion.
+  Completer<void>? createGate;
+  Completer<void>? deleteGate;
 
   var _nextId = 0;
   String _id(String prefix) => '$prefix-${_nextId++}';
@@ -67,6 +73,7 @@ class _FakeSvc extends Fake implements CoachProgramService {
 
   @override
   Future<Map<String, dynamic>> createProgram(Map<String, dynamic> data) async {
+    await createGate?.future;
     final row = {...data, 'id': _id('program')};
     programs.add(row);
     return row;
@@ -94,6 +101,13 @@ class _FakeSvc extends Fake implements CoachProgramService {
   Future<void> deleteWorkout(String workoutId) async {
     await writeGate?.future;
     workouts.removeWhere((w) => w['id'] == workoutId);
+  }
+
+  @override
+  Future<void> deleteProgram(String programId) async {
+    await deleteGate?.future;
+    programs.removeWhere((p) => p['id'] == programId);
+    workouts.removeWhere((w) => w['program_id'] == programId);
   }
 
   @override
@@ -215,6 +229,16 @@ Future<void> _addWednesdayWorkout(WidgetTester t) async {
 
 Future<void> _openBuilder(WidgetTester t, String name) async {
   await t.tap(find.text(name));
+  await _settle(t);
+}
+
+/// From inside a program's builder: the program's own menu, then the confirm.
+Future<void> _deleteProgramFromMenu(WidgetTester t) async {
+  await t.tap(find.byIcon(Icons.more_vert));
+  await _settle(t);
+  await t.tap(find.text('Delete program'));
+  await _settle(t);
+  await t.tap(find.text('Delete'));
   await _settle(t);
 }
 
@@ -429,6 +453,92 @@ void main() {
       await _settle(t);
 
       expect(svc.workouts.single['day_of_week'], 'Friday');
+    });
+  });
+
+  group('creating a program', () {
+    testWidgets('leaving before the insert finishes: the program is still listed',
+        (t) async {
+      final svc = _FakeSvc()
+        ..seedProgram('existing', 'Existing Plan', days: ['Monday'])
+        ..createGate = Completer<void>();
+      final router = await _pump(t, svc);
+
+      await _createProgram(t, _program);
+
+      // The coach taps away before the insert has answered.
+      router.go('/client');
+      await _settle(t);
+      svc.createGate!.complete();
+      await _settle(t);
+
+      expect(svc.programs.map((p) => p['name']), contains(_program));
+      router.go('/programs');
+      await _settle(t);
+      _expectListCount(_program, 0);
+      _expectListCount('Existing Plan', 1);
+    });
+
+    testWidgets('the same from an empty list: it is not left on "No programs yet"',
+        (t) async {
+      final svc = _FakeSvc()..createGate = Completer<void>();
+      final router = await _pump(t, svc);
+      expect(find.textContaining('No programs yet'), findsOneWidget);
+
+      await _createProgram(t, _program);
+      router.go('/client');
+      await _settle(t);
+      svc.createGate!.complete();
+      await _settle(t);
+
+      router.go('/programs');
+      await _settle(t);
+      expect(find.textContaining('No programs yet'), findsNothing);
+      _expectListCount(_program, 0);
+    });
+  });
+
+  group('deleting a program', () {
+    testWidgets('from the menu: gone from the list and from the Assign sheet',
+        (t) async {
+      final svc = _FakeSvc()
+        ..seedProgram('p1', _program, days: ['Wednesday'])
+        ..seedProgram('p2', 'Other Plan', days: ['Monday']);
+      final router = await _pump(t, svc);
+
+      await _openBuilder(t, _program);
+      await _deleteProgramFromMenu(t);
+
+      expect(svc.programs.map((p) => p['id']), ['p2']);
+      expect(find.text(_program), findsNothing);
+      _expectListCount('Other Plan', 1);
+
+      await _openAssignSheet(t, router);
+      expect(find.text(_program), findsNothing);
+      expect(find.text('Other Plan'), findsOneWidget);
+    });
+
+    testWidgets('leaving while the delete is in flight: the list still drops it',
+        (t) async {
+      final svc = _FakeSvc()
+        ..seedProgram('p1', _program, days: ['Wednesday'])
+        ..seedProgram('p2', 'Other Plan', days: ['Monday']);
+      final router = await _pump(t, svc);
+
+      await _openBuilder(t, _program);
+      svc.deleteGate = Completer<void>();
+      await _deleteProgramFromMenu(t);
+
+      router.go('/client');
+      await _settle(t);
+      svc.deleteGate!.complete();
+      await _settle(t);
+
+      expect(svc.programs.map((p) => p['id']), ['p2']);
+      router.go('/programs');
+      await _settle(t);
+      expect(find.text(_program), findsNothing);
+      _expectListCount('Other Plan', 1);
     });
   });
 
