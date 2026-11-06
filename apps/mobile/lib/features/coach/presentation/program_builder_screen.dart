@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
+import '../../../core/observability/app_failure.dart';
 import '../domain/coach_ecosystem_provider.dart';
 
 const _bg     = Color(0xFF030303);
@@ -22,6 +24,46 @@ const _difficulties = ['beginner', 'intermediate', 'advanced'];
 void _refreshProgramDays(ProviderContainer container, String programId) {
   container.invalidate(programWorkoutsProvider(programId));
   container.invalidate(myProgramsProvider);
+}
+
+const _createFailedMessage =
+    "Couldn't create the program — check your connection and try again.";
+const _workoutSaveFailedMessage =
+    "Couldn't save the workout — check your connection and try again.";
+const _workoutDeleteFailedMessage =
+    "Couldn't delete the workout — check your connection and try again.";
+const _deleteFailedMessage =
+    "Couldn't delete the program — check your connection and try again.";
+
+/// The database refuses to delete a program that any assignment, past or present,
+/// still points at: a foreign key violation, Postgres 23503.
+const _deleteBlockedMessage =
+    "This program can't be deleted because clients are or have been assigned to it.";
+
+// Typedefs, not inline function types: query_failure_masking_guard_test.dart reads
+// `Future<bool>` declarations with a regex that stops at the first `)`, so a `()`
+// in the parameter list would hide this one from it.
+typedef _Write = Future<void> Function();
+typedef _FailedMessage = String Function(Object error);
+
+/// Runs one of the builder's writes. A failure is reported and the coach is told,
+/// where it used to escape as an unhandled error and say nothing. [messenger] is
+/// read before the write's first await, so the message still shows if the coach
+/// has left the screen. Returns whether the write succeeded.
+Future<bool> _write(
+  ScaffoldMessengerState messenger,
+  String origin,
+  _Write write,
+  _FailedMessage failedMessage,
+) async {
+  try {
+    await write();
+    return true;
+  } catch (e, s) {
+    reportError(origin, e, s);
+    messenger.showSnackBar(SnackBar(content: Text(failedMessage(e))));
+    return false;
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -88,6 +130,7 @@ class ProgramLibraryScreen extends ConsumerWidget {
     // Read before the awaits: the coach can leave while the insert is in flight,
     // and a disposed widget's `ref` throws.
     final container = ProviderScope.containerOf(context);
+    final messenger = ScaffoldMessenger.of(context);
     final created = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -95,8 +138,12 @@ class ProgramLibraryScreen extends ConsumerWidget {
       builder: (_) => const _ProgramMetaSheet(),
     );
     if (created == null) return;
-    final program =
-        await ref.read(coachProgramServiceProvider).createProgram(created);
+    late Map<String, dynamic> program;
+    final saved = await _write(messenger, 'ProgramLibrary._createProgram', () async {
+      program =
+          await ref.read(coachProgramServiceProvider).createProgram(created);
+    }, (_) => _createFailedMessage);
+    if (!saved) return;
     container.invalidate(myProgramsProvider);
     if (context.mounted) {
       Navigator.push(
@@ -198,11 +245,20 @@ class ProgramBuilderScreen extends ConsumerWidget {
               if (v == 'delete') {
                 // As in `_createProgram`: read before the awaits.
                 final container = ProviderScope.containerOf(context);
+                final messenger = ScaffoldMessenger.of(context);
                 final ok = await _confirmDelete(context);
                 if (ok != true) return;
-                await ref
-                    .read(coachProgramServiceProvider)
-                    .deleteProgram(programId);
+                final deleted = await _write(
+                  messenger,
+                  'ProgramBuilder._deleteProgram',
+                  () => ref
+                      .read(coachProgramServiceProvider)
+                      .deleteProgram(programId),
+                  (e) => e is PostgrestException && e.code == '23503'
+                      ? _deleteBlockedMessage
+                      : _deleteFailedMessage,
+                );
+                if (!deleted) return;
                 container.invalidate(myProgramsProvider);
                 if (context.mounted) Navigator.pop(context);
               }
@@ -278,6 +334,7 @@ class ProgramBuilderScreen extends ConsumerWidget {
   Future<void> _addWorkout(BuildContext context, WidgetRef ref,
       String programId, int weeks) async {
     final container = ProviderScope.containerOf(context, listen: false);
+    final messenger = ScaffoldMessenger.of(context);
     final result = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -285,10 +342,15 @@ class ProgramBuilderScreen extends ConsumerWidget {
       builder: (_) => _WorkoutEditorSheet(maxWeeks: weeks),
     );
     if (result == null) return;
-    await ref
-        .read(coachProgramServiceProvider)
-        .addWorkoutToProgram(programId, result);
-    _refreshProgramDays(container, programId);
+    final saved = await _write(
+      messenger,
+      'ProgramBuilder._addWorkout',
+      () => ref
+          .read(coachProgramServiceProvider)
+          .addWorkoutToProgram(programId, result),
+      (_) => _workoutSaveFailedMessage,
+    );
+    if (saved) _refreshProgramDays(container, programId);
   }
 
   Future<bool?> _confirmDelete(BuildContext context) => showDialog<bool>(
@@ -298,7 +360,7 @@ class ProgramBuilderScreen extends ConsumerWidget {
           title: const Text('Delete program?',
               style: TextStyle(color: _white)),
           content: const Text(
-              'This removes the program and all its workouts. Clients already assigned keep their copy.',
+              "This removes the program and all its workouts. A program that has ever been assigned to a client can't be deleted.",
               style: TextStyle(color: _muted)),
           actions: [
             TextButton(
@@ -362,6 +424,7 @@ class _WorkoutCard extends ConsumerWidget {
                   final svc = ref.read(coachProgramServiceProvider);
                   final container =
                       ProviderScope.containerOf(context, listen: false);
+                  final messenger = ScaffoldMessenger.of(context);
                   if (v == 'edit') {
                     final res = await showModalBottomSheet<Map<String, dynamic>>(
                       context: context,
@@ -371,12 +434,22 @@ class _WorkoutCard extends ConsumerWidget {
                           maxWeeks: weeks, existing: workout),
                     );
                     if (res != null) {
-                      await svc.updateWorkout(workout['id'] as String, res);
-                      _refreshProgramDays(container, programId);
+                      final saved = await _write(
+                        messenger,
+                        'ProgramBuilder._editWorkout',
+                        () => svc.updateWorkout(workout['id'] as String, res),
+                        (_) => _workoutSaveFailedMessage,
+                      );
+                      if (saved) _refreshProgramDays(container, programId);
                     }
                   } else if (v == 'delete') {
-                    await svc.deleteWorkout(workout['id'] as String);
-                    _refreshProgramDays(container, programId);
+                    final deleted = await _write(
+                      messenger,
+                      'ProgramBuilder._deleteWorkout',
+                      () => svc.deleteWorkout(workout['id'] as String),
+                      (_) => _workoutDeleteFailedMessage,
+                    );
+                    if (deleted) _refreshProgramDays(container, programId);
                   }
                 },
                 itemBuilder: (_) => const [
