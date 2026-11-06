@@ -46,8 +46,27 @@ class _FakeSvc extends Fake implements CoachProgramService {
   var _nextId = 0;
   String _id(String prefix) => '$prefix-${_nextId++}';
 
-  void seedProgram(String id, String name, {List<String> days = const []}) {
-    programs.add({'id': id, 'name': name, 'goal': 'Goal', 'duration_weeks': 8});
+  /// The program the client is assigned, as the coach's client page reads it.
+  String? assignedProgramId;
+
+  Map<String, dynamic>? get programAssignment {
+    final id = assignedProgramId;
+    if (id == null) return null;
+    final program = programs.firstWhere((p) => p['id'] == id);
+    return {
+      'current_week': 1,
+      'workout_programs': {'name': program['name'], 'duration_weeks': 8},
+    };
+  }
+
+  void seedProgram(String id, String name,
+      {List<String> days = const [], String? goal = 'Goal'}) {
+    programs.add({
+      'id': id,
+      'name': name,
+      if (goal != null) 'goal': goal,
+      'duration_weeks': 8,
+    });
     for (final day in days) {
       workouts.add({
         'id': _id('workout'),
@@ -111,8 +130,10 @@ class _FakeSvc extends Fake implements CoachProgramService {
   }
 
   @override
-  Future<void> assignProgram(String programId, String clientId) async =>
-      assigned.add('$programId>$clientId');
+  Future<void> assignProgram(String programId, String clientId) async {
+    assigned.add('$programId>$clientId');
+    assignedProgramId = programId;
+  }
 }
 
 /// Answers every request with an empty list, so nothing can reach a real service.
@@ -184,6 +205,7 @@ Future<GoRouter> _pump(WidgetTester t, _FakeSvc svc) async {
             'first_name': 'Jordan',
             'last_name': 'Test',
             'role': 'client',
+            'program_assignment': svc.programAssignment,
           }),
       clientHasPaidPlanProvider(_clientId).overrideWith((ref) async => true),
       clientScheduleProvider(_clientId).overrideWith((ref) async => null),
@@ -539,6 +561,62 @@ void main() {
       await _settle(t);
       expect(find.text(_program), findsNothing);
       _expectListCount('Other Plan', 1);
+    });
+  });
+
+  group('assigning a program', () {
+    testWidgets('the Assigned Program card names the new program at once',
+        (t) async {
+      final svc = _FakeSvc()
+        ..seedProgram('old', 'Old Plan', days: ['Monday'])
+        ..seedProgram('new', 'New Plan', days: ['Wednesday'])
+        ..assignedProgramId = 'old';
+      final router = await _pump(t, svc);
+
+      await _openAssignSheet(t, router);
+      await t.tap(find.text('New Plan'));
+      await _settle(t);
+      await t.tap(find.text('Assign Program'));
+      await _settle(t);
+
+      expect(svc.assignedProgramId, 'new');
+      expect(find.text('Program assigned!'), findsOneWidget);
+      expect(find.text('New Plan'), findsOneWidget,
+          reason: 'the card must show the program the coach just assigned');
+      expect(find.text('Old Plan'), findsNothing,
+          reason: 'the card must not keep naming the program it replaced');
+    });
+
+    testWidgets('a client with no program: the card stops saying so', (t) async {
+      final svc = _FakeSvc()..seedProgram('p1', _program, days: ['Monday']);
+      final router = await _pump(t, svc);
+
+      await _openAssignSheet(t, router);
+      expect(find.text('No program assigned yet'), findsOneWidget);
+      await t.tap(find.text(_program));
+      await _settle(t);
+      await t.tap(find.text('Assign Program'));
+      await _settle(t);
+
+      expect(find.text('No program assigned yet'), findsNothing);
+      expect(find.text(_program), findsOneWidget);
+    });
+  });
+
+  group('the Assign sheet\'s program rows', () {
+    testWidgets('a program with no goal shows its weeks, with no dangling bullet',
+        (t) async {
+      final svc = _FakeSvc()
+        ..seedProgram('p1', 'With Goal', days: ['Monday'])
+        ..seedProgram('p2', 'No Goal', days: ['Monday'], goal: null);
+      final router = await _pump(t, svc);
+
+      await _openAssignSheet(t, router);
+
+      expect(find.text('8 weeks • Goal'), findsOneWidget);
+      expect(find.text('8 weeks'), findsOneWidget);
+      expect(find.textContaining('•'), findsOneWidget,
+          reason: 'only the row that has a goal carries a separator');
     });
   });
 
