@@ -1070,8 +1070,12 @@ class _ProgressTab extends StatelessWidget {
             const SizedBox(height: 6),
             ...workouts.take(4).map((w) {
               final dateStr = (w['completed_at'] as String? ?? '').split('T')[0];
-              final name = w['workout_name'] as String? ?? w['program_name'] as String? ?? 'Workout';
-              final dur  = w['duration_minutes'] as int?;
+              // A `workout_sessions` row (`clientDetailProvider` selects its title and
+              // seconds), not a name and minutes. A session that recorded no duration
+              // shows none, rather than a "0m" nobody measured.
+              final name = w['workout_title'] as String? ?? 'Workout';
+              final secs = w['duration_seconds'];
+              final dur  = secs is num && secs >= 30 ? (secs / 60).round() : null;
               return Padding(
                 padding: const EdgeInsets.only(bottom: 6),
                 child: Row(children: [
