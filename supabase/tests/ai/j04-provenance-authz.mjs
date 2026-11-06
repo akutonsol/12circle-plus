@@ -3,7 +3,8 @@
 // A decision trace is the audit record for a training decision made about a
 // person's body. Two questions: does it record enough to replay the decision,
 // and can only the right people read it?
-import { mark, signIn, rest, rpc, section, characterize, invariant, summary } from './lib.mjs';
+import { mark, signIn, rest, rpc, section, characterize, invariant, summary,
+         intelligenceSubstrate, whenSubstrateEmpty } from './lib.mjs';
 
 const _from = mark();
 
@@ -187,12 +188,20 @@ section('J-04B  what a decision trace actually records');
 
   const analytics = await rpc(admin, 'decision_analytics');
   if (analytics.status < 300) {
-    characterize('F-J-08  recorded decisions triggered no rule and rejected nothing',
-      analytics.body?.most_triggered_rule === null && analytics.body?.most_rejected_exercise === null,
-      `total_generations=${analytics.body?.total_generations}, ` +
-      `most_triggered_rule=${analytics.body?.most_triggered_rule}, ` +
-      `most_rejected_exercise=${analytics.body?.most_rejected_exercise}, ` +
-      `avg_recovery=${analytics.body?.avg_recovery} — every persisted decision is an empty one`);
+    // Every decision persisted so far is empty only because exercise_intelligence
+    // is. Once it has rows, generations (d04/d05 make some on every CI run) record
+    // rules and rejections, so this is SKIPPED while populated and FAILS if the
+    // state cannot be read (PRQ-1, 2026-10-28). Traces persist: if the table is
+    // later emptied, the old non-empty decisions make this fail — a real drift
+    // signal to look at, not a regression to silence.
+    whenSubstrateEmpty(await intelligenceSubstrate(admin),
+      'F-J-08  recorded decisions triggered no rule and rejected nothing', () =>
+      characterize('F-J-08  recorded decisions triggered no rule and rejected nothing',
+        analytics.body?.most_triggered_rule === null && analytics.body?.most_rejected_exercise === null,
+        `total_generations=${analytics.body?.total_generations}, ` +
+        `most_triggered_rule=${analytics.body?.most_triggered_rule}, ` +
+        `most_rejected_exercise=${analytics.body?.most_rejected_exercise}, ` +
+        `avg_recovery=${analytics.body?.avg_recovery} — every persisted decision is an empty one`));
   }
 }
 

@@ -106,7 +106,8 @@ void main() {
     await _pump(t, [_Pg('ENGINE_NO_SELECTION: the coaching engine selected no exercises for week 1 …')]);
     await t.tap(find.byKey(const ValueKey('generate-week-1')));
     await t.pumpAndSettle();
-    expect(find.textContaining("couldn't pick exercises yet"), findsOneWidget);
+    expect(find.textContaining("Couldn't pick exercises yet"), findsOneWidget);
+    expect(find.textContaining('none have been cleared for Program Builder'), findsOneWidget);
     expect(find.textContaining('Nothing was saved'), findsOneWidget);
     expect(find.textContaining('is ready'), findsNothing);
   });
