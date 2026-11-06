@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/challenge_service.dart';
 import '../data/live_challenge_service.dart';
 import '../data/models/challenge_model.dart';
@@ -11,6 +12,7 @@ final selectedChallengeTabProvider = StateProvider<int>((ref) => 0);
 
 // ── Live challenges from Supabase ─────────────────────────────────────────────
 final liveChallengesProvider = FutureProvider<List<Challenge>>((ref) async {
+  ref.watch(currentUserProvider);
   final svc = ref.watch(liveChallengeServiceProvider);
   return svc.getActiveChallenges();
 });

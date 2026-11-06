@@ -202,6 +202,7 @@ final filteredExercisesProvider = Provider<List<Exercise>>((ref) {
 /// A training day the client finished under this assignment is marked done, so
 /// Home stops offering it. Completing a session invalidates this provider.
 final assignedWorkoutsProvider = FutureProvider<List<Workout>>((ref) async {
+  ref.watch(currentUserProvider);
   final service = CoachProgramService();
   final program = await service.getMyAssignedProgram();
   if (program == null) return [];

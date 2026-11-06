@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/habit_service.dart';
 import '../data/models/habit_model.dart';
 import '../data/habit_reminder_service.dart';
@@ -10,6 +11,7 @@ final habitServiceProvider = Provider<HabitService>((ref) => HabitService());
 
 // ── Live habits from Supabase (coach-assigned or default) ─────────────────────
 final liveHabitsProvider = FutureProvider<List<Habit>>((ref) async {
+  ref.watch(currentUserProvider);
   final svc = CoachProgramService();
   final results = await Future.wait([
     svc.getMyHabits(),

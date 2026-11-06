@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../auth/domain/auth_provider.dart';
 import '../data/models/checkin_model.dart';
 import '../data/weekly_checkin_service.dart';
 import '../domain/checkin_hub.dart';
@@ -13,6 +14,7 @@ import '../domain/checkin_provider.dart';
 /// is wrapped here rather than called through a swallowing helper, so a failed
 /// read reaches the screen as a failure instead of as "no history".
 final checkinHistoryProvider = FutureProvider<List<WeeklyCheckin>>((ref) async {
+  ref.watch(currentUserProvider);
   return WeeklyCheckinService().getWeeklyCheckins(limit: checkinHistoryLimit);
 });
 

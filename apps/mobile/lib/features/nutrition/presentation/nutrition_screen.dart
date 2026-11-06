@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/nutrition_service.dart';
 import '../data/models/food_model.dart';
 import '../domain/nutrition_provider.dart';
@@ -17,10 +18,14 @@ const _tertiary = Color(0xFF6FFBBE);
 const _error    = Color(0xFFFFB4AB);
 
 final _svcProvider = Provider<NutritionService>((ref) => NutritionService());
-final _totalsProvider = FutureProvider<Map<String, double>>((ref) async =>
-  ref.watch(_svcProvider).getTodayTotals());
-final _logsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async =>
-  ref.watch(_svcProvider).getTodayLogs());
+final _totalsProvider = FutureProvider<Map<String, double>>((ref) async {
+  ref.watch(currentUserProvider);
+  return ref.watch(_svcProvider).getTodayTotals();
+});
+final _logsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  ref.watch(currentUserProvider);
+  return ref.watch(_svcProvider).getTodayLogs();
+});
 
 class NutritionScreen extends ConsumerStatefulWidget {
   const NutritionScreen({super.key});

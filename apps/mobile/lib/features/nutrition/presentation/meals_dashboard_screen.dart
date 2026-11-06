@@ -6,6 +6,7 @@ import 'widgets/nutrition_load_failed.dart';
 import 'widgets/pill_tab.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/nutrition_service.dart';
 import '../data/models/food_model.dart';
 import '../domain/nutrition_provider.dart' hide nutritionServiceProvider;
@@ -31,12 +32,16 @@ const _blue  = nutBlue;
 final _svcProvider = Provider<NutritionService>((ref) => NutritionService());
 
 /// Public so FIT-022's failure card can retry it.
-final nutritionTotalsProvider = FutureProvider<Map<String, double>>(
-  (ref) async => ref.watch(_svcProvider).getTodayTotals());
+final nutritionTotalsProvider = FutureProvider<Map<String, double>>((ref) async {
+  ref.watch(currentUserProvider);
+  return ref.watch(_svcProvider).getTodayTotals();
+});
 
 final _logsForDateProvider =
-    FutureProvider.family<List<Map<String, dynamic>>, DateTime>(
-  (ref, date) async => ref.watch(_svcProvider).getLogsForDate(date));
+    FutureProvider.family<List<Map<String, dynamic>>, DateTime>((ref, date) async {
+  ref.watch(currentUserProvider);
+  return ref.watch(_svcProvider).getLogsForDate(date);
+});
 
 // ── Screen ─────────────────────────────────────────────────────────────────
 class MealsDashboardScreen extends ConsumerStatefulWidget {

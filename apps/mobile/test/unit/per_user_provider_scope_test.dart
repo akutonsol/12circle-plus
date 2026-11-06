@@ -42,14 +42,54 @@ final _readsUser = RegExp(r'auth\.currentUser\b');
 final _watchesAuth = RegExp(
     r'ref\.watch\(\s*(?:currentUserProvider|currentUserProfileProvider|authStateProvider)\b');
 
+/// A service method declaration, two-space indented as in every data/ service.
+final _method = RegExp(
+    r'^\s{2}(?:static\s+)?(?:Future|Stream)<[^;{=]*?>\s+(\w+)\s*\(',
+    multiLine: true);
+
+/// Providers that hand the user read to a service but whose answer is not about
+/// who is signed in.
+const _exempt = {
+  // Keyed by the client's id: the answer is about that client, whoever asks.
+  'clientHasPaidPlanProvider',
+};
+
+/// Names of service methods that read the signed-in user in their own body. A
+/// provider that calls one is per-user even though its own body never says so, and
+/// the first version of this guard could not see it.
+Set<String> userReadingMethods(Directory lib) {
+  final names = <String>{};
+  for (final f in lib.listSync(recursive: true).whereType<File>()) {
+    final path = f.path.replaceAll('\\', '/');
+    if (!path.endsWith('.dart')) continue;
+    if (!(path.contains('/data/') || path.toLowerCase().contains('service'))) continue;
+    final src = _stripComments(f.readAsStringSync());
+    final decls = _method.allMatches(src).toList();
+    for (var i = 0; i < decls.length; i++) {
+      final end = i + 1 < decls.length ? decls[i + 1].start : src.length;
+      if (_readsUser.hasMatch(src.substring(decls[i].start, end))) {
+        names.add(decls[i].group(1)!);
+      }
+    }
+  }
+  return names;
+}
+
 List<String> offenders(Directory lib) {
   final found = <String>[];
+  final delegating = {
+    for (final n in userReadingMethods(lib)) n: RegExp('\\.${RegExp.escape(n)}\\('),
+  };
   for (final f in lib.listSync(recursive: true).whereType<File>()) {
     if (!f.path.endsWith('.dart')) continue;
     final src = _stripComments(f.readAsStringSync());
     for (final m in _cachedProvider.allMatches(src)) {
       final body = _initializer(src, m.start);
-      if (_readsUser.hasMatch(body) && !_watchesAuth.hasMatch(body)) {
+      final readsUser = _readsUser.hasMatch(body) ||
+          delegating.values.any((call) => call.hasMatch(body));
+      if (readsUser &&
+          !_watchesAuth.hasMatch(body) &&
+          !_exempt.contains(m.group(1))) {
         found.add('${f.path.substring(lib.path.length + 1)}: ${m.group(1)}');
       }
     }
@@ -82,6 +122,40 @@ final disposedProvider = FutureProvider.autoDispose<int>((ref) async {
 });
 ''');
     expect(offenders(dir), ['a.dart: badProvider', 'a.dart: commentedProvider']);
+  });
+
+  test('self-test: a provider that delegates the user read to a service is seen',
+      () {
+    final dir = Directory.systemTemp.createTempSync('qax_ses01_delegate_');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    Directory('${dir.path}/data').createSync();
+    File('${dir.path}/data/svc.dart').writeAsStringSync('''
+class Svc {
+  Future<int> getMine() async {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    return 0;
+  }
+  Future<int> getShared() async {
+    return 1;
+  }
+}
+''');
+    File('${dir.path}/b.dart').writeAsStringSync('''
+final delegatingProvider = FutureProvider<int>((ref) async {
+  return Svc().getMine();
+});
+final watchingDelegateProvider = FutureProvider<int>((ref) async {
+  ref.watch(currentUserProvider);
+  return Svc().getMine();
+});
+final sharedProvider = FutureProvider<int>((ref) async {
+  return Svc().getShared();
+});
+final clientHasPaidPlanProvider = FutureProvider.family<int, String>((ref, id) async {
+  return Svc().getMine();
+});
+''');
+    expect(offenders(dir), ['b.dart: delegatingProvider']);
   });
 
   test('no cached provider reads the current user without watching auth', () {
