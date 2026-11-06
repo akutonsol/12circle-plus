@@ -1845,6 +1845,9 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
     final carb = int.tryParse(_carb.text);
     final fat  = int.tryParse(_fat.text);
     if (cal == null || pro == null || carb == null || fat == null) return;
+    // Read before the await: the sheet can be dismissed while the write is in flight,
+    // and a disposed State's `ref` throws.
+    final container = ProviderScope.containerOf(context);
     setState(() => _saving = true);
     try {
       await ref.read(coachProgramServiceProvider).assignNutritionPlan(
@@ -1852,6 +1855,9 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
         calories: cal, protein: pro, carbs: carb, fat: fat,
         waterOz: int.tryParse(_water.text),
         notes: _notes.text.isEmpty ? null : _notes.text);
+      // The page behind the sheet reads the plan through this and does not refresh
+      // itself: it kept saying "No nutrition plan assigned yet".
+      container.invalidate(clientDetailProvider(widget.clientId));
     } catch (e, s) {
       // This used to have no handler: a failed save left the sheet spinning and the
       // coach told nothing. Since migration 184 the RPC also refuses (42501) when
@@ -2002,6 +2008,8 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
     ]));
 
   Future<void> _save() async {
+    // Read before the await, as in the nutrition sheet.
+    final container = ProviderScope.containerOf(context);
     setState(() => _saving = true);
     final habits = _selected.map((i) {
       final p = _presets[i];
@@ -2013,6 +2021,8 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
     }).toList();
     try {
       await ref.read(coachProgramServiceProvider).assignHabits(widget.clientId, habits);
+      // The page lists the client's habits from this and does not refresh itself.
+      container.invalidate(clientDetailProvider(widget.clientId));
     } catch (e, s) {
       reportError('AssignHabitsSheet._save', e, s);
       if (!mounted) return;
