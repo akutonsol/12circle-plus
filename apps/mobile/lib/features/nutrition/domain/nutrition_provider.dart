@@ -6,6 +6,7 @@ import '../../auth/domain/auth_provider.dart';
 final nutritionServiceProvider = Provider<NutritionService>((ref) => NutritionService());
 
 final todayNutritionProvider = FutureProvider<Map<String, double>>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(nutritionServiceProvider).getTodayTotals();
 });
 

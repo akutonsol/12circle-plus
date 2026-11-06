@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/community_service.dart';
 import '../data/live_community_service.dart';
 import '../data/models/post_model.dart';
@@ -15,6 +16,7 @@ final selectedPostProvider = StateProvider<CommunityPost?>((ref) => null);
 
 // ── Live posts from Supabase ──────────────────────────────────────────────────
 final livePostsProvider = FutureProvider<List<CommunityPost>>((ref) async {
+  ref.watch(currentUserProvider);
   final svc = ref.watch(liveCommunityServiceProvider);
   final live = await svc.getPosts();
   // Real posts only — no sample fallback (avoids demo names in production).
@@ -120,6 +122,7 @@ final postListProvider = Provider<List<CommunityPost>>((ref) {
 
 // ── Live groups from Supabase ─────────────────────────────────────────────────
 final liveGroupsProvider = FutureProvider<List<CommunityGroup>>((ref) async {
+  ref.watch(currentUserProvider);
   final svc = ref.watch(liveCommunityServiceProvider);
   final live = await svc.getGroups();
   if (live.isEmpty) {

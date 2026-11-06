@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/class_service.dart';
 import '../data/live_class_service.dart';
 import '../data/models/class_model.dart';
@@ -14,6 +15,7 @@ final classFilterProvider = StateProvider<ClassCategory?>((ref) => null);
 final refreshClassesProvider = StateProvider<int>((ref) => 0);
 
 final liveClassesFromDbProvider = FutureProvider<List<FitnessClass>>((ref) async {
+  ref.watch(currentUserProvider);
   ref.watch(refreshClassesProvider);
   final svc = ref.watch(liveClassServiceProvider);
   final live = await svc.getUpcomingClasses();
@@ -38,12 +40,14 @@ final liveNowClassesProvider = Provider<List<FitnessClass>>((ref) {
 
 // My Bookings tab: classes the user registered for (real DB query).
 final myClassBookingsProvider = FutureProvider<List<FitnessClass>>((ref) async {
+  ref.watch(currentUserProvider);
   ref.watch(refreshClassesProvider);
   return ref.watch(liveClassServiceProvider).getMyBookings();
 });
 
 // Coach: classes I created.
 final myCreatedClassesProvider = FutureProvider<List<FitnessClass>>((ref) async {
+  ref.watch(currentUserProvider);
   ref.watch(refreshClassesProvider);
   return ref.watch(liveClassServiceProvider).getMyCreatedClasses();
 });

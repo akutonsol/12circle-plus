@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/payment_service.dart';
 import '../data/coach_revenue_service.dart';
 
@@ -18,6 +19,7 @@ final coachConnectStatusProvider =
 /// Coach revenue metrics (monthly/lifetime/mrr/subscribers/marketplace/direct $).
 final coachRevenueServiceProvider = Provider((ref) => CoachRevenueService());
 final coachRevenueProvider = FutureProvider<Map<String, double>>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(coachRevenueServiceProvider).getMetrics();
 });
 

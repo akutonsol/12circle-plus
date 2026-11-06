@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/weekly_checkin_service.dart';
 import '../data/models/checkin_model.dart';
 
@@ -6,10 +7,12 @@ final weeklyCheckinServiceProvider =
     Provider<WeeklyCheckinService>((ref) => WeeklyCheckinService());
 
 final weeklyCheckinsProvider = FutureProvider<List<WeeklyCheckin>>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(weeklyCheckinServiceProvider).getWeeklyCheckins();
 });
 
 final currentWeekCheckinProvider = FutureProvider<WeeklyCheckin>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(weeklyCheckinServiceProvider).getCurrentWeekCheckin();
 });
 
