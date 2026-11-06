@@ -18,6 +18,11 @@ const _brand  = Color(0xFFA855F7);
 const _white  = Colors.white;
 const _muted  = Color(0xFFCFC2D6);
 
+const _sendFailedMessage =
+    "Couldn't send your message — check your connection and try again.";
+const _notReadyMessage =
+    "This conversation isn't ready yet — try again in a moment.";
+
 /// F-28 · the chat header's subtitle.
 ///
 /// It was the constant **"Online now"**, beside a green presence dot. Nothing
@@ -43,7 +48,9 @@ class ChatScreen extends ConsumerStatefulWidget {
 }
 
 class _ChatScreenState extends ConsumerState<ChatScreen> {
-  final _service    = MessagingService();
+  // Through the provider, not a fresh `MessagingService()`, so a test can answer
+  // the sends. Read lazily: the first use is after the first frame.
+  late final MessagingService _service = ref.read(messagingServiceProvider);
   final _msgCtrl    = TextEditingController();
   final _scrollCtrl = ScrollController();
 
@@ -164,6 +171,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Future<void> _send() async {
     final text = _msgCtrl.text.trim();
     if (text.isEmpty || _sending) return;
+    final conversationId = _conversationId;
+    if (conversationId == null) {
+      // Still resolving, or none could be found. Nothing can be sent yet. This used
+      // to clear the input and drop the text without a word.
+      _showSendFailure(_notReadyMessage);
+      return;
+    }
     _msgCtrl.clear();
     setState(() => _hasText = false);
     final userId = Supabase.instance.client.auth.currentUser?.id ?? 'me';
@@ -177,10 +191,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     };
     setState(() => _messages = [..._messages, optimistic]);
     _scrollToBottom();
-    if (_conversationId != null) {
-      await _service.sendMessage(conversationId: _conversationId!, content: text);
+    final ok = await _service.sendMessage(conversationId: conversationId, content: text);
+    if (ok) {
       ScoreEngine().messageCoach(); // +5, once/day (server dedup)
+      return;
     }
+    // The row did not land. `sendMessage` reports that as `false`, which this used
+    // to ignore: the bubble stayed as sent, the text was gone, and the score was
+    // awarded for a message nobody received.
+    reportError('ChatScreen._send', StateError('message was not sent'));
+    if (!mounted) return;
+    setState(() =>
+        _messages = _messages.where((m) => m['id'] != optimistic['id']).toList());
+    // Give the text back, unless the coach has already started something else.
+    if (_msgCtrl.text.isEmpty) {
+      _msgCtrl.value = TextEditingValue(
+          text: text, selection: TextSelection.collapsed(offset: text.length));
+    }
+    _showSendFailure(_sendFailedMessage);
+  }
+
+  void _showSendFailure(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   // Photo send, in the order the storage contract requires (DEC-3A-10 §6):
