@@ -2,7 +2,28 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../features/coach/domain/coach_ecosystem_provider.dart'
+    show myAssignedProgramProvider, myNutritionPlanProvider, todaysWorkoutProvider;
+import '../../features/workout/domain/workout_provider.dart' show assignedWorkoutsProvider;
 import 'browser_push.dart';
+
+/// Re-reads what a new notification says has changed.
+///
+/// What a coach assigns reaches the client as a notification, and nothing else
+/// tells these providers: they don't dispose and no table ticks them, so the
+/// client read "assigned you a program" over a Home that still said there was
+/// none until the app restarted.
+void refreshForNotification(
+    String? type, void Function(ProviderOrFamily) invalidate) {
+  switch (type) {
+    case 'program_assigned':
+      invalidate(assignedWorkoutsProvider);
+      invalidate(myAssignedProgramProvider);
+      invalidate(todaysWorkoutProvider);
+    case 'nutrition_assigned':
+      invalidate(myNutritionPlanProvider);
+  }
+}
 
 /// Wraps the app and surfaces every new in-app notification as a native
 /// browser notification (web). Subscribes to the signed-in user's
@@ -46,11 +67,14 @@ class _NotificationWatcherState extends ConsumerState<NotificationWatcher> {
           final id = r['id']?.toString();
           if (id == null || _seen.contains(id)) continue;
           _seen.add(id);
-          if (_primed && r['read'] == false) {
-            showBrowserNotification(
-              r['title'] as String? ?? '12 Circle',
-              r['body'] as String? ?? '',
-            );
+          if (_primed) {
+            refreshForNotification(r['type'] as String?, ref.invalidate);
+            if (r['read'] == false) {
+              showBrowserNotification(
+                r['title'] as String? ?? '12 Circle',
+                r['body'] as String? ?? '',
+              );
+            }
           }
         }
         _primed = true;

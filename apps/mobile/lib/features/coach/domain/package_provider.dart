@@ -21,6 +21,6 @@ final myScheduleProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
 
 /// Coach view: a specific client's training schedule.
 final clientScheduleProvider =
-    FutureProvider.family<Map<String, dynamic>?, String>((ref, clientId) async {
+    FutureProvider.autoDispose.family<Map<String, dynamic>?, String>((ref, clientId) async {
   return ref.watch(packageServiceProvider).getClientSchedule(clientId);
 });

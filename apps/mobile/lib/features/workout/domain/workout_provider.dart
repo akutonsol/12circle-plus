@@ -575,14 +575,14 @@ final loggedExerciseNamesProvider = FutureProvider<List<String>>((ref) async {
 });
 
 // ── Coach: client workout stats ───────────────────────────────────────────────
-final clientWorkoutStatsProvider = FutureProvider.family<List<Map<String, dynamic>>, String>(
+final clientWorkoutStatsProvider = FutureProvider.autoDispose.family<List<Map<String, dynamic>>, String>(
   (ref, coachId) async => WorkoutService().getClientWorkoutStats(coachId),
 );
 
-final clientPersonalRecordsProvider = FutureProvider.family<List<Map<String, dynamic>>, String>(
+final clientPersonalRecordsProvider = FutureProvider.autoDispose.family<List<Map<String, dynamic>>, String>(
   (ref, clientId) async => WorkoutService().getClientPersonalRecords(clientId),
 );
 
-final clientRecentSessionsProvider = FutureProvider.family<List<Map<String, dynamic>>, String>(
+final clientRecentSessionsProvider = FutureProvider.autoDispose.family<List<Map<String, dynamic>>, String>(
   (ref, clientId) async => WorkoutService().getClientRecentSessions(clientId),
 );

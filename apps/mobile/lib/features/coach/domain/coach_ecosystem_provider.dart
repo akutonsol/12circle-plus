@@ -133,7 +133,9 @@ final coachLeaderboardProvider = FutureProvider<List<Map<String, dynamic>>>((ref
 });
 
 // ── Client data (coach reads a specific client) ───────────────
-final clientDetailProvider = FutureProvider.family<Map<String, dynamic>, String>((ref, clientId) async {
+// Disposed with the page: reopening a client must read them again, because
+// what changes here is the client's doing and nothing else tells this device.
+final clientDetailProvider = FutureProvider.autoDispose.family<Map<String, dynamic>, String>((ref, clientId) async {
   final db = Supabase.instance.client;
   final profile = await db
       .from('user_profiles')
@@ -253,6 +255,6 @@ final scoreServiceProvider = Provider((_) => _scoreSvc);
 /// Whether the given client has paid for a plan with the current coach.
 /// Coaches can only assign work (programs/nutrition/habits/etc.) once true.
 final clientHasPaidPlanProvider =
-    FutureProvider.family<bool, String>((ref, clientId) async {
+    FutureProvider.autoDispose.family<bool, String>((ref, clientId) async {
   return _programSvc.clientHasPaidPlan(clientId);
 });
