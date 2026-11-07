@@ -5,6 +5,7 @@
 // PopupMenuButton.onSelected with no handler (the app has no global error
 // handler, so a failure was an unhandled async error the member never saw), and
 // "Update progress" ignored the `false` that updateProgress returns on failure.
+import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/goals/data/goal_service.dart';
 import 'package:circle_fitness/features/goals/data/models/goal.dart';
 import 'package:circle_fitness/features/goals/domain/goal_provider.dart';
@@ -48,7 +49,7 @@ class _FakeGoals implements GoalService {
 }
 
 Widget _screen(GoalService svc) => ProviderScope(
-      overrides: [goalServiceProvider.overrideWithValue(svc)],
+      overrides: [currentUserProvider.overrideWithValue(null), goalServiceProvider.overrideWithValue(svc)],
       child: const MaterialApp(home: GoalsScreen()),
     );
 

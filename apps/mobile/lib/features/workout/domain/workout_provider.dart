@@ -234,6 +234,7 @@ Future<Workout?> generateAiWorkout({int? minutes}) async {
 
 // ── Workout session history ───────────────────────────────────────────────────
 final workoutHistoryProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(workoutServiceProvider).getWorkoutHistory();
 });
 
@@ -432,14 +433,17 @@ final activeWorkoutProvider = StateNotifierProvider<ActiveWorkoutNotifier,
 
 // ── Stat providers ────────────────────────────────────────────────────────────
 final weeklyWorkoutCountProvider = FutureProvider<int>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(workoutServiceProvider).getWeeklyWorkoutCount();
 });
 
 final currentStreakProvider = FutureProvider<int>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(workoutServiceProvider).getCurrentStreak();
 });
 
 final totalWorkoutCountProvider = FutureProvider<int>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(workoutServiceProvider).getTotalWorkoutCount();
 });
 
@@ -549,14 +553,17 @@ Future<Workout?> bindSessionToSelectedWorkout(
 }
 
 final personalRecordsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(workoutServiceProvider).getPersonalRecords();
 });
 
 final totalVolumeProvider = FutureProvider<double>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(workoutServiceProvider).getTotalVolumeLifted();
 });
 
 final completionRateProvider = FutureProvider<double>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(workoutServiceProvider).getCompletionRate();
 });
 
@@ -567,10 +574,12 @@ final programAdherenceProvider = FutureProvider<double>((ref) async {
 // ── Exercise progression (family: keyed by exercise name) ────────────────────
 final exerciseProgressionProvider =
     FutureProvider.family<List<Map<String, dynamic>>, String>((ref, exerciseName) async {
+  ref.watch(currentUserProvider);
   return ref.watch(workoutServiceProvider).getExerciseProgression(exerciseName);
 });
 
 final loggedExerciseNamesProvider = FutureProvider<List<String>>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(workoutServiceProvider).getLoggedExerciseNames();
 });
 

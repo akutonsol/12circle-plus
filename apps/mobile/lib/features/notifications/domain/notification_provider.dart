@@ -1,15 +1,18 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/notification_service.dart';
 import '../data/notification_model.dart';
 
 final _svc = NotificationService();
 
 final notificationsStreamProvider = StreamProvider<List<AppNotification>>((ref) {
+  ref.watch(currentUserProvider);
   return _svc.streamNotifications();
 });
 
 final unreadCountProvider = FutureProvider<int>((ref) async {
+  ref.watch(currentUserProvider);
   // Re-fetches whenever the stream fires (via invalidation from notifier)
   ref.watch(notificationsStreamProvider);
   return _svc.fetchUnreadCount();

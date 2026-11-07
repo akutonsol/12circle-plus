@@ -7,6 +7,7 @@ final paymentServiceProvider = Provider<PaymentService>((ref) => PaymentService(
 
 final mySubscriptionsProvider =
     FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(paymentServiceProvider).getMySubscriptions();
 });
 
@@ -47,5 +48,6 @@ final coachPlanTierProvider = FutureProvider<String?>((ref) async {
 /// Active subscription to a given coach (null if not subscribed).
 final coachSubscriptionProvider =
     FutureProvider.family<Map<String, dynamic>?, String>((ref, coachId) async {
+  ref.watch(currentUserProvider);
   return ref.watch(paymentServiceProvider).activeCoachSubscription(coachId);
 });

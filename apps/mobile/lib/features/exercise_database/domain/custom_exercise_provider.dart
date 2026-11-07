@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/custom_exercise_service.dart';
 import '../data/models/exercise_detail_model.dart';
 
@@ -9,6 +10,7 @@ final editingExerciseProvider = StateProvider<String?>((ref) => null);
 
 // Coach's own exercises
 final myExercisesProvider = FutureProvider<List<ExerciseDetail>>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.read(customExerciseSvcProvider).getMyExercises();
 });
 

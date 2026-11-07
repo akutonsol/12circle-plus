@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/action_item_service.dart';
 import '../data/models/action_item.dart';
 
@@ -7,6 +8,7 @@ final actionItemServiceProvider =
 
 /// Client's own action items.
 final myActionItemsProvider = FutureProvider<List<ActionItem>>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(actionItemServiceProvider).getMyActionItems();
 });
 

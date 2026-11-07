@@ -11,6 +11,7 @@
 // These drive the real screen through a fake service: a failure must keep the
 // sheet open AND say so; success must still close it (the positive control —
 // a "fix" that never closes the sheet would pass the failure tests alone).
+import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/womens_health/data/cycle_service.dart';
 import 'package:circle_fitness/features/womens_health/domain/cycle_provider.dart';
 import 'package:circle_fitness/features/womens_health/presentation/womens_health_screen.dart';
@@ -77,7 +78,7 @@ class _FakeCycleService implements CycleService {
 }
 
 Widget _screen(CycleService svc) => ProviderScope(
-      overrides: [cycleServiceProvider.overrideWithValue(svc)],
+      overrides: [currentUserProvider.overrideWithValue(null), cycleServiceProvider.overrideWithValue(svc)],
       child: const MaterialApp(home: WomensHealthScreen()),
     );
 

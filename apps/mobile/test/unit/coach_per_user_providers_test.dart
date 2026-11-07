@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
+import 'package:circle_fitness/features/goals/domain/goal_provider.dart';
+import 'package:circle_fitness/features/workout/domain/workout_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -112,6 +114,13 @@ void main() {
     'the client\'s habit logs for today': todayHabitLogsProvider,
     'the client\'s score for today': todayScoreProvider,
     'the client\'s scores for the week': weekScoresProvider,
+    // These read the user through a `_uid` getter inside the service.
+    'the client\'s streak (Home, Train hub)': currentStreakProvider,
+    'the client\'s workouts this week': weeklyWorkoutCountProvider,
+    'the client\'s total workouts': totalWorkoutCountProvider,
+    'the client\'s workout history': workoutHistoryProvider,
+    'the client\'s completion rate': completionRateProvider,
+    'the client\'s goals': myGoalsProvider,
   };
 
   for (final entry in perUser.entries) {
