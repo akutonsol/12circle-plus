@@ -43,10 +43,10 @@ class _FakeSvc extends Fake implements CoachProgramService {
     String? notes,
   }) async {
     nutritionPlan = {
-      'target_calories': calories,
-      'target_protein_g': protein,
-      'target_carbs_g': carbs,
-      'target_fat_g': fat,
+      'calories_target': calories,
+      'protein_g': protein,
+      'carbs_g': carbs,
+      'fat_g': fat,
       'notes': notes,
     };
   }
