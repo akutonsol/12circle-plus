@@ -154,18 +154,21 @@ class MessagingService {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return false;
     try {
+      // UTC, stated. Both columns are timestamptz, which reads a time with no zone
+      // as UTC: local time written that way recorded the wrong moment.
+      final now = DateTime.now().toUtc().toIso8601String();
       final row = <String, dynamic>{
         'conversation_id': conversationId,
         'sender_id': userId,
         'content': content,
         'is_read': false,
-        'sent_at': DateTime.now().toIso8601String(),
+        'sent_at': now,
       };
       if (metadata != null) row['metadata'] = metadata;
       await supabase.from('messages').insert(row);
       await supabase.from('conversations').update({
         'last_message': content,
-        'last_message_at': DateTime.now().toIso8601String(),
+        'last_message_at': now,
       }).eq('id', conversationId);
       // Recipient notification is handled server-side by the
       // trg_notify_on_message DB trigger (MSG-003) — no Dart-side insert here,
@@ -190,11 +193,14 @@ class MessagingService {
   }
 
   Stream<List<Map<String, dynamic>>> messagesStream(String conversationId) {
+    // `ascending` must be stated: the stream's `.order()` defaults to descending,
+    // unlike the query's. This replaces what `getMessages` loaded, so the two have
+    // to agree, and the chat expects the newest message last.
     return supabase
         .from('messages')
         .stream(primaryKey: ['id'])
         .eq('conversation_id', conversationId)
-        .order('sent_at');
+        .order('sent_at', ascending: true);
   }
 
   Future<void> markAsRead(String conversationId) async {

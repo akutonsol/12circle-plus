@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:circle_fitness/features/coach/data/coach_program_service.dart';
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
@@ -42,11 +43,13 @@ class _FakeSvc extends Fake implements CoachProgramService {
     int? waterOz,
     String? notes,
   }) async {
+    // The real column names. This fake used the names the card wrongly read, so
+    // the test passed while the real page showed "—" for every figure.
     nutritionPlan = {
-      'target_calories': calories,
-      'target_protein_g': protein,
-      'target_carbs_g': carbs,
-      'target_fat_g': fat,
+      'calories_target': calories,
+      'protein_g': protein,
+      'carbs_g': carbs,
+      'fat_g': fat,
       'notes': notes,
     };
   }
@@ -167,7 +170,7 @@ void main() {
     await t.tap(find.text('Save Nutrition Plan'));
     await _settle(t);
 
-    expect(svc.nutritionPlan?['target_calories'], 2200);
+    expect(svc.nutritionPlan?['calories_target'], 2200);
     expect(find.text('Nutrition plan saved!'), findsOneWidget);
 
     await t.tap(find.text('Progress'));
@@ -175,6 +178,31 @@ void main() {
     expect(find.text('No nutrition plan assigned yet'), findsNothing,
         reason: 'the page must not keep saying nothing is assigned');
     expect(find.text('2200'), findsOneWidget);
+    expect(find.text('150g'), findsOneWidget);
+    expect(find.text('240g'), findsOneWidget);
+    expect(find.text('70g'), findsOneWidget);
+    expect(find.text('Fat Target'), findsOneWidget);
+    expect(find.text('—'), findsNothing,
+        reason: 'a saved plan must not read as if it had no figures');
+  });
+
+  // Holds the fake above to the schema, so it cannot drift back to names the
+  // database does not have.
+  test('the plan the fake saves uses columns client_nutrition_plans has', () async {
+    final svc = _FakeSvc();
+    await svc.assignNutritionPlan(_clientId,
+        calories: 1, protein: 1, carbs: 1, fat: 1, notes: 'n');
+
+    final migration =
+        File('../../supabase/migrations/001_full_ecosystem.sql').readAsStringSync();
+    final table = RegExp(
+      r'CREATE TABLE[^;]*?client_nutrition_plans\s*\((.*?)\n\);',
+      dotAll: true,
+    ).firstMatch(migration)![1]!;
+
+    for (final column in svc.nutritionPlan!.keys) {
+      expect(table, contains(RegExp('\\b$column\\b')), reason: column);
+    }
   });
 
   testWidgets('assigning habits: the Overview lists them at once', (t) async {

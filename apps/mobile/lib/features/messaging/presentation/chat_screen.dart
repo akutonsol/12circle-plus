@@ -158,12 +158,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollCtrl.hasClients) {
-        _scrollCtrl.animateTo(
-          _scrollCtrl.position.maxScrollExtent,
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // The list builds lazily and estimates its full length from what it has
+      // built, so in a long thread the first target falls short of the newest
+      // message. Go again until the end stops moving.
+      for (var i = 0; i < 8; i++) {
+        if (!mounted || !_scrollCtrl.hasClients) return;
+        final target = _scrollCtrl.position.maxScrollExtent;
+        await _scrollCtrl.animateTo(
+          target,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut);
+        if (!mounted || !_scrollCtrl.hasClients) return;
+        final position = _scrollCtrl.position;
+        // Short of the target means the client took over the scroll. Leave them.
+        if (position.pixels < target - 1 || position.maxScrollExtent <= target) return;
       }
     });
   }
