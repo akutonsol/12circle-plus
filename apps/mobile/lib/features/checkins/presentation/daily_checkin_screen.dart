@@ -3,6 +3,10 @@ import 'widgets/checkin_pickers.dart';
 import '../data/weekly_checkin_service.dart';
 import '../domain/checkin_hub.dart';
 import '../../coach/domain/coach_provider.dart';
+import '../../coach/domain/coach_ecosystem_provider.dart'
+    show todayScoreProvider, weekScoresProvider;
+import '../../scoring/domain/score_provider.dart';
+import 'checkin_hub_sections.dart' show checkinHistoryProvider;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -83,6 +87,13 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
     setState(() => _saving = false);
     if (!mounted) return;
     if (ok) {
+      // The week is written and its points awarded: none of these re-read
+      // themselves, so the hub and Home would go on showing the week before.
+      ref.invalidate(checkinHistoryProvider);
+      ref.invalidate(todayScoreProvider);
+      ref.invalidate(weekScoresProvider);
+      ref.invalidate(myScoreProvider);
+      ref.invalidate(recentScoreEventsProvider);
       _showSuccess(WeeklyCheckinService.needsCoachAttention(energy: _energy, stress: _stress));
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
