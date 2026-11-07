@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/score_engine.dart';
 import '../../../core/realtime/realtime.dart';
 
@@ -8,12 +9,14 @@ final scoreEngineProvider = Provider<ScoreEngine>((ref) => ScoreEngine());
 final scoreRefreshProvider = StateProvider<int>((ref) => 0);
 
 final myScoreProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
+  ref.watch(currentUserProvider);
   ref.watch(scoreRefreshProvider);
   ref.watch(tableTickerProvider('user_scores')); // live: re-fetch on any score change
   return ref.watch(scoreEngineProvider).myScore();
 });
 
 final recentScoreEventsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  ref.watch(currentUserProvider);
   ref.watch(scoreRefreshProvider);
   ref.watch(tableTickerProvider('score_events'));
   return ref.watch(scoreEngineProvider).recentEvents();
@@ -24,6 +27,7 @@ final allBadgesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async
 });
 
 final myBadgeIdsProvider = FutureProvider<Set<String>>((ref) async {
+  ref.watch(currentUserProvider);
   ref.watch(scoreRefreshProvider);
   return ref.watch(scoreEngineProvider).myBadgeIds();
 });

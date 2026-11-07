@@ -1,10 +1,12 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/package_service.dart';
 
 final packageServiceProvider = Provider<PackageService>((ref) => PackageService());
 
 /// The signed-in coach's own packages.
 final myPackagesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(packageServiceProvider).getMyPackages();
 });
 
@@ -16,6 +18,7 @@ final coachPackagesProvider =
 
 /// The signed-in client's current schedule (null if not set).
 final myScheduleProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(packageServiceProvider).getMySchedule();
 });
 

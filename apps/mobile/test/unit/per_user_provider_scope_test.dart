@@ -54,9 +54,14 @@ const _exempt = {
   'clientHasPaidPlanProvider',
 };
 
-/// Names of service methods that read the signed-in user in their own body. A
-/// provider that calls one is per-user even though its own body never says so, and
-/// the first version of this guard could not see it.
+/// A getter that wraps the user read (`String? get _uid => ...auth.currentUser?.id`).
+/// A method that uses one reads the user without ever saying `auth.currentUser`.
+final _userGetter = RegExp(
+    r'(?:String\??|User\??)\s+get\s+(_?\w+)\s*(?:=>|\{)[^;]*auth\.currentUser');
+
+/// Names of service methods that read the signed-in user, in their own body or
+/// through a getter. A provider that calls one is per-user even though its own body
+/// never says so, and earlier versions of this guard could not see either shape.
 Set<String> userReadingMethods(Directory lib) {
   final names = <String>{};
   for (final f in lib.listSync(recursive: true).whereType<File>()) {
@@ -64,10 +69,15 @@ Set<String> userReadingMethods(Directory lib) {
     if (!path.endsWith('.dart')) continue;
     if (!(path.contains('/data/') || path.toLowerCase().contains('service'))) continue;
     final src = _stripComments(f.readAsStringSync());
+    final getters = [
+      for (final g in _userGetter.allMatches(src))
+        RegExp('\\b${RegExp.escape(g.group(1)!)}\\b'),
+    ];
     final decls = _method.allMatches(src).toList();
     for (var i = 0; i < decls.length; i++) {
       final end = i + 1 < decls.length ? decls[i + 1].start : src.length;
-      if (_readsUser.hasMatch(src.substring(decls[i].start, end))) {
+      final body = src.substring(decls[i].start, end);
+      if (_readsUser.hasMatch(body) || getters.any((g) => g.hasMatch(body))) {
         names.add(decls[i].group(1)!);
       }
     }
@@ -156,6 +166,31 @@ final clientHasPaidPlanProvider = FutureProvider.family<int, String>((ref, id) a
 });
 ''');
     expect(offenders(dir), ['b.dart: delegatingProvider']);
+  });
+
+  test('self-test: a user read hidden behind a getter is seen', () {
+    final dir = Directory.systemTemp.createTempSync('qax_ses01_getter_');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    Directory('${dir.path}/data').createSync();
+    File('${dir.path}/data/svc.dart').writeAsStringSync('''
+class Svc {
+  String? get _uid => Supabase.instance.client.auth.currentUser?.id;
+  Future<int> getMine() async {
+    final uid = _uid;
+    return 0;
+  }
+}
+''');
+    File('${dir.path}/c.dart').writeAsStringSync('''
+final getterProvider = FutureProvider<int>((ref) async {
+  return Svc().getMine();
+});
+final watchingGetterProvider = FutureProvider<int>((ref) async {
+  ref.watch(currentUserProvider);
+  return Svc().getMine();
+});
+''');
+    expect(offenders(dir), ['c.dart: getterProvider']);
   });
 
   test('no cached provider reads the current user without watching auth', () {

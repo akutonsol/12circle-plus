@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/vendor_service.dart';
 import '../data/session_service.dart';
 
@@ -15,6 +16,7 @@ final eventSessionsProvider =
 
 final myEventsProvider =
     FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(vendorServiceProvider).getMyEvents();
 });
 
