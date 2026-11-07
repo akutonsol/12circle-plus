@@ -1108,13 +1108,13 @@ class _ProgressTab extends StatelessWidget {
           const SizedBox(height: 12),
           if (nutrition != null) ...[
             Row(children: [
-              _IntelStat('Calories', '${nutrition['target_calories'] ?? '—'}', _pri),
-              _IntelStat('Protein', '${nutrition['target_protein_g'] ?? '—'}g', _tert),
-              _IntelStat('Carbs', '${nutrition['target_carbs_g'] ?? '—'}g', _amber),
+              _IntelStat('Calories', '${nutrition['calories_target'] ?? '—'}', _pri),
+              _IntelStat('Protein', '${nutrition['protein_g'] ?? '—'}g', _tert),
+              _IntelStat('Carbs', '${nutrition['carbs_g'] ?? '—'}g', _amber),
             ]),
             const SizedBox(height: 10),
-            if (nutrition['target_fat_g'] != null)
-              _statRow('Fat Target', '${nutrition['target_fat_g']}g'),
+            if (nutrition['fat_g'] != null)
+              _statRow('Fat Target', '${nutrition['fat_g']}g'),
             if ((nutrition['notes'] as String?)?.isNotEmpty ?? false)
               _statRow('Notes', nutrition['notes'] as String),
           ] else
