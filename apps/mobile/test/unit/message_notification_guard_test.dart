@@ -86,6 +86,39 @@ void main() {
             'half needs the recipient\'s session, not a looser policy.');
   });
 
+
+  test('QA D1 message reads are explicitly oldest to newest on both paths', () {
+    final src = File('lib/features/messaging/data/messaging_service.dart')
+        .readAsStringSync();
+
+    expect(
+      RegExp(r"getMessages\(String conversationId\)[\s\S]*?\.order\('sent_at', ascending: true\);")
+          .hasMatch(src),
+      isTrue,
+      reason: 'first-load messages must be explicitly oldest to newest',
+    );
+    expect(
+      RegExp(r"messagesStream\(String conversationId\)[\s\S]*?\.order\('sent_at', ascending: true\);")
+          .hasMatch(src),
+      isTrue,
+      reason: 'realtime messages must keep the same oldest-to-newest order',
+    );
+  });
+
+  test('QA D2 newly written message timestamps are UTC', () {
+    final src = File('lib/features/messaging/data/messaging_service.dart')
+        .readAsStringSync();
+    final sendStart = src.indexOf('Future<bool> sendMessage(');
+    final sendEnd = src.indexOf('\n  Future<List<Map<String, dynamic>>> getMessages');
+    final body = src.substring(sendStart, sendEnd);
+
+    expect(body, contains("'sent_at': DateTime.now().toUtc().toIso8601String()"),
+        reason: 'messages must store an absolute UTC timestamp');
+    expect(body,
+        contains("'last_message_at': DateTime.now().toUtc().toIso8601String()"),
+        reason: 'conversation ordering must use the same UTC clock');
+  });
+
 }
 
 /// Drops `//` line comments. Enough for this guard: the expressions it looks
