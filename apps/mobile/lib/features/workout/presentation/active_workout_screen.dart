@@ -20,6 +20,9 @@ import '../../exercise_database/data/exercise_database_service.dart';
 import '../../../core/utils/rest_alarm.dart';
 import '../../coach/data/score_service.dart';
 import '../../scoring/data/score_engine.dart';
+import '../../scoring/domain/score_provider.dart';
+import '../../coach/domain/coach_ecosystem_provider.dart'
+    show myAssignedProgramProvider, todaysWorkoutProvider, todayScoreProvider, weekScoresProvider;
 import '../../auth/domain/auth_provider.dart';
 import '../domain/session_complete.dart';
 import '../domain/workout_save.dart';
@@ -138,6 +141,9 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// EC-05 / N-07: an essential write did not land, so the workout is not
   /// filed and the screen must not say it is.
   bool _saveFailedCompleting = false;
+  /// The log is already in `workout_logs`, so a retry of a failed completion
+  /// must not insert it again: one workout, one row.
+  bool _logFiled = false;
   final _workoutService = WorkoutService();
   final _scrollController = ScrollController();
   /// Resolved on USE, not in the field initializer.
@@ -668,8 +674,9 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     // complete.
     var logWritten = false;
     try {
-      await _workoutService.logWorkout(log);
+      if (!_logFiled) await _workoutService.logWorkout(log);
       logWritten = true;
+      _logFiled = true;
     } catch (_) {}
 
     bool? sessionCompleted;
@@ -689,11 +696,15 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     // Derived, and recomputable: worth recording, not worth making someone
     // retry a finished workout for.
     var scored = false;
-    try {
-      await ScoreService().addWorkoutPoints();
-      await ScoreEngine().workoutCompleted(workout.id);
-      scored = true;
-    } catch (_) {}
+    // Only for a workout that was filed: a client who gives up on a failed save
+    // must not keep the points for it. The retry awards them.
+    if (logWritten && sessionCompleted != false) {
+      try {
+        await ScoreService().addWorkoutPoints();
+        await ScoreEngine().workoutCompleted(workout.id);
+        scored = true;
+      } catch (_) {}
+    }
 
     final outcome = workoutSaveOutcome(
       logWritten: logWritten,
@@ -733,6 +744,25 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     // Its training day is now done: re-read the program so Home and the
     // Workouts tab stop offering it.
     ref.invalidate(assignedWorkoutsProvider);
+    ref.invalidate(todaysWorkoutProvider);
+    ref.invalidate(myAssignedProgramProvider);
+    // Nothing else re-reads these, and none of them dispose: without this the
+    // streak, totals and score stay as they were before the workout until the
+    // app restarts.
+    ref.invalidate(totalWorkoutCountProvider);
+    ref.invalidate(weeklyWorkoutCountProvider);
+    ref.invalidate(currentStreakProvider);
+    ref.invalidate(workoutHistoryProvider);
+    ref.invalidate(completionRateProvider);
+    ref.invalidate(programAdherenceProvider);
+    ref.invalidate(personalRecordsProvider);
+    ref.invalidate(loggedExerciseNamesProvider);
+    ref.invalidate(exerciseProgressionProvider);
+    ref.invalidate(todayScoreProvider);
+    ref.invalidate(weekScoresProvider);
+    ref.invalidate(myScoreProvider);
+    ref.invalidate(recentScoreEventsProvider);
+    ref.invalidate(myBadgeIdsProvider);
 
     if (mounted) {
       showDialog(
