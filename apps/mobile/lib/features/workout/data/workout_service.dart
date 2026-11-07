@@ -52,17 +52,17 @@ class WorkoutService {
   Future<void> logWorkout(WorkoutLog log) async {
     final uid = _uid;
     if (uid == null) return;
-    try {
-      await _supabase.from('workout_logs').insert({
-        'user_id': uid,
-        'workout_title': log.workoutTitle,
-        'duration_minutes': log.durationMinutes ?? 0,
-        'calories_burned': log.caloriesBurned ?? 0,
-        'category': log.category ?? 'Strength',
-        'notes': log.notes ?? '',
-        'completed_at': DateTime.now().toUtc().toIso8601String(),
-      });
-    } catch (_) {}
+    // Throws on failure: the caller decides whether the workout was filed, and
+    // it can only do that if it hears about it.
+    await _supabase.from('workout_logs').insert({
+      'user_id': uid,
+      'workout_title': log.workoutTitle,
+      'duration_minutes': log.durationMinutes ?? 0,
+      'calories_burned': log.caloriesBurned ?? 0,
+      'category': log.category ?? 'Strength',
+      'notes': log.notes ?? '',
+      'completed_at': DateTime.now().toUtc().toIso8601String(),
+    });
   }
 
   /// Records what the client did on one set.
