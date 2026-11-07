@@ -696,11 +696,15 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     // Derived, and recomputable: worth recording, not worth making someone
     // retry a finished workout for.
     var scored = false;
-    try {
-      await ScoreService().addWorkoutPoints();
-      await ScoreEngine().workoutCompleted(workout.id);
-      scored = true;
-    } catch (_) {}
+    // Only for a workout that was filed: a client who gives up on a failed save
+    // must not keep the points for it. The retry awards them.
+    if (logWritten && sessionCompleted != false) {
+      try {
+        await ScoreService().addWorkoutPoints();
+        await ScoreEngine().workoutCompleted(workout.id);
+        scored = true;
+      } catch (_) {}
+    }
 
     final outcome = workoutSaveOutcome(
       logWritten: logWritten,

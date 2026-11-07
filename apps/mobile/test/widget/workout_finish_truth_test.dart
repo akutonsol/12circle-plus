@@ -83,12 +83,14 @@ class _Backend extends http.BaseClient {
   bool sessionStartFails = false;
   bool sessionCompleteFails = false;
   int logInserts = 0;
+  int scoreWrites = 0;
 
   void reset() {
     logFails = false;
     sessionStartFails = false;
     sessionCompleteFails = false;
     logInserts = 0;
+    scoreWrites = 0;
   }
 
   /// postgrest reads the request back off the response to parse it.
@@ -107,6 +109,11 @@ class _Backend extends http.BaseClient {
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final path = request.url.path;
     final body = request is http.Request ? request.body : '';
+
+    if (request.method == 'POST' &&
+        (path.endsWith('/rpc/award_points') || path.endsWith('/daily_scores'))) {
+      scoreWrites++;
+    }
 
     if (path.endsWith('/workout_logs') && request.method == 'POST') {
       if (logFails) return _fail(request);
@@ -261,6 +268,36 @@ void main() {
 
       expect(find.byType(WorkoutCompleteDialog), findsOneWidget);
       expect(_backend.logInserts, 1, reason: 'one workout, one row');
+    });
+  });
+
+  group('points are for a workout that was filed', () {
+    testWidgets('a failed log scores nothing, and the retry that files it does',
+        (t) async {
+      _backend.logFails = true;
+      await _openZone(t, _container());
+      _backend.scoreWrites = 0; // Starting the workout has its own award.
+
+      await _tapFinish(t);
+      expect(find.byType(WorkoutCompleteDialog), findsNothing);
+      expect(_backend.scoreWrites, 0, reason: 'nothing was filed');
+
+      _backend.logFails = false;
+      await t.tap(find.text(workoutSaveRetryLabel));
+      await _settle(t);
+      expect(find.byType(WorkoutCompleteDialog), findsOneWidget);
+      expect(_backend.scoreWrites, greaterThan(0));
+    });
+
+    testWidgets('a failed session completion scores nothing', (t) async {
+      _backend.sessionCompleteFails = true;
+      await _openZone(t, _container());
+      _backend.scoreWrites = 0;
+
+      await _tapFinish(t);
+
+      expect(find.byType(WorkoutCompleteDialog), findsNothing);
+      expect(_backend.scoreWrites, 0);
     });
   });
 
