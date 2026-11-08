@@ -30,13 +30,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../" && pwd)"
 # anchors of its own (the save and the streak), so the total stayed seven.
 # 2026-10-25: nutrition-compliance derivation added a third (_derivedCompliance,
 # which reports and returns null so a failure there never blocks a check-in), so
-# the total is EIGHT. If it ever moves, the mutation-anchor
+# the total was EIGHT. 2026-11-08 (PR #38, check-in loop): three more, each
+# reporting and moving on so the check-in save is never blocked or misreported —
+# the daily and weekly points after the save (C5) and the coach lookup for the
+# first submission (C2/N1) — so the total is ELEVEN. If it ever moves, the mutation-anchor
 # count check in the python block refuses to assert against a tree it did not
 # mutate as declared — which is how this harness caught the retirement.
 CHECKIN="$ROOT/apps/mobile/lib/features/checkins/data/weekly_checkin_service.dart"
 MESSAGING="$ROOT/apps/mobile/lib/features/messaging/data/messaging_service.dart"
 TEST="$ROOT/apps/mobile/test/unit/error_sink_test.dart"
-EXPECTED_OFFENDERS=8
+EXPECTED_OFFENDERS=11
 
 die() {
   echo "ERROR: $*" >&2

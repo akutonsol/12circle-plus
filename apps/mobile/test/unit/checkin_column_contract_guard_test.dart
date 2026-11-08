@@ -42,6 +42,9 @@ void main() {
     'lib/features/dashboard/presentation/client_detail_screen.dart',
     'lib/features/checkins/domain/coach_review_queue.dart',
     'lib/features/checkins/data/weekly_checkin_service.dart',
+    // The review screen's summary read the legacy names directly and was not
+    // listed here, so this guard never saw it (C4).
+    'lib/features/checkins/presentation/coach_checkin_review_screen.dart',
   ];
   const edgeReader = '../../supabase/functions/ai-coach/index.ts';
 

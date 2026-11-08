@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/named_icon_button.dart';
+import '../domain/checkin_columns.dart';
 import '../domain/checkin_provider.dart';
 import '../domain/coach_review_queue.dart' as q;
 import '../../auth/domain/auth_provider.dart';
@@ -123,7 +124,6 @@ class _CoachCheckinReviewScreenState
 
   @override
   Widget build(BuildContext context) {
-    final checkin = ref.watch(selectedCoachCheckinProvider);
     // Watched, not read — see `_queue()`. The three states are kept apart:
     // a queue that FAILED must not read as a queue that is empty.
     final queueState = ref.watch(coachSubmittedCheckinsProvider);
@@ -132,6 +132,13 @@ class _CoachCheckinReviewScreenState
       _ => const <Map<String, dynamic>>[],
     };
     final queueFailed = queueState is AsyncError;
+    // PD7: every way into this screen (the Check-ins nav item, "Needs you
+    // today", the directory tile) arrives with nothing selected, so it said
+    // "No check-in selected" and no check-in could ever be opened. With nothing
+    // selected, open the oldest submitted one: the queue is read oldest first
+    // (`getSubmittedCheckinsForCoach`), and Next / Send and open next page on.
+    final checkin = ref.watch(selectedCoachCheckinProvider) ??
+        (queue.isNotEmpty ? queue.first : null);
 
     if (checkin == null) {
       return Scaffold(
@@ -146,17 +153,26 @@ class _CoachCheckinReviewScreenState
             onPressed: () => context.pop(),
           ),
         ),
-        body: const Center(
-          child: Text("No check-in selected",
-              style: TextStyle(color: AppColors.textSecondary)),
+        body: Center(
+          child: switch (queueState) {
+            AsyncLoading() => const CircularProgressIndicator(),
+            // Not "nothing selected": the coach is about to conclude they have
+            // nothing to review, when the truth is that we could not tell.
+            AsyncError() => const Text("Couldn't load your review queue",
+                style: TextStyle(color: AppColors.warning)),
+            _ => const Text("No check-in selected",
+                style: TextStyle(color: AppColors.textSecondary)),
+          },
         ),
       );
     }
 
     final mood = checkin['mood'] as int?;
-    final energy = checkin['energy'] as int?;
+    // Canonical columns first, legacy as fallback (PD-B02, checkin_columns.dart).
+    // These read `energy` / `sleep_hours_avg`, which new rows do not carry.
+    final energy = checkinEnergy(checkin)?.toInt();
     final stress = checkin['stress_level'] as int?;
-    final sleep = (checkin['sleep_hours_avg'] as num?)?.toDouble();
+    final sleep = checkinSleepHours(checkin)?.toDouble();
     final notes = checkin['notes'] as String?;
     final score = (checkin['overall_score'] as num?)?.toDouble() ?? 0;
     final weekNumber = checkin['week_number'] as int?;
