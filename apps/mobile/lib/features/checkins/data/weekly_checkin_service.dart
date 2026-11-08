@@ -152,12 +152,14 @@ class WeeklyCheckinService {
     final score = _computeScore(
       mood: mood, energy: energy, stress: stress, sleepHoursAvg: sleepHoursAvg);
     final compliance = await _derivedCompliance(userId, info.weekStart, now);
+    final weekStart = info.weekStart.toIso8601String().split('T')[0];
+    final coachId = await _coachForFirstSubmission(userId, weekStart);
 
     try {
       await _supabase.from('weekly_checkins').upsert({
         'user_id': userId,
         'week_number': info.weekNumber,
-        'week_start_date': info.weekStart.toIso8601String().split('T')[0],
+        'week_start_date': weekStart,
         'status': 'submitted',
         'mood': mood,
         // PD-B02: the 001 family is canonical. These were 'energy' and
@@ -172,20 +174,64 @@ class WeeklyCheckinService {
         // Derived, never asked (see nutrition_compliance.dart). Omitted when it
         // cannot be computed, so a re-submit never overwrites a stored value with NULL.
         if (compliance != null) 'compliance_percent': compliance,
-        'submitted_at': now.toIso8601String(),
+        // Coach notification (CHK-001) is handled server-side by the
+        // trg_notify_coach_on_checkin DB trigger, which needs coach_id on the
+        // INSERT. Sent only on the first submission: see _coachForFirstSubmission.
+        if (coachId != null) 'coach_id': coachId,
+        // UTC, stated: timestamptz reads a zoneless time as UTC.
+        'submitted_at': now.toUtc().toIso8601String(),
       }, onConflict: 'user_id,week_start_date');
-      // Award 12 Circle Score check-in points (SCR-004) — idempotent.
-      await ScoreService().addCheckinPoints();
-      await ScoreEngine().weeklyCheckin(info.weekStart.toIso8601String().split('T')[0]);
-      // Coach notification (CHK-001) is handled server-side by the
-      // trg_notify_coach_on_checkin DB trigger, so no Dart-side insert here.
-      return true;
     } catch (e) {
       // Rule O: this was a silent `return false`. The retired CheckinService
       // reported its save failure through the sink; that obligation moves to the
       // writer that is actually live, instead of vanishing with the old file.
       reportError('WeeklyCheckinService.submitWeeklyCheckin', e);
       return false;
+    }
+    // Award 12 Circle Score check-in points (SCR-004) — idempotent. After the
+    // save, and outside its try: the check-in is written whether or not these
+    // land, and reporting it as unsaved invited a resubmission of a saved row.
+    try {
+      await ScoreService().addCheckinPoints();
+    } catch (e) {
+      reportError('WeeklyCheckinService.submitWeeklyCheckin.dailyPoints', e);
+    }
+    try {
+      await ScoreEngine().weeklyCheckin(weekStart);
+    } catch (e) {
+      reportError('WeeklyCheckinService.submitWeeklyCheckin.weeklyPoints', e);
+    }
+    return true;
+  }
+
+  /// The coach to name on this week's check-in, or null.
+  ///
+  /// Only for the week's first row: the notify trigger fires on INSERT, and the
+  /// authorship trigger (114) refuses a client CHANGING coach_id on UPDATE, so a
+  /// resubmission that sent it would fail the whole save. Only when the client
+  /// has exactly one active coach: with several there is no single right one,
+  /// and naming either would notify a coach at random. Null leaves the row as
+  /// it was before this existed, so a failed lookup never blocks the check-in.
+  Future<String?> _coachForFirstSubmission(String userId, String weekStart) async {
+    try {
+      final existing = await _supabase
+          .from('weekly_checkins')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('week_start_date', weekStart)
+          .maybeSingle();
+      if (existing != null) return null;
+      final rows = await _supabase
+          .from('coach_client_relationships')
+          .select('coach_id')
+          .eq('client_id', userId)
+          .eq('status', 'active')
+          .limit(2);
+      final coaches = List<Map<String, dynamic>>.from(rows as List);
+      return coaches.length == 1 ? coaches.single['coach_id'] as String? : null;
+    } catch (e) {
+      reportError('WeeklyCheckinService._coachForFirstSubmission', e);
+      return null;
     }
   }
 
@@ -253,7 +299,9 @@ class WeeklyCheckinService {
             .order('submitted_at', ascending: true);
         return List<Map<String, dynamic>>.from(data);
       } catch (e2) {
-        return [];
+        // Not `[]`: a queue that could not be read is not a queue with nothing
+        // in it, and the review screen states the difference (EC-G8).
+        rethrow;
       }
     }
   }
@@ -270,7 +318,7 @@ class WeeklyCheckinService {
         'feedback_message': message,
         'feedback_recommendations': recommendations,
         'coach_name': coachName,
-        'reviewed_at': DateTime.now().toIso8601String(),
+        'reviewed_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', checkinId).select('user_id').maybeSingle();
       // A 0-row update is not a success (QAX-ERR-02): RLS filters the row out
       // when the coaching relationship is no longer active, and no error is
