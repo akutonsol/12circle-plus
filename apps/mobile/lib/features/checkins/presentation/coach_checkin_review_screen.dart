@@ -104,8 +104,17 @@ class _CoachCheckinReviewScreenState
   /// and those are different facts with different consequences — a coach whose
   /// queue failed silently loses `Send and open next` and is never told why.
   List<Map<String, dynamic>> _queue() =>
-      switch (ref.read(coachSubmittedCheckinsProvider)) {
-        AsyncData(:final value) => value,
+      _loaded(ref.read(coachSubmittedCheckinsProvider));
+
+  /// The queue as last loaded, kept while it is being re-read — after a send,
+  /// or when a `weekly_checkins` notification says one more arrived (C8) — so
+  /// the screen does not drop to a spinner under a coach writing a reply. A
+  /// failed read is still not a queue: see `_queue()`.
+  static List<Map<String, dynamic>> _loaded(
+          AsyncValue<List<Map<String, dynamic>>> state) =>
+      switch (state) {
+        AsyncError() => const <Map<String, dynamic>>[],
+        AsyncValue(hasValue: true, :final value?) => value,
         _ => const <Map<String, dynamic>>[],
       };
 
@@ -127,10 +136,7 @@ class _CoachCheckinReviewScreenState
     // Watched, not read — see `_queue()`. The three states are kept apart:
     // a queue that FAILED must not read as a queue that is empty.
     final queueState = ref.watch(coachSubmittedCheckinsProvider);
-    final queue = switch (queueState) {
-      AsyncData(:final value) => value,
-      _ => const <Map<String, dynamic>>[],
-    };
+    final queue = _loaded(queueState);
     final queueFailed = queueState is AsyncError;
     // PD7: every way into this screen (the Check-ins nav item, "Needs you
     // today", the directory tile) arrives with nothing selected, so it said

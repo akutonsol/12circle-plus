@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../features/checkins/domain/checkin_provider.dart'
+    show coachSubmittedCheckinsProvider;
 import '../../features/coach/domain/coach_ecosystem_provider.dart'
     show myAssignedProgramProvider, myNutritionPlanProvider, todaysWorkoutProvider;
 import '../../features/workout/domain/workout_provider.dart' show assignedWorkoutsProvider;
@@ -13,6 +15,9 @@ import 'browser_push.dart';
 /// tells these providers: they don't dispose and no table ticks them, so the
 /// client read "assigned you a program" over a Home that still said there was
 /// none until the app restarted.
+///
+/// `weekly_checkins` goes only to the coach, from `trg_notify_coach_on_checkin`
+/// (004), when a client submits: the review queue, if it is open, gains one.
 void refreshForNotification(
     String? type, void Function(ProviderOrFamily) invalidate) {
   switch (type) {
@@ -22,6 +27,8 @@ void refreshForNotification(
       invalidate(todaysWorkoutProvider);
     case 'nutrition_assigned':
       invalidate(myNutritionPlanProvider);
+    case 'weekly_checkins':
+      invalidate(coachSubmittedCheckinsProvider);
   }
 }
 

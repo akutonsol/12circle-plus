@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:circle_fitness/core/notifications/notification_watcher.dart';
+import 'package:circle_fitness/features/checkins/domain/checkin_provider.dart';
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
 import 'package:circle_fitness/features/coach/domain/package_provider.dart';
 import 'package:circle_fitness/features/workout/domain/workout_provider.dart';
@@ -116,6 +117,7 @@ void main() {
       'recent sessions': clientRecentSessionsProvider('c1'),
       'personal records': clientPersonalRecordsProvider('c1'),
       'the roster\'s workout stats': clientWorkoutStatsProvider('coach1'),
+      'the coach\'s check-in queue': coachSubmittedCheckinsProvider,
     };
 
     pages.forEach((name, provider) {
@@ -160,13 +162,18 @@ void main() {
         counted<Map<String, dynamic>>('program', myAssignedProgramProvider, null),
         counted<Map<String, dynamic>>('today', todaysWorkoutProvider, null),
         counted<Map<String, dynamic>>('nutrition', myNutritionPlanProvider, null),
+        coachSubmittedCheckinsProvider.overrideWith((ref) async {
+          reads['queue'] = (reads['queue'] ?? 0) + 1;
+          return const [];
+        }),
       ]);
       addTearDown(container.dispose);
-      for (final p in [
+      for (final p in <ProviderListenable<Object?>>[
         assignedWorkoutsProvider,
         myAssignedProgramProvider,
         todaysWorkoutProvider,
         myNutritionPlanProvider,
+        coachSubmittedCheckinsProvider,
       ]) {
         container.listen<Object?>(p, (_, __) {});
       }
@@ -190,6 +197,10 @@ void main() {
 
     test('nutrition_assigned: the plan', () async {
       expect((await after('nutrition_assigned')).keys.toSet(), {'nutrition'});
+    });
+
+    test('weekly_checkins: the coach\'s review queue', () async {
+      expect((await after('weekly_checkins')).keys.toSet(), {'queue'});
     });
 
     test('anything else re-reads nothing', () async {
