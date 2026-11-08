@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:circle_fitness/core/notifications/notification_watcher.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/checkins/data/weekly_checkin_service.dart';
 import 'package:circle_fitness/features/checkins/domain/checkin_provider.dart';
@@ -23,6 +25,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 //   * C5 — a check-in that saved was reported "Failed to save" when only the
 //     points that follow it failed.
 //   * C6 — a failed queue read came back as an empty queue.
+//   * C8 — on bb00a0e the queue was cached for the session and only the coach
+//     dashboard re-read it, so a coach who opened Check-ins after a client
+//     submitted was shown `1 of 1` while QA held two.
 //
 // The service tests drive the real service, signed in, with only the network
 // substituted. The screen tests drive the real review screen.
@@ -166,6 +171,64 @@ Future<void> _openReview(
   await tester.pumpAndSettle();
 }
 
+/// The coach's queue as the server holds it, which a test changes between
+/// visits. [gate], when set, holds the next read open.
+class _QueueService implements WeeklyCheckinService {
+  final rows = <Map<String, dynamic>>[];
+  Completer<void>? gate;
+
+  @override
+  Future<List<Map<String, dynamic>>> getSubmittedCheckinsForCoach() async {
+    await gate?.future;
+    return List.of(rows);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
+}
+
+/// The real queue and selection providers, under two shell routes the way the
+/// app has them: leaving Check-ins for Clients and coming back is a `go` each
+/// way. Clients is a stand-in, so nothing here is the dashboard re-reading.
+Future<({ProviderContainer container, GoRouter router})> _openCheckins(
+    WidgetTester tester, _QueueService service) async {
+  final container = ProviderContainer(overrides: [
+    weeklyCheckinServiceProvider.overrideWithValue(service),
+    currentUserDisplayNameProvider.overrideWithValue('Coach Nadia'),
+  ]);
+  addTearDown(container.dispose);
+  final router = GoRouter(initialLocation: '/coach-checkin-review', routes: [
+    ShellRoute(
+      builder: (_, __, child) => child,
+      routes: [
+        GoRoute(
+          path: '/coach-dashboard',
+          builder: (_, __) => const Scaffold(body: Text('Clients')),
+        ),
+        GoRoute(
+          path: '/coach-checkin-review',
+          builder: (_, __) => const CoachCheckinReviewScreen(),
+        ),
+      ],
+    ),
+  ]);
+  addTearDown(router.dispose);
+  await tester.pumpWidget(UncontrolledProviderScope(
+    container: container,
+    child: MaterialApp.router(routerConfig: router),
+  ));
+  await tester.pumpAndSettle();
+  return (container: container, router: router);
+}
+
+Future<void> _leaveAndReopen(WidgetTester tester, GoRouter router) async {
+  router.go('/coach-dashboard');
+  await tester.pumpAndSettle();
+  expect(find.text('Clients'), findsOneWidget);
+  router.go('/coach-checkin-review');
+  await tester.pumpAndSettle();
+}
+
 late _Server _server;
 
 void main() {
@@ -302,6 +365,75 @@ void main() {
       await _openReview(tester, queue: () async => const []);
 
       expect(find.text('No check-in selected'), findsOneWidget);
+    });
+  });
+
+  group('C8 reopening Check-ins reads the queue again', () {
+    final older = _row('a', 'Amara', extra: {'week_number': 39});
+    final newer = _row('b', 'Tomas');
+
+    testWidgets('a check-in submitted while away is there on return', (tester) async {
+      // Real-build QA on bb00a0e: Jordan submitted, QA held two, and the coach
+      // opened Check-ins to `1 of 1`.
+      final service = _QueueService()..rows.add(older);
+      final app = await _openCheckins(tester, service);
+      expect(find.textContaining('1 of 1'), findsOneWidget);
+
+      service.rows.add(newer);
+      await _leaveAndReopen(tester, app.router);
+
+      expect(find.textContaining('1 of 2'), findsOneWidget,
+          reason: 'the coach was shown the queue as it was before the client '
+              'submitted');
+      expect(find.textContaining('Amara'), findsWidgets,
+          reason: 'PD7: the oldest submitted check-in opens first');
+
+      await tester.tap(find.bySemanticsLabel('Next'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('2 of 2'), findsOneWidget);
+      expect(find.textContaining('Tomas'), findsWidgets);
+    });
+
+    testWidgets('where Next had reached is not where the next visit opens',
+        (tester) async {
+      // PD7 is "every way in opens the oldest". A selection kept from the last
+      // visit is a copy of a row as it was then, and after a send it is a
+      // check-in that is no longer in the queue at all.
+      final service = _QueueService()..rows.addAll([older, newer]);
+      final app = await _openCheckins(tester, service);
+      await tester.tap(find.bySemanticsLabel('Next'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('2 of 2'), findsOneWidget);
+
+      await _leaveAndReopen(tester, app.router);
+
+      expect(find.textContaining('1 of 2'), findsOneWidget);
+      expect(find.textContaining('Amara'), findsWidgets);
+    });
+
+    testWidgets('a weekly_checkins notification re-reads the open queue in place',
+        (tester) async {
+      final service = _QueueService()..rows.add(older);
+      final app = await _openCheckins(tester, service);
+      expect(find.textContaining('1 of 1'), findsOneWidget);
+      await tester.enterText(find.byType(TextField).first, 'Half-written reply');
+
+      service
+        ..rows.add(newer)
+        ..gate = Completer<void>();
+      refreshForNotification('weekly_checkins', app.container.invalidate);
+      await tester.pump();
+
+      // While the re-read is in flight the coach keeps the check-in and the
+      // reply they are writing; the screen does not drop to a spinner.
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.text('Half-written reply'), findsOneWidget);
+      expect(find.textContaining('Amara'), findsWidgets);
+
+      service.gate!.complete();
+      await tester.pumpAndSettle();
+      expect(find.textContaining('1 of 2'), findsOneWidget);
+      expect(find.text('Half-written reply'), findsOneWidget);
     });
   });
 
