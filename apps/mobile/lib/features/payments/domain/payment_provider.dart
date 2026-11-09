@@ -14,6 +14,7 @@ final mySubscriptionsProvider =
 /// Coach: Stripe Connect status (connected / charges_enabled / payouts_enabled).
 final coachConnectStatusProvider =
     FutureProvider<Map<String, dynamic>>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(paymentServiceProvider).connectStripeStatus();
 });
 
@@ -26,12 +27,15 @@ final coachRevenueProvider = FutureProvider<Map<String, double>>((ref) async {
 
 /// Coach: connected-account balance {pending, available} (cents).
 final coachBalanceProvider = FutureProvider<Map<String, dynamic>>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(paymentServiceProvider).connectBalance();
 });
 
 /// Server-evaluated membership tier ('ai_guided' | 'self_guided' | null).
-/// Gate platform features on this.
+/// Gate platform features on this — for whoever is signed in now, which is
+/// why it watches the user: the server answers for `auth.uid()`.
 final membershipTierProvider = FutureProvider<String?>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(paymentServiceProvider).activeMembership();
 });
 
@@ -42,6 +46,7 @@ final hasMembershipProvider = Provider<bool>((ref) {
 
 /// The coach's active platform plan tier ('starter'|'growth'|'elite' | null).
 final coachPlanTierProvider = FutureProvider<String?>((ref) async {
+  ref.watch(currentUserProvider);
   return ref.watch(paymentServiceProvider).coachPlanTier();
 });
 

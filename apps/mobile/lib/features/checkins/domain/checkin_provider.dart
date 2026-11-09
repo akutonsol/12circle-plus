@@ -16,7 +16,12 @@ final currentWeekCheckinProvider = FutureProvider<WeeklyCheckin>((ref) async {
   return ref.watch(weeklyCheckinServiceProvider).getCurrentWeekCheckin();
 });
 
-final selectedCheckinProvider = StateProvider<WeeklyCheckin?>((ref) => null);
+/// The check-in the client opened. Cleared when the signed-in account changes:
+/// it outlived sign-out, so the next account could open the last one's week.
+final selectedCheckinProvider = StateProvider<WeeklyCheckin?>((ref) {
+  ref.watch(currentUserProvider);
+  return null;
+});
 
 /// The coach's pending review queue. Auto-disposed so that opening Check-ins,
 /// by any route, reads it again: kept for the session, it was re-read only by

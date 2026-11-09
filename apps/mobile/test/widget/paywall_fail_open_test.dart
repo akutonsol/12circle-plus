@@ -118,6 +118,8 @@ void main() {
     test('a throwing clientPlan makes the provider an AsyncError', () async {
       final container = ProviderContainer(overrides: [
         paymentServiceProvider.overrideWithValue(_ThrowingPayments()),
+        // The plan is read for whoever is signed in, so it watches the user.
+        currentUserProvider.overrideWithValue(null),
       ]);
       addTearDown(container.dispose);
 
@@ -159,6 +161,8 @@ void main() {
     test('a successful read still resolves to a plan', () async {
       final container = ProviderContainer(overrides: [
         paymentServiceProvider.overrideWithValue(_CoachGuidedPayments()),
+        // The plan is read for whoever is signed in, so it watches the user.
+        currentUserProvider.overrideWithValue(null),
       ]);
       addTearDown(container.dispose);
 

@@ -39,9 +39,11 @@ class NotificationsNotifier extends StateNotifier<AsyncValue<List<AppNotificatio
     state = const AsyncValue.loading();
     try {
       final list = await _svc.fetchNotifications();
+      // Replaced when another account signs in, possibly mid-read.
+      if (!mounted) return;
       state = AsyncValue.data(list);
     } catch (e, st) {
-      state = AsyncValue.error(e, st);
+      if (mounted) state = AsyncValue.error(e, st);
     }
   }
 
@@ -69,5 +71,10 @@ class NotificationsNotifier extends StateNotifier<AsyncValue<List<AppNotificatio
 
 final notificationsProvider =
     StateNotifierProvider<NotificationsNotifier, AsyncValue<List<AppNotification>>>(
-      (_) => NotificationsNotifier(),
+      (ref) {
+        // A new list for each account: the notifier holds one account's rows
+        // and its stream, and outlived sign-out.
+        ref.watch(currentUserProvider);
+        return NotificationsNotifier();
+      },
     );

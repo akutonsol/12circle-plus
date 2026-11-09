@@ -172,6 +172,8 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
 }
 
 final liveHabitNotifierProvider = StateNotifierProvider<LiveHabitNotifier, AsyncValue<List<Habit>>>((ref) {
+  // The habits of whoever is signed in now, not of whoever opened Habits first.
+  ref.watch(currentUserProvider);
   return LiveHabitNotifier(CoachProgramService(), ScoreService());
 });
 
