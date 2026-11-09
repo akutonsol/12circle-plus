@@ -13,7 +13,13 @@ import '../domain/checkin_provider.dart';
 /// **F-16: the error propagates.** `WeeklyCheckinService.getWeeklyCheckins()`
 /// is wrapped here rather than called through a swallowing helper, so a failed
 /// read reaches the screen as a failure instead of as "no history".
-final checkinHistoryProvider = FutureProvider<List<WeeklyCheckin>>((ref) async {
+///
+/// **autoDispose, so each visit reads it again.** It was cached for the life of
+/// the app, and the coach's reply lands on a row this already held: a client who
+/// had looked at their history saw "Awaiting reply" over an answered week until
+/// the app restarted. The reply's notification (`checkin`) re-reads it too.
+final checkinHistoryProvider =
+    FutureProvider.autoDispose<List<WeeklyCheckin>>((ref) async {
   ref.watch(currentUserProvider);
   return WeeklyCheckinService().getWeeklyCheckins(limit: checkinHistoryLimit);
 });

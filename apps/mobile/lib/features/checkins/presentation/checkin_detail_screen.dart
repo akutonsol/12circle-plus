@@ -6,6 +6,7 @@ import '../../../core/widgets/named_icon_button.dart';
 import '../data/models/checkin_model.dart';
 import '../domain/checkin_hub.dart';
 import '../domain/checkin_provider.dart';
+import 'checkin_hub_sections.dart' show checkinHistoryProvider;
 
 /// FIT-024 · "Check-in detail — `/checkin-detail · with the coach's reply`"
 /// and FIT-025 · "Awaiting reply — the empty state with a real answer".
@@ -36,7 +37,8 @@ class CheckinDetailScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final checkin = ref.watch(selectedCheckinProvider);
+    final checkin = latestOf(
+        ref.watch(selectedCheckinProvider), ref.watch(checkinHistoryProvider));
 
     return Scaffold(
       backgroundColor: _bg,
@@ -60,6 +62,24 @@ class CheckinDetailScreen extends ConsumerWidget {
           : _Detail(checkin: checkin),
     );
   }
+}
+
+/// The week that was opened, as the history last read it.
+///
+/// The selection is the copy the client tapped, so a reply that arrived after
+/// that never reached this screen: it said "No reply yet" over an answered
+/// week. The history is re-read when the reply's notification lands. Anything
+/// short of a read that has this week — loading, failed, or the week no longer
+/// in it — keeps the copy that was opened rather than blanking the screen.
+@visibleForTesting
+WeeklyCheckin? latestOf(
+    WeeklyCheckin? selected, AsyncValue<List<WeeklyCheckin>> history) {
+  if (selected == null) return null;
+  final weeks = history.hasError ? null : history.valueOrNull;
+  for (final w in weeks ?? const <WeeklyCheckin>[]) {
+    if (w.id == selected.id) return w;
+  }
+  return selected;
 }
 
 class _NothingSelected extends StatelessWidget {

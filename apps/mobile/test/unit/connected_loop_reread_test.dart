@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:circle_fitness/core/notifications/notification_watcher.dart';
 import 'package:circle_fitness/features/checkins/domain/checkin_provider.dart';
+import 'package:circle_fitness/features/checkins/presentation/checkin_hub_sections.dart'
+    show checkinHistoryProvider;
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
 import 'package:circle_fitness/features/coach/domain/package_provider.dart';
 import 'package:circle_fitness/features/workout/domain/workout_provider.dart';
@@ -118,6 +120,7 @@ void main() {
       'personal records': clientPersonalRecordsProvider('c1'),
       'the roster\'s workout stats': clientWorkoutStatsProvider('coach1'),
       'the coach\'s check-in queue': coachSubmittedCheckinsProvider,
+      'the client\'s check-in history': checkinHistoryProvider,
     };
 
     pages.forEach((name, provider) {
@@ -166,6 +169,10 @@ void main() {
           reads['queue'] = (reads['queue'] ?? 0) + 1;
           return const [];
         }),
+        checkinHistoryProvider.overrideWith((ref) async {
+          reads['history'] = (reads['history'] ?? 0) + 1;
+          return const [];
+        }),
       ]);
       addTearDown(container.dispose);
       for (final p in <ProviderListenable<Object?>>[
@@ -174,6 +181,7 @@ void main() {
         todaysWorkoutProvider,
         myNutritionPlanProvider,
         coachSubmittedCheckinsProvider,
+        checkinHistoryProvider,
       ]) {
         container.listen<Object?>(p, (_, __) {});
       }
@@ -201,6 +209,13 @@ void main() {
 
     test('weekly_checkins: the coach\'s review queue', () async {
       expect((await after('weekly_checkins')).keys.toSet(), {'queue'});
+    });
+
+    test('checkin: the client\'s history, where the coach\'s reply is shown',
+        () async {
+      // `submitCoachFeedback` is the only sender of this type, and it sends it
+      // to the client: "Coach Feedback Ready".
+      expect((await after('checkin')).keys.toSet(), {'history'});
     });
 
     test('anything else re-reads nothing', () async {

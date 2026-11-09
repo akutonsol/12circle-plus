@@ -6,6 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:circle_fitness/features/checkins/data/models/checkin_model.dart';
 import 'package:circle_fitness/features/checkins/domain/checkin_provider.dart';
 import 'package:circle_fitness/features/checkins/presentation/checkin_detail_screen.dart';
+import 'package:circle_fitness/features/checkins/presentation/checkin_hub_sections.dart'
+    show checkinHistoryProvider;
 
 /// FIT-024 · "Check-in detail — with the coach's reply" and
 /// FIT-025 · "Awaiting reply — the empty state with a real answer".
@@ -164,5 +166,52 @@ void main() {
         .first);
     expect(size.height, greaterThanOrEqualTo(44.0));
     handle.dispose();
+  });
+
+  group('FIT-024 a reply that arrives while the week is open', () {
+    // The client opened week 46 before the coach replied. The coach's
+    // "Coach Feedback Ready" re-reads the history (notification_watcher); the
+    // open week must show what that read returned, not the copy it was opened
+    // with — which said "No reply yet" until the app was restarted.
+    testWidgets('is shown without leaving the screen', (t) async {
+      var rows = [week(number: 46, status: CheckinStatus.submitted)];
+      await t.binding.setSurfaceSize(const Size(420, 1200));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      await t.pumpWidget(ProviderScope(
+        overrides: [
+          selectedCheckinProvider.overrideWith((ref) => rows.single),
+          checkinHistoryProvider.overrideWith((ref) async => rows),
+        ],
+        child: const MaterialApp(home: CheckinDetailScreen()),
+      ));
+      await t.pumpAndSettle();
+      expect(find.text('No reply yet'), findsOneWidget);
+
+      rows = [week(number: 46, feedback: reply())];
+      ProviderScope.containerOf(t.element(find.byType(CheckinDetailScreen)))
+          .invalidate(checkinHistoryProvider);
+      await t.pumpAndSettle();
+
+      expect(find.text('Two is fine.'), findsOneWidget);
+      expect(find.text('No reply yet'), findsNothing);
+    });
+
+    testWidgets('a failed re-read keeps the week that was opened', (t) async {
+      // Not a blank screen, and not "nothing selected": the client still has
+      // the week they tapped.
+      await t.binding.setSurfaceSize(const Size(420, 1200));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      await t.pumpWidget(ProviderScope(
+        overrides: [
+          selectedCheckinProvider.overrideWith((ref) => week(feedback: reply())),
+          checkinHistoryProvider.overrideWith(
+              (ref) => Future<List<WeeklyCheckin>>.error(Exception('offline'))),
+        ],
+        child: const MaterialApp(home: CheckinDetailScreen()),
+      ));
+      await t.pumpAndSettle();
+      expect(find.text('Two is fine.'), findsOneWidget);
+      expect(find.text('Open a check-in from your history'), findsNothing);
+    });
   });
 }

@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../features/checkins/domain/checkin_provider.dart'
     show coachSubmittedCheckinsProvider;
+import '../../features/checkins/presentation/checkin_hub_sections.dart'
+    show checkinHistoryProvider;
 import '../../features/coach/domain/coach_ecosystem_provider.dart'
     show myAssignedProgramProvider, myNutritionPlanProvider, todaysWorkoutProvider;
 import '../../features/workout/domain/workout_provider.dart' show assignedWorkoutsProvider;
@@ -18,6 +20,8 @@ import 'browser_push.dart';
 ///
 /// `weekly_checkins` goes only to the coach, from `trg_notify_coach_on_checkin`
 /// (004), when a client submits: the review queue, if it is open, gains one.
+/// `checkin` goes only to the client, from `submitCoachFeedback`, when the
+/// coach replies: the history and an open week then show the reply.
 void refreshForNotification(
     String? type, void Function(ProviderOrFamily) invalidate) {
   switch (type) {
@@ -29,6 +33,8 @@ void refreshForNotification(
       invalidate(myNutritionPlanProvider);
     case 'weekly_checkins':
       invalidate(coachSubmittedCheckinsProvider);
+    case 'checkin':
+      invalidate(checkinHistoryProvider);
   }
 }
 

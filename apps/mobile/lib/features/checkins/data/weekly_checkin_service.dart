@@ -252,7 +252,9 @@ class WeeklyCheckinService {
           .from('weekly_checkins')
           .select('week_start_date')
           .eq('user_id', userId)
-          .eq('status', 'submitted')
+          // A week the coach has replied to was still checked in: replying
+          // moves it to `reviewed`, and that took it out of the streak.
+          .inFilter('status', const ['submitted', 'reviewed'])
           .order('week_start_date', ascending: false)
           .limit(60);
       return weeklyStreak(
