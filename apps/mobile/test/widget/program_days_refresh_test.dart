@@ -631,4 +631,53 @@ void main() {
     await _settle(t);
     expect(_assignButton(t).onPressed, isNull);
   });
+
+  group('S1 on a phone, Assign Program is reachable', () {
+    // The sheet laid every program out in a plain Column, with the button
+    // last. Seen on the real build at 551 px: with a coach's ordinary library
+    // the list ran past the bottom of the screen and took "Assign Program" with
+    // it, so a client's first program could not be assigned. The tests above
+    // run on a 4000 px surface, where that cannot happen.
+    testWidgets('a coach with eight programs assigns the last one', (t) async {
+      final svc = _FakeSvc();
+      for (var i = 1; i <= 8; i++) {
+        svc.seedProgram('p$i', 'Program $i', days: ['Monday']);
+      }
+      final router = await _pump(t, svc);
+      // HEIGHT is the variable: 667 is a common phone height (S1 was seen at
+      // 551). The width is 480, not a phone's, only because the test font
+      // draws every glyph as a full square, so the page's action labels need
+      // more room than real text does and would report an unrelated overflow.
+      t.view.physicalSize = const Size(480, 667);
+      await _settle(t);
+
+      // At phone height the page builds lazily: scroll to the action, as a
+      // coach would, rather than expect it to exist off screen.
+      router.go('/client');
+      await _settle(t);
+      final open = find.text('Assign / Change Program');
+      await t.scrollUntilVisible(open, 200, scrollable: find
+          .byWidgetPredicate(
+              (w) => w is Scrollable && w.axisDirection == AxisDirection.down)
+          .first);
+      await _settle(t);
+      await t.tap(open);
+      await _settle(t);
+
+      final last = find.text('Program 8');
+      await t.ensureVisible(last);
+      await _settle(t);
+      await t.tap(last);
+      await _settle(t);
+
+      final assign = find.text('Assign Program');
+      await t.ensureVisible(assign);
+      await _settle(t);
+      expect(t.getRect(assign).bottom, lessThanOrEqualTo(667),
+          reason: 'the button must be on screen, not below it');
+      await t.tap(assign);
+      await _settle(t);
+      expect(svc.assigned, ['p8>$_clientId']);
+    });
+  });
 }
