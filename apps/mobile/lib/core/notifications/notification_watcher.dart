@@ -7,7 +7,15 @@ import '../../features/checkins/domain/checkin_provider.dart'
 import '../../features/checkins/presentation/checkin_hub_sections.dart'
     show checkinHistoryProvider;
 import '../../features/coach/domain/coach_ecosystem_provider.dart'
-    show myAssignedProgramProvider, myNutritionPlanProvider, todaysWorkoutProvider;
+    show
+        myAssignedProgramProvider,
+        myHabitsProvider,
+        myNutritionPlanProvider,
+        todaysWorkoutProvider;
+import '../../features/habits/domain/habit_provider.dart'
+    show liveHabitNotifierProvider;
+import '../../features/nutrition/domain/nutrition_provider.dart'
+    show nutritionGoalsProvider;
 import '../../features/workout/domain/workout_provider.dart' show assignedWorkoutsProvider;
 import 'browser_push.dart';
 
@@ -31,6 +39,12 @@ void refreshForNotification(
       invalidate(todaysWorkoutProvider);
     case 'nutrition_assigned':
       invalidate(myNutritionPlanProvider);
+      // What the client's Nutrition, Meals and Meal plan screens show.
+      invalidate(nutritionGoalsProvider);
+    case 'habits_assigned':
+      invalidate(myHabitsProvider);
+      // The Habits screen.
+      invalidate(liveHabitNotifierProvider);
     case 'weekly_checkins':
       invalidate(coachSubmittedCheckinsProvider);
     case 'checkin':

@@ -107,11 +107,14 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
           );
         }).toList();
       }
+      // Replaced mid-load (`habits_assigned`, or another account signing in):
+      // the replaced one must not write its stale answer, or schedule reminders.
+      if (!mounted) return;
       state = AsyncValue.data(habits);
       // Schedule device notifications for all habits that have a reminder time
       HabitReminderService().scheduleHabitReminders(habits);
     } catch (e, st) {
-      state = AsyncValue.error(e, st);
+      if (mounted) state = AsyncValue.error(e, st);
     }
   }
 
