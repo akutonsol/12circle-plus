@@ -129,7 +129,13 @@ void main() {
     reads = {};
     overrides = [assignedCoachProvider.overrideWith((ref) async => null)];
     providers = [];
-    counted<List<WeeklyCheckin>>('check-in history', checkinHistoryProvider, const []);
+    // autoDispose (each visit re-reads it), so not a `FutureProvider`; counted
+    // exactly as `counted` would.
+    overrides.add(checkinHistoryProvider.overrideWith((ref) async {
+      reads['check-in history'] = (reads['check-in history'] ?? 0) + 1;
+      return const <WeeklyCheckin>[];
+    }));
+    providers.add(checkinHistoryProvider);
     counted('today\'s score', todayScoreProvider, const <String, dynamic>{});
     counted('week scores', weekScoresProvider, const <Map<String, dynamic>>[]);
     counted('score', myScoreProvider, null);
