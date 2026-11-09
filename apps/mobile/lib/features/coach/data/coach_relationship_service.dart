@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 
 class CoachRelationshipService {
   final _db = Supabase.instance.client;
@@ -16,44 +17,74 @@ class CoachRelationshipService {
       'pending_at': DateTime.now().toIso8601String(),
     }, onConflict: 'client_id,coach_id');
     // Notify coach
-    await _db.from('notifications').insert({
-      'recipient_id': coachId,
-      'type': 'coach_request',
-      'title': 'New Coaching Request',
-      'body': 'A new client is requesting you as their coach.',
-      'data': {'client_id': clientId},
-      'read': false,
-    });
+    // Best-effort, and reported: the change above is saved, and a failed
+    // notification thrown from here read as a failed save (N3).
+    try {
+      await _db.from('notifications').insert({
+        'recipient_id': coachId,
+        'type': 'coach_request',
+        'title': 'New Coaching Request',
+        'body': 'A new client is requesting you as their coach.',
+        'data': {'client_id': clientId},
+        'read': false,
+      });
+    } catch (e) {
+      reportError('CoachRelationshipService.requestCoach.notify', e);
+    }
+  }
+
+
+  /// A request answer that matched no row is not an answer (QAX-ERR-02): RLS
+  /// filters out a relationship that is not this coach's, or one already
+  /// answered, without an error — and the screen said "Client accepted!".
+  void _requireAnswered(List<dynamic> rows) {
+    if (rows.isEmpty) {
+      throw StateError('That request is no longer pending — nothing was changed.');
+    }
   }
 
   // ── Coach approves a pending request ──────────────────────
   Future<void> approveRequest(String relationshipId, String clientId) async {
-    await _db.from('coach_client_relationships').update({
+    final rows = await _db.from('coach_client_relationships').update({
       'status': 'active',
       'activated_at': DateTime.now().toIso8601String(),
-    }).eq('id', relationshipId);
+    }).eq('id', relationshipId).select('id');
+    _requireAnswered(rows);
     // Notify client
-    await _db.from('notifications').insert({
-      'recipient_id': clientId,
-      'type': 'request_approved',
-      'title': 'Coach Request Approved',
-      'body': 'Your coach has accepted your request. You can now start working together!',
-      'read': false,
-    });
+    // Best-effort, and reported: the change above is saved, and a failed
+    // notification thrown from here read as a failed save (N3).
+    try {
+      await _db.from('notifications').insert({
+        'recipient_id': clientId,
+        'type': 'request_approved',
+        'title': 'Coach Request Approved',
+        'body': 'Your coach has accepted your request. You can now start working together!',
+        'read': false,
+      });
+    } catch (e) {
+      reportError('CoachRelationshipService.approveRequest.notify', e);
+    }
   }
 
   // ── Coach declines a pending request ─────────────────────
   Future<void> declineRequest(String relationshipId, String clientId) async {
-    await _db.from('coach_client_relationships').update({
+    final rows = await _db.from('coach_client_relationships').update({
       'status': 'rejected',
-    }).eq('id', relationshipId);
-    await _db.from('notifications').insert({
-      'recipient_id': clientId,
-      'type': 'request_declined',
-      'title': 'Coach Request Update',
-      'body': 'Your coaching request was not accepted. Browse other coaches to find your match.',
-      'read': false,
-    });
+    }).eq('id', relationshipId).select('id');
+    _requireAnswered(rows);
+    // Best-effort, and reported: the change above is saved, and a failed
+    // notification thrown from here read as a failed save (N3).
+    try {
+      await _db.from('notifications').insert({
+        'recipient_id': clientId,
+        'type': 'request_declined',
+        'title': 'Coach Request Update',
+        'body': 'Your coaching request was not accepted. Browse other coaches to find your match.',
+        'read': false,
+      });
+    } catch (e) {
+      reportError('CoachRelationshipService.declineRequest.notify', e);
+    }
   }
 
   // ── Fetch pending requests for a coach ───────────────────
