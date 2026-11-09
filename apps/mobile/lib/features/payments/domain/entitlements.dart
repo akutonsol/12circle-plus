@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'payment_provider.dart';
+import '../../auth/domain/auth_provider.dart';
 
 /// The client's effective plan along the journey Free → Self → AI → Coach.
 enum ClientPlan { free, selfGuided, aiGuided, coachGuided }
@@ -55,6 +56,9 @@ extension ClientPlanCaps on ClientPlan {
 
 /// The current client's effective plan (server-resolved via client_plan()).
 final clientPlanProvider = FutureProvider<ClientPlan>((ref) async {
+  // `client_plan()` answers for `auth.uid()`: the next account on the device
+  // must not be gated by the previous one's plan.
+  ref.watch(currentUserProvider);
   // Reuse the membership call path; client_plan() is the unified resolver.
   final svc = ref.watch(paymentServiceProvider);
   return clientPlanFromString(await svc.clientPlan());
