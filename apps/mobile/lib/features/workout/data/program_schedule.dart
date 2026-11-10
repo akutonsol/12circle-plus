@@ -84,6 +84,38 @@ Set<String> _finishedDays(
 
 DateTime? _instant(Object? v) => v is String ? DateTime.tryParse(v) : null;
 
+/// R2 (owner, 2026-11-09): "Week N of M" while the program is active, then
+/// "Program complete" after it ends.
+///
+/// [assignment] is a `workout_program_assignments` row with its
+/// `workout_programs(duration_weeks)`. N counts the Monday-to-Sunday weeks from
+/// the one containing `start_date`, the week [programDayDate] calls week 1, so
+/// the coach's label and the client's dated sessions agree. It was read from
+/// `current_week`, which is written as 1 and never advanced, so every client
+/// read "Week 1" for the life of the program.
+///
+/// M keeps the screen's old default of 12 when the program has no length. Only
+/// what the ruling covers is new: a row with no start date keeps the old
+/// label, and a start date later than this week (never written by the app,
+/// which assigns from today) still reads week 1, as it did.
+String programWeekLabel(Map<String, dynamic> assignment, {DateTime? now}) {
+  final total = ((assignment['workout_programs'] as Map?)?['duration_weeks'] as num?)
+          ?.toInt() ??
+      12;
+  final start = _date(assignment['start_date']);
+  if (start == null) {
+    return 'Week ${assignment['current_week'] ?? 1} of $total';
+  }
+  final today = now ?? DateTime.now();
+  // Whole days between the two Mondays, counted on UTC dates so a DST change
+  // in between does not shorten a day.
+  final startMonday = DateTime.utc(start.year, start.month, start.day - (start.weekday - 1));
+  final thisMonday = DateTime.utc(today.year, today.month, today.day - (today.weekday - 1));
+  final week = thisMonday.difference(startMonday).inDays ~/ 7 + 1;
+  if (week > total) return 'Program complete';
+  return 'Week ${week < 1 ? 1 : week} of $total';
+}
+
 /// `start_date` is a Postgres `date` and arrives as `2026-11-04`. Read as the
 /// local calendar day it names, never shifted through UTC.
 DateTime? _date(Object? v) {

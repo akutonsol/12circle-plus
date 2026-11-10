@@ -12,6 +12,7 @@ import '../../scoring/domain/score_provider.dart';
 import '../../../core/widgets/named_icon_button.dart';
 import '../../checkins/domain/checkin_columns.dart';
 import '../../coach/domain/program_readiness.dart';
+import '../../workout/data/program_schedule.dart' show programWeekLabel;
 const _bg    = Color(0xFF030303);
 const _card  = Color(0xFF0E0B16);
 const _brd   = Color(0xFF1A1020);
@@ -328,7 +329,8 @@ class _OverviewTab extends ConsumerWidget {
             Text((assignment['workout_programs'] as Map?)?['name'] as String? ?? 'Program',
               style: const TextStyle(color: _wht, fontSize: 14, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
-            Text('Week ${assignment['current_week']} of ${(assignment['workout_programs'] as Map?)?['duration_weeks'] ?? 12}',
+            // R2: counted from start_date; current_week is never advanced.
+            Text(programWeekLabel(assignment),
               style: const TextStyle(color: _pri, fontSize: 12)),
           ],
           const SizedBox(height: 16),
