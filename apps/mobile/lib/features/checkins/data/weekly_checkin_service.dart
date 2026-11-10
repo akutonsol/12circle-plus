@@ -93,7 +93,8 @@ class WeeklyCheckinService {
           .eq('week_start_date', info.weekStart.toIso8601String().split('T')[0])
           .maybeSingle();
       if (data == null) return CheckinKnown.notDone;
-      return data['status'] == 'submitted'
+      // PD8: a week the coach has reviewed is done too, and is not reopened.
+      return const {'submitted', 'reviewed'}.contains(data['status'])
           ? CheckinKnown.done
           : CheckinKnown.notDone;
     } catch (_) {
@@ -153,7 +154,11 @@ class WeeklyCheckinService {
       mood: mood, energy: energy, stress: stress, sleepHoursAvg: sleepHoursAvg);
     final compliance = await _derivedCompliance(userId, info.weekStart, now);
     final weekStart = info.weekStart.toIso8601String().split('T')[0];
-    final coachId = await _coachForFirstSubmission(userId, weekStart);
+    final (:reviewed, :coachId) = await _weekBeforeWrite(userId, weekStart);
+    // PD8: a reviewed week cannot be resubmitted. The form can still be open
+    // from before the review landed; writing it would overwrite the answers the
+    // coach replied to and put the week back in the queue as `submitted`.
+    if (reviewed) throw StateError(alreadyReviewedMessage);
 
     try {
       await _supabase.from('weekly_checkins').upsert({
@@ -176,7 +181,7 @@ class WeeklyCheckinService {
         if (compliance != null) 'compliance_percent': compliance,
         // Coach notification (CHK-001) is handled server-side by the
         // trg_notify_coach_on_checkin DB trigger, which needs coach_id on the
-        // INSERT. Sent only on the first submission: see _coachForFirstSubmission.
+        // INSERT. Sent only on the first submission: see _weekBeforeWrite.
         if (coachId != null) 'coach_id': coachId,
         // UTC, stated: timestamptz reads a zoneless time as UTC.
         'submitted_at': now.toUtc().toIso8601String(),
@@ -204,23 +209,29 @@ class WeeklyCheckinService {
     return true;
   }
 
-  /// The coach to name on this week's check-in, or null.
+  /// What the save needs to know about this week's existing row, read once:
+  /// whether the coach has reviewed it (PD8 — then nothing is written), and the
+  /// coach to name on it, or null.
   ///
-  /// Only for the week's first row: the notify trigger fires on INSERT, and the
-  /// authorship trigger (114) refuses a client CHANGING coach_id on UPDATE, so a
-  /// resubmission that sent it would fail the whole save. Only when the client
-  /// has exactly one active coach: with several there is no single right one,
-  /// and naming either would notify a coach at random. Null leaves the row as
-  /// it was before this existed, so a failed lookup never blocks the check-in.
-  Future<String?> _coachForFirstSubmission(String userId, String weekStart) async {
+  /// The coach is named only on the week's first row: the notify trigger fires
+  /// on INSERT, and the authorship trigger (114) refuses a client CHANGING
+  /// coach_id on UPDATE, so a resubmission that sent it would fail the whole
+  /// save. Only when the client has exactly one active coach: with several there
+  /// is no single right one, and naming either would notify a coach at random.
+  /// A failed lookup answers (reviewed: false, coachId: null), which leaves the
+  /// save as it was before this existed, so it never blocks the check-in.
+  Future<({bool reviewed, String? coachId})> _weekBeforeWrite(
+      String userId, String weekStart) async {
     try {
       final existing = await _supabase
           .from('weekly_checkins')
-          .select('id')
+          .select('id, status')
           .eq('user_id', userId)
           .eq('week_start_date', weekStart)
           .maybeSingle();
-      if (existing != null) return null;
+      if (existing != null) {
+        return (reviewed: existing['status'] == 'reviewed', coachId: null);
+      }
       final rows = await _supabase
           .from('coach_client_relationships')
           .select('coach_id')
@@ -228,12 +239,19 @@ class WeeklyCheckinService {
           .eq('status', 'active')
           .limit(2);
       final coaches = List<Map<String, dynamic>>.from(rows as List);
-      return coaches.length == 1 ? coaches.single['coach_id'] as String? : null;
+      return (
+        reviewed: false,
+        coachId: coaches.length == 1 ? coaches.single['coach_id'] as String? : null,
+      );
     } catch (e) {
-      reportError('WeeklyCheckinService._coachForFirstSubmission', e);
-      return null;
+      reportError('WeeklyCheckinService._weekBeforeWrite', e);
+      return (reviewed: false, coachId: null);
     }
   }
+
+  /// What the client is told when [submitWeeklyCheckin] refuses a reviewed week.
+  static const alreadyReviewedMessage =
+      "Your coach has already reviewed this week's check-in — nothing was changed.";
 
   /// Whether a check-in tells the coach to look at this client. Pure; moved here
   /// unchanged from the retired CheckinService.

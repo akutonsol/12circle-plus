@@ -79,10 +79,22 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
     // — and the old path did not persist them either, since it wrote to a
     // table that is not there. Nothing that was ever saved is lost; adding
     // columns for them is an owner decision.
-    final ok = await _weekly.submitWeeklyCheckin(
-      mood: _mood, energy: _energy, stress: _stress,
-      sleepHoursAvg: _sleep, notes: _notesCtrl.text.trim(),
-    );
+    final bool ok;
+    try {
+      ok = await _weekly.submitWeeklyCheckin(
+        mood: _mood, energy: _energy, stress: _stress,
+        sleepHoursAvg: _sleep, notes: _notesCtrl.text.trim(),
+      );
+    } on StateError catch (e) {
+      // PD8: the coach reviewed this week while the form was open. Nothing was
+      // written, and trying again cannot succeed, so say so and show the week
+      // as the done week it now is.
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      await _load();
+      return;
+    }
     if (!mounted) return;
     setState(() => _saving = false);
     if (!mounted) return;
