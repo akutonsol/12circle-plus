@@ -71,6 +71,9 @@ class _Backend extends http.BaseClient {
   bool checkinFails = false;
   int checkinWrites = 0;
 
+  /// This week's row as the server holds it; null is no row.
+  String? weekStatus;
+
   http.StreamedResponse _reply(http.BaseRequest request, int status, Object body) =>
       http.StreamedResponse(
         Stream.value(utf8.encode(jsonEncode(body))),
@@ -87,6 +90,11 @@ class _Backend extends http.BaseClient {
       }
       checkinWrites++;
       return _reply(request, 201, []);
+    }
+    if (request.url.path.endsWith('/weekly_checkins') && weekStatus != null) {
+      return _reply(request, 200, [
+        {'id': 'this-week', 'status': weekStatus},
+      ]);
     }
     return _reply(request, 200, []);
   }
@@ -125,7 +133,8 @@ void main() {
   setUp(() {
     _backend
       ..checkinFails = false
-      ..checkinWrites = 0;
+      ..checkinWrites = 0
+      ..weekStatus = null;
     reads = {};
     overrides = [assignedCoachProvider.overrideWith((ref) async => null)];
     providers = [];
@@ -192,5 +201,32 @@ void main() {
 
     expect(find.text('Failed to save. Please try again.'), findsOneWidget);
     expect(reads, before);
+  });
+
+  // C3/PD8: a reviewed week is done and is not resubmitted.
+  testWidgets('a week the coach has reviewed opens as already checked in', (t) async {
+    _backend.weekStatus = 'reviewed';
+    await submit(t);
+
+    expect(find.text('Already Checked In!'), findsOneWidget,
+        reason: 'a reviewed week reopened the form');
+    expect(find.text(checkinSubmitLabel(const AsyncData(null))), findsNothing);
+  });
+
+  testWidgets('a review landing while the form is open: the send writes nothing '
+      'and says why', (t) async {
+    await submit(t);
+    _backend.weekStatus = 'reviewed';
+
+    await tapSubmit(t);
+
+    expect(_backend.checkinWrites, 0);
+    expect(
+        find.text("Your coach has already reviewed this week's check-in — "
+            'nothing was changed.'),
+        findsOneWidget);
+    expect(find.text('Failed to save. Please try again.'), findsNothing,
+        reason: 'trying again cannot succeed');
+    expect(find.text('Already Checked In!'), findsOneWidget);
   });
 }

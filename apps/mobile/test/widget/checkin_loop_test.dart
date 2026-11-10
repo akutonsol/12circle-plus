@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:circle_fitness/core/notifications/notification_watcher.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/checkins/data/weekly_checkin_service.dart';
+import 'package:circle_fitness/features/checkins/domain/checkin_known.dart';
 import 'package:circle_fitness/features/checkins/domain/checkin_provider.dart';
 import 'package:circle_fitness/features/checkins/presentation/coach_checkin_review_screen.dart';
 import 'package:flutter/material.dart';
@@ -330,6 +331,49 @@ void main() {
       _server.failing.add(_checkins);
 
       expect(await _submit(), isFalse);
+    });
+  });
+
+  // PD8 (owner, 2026-11-09): a reviewed weekly check-in counts as completed for
+  // that week and cannot be resubmitted. Only `submitted` counted as done, so a
+  // reviewed week reopened the form, and sending it overwrote the answers the
+  // coach had replied to and put the week back in the queue as `submitted`.
+  group('C3/PD8 a reviewed week is done and is not resubmitted', () {
+    test('a reviewed week reads as done', () async {
+      _server.bodies[_checkins] = [
+        {'status': 'reviewed'},
+      ];
+
+      expect(await WeeklyCheckinService().weekStatus(), CheckinKnown.done,
+          reason: 'a reviewed week reopened the form');
+    });
+
+    test('a submitted week still reads as done', () async {
+      _server.bodies[_checkins] = [
+        {'status': 'submitted'},
+      ];
+
+      expect(await WeeklyCheckinService().weekStatus(), CheckinKnown.done);
+    });
+
+    test('a form left open while the coach reviewed writes nothing', () async {
+      _server.bodies[_checkins] = [
+        {'id': 'existing', 'status': 'reviewed'},
+      ];
+
+      await expectLater(_submit(), throwsA(isA<StateError>()));
+      expect(_server.last('POST', _checkins), isNull,
+          reason: 'the write would overwrite the reviewed answers and reset '
+              'the week to submitted');
+    });
+
+    test('a submitted week the coach has not reviewed still saves', () async {
+      _server.bodies[_checkins] = [
+        {'id': 'existing', 'status': 'submitted'},
+      ];
+
+      expect(await _submit(), isTrue);
+      expect(_server.last('POST', _checkins), isNotNull);
     });
   });
 
