@@ -17,6 +17,7 @@ import '../domain/coach_triage_provider.dart';
 import 'widgets/needs_you_today.dart';
 import '../../checkins/domain/checkin_columns.dart';
 import '../domain/checked_in_week.dart';
+import '../domain/still_reading.dart';
 import '../domain/session_as_log.dart';
 
 const _bg      = Color(0xFF030303);
@@ -235,6 +236,11 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
     final clientList    = clients is AsyncError ? const <Map<String, dynamic>>[] : (clients.valueOrNull  ?? []);
     final checkinList   = checkins is AsyncError ? const <Map<String, dynamic>>[] : (checkins.valueOrNull ?? []);
     final workoutList   = workouts is AsyncError ? const <Map<String, dynamic>>[] : (workouts.valueOrNull ?? []);
+    // D4: nor may a read still in flight. Until each list arrives, its tab and
+    // its count say so instead of "none".
+    final clientsReading  = stillReading(clients);
+    final checkinsReading = stillReading(checkins);
+    final workoutsReading = stillReading(workouts);
 
     // Stats
     final checkedInThisWeek = checkinList.map((c) => c['user_id']).toSet().length;
@@ -389,25 +395,25 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
             _SummaryChip(
               icon: Icons.people_outline,
               label: "Clients",
-              value: "${clientList.length}",
+              value: clientsReading ? '—' : "${clientList.length}",
               color: _primary),
             const SizedBox(width: 8),
             _SummaryChip(
               icon: Icons.check_circle_outline,
               label: "Checked In",
-              value: "$checkedInThisWeek",
+              value: checkinsReading ? '—' : "$checkedInThisWeek",
               color: _tertiary),
             const SizedBox(width: 8),
             _SummaryChip(
               icon: Icons.warning_amber_outlined,
               label: "Needs Attention",
-              value: "$needsAttention",
+              value: checkinsReading ? '—' : "$needsAttention",
               color: needsAttention > 0 ? _error : _muted),
             const SizedBox(width: 8),
             _SummaryChip(
               icon: Icons.fitness_center_outlined,
               label: "Workouts",
-              value: "$workoutsThisWeek",
+              value: workoutsReading ? '—' : "$workoutsThisWeek",
               color: _brand),
           ])),
 
@@ -416,10 +422,11 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
           child: TabBarView(
             controller: _tabs,
             children: [
-              _buildClientsTab(clientList, checkinList, workoutList, failed: failed),
+              _buildClientsTab(clientList, checkinList, workoutList,
+                  failed: failed, reading: clientsReading),
               _buildRequestsTab(),
-              _buildCheckinsTab(checkinList, clientList),
-              _buildWorkoutsTab(workoutList, clientList),
+              _buildCheckinsTab(checkinList, clientList, reading: checkinsReading),
+              _buildWorkoutsTab(workoutList, clientList, reading: workoutsReading),
               _buildLeaderboardTab(),
             ])),
       ])));
@@ -553,6 +560,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
     List<Map<String, dynamic>> checkins,
     List<Map<String, dynamic>> workouts, {
     required bool failed,
+    required bool reading,
   }) {
     // Client Intelligence metrics
     final highRisk = clients.where((c) => c['risk_level'] == 'high').length;
@@ -576,6 +584,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
         message: "Could not load your clients",
         sub: "Pull to refresh to try again");
     }
+    if (reading) return const Center(child: CircularProgressIndicator(color: _brand));
     if (clients.isEmpty) {
       return _EmptyState(
         icon: Icons.people_outline,
@@ -1263,8 +1272,10 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
 
   Widget _buildCheckinsTab(
     List<Map<String, dynamic>> checkins,
-    List<Map<String, dynamic>> clients,
-  ) {
+    List<Map<String, dynamic>> clients, {
+    required bool reading,
+  }) {
+    if (reading) return const Center(child: CircularProgressIndicator(color: _brand));
     if (checkins.isEmpty) {
       return _EmptyState(
         icon: Icons.check_circle_outline,
@@ -1344,8 +1355,10 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
 
   Widget _buildWorkoutsTab(
     List<Map<String, dynamic>> workouts,
-    List<Map<String, dynamic>> clients,
-  ) {
+    List<Map<String, dynamic>> clients, {
+    required bool reading,
+  }) {
+    if (reading) return const Center(child: CircularProgressIndicator(color: _brand));
     if (workouts.isEmpty) {
       return _EmptyState(
         icon: Icons.fitness_center_outlined,
