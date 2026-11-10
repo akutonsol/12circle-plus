@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -7,6 +8,10 @@ import 'package:circle_fitness/features/checkins/presentation/checkin_hub_sectio
     show checkinHistoryProvider;
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
 import 'package:circle_fitness/features/coach/domain/package_provider.dart';
+import 'package:circle_fitness/features/coach/data/coach_program_service.dart';
+import 'package:circle_fitness/features/coach/data/score_service.dart';
+import 'package:circle_fitness/features/habits/domain/habit_provider.dart';
+import 'package:circle_fitness/features/nutrition/domain/nutrition_provider.dart';
 import 'package:circle_fitness/features/workout/domain/workout_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -84,6 +89,23 @@ class _CountingClient extends http.BaseClient {
       headers: {'content-type': 'application/json'},
     );
   }
+}
+
+/// Loading real habits schedules device reminders, which a unit test cannot
+/// host. The read failing ends the load before that, and the count is taken
+/// when the notifier is created, which is what is being asserted.
+class _NoHabitsRead extends CoachProgramService {
+  @override
+  Future<List<Map<String, dynamic>>> getMyHabits() async =>
+      throw StateError('not read in this test');
+}
+
+/// Holds the habits read open until the test lets it finish.
+class _GatedHabits extends CoachProgramService {
+  _GatedHabits(this.gate);
+  final Completer<List<Map<String, dynamic>>> gate;
+  @override
+  Future<List<Map<String, dynamic>>> getMyHabits() => gate.future;
 }
 
 Future<void> _settle() async {
@@ -173,6 +195,21 @@ void main() {
           reads['history'] = (reads['history'] ?? 0) + 1;
           return const [];
         }),
+        // What the client's nutrition screens actually read (Nutrition, Meals,
+        // Meal plan) — not `myNutritionPlanProvider`, which no screen reads.
+        nutritionGoalsProvider.overrideWith((ref) async {
+          reads['goals'] = (reads['goals'] ?? 0) + 1;
+          return const <String, double>{};
+        }),
+        myHabitsProvider.overrideWith((ref) async {
+          reads['habits'] = (reads['habits'] ?? 0) + 1;
+          return const <Map<String, dynamic>>[];
+        }),
+        // The Habits screen. A new notifier is a new read (it loads on creation).
+        liveHabitNotifierProvider.overrideWith((ref) {
+          reads['live habits'] = (reads['live habits'] ?? 0) + 1;
+          return LiveHabitNotifier(_NoHabitsRead(), ScoreService());
+        }),
       ]);
       addTearDown(container.dispose);
       for (final p in <ProviderListenable<Object?>>[
@@ -182,6 +219,9 @@ void main() {
         myNutritionPlanProvider,
         coachSubmittedCheckinsProvider,
         checkinHistoryProvider,
+        nutritionGoalsProvider,
+        myHabitsProvider,
+        liveHabitNotifierProvider,
       ]) {
         container.listen<Object?>(p, (_, __) {});
       }
@@ -203,8 +243,19 @@ void main() {
           {'workouts', 'program', 'today'});
     });
 
-    test('nutrition_assigned: the plan', () async {
-      expect((await after('nutrition_assigned')).keys.toSet(), {'nutrition'});
+    test('nutrition_assigned: the plan, and the goals the screens show',
+        () async {
+      // The coach's new targets reached `myNutritionPlanProvider` only; the
+      // client's open Nutrition screen went on showing the old goals.
+      expect((await after('nutrition_assigned')).keys.toSet(),
+          {'nutrition', 'goals'});
+    });
+
+    test('habits_assigned: the habits list and the Habits screen', () async {
+      // Unhandled: a client on Habits kept the list they opened, which for a
+      // new client is the made-up defaults (I6), until the app restarted.
+      expect((await after('habits_assigned')).keys.toSet(),
+          {'habits', 'live habits'});
     });
 
     test('weekly_checkins: the coach\'s review queue', () async {
@@ -231,5 +282,27 @@ void main() {
       expect(call, greaterThan(primed),
           reason: 'the first batch only primes the seen set: it is not new');
     });
+  });
+
+  test('habits replaced mid-load: the replaced list writes nothing', () async {
+    // `habits_assigned` can land while the Habits screen is still loading. The
+    // notifier it replaces then finished its read and wrote to itself after
+    // disposal — "Tried to use LiveHabitNotifier after `dispose`".
+    final gate = Completer<List<Map<String, dynamic>>>();
+    final container = ProviderContainer(overrides: [
+      liveHabitNotifierProvider.overrideWith(
+          (ref) => LiveHabitNotifier(_GatedHabits(gate), ScoreService())),
+    ]);
+    addTearDown(container.dispose);
+    container.listen<Object?>(liveHabitNotifierProvider, (_, __) {});
+    await _settle();
+
+    refreshForNotification('habits_assigned', container.invalidate);
+    await _settle();
+    gate.completeError(StateError('the read ends after the notifier was replaced'));
+    await _settle();
+
+    expect(container.read(liveHabitNotifierProvider).hasError, isTrue,
+        reason: 'the live notifier still reports its own read');
   });
 }
