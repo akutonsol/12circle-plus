@@ -13,6 +13,7 @@ import '../../../core/widgets/named_icon_button.dart';
 import '../../checkins/domain/checkin_columns.dart';
 import '../../coach/domain/program_readiness.dart';
 import '../../workout/data/program_schedule.dart' show programWeekLabel;
+import '../domain/workout_streak.dart';
 const _bg    = Color(0xFF030303);
 const _card  = Color(0xFF0E0B16);
 const _brd   = Color(0xFF1A1020);
@@ -985,20 +986,8 @@ class _ProgressTab extends StatelessWidget {
     double avgPerWeek = 0;
     if (workouts.isNotEmpty) {
       lastWorkoutStr = (workouts.first['completed_at'] as String? ?? '').split('T')[0];
-      // streak: consecutive days with at least one workout (descending)
-      final dates = workouts
-          .map((w) => (w['completed_at'] as String? ?? '').split('T')[0])
-          .toSet().toList()..sort((a, b) => b.compareTo(a));
-      if (dates.isNotEmpty) {
-        streak = 1;
-        for (int i = 1; i < dates.length; i++) {
-          final prev = DateTime.parse(dates[i - 1]);
-          final curr = DateTime.parse(dates[i]);
-          if (prev.difference(curr).inDays == 1) {
-            streak++;
-          } else break;
-        }
-      }
+      // D7: consecutive workout days that reach today or yesterday.
+      streak = currentWorkoutStreak(workouts.map((w) => w['completed_at'] as String?));
       final oldest = workouts.last;
       final oldestDate = DateTime.tryParse(oldest['completed_at'] as String? ?? '');
       if (oldestDate != null) {
