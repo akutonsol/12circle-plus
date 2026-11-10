@@ -1658,7 +1658,10 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
         const Text('Assign Workout Program',
           style: TextStyle(color: _wht, fontSize: 18, fontWeight: FontWeight.w700)),
         const SizedBox(height: 20),
-        programsAsync.when(
+        // S1: the list scrolls and the button stays on screen, as in the habits
+        // sheet. Laid out in a plain Column, a coach's ordinary library ran past
+        // the bottom of a phone and took "Assign Program" with it.
+        Flexible(child: SingleChildScrollView(child: programsAsync.when(
           loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
           error: (e, _) => const Text('Could not load programs',
               style: TextStyle(color: _mut)),
@@ -1695,7 +1698,7 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
                       const Icon(Icons.check_circle, color: _brand, size: 20),
                   ]))));
               }).toList()),
-        ),
+        ))),
         const SizedBox(height: 20),
         SizedBox(
           width: double.infinity,
