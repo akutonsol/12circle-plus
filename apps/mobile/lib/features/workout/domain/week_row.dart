@@ -60,6 +60,28 @@ const _shortDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 bool isSameDay(DateTime a, DateTime b) =>
     a.year == b.year && a.month == b.month && a.day == b.day;
 
+/// R1 (owner, 2026-11-09): "This week" lists only this week's sessions.
+///
+/// The week runs Monday to Sunday, the same week `program_schedule.dart` dates a
+/// program by. A dated session is kept only when it falls in the week containing
+/// [now]; the rest of the program, finished weeks and later ones, is left out.
+/// An undated workout (a self-generated plan) belongs to no week and is kept,
+/// listed as it always was — also the owner's ruling. Order is unchanged.
+List<Workout> thisWeeksSessions(List<Workout> workouts, {DateTime? now}) {
+  final today = now ?? DateTime.now();
+  final monday = DateTime(today.year, today.month, today.day - (today.weekday - 1));
+  final nextMonday = DateTime(monday.year, monday.month, monday.day + 7);
+  return [
+    for (final w in workouts)
+      if (w.scheduledDate == null ||
+          (!_day(w.scheduledDate!).isBefore(monday) &&
+              _day(w.scheduledDate!).isBefore(nextMonday)))
+        w,
+  ];
+}
+
+DateTime _day(DateTime d) => DateTime(d.year, d.month, d.day);
+
 WeekRowKind weekRowKind(Workout w, {DateTime? now}) {
   if (w.isCompleted) return WeekRowKind.done;
   final when = w.scheduledDate;

@@ -10,6 +10,7 @@ import '../../exercise_database/data/models/exercise_detail_model.dart';
 import '../../exercise_database/domain/exercise_database_provider.dart';
 import '../data/models/workout_model.dart';
 import '../domain/plan_summary.dart';
+import '../domain/week_row.dart' show thisWeeksSessions;
 import 'train_palette.dart';
 import 'widgets/week_row_tile.dart';
 import '../domain/workout_provider.dart';
@@ -1090,12 +1091,24 @@ class _ThisWeek extends ConsumerWidget {
   const _ThisWeek({required this.workouts});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) => Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('THIS WEEK', style: _NoPlanYet._micStyle),
-          const SizedBox(height: 8),
-          ...workouts.map((w) => WeekRowTile(workout: w)),
-        ]),
-      );
+  Widget build(BuildContext context, WidgetRef ref) {
+    // R1: the program's other weeks are not this week. See thisWeeksSessions.
+    final week = thisWeeksSessions(workouts);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('THIS WEEK', style: _NoPlanYet._micStyle),
+        const SizedBox(height: 8),
+        if (week.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            child: Text('No sessions this week',
+                style: TextStyle(
+                    color: _C.onSurfaceVar.withValues(alpha: 0.6), fontSize: 14)),
+          )
+        else
+          ...week.map((w) => WeekRowTile(workout: w)),
+      ]),
+    );
+  }
 }

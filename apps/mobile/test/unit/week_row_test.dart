@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:circle_fitness/features/workout/data/models/exercise_model.dart';
@@ -162,6 +164,68 @@ void main() {
     test('an undated row names only what it has', () {
       expect(weekRowLabel(_w(title: 'Conditioning', minutes: 30), now: _now),
           'Conditioning 30 min');
+    });
+  });
+
+  // R1 (owner, 2026-11-09): only the current week's sessions, and "No sessions
+  // this week" when there are none. The list was the whole program: every
+  // week's sessions, under a heading that says THIS WEEK.
+  group('R1 only this week', () {
+    final lastSunday = DateTime(2026, 9, 20);
+    final sunday = DateTime(2026, 9, 27);
+    final nextMonday = DateTime(2026, 9, 28);
+
+    List<String> titles(List<Workout> ws) => [for (final w in ws) w.title];
+
+    test('sessions from other weeks are left out', () {
+      final week = thisWeeksSessions([
+        _w(title: 'last week', on: lastSunday, completed: true),
+        _w(title: 'mon', on: _monday, completed: true),
+        _w(title: 'thu', on: _thursday),
+        _w(title: 'sun', on: sunday),
+        _w(title: 'next week', on: nextMonday),
+      ], now: _now);
+
+      expect(titles(week), ['mon', 'thu', 'sun']);
+    });
+
+    test('a session with a time of day still belongs to its day', () {
+      final week = thisWeeksSessions([
+        _w(title: 'sun evening', on: DateTime(2026, 9, 27, 21, 30)),
+        _w(title: 'next mon early', on: DateTime(2026, 9, 28, 0, 30)),
+      ], now: DateTime(2026, 9, 27, 23));
+
+      expect(titles(week), ['sun evening']);
+    });
+
+    test('undated workouts stay listed as they were', () {
+      final week = thisWeeksSessions([
+        _w(title: 'self-guided A'),
+        _w(title: 'next week', on: nextMonday),
+        _w(title: 'self-guided B'),
+      ], now: _now);
+
+      expect(titles(week), ['self-guided A', 'self-guided B']);
+    });
+
+    test('a program with nothing this week gives an empty week', () {
+      expect(thisWeeksSessions([_w(on: nextMonday)], now: _now), isEmpty);
+    });
+
+    // The hub cannot be driven in a widget test (plan_summary.dart says why),
+    // so its wiring is held by its source.
+    test('[SOURCE] THIS WEEK lists this week, and says when there is nothing', () {
+      final src = File('lib/features/workout/presentation/train_hub_screen.dart')
+          .readAsStringSync();
+      final start = src.indexOf('class _ThisWeek ');
+      expect(start, greaterThan(0), reason: '_ThisWeek has gone');
+      final next = src.indexOf('\nclass ', start + 1);
+      final body = src.substring(start, next < 0 ? src.length : next);
+
+      expect(body, contains('thisWeeksSessions(workouts)'),
+          reason: 'THIS WEEK is listing the whole program again');
+      expect(body, isNot(contains('workouts.map(')));
+      expect(body, contains("'No sessions this week'"));
     });
   });
 }
