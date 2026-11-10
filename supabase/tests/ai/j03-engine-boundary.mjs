@@ -3,7 +3,8 @@
 // The architecture's central claim is "the engine decides, the LLM explains".
 // This suite asks whether the engine can actually decide: does it run, does it
 // select anything, and does it fail closed when it cannot?
-import { mark, signIn, rpc, section, characterize, invariant, summary, ALLOW_WRITES } from './lib.mjs';
+import { mark, signIn, rpc, section, characterize, invariant, summary, ALLOW_WRITES,
+         intelligenceSubstrate, whenSubstrateEmpty } from './lib.mjs';
 
 const _from = mark();
 
@@ -18,34 +19,43 @@ section('J-03A  build_workout applies the deload rule whenever recovery is low')
   // Migration 127 casts it to ::text. The two assertions below were F-J-07
   // characterizations of that fault; they are inverted here to the post-fix
   // contract, per RELEASE_GATES.md Gate 3.13.
-  const low = await rpc(victim, 'build_workout', { p_context: { recovery: 59 } });
+  // `module` is required by migration 188 (ENGINE_UNKNOWN_MODULE otherwise); a pre-188
+  // build_workout ignores the key, so every call below holds on both sides.
+  const low = await rpc(victim, 'build_workout', { p_context: { recovery: 59, module: 'workout_builder' } });
   const lowRules = Array.isArray(low.body?.rules_triggered) ? low.body.rules_triggered : [];
   invariant('F-J-07  recovery below the deload threshold triggers RECOVERY_REDUCTION',
     low.status < 300 && lowRules.includes('RECOVERY_REDUCTION'),
     `HTTP ${low.status} rules_triggered=${JSON.stringify(low.body?.rules_triggered ?? null)}`);
 
-  const ok = await rpc(victim, 'build_workout', { p_context: { recovery: 60 } });
+  const ok = await rpc(victim, 'build_workout', { p_context: { recovery: 60, module: 'workout_builder' } });
   invariant('the same call at the threshold succeeds, isolating the fault to the rule append',
     ok.status < 300, `HTTP ${ok.status}`);
 
   // Same branch, a different context: the correction is deterministic.
-  const gen = await rpc(victim, 'build_workout', { p_context: { recovery: 30, goal: 'strength', size: 4 } });
+  const gen = await rpc(victim, 'build_workout', { p_context: { recovery: 30, goal: 'strength', size: 4, module: 'workout_builder' } });
   invariant('F-J-07  the correction is deterministic, not incidental to one context',
     gen.status < 300, `HTTP ${gen.status} ${gen.body?.code ?? ''}`);
 }
 
 section('J-03B  an unplannable request succeeds with nothing in it');
 {
+  // Both assertions below pin EMPTY-substrate behaviour: with no
+  // exercise_intelligence rows nothing can be planned. Once the table has rows
+  // the request becomes plannable and the defect cannot be exercised, so they
+  // are SKIPPED then (never passed), and FAIL if the state cannot be read
+  // (PRQ-1, 2026-10-28). On an empty table they run exactly as before.
+  const substrate = await intelligenceSubstrate(await signIn('admin'));
   const r = await rpc(victim, 'build_workout', {
     p_context: { goal: 'strength', size: 5, recovery: 100,
-                 equipment: ['barbell', 'dumbbell'], experience: 'intermediate' },
+                 equipment: ['barbell', 'dumbbell'], experience: 'intermediate', module: 'workout_builder' },
   });
   const selected = r.body?.selected ?? null;
-  characterize('F-J-08  an empty substrate yields HTTP 200 and an empty workout',
-    r.status < 300 && Array.isArray(selected) && selected.length === 0,
-    `HTTP ${r.status}, selected=${Array.isArray(selected) ? selected.length : selected}, ` +
-    `trace=${(r.body?.trace ?? []).length} entries, rules_triggered=${JSON.stringify(r.body?.rules_triggered)} — ` +
-    'no status field, no error: the caller cannot tell "nothing suits you" from "the engine has no library"');
+  whenSubstrateEmpty(substrate, 'F-J-08  an empty substrate yields HTTP 200 and an empty workout', () =>
+    characterize('F-J-08  an empty substrate yields HTTP 200 and an empty workout',
+      r.status < 300 && Array.isArray(selected) && selected.length === 0,
+      `HTTP ${r.status}, selected=${Array.isArray(selected) ? selected.length : selected}, ` +
+      `trace=${(r.body?.trace ?? []).length} entries, rules_triggered=${JSON.stringify(r.body?.rules_triggered)} — ` +
+      'no status field, no error: the caller cannot tell "nothing suits you" from "the engine has no library"'));
 
   // Downstream: migration 119 made materialize_program_week RAISE on an empty
   // selection, but 124 restored the pre-119 engine body behind the wrapper, so
@@ -53,9 +63,10 @@ section('J-03B  an unplannable request succeeds with nothing in it');
   // and reports them as created — reproduced on a 000-181 local replay
   // 2026-10-25. Migration 183 restores the guard (authored, not applied). No app
   // screen, edge function or live suite calls materialize_program_week today.
-  invariant('the empty selection carries no rules_triggered to explain itself',
-    Array.isArray(r.body?.rules_triggered) && r.body.rules_triggered.length === 0,
-    'rules_triggered=[] — nothing in the response says why the plan is empty');
+  whenSubstrateEmpty(substrate, 'the empty selection carries no rules_triggered to explain itself', () =>
+    invariant('the empty selection carries no rules_triggered to explain itself',
+      Array.isArray(r.body?.rules_triggered) && r.body.rules_triggered.length === 0,
+      'rules_triggered=[] — nothing in the response says why the plan is empty'));
 }
 
 section('J-03C  the rejection gates are null-permissive');
@@ -92,7 +103,7 @@ section('J-03D  the AI generator never consults the engine');
 if (ALLOW_WRITES) {
   section('J-03E  writes (AI_ALLOW_WRITES=1)');
   const before = await rpc(await signIn('admin'), 'decision_analytics');
-  const g = await rpc(victim, 'generate_workout', { p_context: { goal: 'strength', size: 3, recovery: 100 } });
+  const g = await rpc(victim, 'generate_workout', { p_context: { goal: 'strength', size: 3, recovery: 100, module: 'workout_builder' } });
   const after = await rpc(await signIn('admin'), 'decision_analytics');
   characterize('F-J-11  an empty selection is still persisted as engine provenance',
     g.status < 300 && (g.body?.selected ?? []).length === 0 && !!g.body?.trace_id,

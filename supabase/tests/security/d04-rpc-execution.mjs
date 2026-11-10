@@ -116,11 +116,13 @@ section('3. Subject-scoped RPCs reject an arbitrary subject');
 // ═══ 4. own-subject and coach-authorized paths still work ══════════════════
 section('4. Legitimate subject-scoped use');
 {
-  const own = await rpc(victim, 'generate_workout', { p_context: { size: 3 }, p_subject: ids.victim });
+  // `module` is required by migration 188 (ENGINE_UNKNOWN_MODULE otherwise); a
+  // pre-188 build_workout ignores the key, so these calls hold on both sides.
+  const own = await rpc(victim, 'generate_workout', { p_context: { size: 3, module: 'workout_builder' }, p_subject: ids.victim });
   check('a member can generate_workout for themselves', own.status < 300,
         `status=${own.status} ${JSON.stringify(own.body || '').slice(0, 80)}`);
 
-  const implicit = await rpc(victim, 'generate_workout', { p_context: { size: 3 } });
+  const implicit = await rpc(victim, 'generate_workout', { p_context: { size: 3, module: 'workout_builder' } });
   check('generate_workout with no subject defaults to the caller', implicit.status < 300,
         `status=${implicit.status}`);
 
@@ -150,7 +152,7 @@ section('4. Legitimate subject-scoped use');
 // ═══ 5. deterministic engine still executes ════════════════════════════════
 section('5. The deterministic engine is intact');
 {
-  const build = await rpc(victim, 'build_workout', { p_context: { size: 4, focus: 'push' } });
+  const build = await rpc(victim, 'build_workout', { p_context: { size: 4, focus: 'push', module: 'workout_builder' } });
   check('build_workout still runs for a member', build.status < 300,
         `status=${build.status} ${JSON.stringify(build.body || '').slice(0, 70)}`);
 

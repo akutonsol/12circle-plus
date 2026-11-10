@@ -1,9 +1,12 @@
 // Per-Attribute Knowledge Review — the editorial workflow for intelligence
 // profiles. Instead of approve/reject the whole profile, the reviewer sees each
-// attribute group with its AI confidence and acts on it independently. High-
-// confidence attributes auto-pass (green); the reviewer focuses on the low-
-// confidence ones, then Finalizes — the profile is approved only when every
-// attribute is resolved. Admin / content-manager.
+// attribute group with its AI confidence and acts on it independently, then
+// Finalizes. Since migration 187 NOTHING auto-passes: the profile is approved
+// only when a content editor has approved every one of the eight attribute
+// groups as it currently stands — AI confidence is shown for prioritising, never
+// counted as review. An attribute edited after approval reads "stale" and must be
+// reviewed again. Admin / content-manager.
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/custom_exercise_service.dart';
@@ -54,12 +57,17 @@ class _State extends ConsumerState<IntelligenceReviewScreen> {
     });
   }
 
-  Future<void> _act(String exerciseId, String attribute, String status) async {
+  Future<void> _act(String exerciseId, String attribute, String status, {String? fingerprint}) async {
     setState(() => _busy = true);
-    final ok = await _svc.reviewAttribute(exerciseId, attribute, status);
-    if (ok) { _attrsFor = null; _ensureAttrs(exerciseId); } // refresh state
+    final ok = await _svc.reviewAttribute(exerciseId, attribute, status, fingerprint: fingerprint);
+    // Refresh either way: after a refusal the value shown may be stale.
+    _attrsFor = null; _ensureAttrs(exerciseId);
     if (mounted) setState(() => _busy = false);
-    if (!ok && mounted) {
+    if (!ok && mounted && '${_svc.lastError}'.contains('INTEL_REVIEW_VALUE_CHANGED')) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text(
+          'This attribute changed while you were reviewing it. Nothing was approved — '
+          'the current value is shown now; review it again.')));
+    } else if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Action failed — check permissions / migration 091.')));
     }
@@ -151,6 +159,13 @@ class _State extends ConsumerState<IntelligenceReviewScreen> {
         const SizedBox(height: 6),
         ClipRRect(borderRadius: BorderRadius.circular(4),
           child: LinearProgressIndicator(value: conf / 100, minHeight: 5, backgroundColor: _panel2, color: c)),
+        // The value under review (187). Before this the reviewer saw only the
+        // model's confidence, so an approval was not tied to anything they read.
+        if (state['value'] != null) ...[
+          const SizedBox(height: 8),
+          Text(const JsonEncoder.withIndent('  ').convert(state['value']),
+              style: const TextStyle(color: _text, fontSize: 11.5, fontFamily: 'monospace')),
+        ],
         const SizedBox(height: 8),
         Row(children: [
           _statusTag(rs),
@@ -158,7 +173,10 @@ class _State extends ConsumerState<IntelligenceReviewScreen> {
           if (rs == 'auto')
             const Text('auto-passed (high confidence)', style: TextStyle(color: _muted, fontSize: 10.5))
           else ...[
-            _mini('Approve', _pass, () => _act(id, attr, 'approved')),
+            // 187: an approval names the exact value shown above; no value, no approve.
+            if (state['fingerprint'] is String)
+              _mini('Approve', _pass, () => _act(id, attr, 'approved',
+                  fingerprint: state['fingerprint'] as String)),
             const SizedBox(width: 6),
             _mini('Edit', _warn, () => _act(id, attr, 'needs_edit')),
             const SizedBox(width: 6),
