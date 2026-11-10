@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/observability/app_failure.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/domain/auth_provider.dart';
@@ -1074,8 +1075,23 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
     );
   }
 
+  // N4: neither had a handler, so a failure escaped the button — no message,
+  // no refresh, the request still showing as pending. The service now refuses
+  // an answer that changed nothing, so the copy is the truth either way, and
+  // the list is re-read so it shows what the server holds.
   Future<void> _approveRequest(String relId, String clientId) async {
-    await ref.read(coachRelServiceProvider).approveRequest(relId, clientId);
+    try {
+      await ref.read(coachRelServiceProvider).approveRequest(relId, clientId);
+    } catch (e, s) {
+      reportError('CoachDashboard._approveRequest', e, s);
+      ref.invalidate(pendingRequestsProvider);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+            e is StateError ? e.message
+                : "Couldn't accept the request — check your connection and try again.")));
+      }
+      return;
+    }
     ref.invalidate(pendingRequestsProvider);
     ref.invalidate(coachClientsProvider);
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(
@@ -1083,7 +1099,18 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
   }
 
   Future<void> _declineRequest(String relId, String clientId) async {
-    await ref.read(coachRelServiceProvider).declineRequest(relId, clientId);
+    try {
+      await ref.read(coachRelServiceProvider).declineRequest(relId, clientId);
+    } catch (e, s) {
+      reportError('CoachDashboard._declineRequest', e, s);
+      ref.invalidate(pendingRequestsProvider);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+            e is StateError ? e.message
+                : "Couldn't decline the request — check your connection and try again.")));
+      }
+      return;
+    }
     ref.invalidate(pendingRequestsProvider);
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Request declined'), backgroundColor: Color(0xFF333333)));

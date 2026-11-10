@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 
 class CoachProgramService {
   final _db = Supabase.instance.client;
@@ -189,6 +190,7 @@ class CoachProgramService {
     await _db.from('program_workouts').delete().eq('id', workoutId);
   }
 
+
   // ── Assign program to client ─────────────────────────────
   Future<void> assignProgram(String programId, String clientId) async {
     final coachId = _db.auth.currentUser?.id;
@@ -206,13 +208,19 @@ class CoachProgramService {
       'current_week': 1,
       'status': 'active',
     });
-    await _db.from('notifications').insert({
-      'recipient_id': clientId,
-      'type': 'program_assigned',
-      'title': 'New Workout Program',
-      'body': 'Your coach has assigned you a new workout program. Check your training tab!',
-      'read': false,
-    });
+    // Best-effort, and reported: the change above is saved, and a failed
+    // notification thrown from here read as a failed save (N3).
+    try {
+      await _db.from('notifications').insert({
+        'recipient_id': clientId,
+        'type': 'program_assigned',
+        'title': 'New Workout Program',
+        'body': 'Your coach has assigned you a new workout program. Check your training tab!',
+        'read': false,
+      });
+    } catch (e) {
+      reportError('CoachProgramService.assignProgram.notify', e);
+    }
   }
 
   // ── Client reads their assigned program ──────────────────
@@ -296,13 +304,19 @@ class CoachProgramService {
       'p_water_target_oz': waterOz,
       'p_notes': notes,
     });
-    await _db.from('notifications').insert({
-      'recipient_id': clientId,
-      'type': 'nutrition_assigned',
-      'title': 'Nutrition Plan Updated',
-      'body': 'Your coach has set your nutrition targets. Check your nutrition tab!',
-      'read': false,
-    });
+    // Best-effort, and reported: the change above is saved, and a failed
+    // notification thrown from here read as a failed save (N3).
+    try {
+      await _db.from('notifications').insert({
+        'recipient_id': clientId,
+        'type': 'nutrition_assigned',
+        'title': 'Nutrition Plan Updated',
+        'body': 'Your coach has set your nutrition targets. Check your nutrition tab!',
+        'read': false,
+      });
+    } catch (e) {
+      reportError('CoachProgramService.assignNutritionPlan.notify', e);
+    }
   }
 
   /// Coach: the active nutrition plan for a specific client (to pre-fill the sheet).
@@ -352,13 +366,19 @@ class CoachProgramService {
       'is_active': true,
     }).toList();
     await _db.from('client_habits').insert(rows);
-    await _db.from('notifications').insert({
-      'recipient_id': clientId,
-      'type': 'habits_assigned',
-      'title': 'Habits Assigned',
-      'body': 'Your coach has set your daily habit targets. Start tracking today!',
-      'read': false,
-    });
+    // Best-effort, and reported: the change above is saved, and a failed
+    // notification thrown from here read as a failed save (N3).
+    try {
+      await _db.from('notifications').insert({
+        'recipient_id': clientId,
+        'type': 'habits_assigned',
+        'title': 'Habits Assigned',
+        'body': 'Your coach has set your daily habit targets. Start tracking today!',
+        'read': false,
+      });
+    } catch (e) {
+      reportError('CoachProgramService.assignHabits.notify', e);
+    }
   }
 
   Future<List<Map<String, dynamic>>> getMyHabits() async {
