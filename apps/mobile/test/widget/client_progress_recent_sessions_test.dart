@@ -138,4 +138,69 @@ void main() {
     expect(find.text('0m'), findsNothing,
         reason: 'a row must not state a length nobody measured');
   });
+
+  // D7 · "Current Streak" counted back from the client's latest workout and
+  // never compared it with today: three days in a row a month ago read "3d".
+  group('D7 Current Streak is a run that is still going', () {
+    // A completed_at for local noon `daysAgo` days back (or a given hour), as
+    // the database returns it: a UTC instant.
+    String at(int daysAgo, {int hour = 12, int minute = 0}) {
+      final n = DateTime.now();
+      return DateTime(n.year, n.month, n.day - daysAgo, hour, minute)
+          .toUtc()
+          .toIso8601String();
+    }
+
+    testWidgets('a run that ended a month ago is not a current streak',
+        (t) async {
+      await _openProgressTab(t, [
+        _session('Leg Day', at(30), 1800),
+        _session('Push', at(31), 1800),
+        _session('Pull', at(32), 1800),
+      ]);
+      expect(find.text('3d'), findsNothing,
+          reason: 'the run stopped 30 days ago');
+      expect(find.text('0d'), findsOneWidget);
+    });
+
+    testWidgets('a run through today counts every day of it', (t) async {
+      await _openProgressTab(t, [
+        _session('Leg Day', at(0), 1800),
+        _session('Push', at(1), 1800),
+        _session('Pull', at(2), 1800),
+        _session('Old', at(9), 1800),
+      ]);
+      expect(find.text('3d'), findsOneWidget);
+    });
+
+    testWidgets('not having trained yet today does not break the run',
+        (t) async {
+      await _openProgressTab(t, [
+        _session('Push', at(1), 1800),
+        _session('Pull', at(2), 1800),
+      ]);
+      expect(find.text('2d'), findsOneWidget);
+    });
+
+    testWidgets('a run that stopped the day before yesterday is over',
+        (t) async {
+      await _openProgressTab(t, [
+        _session('Push', at(2), 1800),
+        _session('Pull', at(3), 1800),
+      ]);
+      expect(find.text('0d'), findsOneWidget);
+    });
+
+    testWidgets('a late-evening workout counts on its local day', (t) async {
+      // West of UTC this instant falls on TOMORROW's UTC date; a comparison of
+      // that date with today would drop it. In a UTC zone (CI) it is simply
+      // today, so this guards the conversion where it can and costs nothing
+      // where it cannot.
+      await _openProgressTab(t, [
+        _session('Late', at(0, hour: 23, minute: 30), 1800),
+        _session('Push', at(1, hour: 23, minute: 30), 1800),
+      ]);
+      expect(find.text('2d'), findsOneWidget);
+    });
+  });
 }
