@@ -16,6 +16,7 @@ import '../../../core/widgets/named_icon_button.dart';
 import '../domain/coach_triage_provider.dart';
 import 'widgets/needs_you_today.dart';
 import '../../checkins/domain/checkin_columns.dart';
+import '../domain/checked_in_week.dart';
 import '../domain/session_as_log.dart';
 
 const _bg      = Color(0xFF030303);
@@ -120,11 +121,12 @@ final clientCheckinsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
     // wording had to change.
     final today = DateTime.now();
     final weekStart = DateTime(today.year, today.month, today.day - (today.weekday - 1));
+    // C7: a week the coach has replied to is still a week checked in.
     final data = await _supabase
         .from('weekly_checkins')
         .select()
         .inFilter('user_id', ids)
-        .eq('status', 'submitted')
+        .inFilter('status', kCheckedInStatuses)
         .gte('week_start_date', weekStart.toIso8601String().split('T')[0])
         .order('submitted_at', ascending: false);
     return List<Map<String, dynamic>>.from(data);
@@ -236,8 +238,9 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
 
     // Stats
     final checkedInThisWeek = checkinList.map((c) => c['user_id']).toSet().length;
-    final needsAttention  = checkinList.where((c) =>
-      (checkinEnergy(c)?.toInt() ?? 5) <= 2 || (c['stress_level'] as int? ?? 0) >= 4).length;
+    // C7: a reviewed week leaves "Needs Attention" (it stays in "Checked In").
+    final needsAttention  = checkinList.where((c) => !reviewedByCoach(c) &&
+      ((checkinEnergy(c)?.toInt() ?? 5) <= 2 || (c['stress_level'] as int? ?? 0) >= 4)).length;
     final workoutsThisWeek = workoutList.length;
 
     return Scaffold(
@@ -753,7 +756,8 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
           final hasCheckedIn = checkin != null;
           final energy = (checkin == null ? null : checkinEnergy(checkin))?.toInt() ?? 0;
           final stress = checkin?['stress_level'] as int? ?? 0;
-          final needsAttention = hasCheckedIn && (energy <= 2 || stress >= 4);
+          final needsAttention = hasCheckedIn && !reviewedByCoach(checkin) &&
+              (energy <= 2 || stress >= 4);
 
           return GestureDetector(
             onTap: () {
@@ -1277,7 +1281,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
         final fn = client?['first_name'] ?? ''; final ln = client?['last_name'] ?? ''; final name = '$fn $ln'.trim().isEmpty ? 'Client' : '$fn $ln'.trim();
         final energy = checkinEnergy(c)?.toInt() ?? 0;
         final stress = c['stress_level'] as int? ?? 0;
-        final needsAttention = energy <= 2 || stress >= 4;
+        final needsAttention = !reviewedByCoach(c) && (energy <= 2 || stress >= 4);
 
         return Container(
           margin: const EdgeInsets.only(bottom: 10),
