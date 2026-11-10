@@ -12,6 +12,13 @@ import '../../features/coach/domain/coach_ecosystem_provider.dart'
         myHabitsProvider,
         myNutritionPlanProvider,
         todaysWorkoutProvider;
+import '../../features/coach/domain/coach_provider.dart'
+    show
+        assignedCoachProvider,
+        clientRelationshipProvider,
+        myCoachesProvider,
+        pendingCoachProvider;
+import '../../features/payments/domain/entitlements.dart' show clientPlanProvider;
 import '../../features/habits/domain/habit_provider.dart'
     show liveHabitNotifierProvider;
 import '../../features/nutrition/domain/nutrition_provider.dart'
@@ -49,6 +56,18 @@ void refreshForNotification(
       invalidate(coachSubmittedCheckinsProvider);
     case 'checkin':
       invalidate(checkinHistoryProvider);
+    // `request_approved` / `request_declined` go only to the client, from
+    // `approveRequest` / `declineRequest`. An active relationship is also a
+    // plan: `client_plan()` answers coach_guided for one.
+    case 'request_approved':
+      invalidate(assignedCoachProvider);
+      invalidate(myCoachesProvider);
+      invalidate(pendingCoachProvider);
+      invalidate(clientRelationshipProvider);
+      invalidate(clientPlanProvider);
+    case 'request_declined':
+      invalidate(pendingCoachProvider);
+      invalidate(clientRelationshipProvider);
   }
 }
 

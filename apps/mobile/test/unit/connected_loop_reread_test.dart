@@ -7,6 +7,8 @@ import 'package:circle_fitness/features/checkins/domain/checkin_provider.dart';
 import 'package:circle_fitness/features/checkins/presentation/checkin_hub_sections.dart'
     show checkinHistoryProvider;
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
+import 'package:circle_fitness/features/coach/domain/coach_provider.dart';
+import 'package:circle_fitness/features/payments/domain/entitlements.dart';
 import 'package:circle_fitness/features/coach/domain/package_provider.dart';
 import 'package:circle_fitness/features/coach/data/coach_program_service.dart';
 import 'package:circle_fitness/features/coach/data/score_service.dart';
@@ -210,6 +212,19 @@ void main() {
           reads['live habits'] = (reads['live habits'] ?? 0) + 1;
           return LiveHabitNotifier(_NoHabitsRead(), ScoreService());
         }),
+        // N10: what the client is shown about their coach, and the plan an
+        // active relationship grants (`client_plan()` answers coach_guided).
+        counted<Map<String, dynamic>>('coach', assignedCoachProvider, null),
+        counted<Map<String, dynamic>>('pending', pendingCoachProvider, null),
+        counted<Map<String, dynamic>>('relationship', clientRelationshipProvider, null),
+        myCoachesProvider.overrideWith((ref) async {
+          reads['coaches'] = (reads['coaches'] ?? 0) + 1;
+          return const <Map<String, dynamic>>[];
+        }),
+        clientPlanProvider.overrideWith((ref) async {
+          reads['plan'] = (reads['plan'] ?? 0) + 1;
+          return ClientPlan.free;
+        }),
       ]);
       addTearDown(container.dispose);
       for (final p in <ProviderListenable<Object?>>[
@@ -222,6 +237,11 @@ void main() {
         nutritionGoalsProvider,
         myHabitsProvider,
         liveHabitNotifierProvider,
+        assignedCoachProvider,
+        pendingCoachProvider,
+        clientRelationshipProvider,
+        myCoachesProvider,
+        clientPlanProvider,
       ]) {
         container.listen<Object?>(p, (_, __) {});
       }
@@ -267,6 +287,20 @@ void main() {
       // `submitCoachFeedback` is the only sender of this type, and it sends it
       // to the client: "Coach Feedback Ready".
       expect((await after('checkin')).keys.toSet(), {'history'});
+    });
+
+    test('request_approved: the coach, the request, and the plan it grants',
+        () async {
+      // N10: unhandled. The client was told "Coach Request Approved" over a
+      // profile still showing the request as sent and a plan still gated as
+      // before, until the app restarted.
+      expect((await after('request_approved')).keys.toSet(),
+          {'coach', 'pending', 'relationship', 'coaches', 'plan'});
+    });
+
+    test('request_declined: the request, which is no longer pending', () async {
+      expect((await after('request_declined')).keys.toSet(),
+          {'pending', 'relationship'});
     });
 
     test('anything else re-reads nothing', () async {
