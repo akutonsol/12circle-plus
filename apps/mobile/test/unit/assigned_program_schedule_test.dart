@@ -250,4 +250,51 @@ void main() {
     expect(provider, contains('assignedProgramToWorkouts(program,'));
     expect(provider, isNot(contains('map(programWorkoutToWorkout)')));
   });
+
+  // R2 (owner, 2026-11-09): "Week N of M" while the program is active, then
+  // "Program complete". The coach's label read `current_week`, which is written
+  // as 1 and never advanced, so every client was in week 1 forever.
+  group('R2 the coach sees the program week', () {
+    Map<String, dynamic> assigned(String? start, {int? weeks = 4}) => {
+          'start_date': start,
+          'current_week': 1,
+          'workout_programs': {'duration_weeks': weeks},
+        };
+    // Wednesday 2026-11-04 starts the program; its week 1 is Mon 2 – Sun 8.
+    const start = '2026-11-04';
+
+    test('week 1 is the week containing the start date', () {
+      expect(programWeekLabel(assigned(start), now: DateTime(2026, 11, 2)), 'Week 1 of 4');
+      expect(programWeekLabel(assigned(start), now: DateTime(2026, 11, 8, 23)), 'Week 1 of 4');
+    });
+
+    test('the week advances on Monday', () {
+      expect(programWeekLabel(assigned(start), now: DateTime(2026, 11, 9)), 'Week 2 of 4');
+      expect(programWeekLabel(assigned(start), now: DateTime(2026, 11, 29)), 'Week 4 of 4');
+    });
+
+    test('after the last week the program is complete', () {
+      expect(programWeekLabel(assigned(start), now: DateTime(2026, 11, 30)), 'Program complete');
+    });
+
+    test('a DST change inside the program does not lose a week', () {
+      // Europe and the US both leave summer time between these dates.
+      expect(programWeekLabel(assigned('2026-10-19', weeks: 12), now: DateTime(2026, 11, 2)),
+          'Week 3 of 12');
+    });
+
+    test('what the ruling does not cover keeps the old label', () {
+      expect(programWeekLabel(assigned(null), now: DateTime(2026, 11, 30)), 'Week 1 of 4');
+      expect(programWeekLabel(assigned(start, weeks: null), now: DateTime(2026, 11, 9)),
+          'Week 2 of 12');
+    });
+
+    test('[SOURCE] the client page uses it, not current_week', () {
+      final src = File('lib/features/dashboard/presentation/client_detail_screen.dart')
+          .readAsStringSync();
+      expect(src, contains('programWeekLabel(assignment)'));
+      expect(src, isNot(contains("assignment['current_week']")),
+          reason: 'current_week is never advanced');
+    });
+  });
 }
