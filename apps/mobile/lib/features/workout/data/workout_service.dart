@@ -387,14 +387,16 @@ class WorkoutService {
 
   // ── Coach: client stats ───────────────────────────────────────────────────
 
+  // F-15: the error propagates. `catch (_) { return []; }` made the screen's
+  // "Error loading stats" arm unreachable, so a failed read was drawn as "No
+  // Active Clients" — on the screen "Needs you today" opens for an at-risk
+  // client.
   Future<List<Map<String, dynamic>>> getClientWorkoutStats(String coachId) async {
-    try {
-      final rows = await _supabase
-          .from('coach_client_workout_stats')
-          .select()
-          .eq('coach_id', coachId);
-      return List<Map<String, dynamic>>.from(rows as List);
-    } catch (_) { return []; }
+    final rows = await _supabase
+        .from('coach_client_workout_stats')
+        .select()
+        .eq('coach_id', coachId);
+    return List<Map<String, dynamic>>.from(rows as List);
   }
 
   Future<List<Map<String, dynamic>>> getClientPersonalRecords(String clientId) async {
