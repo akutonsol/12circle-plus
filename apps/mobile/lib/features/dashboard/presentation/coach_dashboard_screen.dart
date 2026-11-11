@@ -106,12 +106,17 @@ Widget _riskPill(String label, Color color) => Container(
 
 // AI coaching signals for the coach's active clients (risk/adherence/last brief).
 final coachAiSignalsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  // QAX-SES-01: the RPC answers for `auth.uid()`; recompute for whoever is
+  // signed in now, not the coach whose clients' risk this last showed.
+  ref.watch(currentUserProvider);
   ref.watch(tableTickerProvider('coach_client_relationships'));
   final data = await _supabase.rpc('coach_client_ai_signals');
   return List<Map<String, dynamic>>.from(data as List);
 });
 
 final clientCheckinsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
+  ref.watch(currentUserProvider);
   {
     final ids = await _coachClientIds();
     if (ids.isEmpty) return []; // no clients → no data (was showing ALL platform check-ins)
@@ -168,6 +173,8 @@ final clientCheckinsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
 ///     `calories_burned`). A bare `select()` would have pulled each one into a
 ///     coach surface as it landed, with nobody deciding.
 final clientWorkoutLogsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
+  ref.watch(currentUserProvider);
   {
     final ids = await _coachClientIds();
     if (ids.isEmpty) return []; // no clients → no data (was showing ALL platform workouts)
