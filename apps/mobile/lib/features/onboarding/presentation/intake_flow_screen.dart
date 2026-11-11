@@ -11,6 +11,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/intake_data.dart';
 import '../../coach/domain/coach_provider.dart';
+import '../../../core/observability/app_failure.dart';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const _bg      = Color(0xFF0A0A0B);
@@ -4164,6 +4165,9 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
 
   Future<void> _selectCoach(Map<String, dynamic> coach) async {
     setState(() => _selecting = true);
+    // "Meet Coach …" only for a coach who IS linked. One `catch (_) {}` around
+    // the whole chain welcomed a client to a coach whose link had failed.
+    var linked = false;
     try {
       final uid = Supabase.instance.client.auth.currentUser?.id;
       if (uid != null) {
@@ -4190,19 +4194,35 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
             .eq('client_id', uid)
             .eq('status', 'active')
             .neq('coach_id', coach['id'] as String);
-        // Notify coach
-        await Supabase.instance.client.from('notifications').insert({
-          'recipient_id': coach['id'],
-          'type': 'new_client',
-          'title': 'New Client Added',
-          'body': 'A new client has selected you as their coach.',
-          'data': {'client_id': uid},
-          'read': false,
-        });
+        linked = true;
         ref.invalidate(assignedCoachProvider);
+        // Notify coach. Best-effort, and reported: the link above is saved, and
+        // a failed notification must not read as a failed link (N3).
+        try {
+          await Supabase.instance.client.from('notifications').insert({
+            'recipient_id': coach['id'],
+            'type': 'new_client',
+            'title': 'New Client Added',
+            'body': 'A new client has selected you as their coach.',
+            'data': {'client_id': uid},
+            'read': false,
+          });
+        } catch (e) {
+          reportError('IntakeFlow.selectCoach.notify', e);
+        }
       }
-    } catch (_) {}
-    if (mounted) setState(() { _selectedCoach = coach; _selecting = false; });
+    } catch (e) {
+      reportError('IntakeFlow.selectCoach', e);
+    }
+    if (!mounted) return;
+    setState(() {
+      if (linked) _selectedCoach = coach;
+      _selecting = false;
+    });
+    if (!linked) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text("Couldn't select this coach — check your connection and try again.")));
+    }
   }
 
   Widget _avatar(String? url, {double size = 160}) {
