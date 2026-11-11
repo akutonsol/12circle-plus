@@ -2,6 +2,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'models/exercise_model.dart';
 import 'models/workout_model.dart';
 import 'models/workout_log_model.dart';
+import '../../dashboard/domain/workout_streak.dart';
 
 class WorkoutService {
   // Resolved on use, not in the constructor: the sample workout/exercise
@@ -308,22 +309,13 @@ class WorkoutService {
         .eq('user_id', uid)
         .order('completed_at', ascending: false)
         .limit(30);
-    if ((data as List).isEmpty) return 0;
-    int streak = 0;
-    DateTime checkDate = DateTime.now();
-    for (final log in data) {
-      final logDate = DateTime.parse(log['completed_at']);
-      final logDay = DateTime(logDate.year, logDate.month, logDate.day);
-      final checkDay = DateTime(checkDate.year, checkDate.month, checkDate.day);
-      final diff = checkDay.difference(logDay).inDays;
-      if (diff == 0 || diff == 1) {
-        streak++;
-        checkDate = logDay.subtract(const Duration(days: 1));
-      } else {
-        break;
-      }
-    }
-    return streak;
+    // The rule the coach's view of this client, the habit streak and the
+    // activity streak keep: consecutive LOCAL days, a day with two sessions is
+    // one day, and the run must reach today or yesterday. This loop accepted a
+    // one-day gap at every step, ended at a second same-day session, and read
+    // `completed_at` (a UTC instant) as a UTC day.
+    return currentWorkoutStreak(
+        (data as List).map((log) => log['completed_at'] as String?));
   }
 
   Future<int> getTotalWorkoutCount() async {
