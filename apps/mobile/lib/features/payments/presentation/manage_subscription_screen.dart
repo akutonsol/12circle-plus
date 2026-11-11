@@ -5,6 +5,7 @@ import '../domain/entitlements.dart';
 import '../domain/payment_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coach/data/coach_relationship_service.dart';
+import '../../../core/observability/app_failure.dart';
 
 const _bg     = Color(0xFF030303);
 const _card   = Color(0xFF0E0B16);
@@ -117,13 +118,23 @@ class _ManageSubscriptionScreenState
           ['active', 'trialing', 'past_due'].contains(s['status']),
       orElse: () => <String, dynamic>{},
     );
+    // The message follows what happened, as `_cancelPlan`'s does: a failed
+    // cancellation left the client billed and was announced as ended.
+    bool ended;
     if (coachSub.isNotEmpty) {
-      await ref.read(paymentServiceProvider).cancelSubscription(coachSub['id'] as String);
+      ended = await ref.read(paymentServiceProvider).cancelSubscription(coachSub['id'] as String);
     } else {
-      await CoachRelationshipService().cancelCoach(coachId, 'client_cancelled', null);
+      try {
+        await CoachRelationshipService().cancelCoach(coachId, 'client_cancelled', null);
+        ended = true;
+      } catch (e) {
+        reportError('ManageSubscriptionScreen.stopCoach', e);
+        ended = false;
+      }
     }
-    messenger.showSnackBar(
-        const SnackBar(content: Text('Coaching ended. Your coach has been notified.')));
+    messenger.showSnackBar(SnackBar(content: Text(ended
+        ? 'Coaching ended. Your coach has been notified.'
+        : 'Could not cancel. Try again.')));
     ref.invalidate(myCoachesProvider);
     ref.invalidate(mySubscriptionsProvider);
     ref.invalidate(clientPlanProvider);

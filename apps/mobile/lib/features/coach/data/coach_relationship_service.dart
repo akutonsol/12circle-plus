@@ -147,20 +147,26 @@ class CoachRelationshipService {
       'cancelled_at': DateTime.now().toIso8601String(),
     }).eq('client_id', clientId).eq('coach_id', coachId).eq('status', 'active');
     // Notify the coach that the client has ended the relationship.
-    final me = await _db
-        .from('user_profiles')
-        .select('first_name, last_name')
-        .eq('id', clientId)
-        .maybeSingle();
-    final name = '${me?['first_name'] ?? ''} ${me?['last_name'] ?? ''}'.trim();
-    await _db.from('notifications').insert({
-      'recipient_id': coachId,
-      'type': 'coaching_ended',
-      'title': 'A client ended coaching',
-      'body': '${name.isEmpty ? 'A client' : name} has stopped working with you.',
-      'data': {'client_id': clientId},
-      'read': false,
-    });
+    // Best-effort, and reported: the change above is saved, and a failed
+    // notification thrown from here read as a failed save (N3).
+    try {
+      final me = await _db
+          .from('user_profiles')
+          .select('first_name, last_name')
+          .eq('id', clientId)
+          .maybeSingle();
+      final name = '${me?['first_name'] ?? ''} ${me?['last_name'] ?? ''}'.trim();
+      await _db.from('notifications').insert({
+        'recipient_id': coachId,
+        'type': 'coaching_ended',
+        'title': 'A client ended coaching',
+        'body': '${name.isEmpty ? 'A client' : name} has stopped working with you.',
+        'data': {'client_id': clientId},
+        'read': false,
+      });
+    } catch (e) {
+      reportError('CoachRelationshipService.cancelCoach.notify', e);
+    }
   }
 
   // ── Coach pricing ─────────────────────────────────────────
