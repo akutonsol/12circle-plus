@@ -230,9 +230,10 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
     // arriving as an empty list told them it had vanished. `.valueOrNull` is
     // kept — these are the reads EC-G8 already counts — but a failure is now
     // tracked alongside it so the screen can tell the two apart.
-    final failed = clients is AsyncError ||
-        checkins is AsyncError ||
-        workouts is AsyncError;
+    final clientsFailed  = clients is AsyncError;
+    final checkinsFailed = checkins is AsyncError;
+    final workoutsFailed = workouts is AsyncError;
+    final failed = clientsFailed || checkinsFailed || workoutsFailed;
     final clientList    = clients is AsyncError ? const <Map<String, dynamic>>[] : (clients.valueOrNull  ?? []);
     final checkinList   = checkins is AsyncError ? const <Map<String, dynamic>>[] : (checkins.valueOrNull ?? []);
     final workoutList   = workouts is AsyncError ? const <Map<String, dynamic>>[] : (workouts.valueOrNull ?? []);
@@ -241,6 +242,10 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
     final clientsReading  = stillReading(clients);
     final checkinsReading = stillReading(checkins);
     final workoutsReading = stillReading(workouts);
+    // Nor a failed one: a count over the empty stand-in is not a count.
+    final clientsUnknown  = clientsReading  || clientsFailed;
+    final checkinsUnknown = checkinsReading || checkinsFailed;
+    final workoutsUnknown = workoutsReading || workoutsFailed;
 
     // Stats
     final checkedInThisWeek = checkinList.map((c) => c['user_id']).toSet().length;
@@ -395,25 +400,25 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
             _SummaryChip(
               icon: Icons.people_outline,
               label: "Clients",
-              value: clientsReading ? '—' : "${clientList.length}",
+              value: clientsUnknown ? '—' : "${clientList.length}",
               color: _primary),
             const SizedBox(width: 8),
             _SummaryChip(
               icon: Icons.check_circle_outline,
               label: "Checked In",
-              value: checkinsReading ? '—' : "$checkedInThisWeek",
+              value: checkinsUnknown ? '—' : "$checkedInThisWeek",
               color: _tertiary),
             const SizedBox(width: 8),
             _SummaryChip(
               icon: Icons.warning_amber_outlined,
               label: "Needs Attention",
-              value: checkinsReading ? '—' : "$needsAttention",
+              value: checkinsUnknown ? '—' : "$needsAttention",
               color: needsAttention > 0 ? _error : _muted),
             const SizedBox(width: 8),
             _SummaryChip(
               icon: Icons.fitness_center_outlined,
               label: "Workouts",
-              value: workoutsReading ? '—' : "$workoutsThisWeek",
+              value: workoutsUnknown ? '—' : "$workoutsThisWeek",
               color: _brand),
           ])),
 
@@ -425,8 +430,10 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
               _buildClientsTab(clientList, checkinList, workoutList,
                   failed: failed, reading: clientsReading),
               _buildRequestsTab(),
-              _buildCheckinsTab(checkinList, clientList, reading: checkinsReading),
-              _buildWorkoutsTab(workoutList, clientList, reading: workoutsReading),
+              _buildCheckinsTab(checkinList, clientList,
+                  failed: checkinsFailed, reading: checkinsReading),
+              _buildWorkoutsTab(workoutList, clientList,
+                  failed: workoutsFailed, reading: workoutsReading),
               _buildLeaderboardTab(),
             ])),
       ])));
@@ -579,10 +586,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
       // their clients have gone, which is both false and alarming. The line
       // follows the `Could not load [noun]` pattern this repository renders in
       // fifteen files; "Try again" is the package's own label.
-      return _EmptyState(
-        icon: Icons.cloud_off_rounded,
-        message: "Could not load your clients",
-        sub: "Pull to refresh to try again");
+      return _failedRead("Could not load your clients");
     }
     if (reading) return const Center(child: CircularProgressIndicator(color: _brand));
     if (clients.isEmpty) {
@@ -1270,11 +1274,33 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
     );
   }
 
+  /// A failed read, with the retry its line promises. `_EmptyState` alone is
+  /// not scrollable, so "Pull to refresh" over it did nothing.
+  Widget _failedRead(String message) => RefreshIndicator(
+    color: _brand,
+    backgroundColor: _card,
+    onRefresh: () async {
+      ref.invalidate(coachClientsProvider);
+      ref.invalidate(clientCheckinsProvider);
+      ref.invalidate(clientWorkoutLogsProvider);
+    },
+    child: LayoutBuilder(builder: (_, box) => SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      child: SizedBox(
+        height: box.maxHeight,
+        child: _EmptyState(
+          icon: Icons.cloud_off_rounded,
+          message: message,
+          sub: "Pull to refresh to try again")))));
+
   Widget _buildCheckinsTab(
     List<Map<String, dynamic>> checkins,
     List<Map<String, dynamic>> clients, {
+    required bool failed,
     required bool reading,
   }) {
+    // F-15 on this tab: a failed read is not "no check-ins".
+    if (failed) return _failedRead("Could not load check-ins");
     if (reading) return const Center(child: CircularProgressIndicator(color: _brand));
     if (checkins.isEmpty) {
       return _EmptyState(
@@ -1356,8 +1382,11 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
   Widget _buildWorkoutsTab(
     List<Map<String, dynamic>> workouts,
     List<Map<String, dynamic>> clients, {
+    required bool failed,
     required bool reading,
   }) {
+    // F-15 on this tab: a failed read is not "no workouts".
+    if (failed) return _failedRead("Could not load workouts");
     if (reading) return const Center(child: CircularProgressIndicator(color: _brand));
     if (workouts.isEmpty) {
       return _EmptyState(
