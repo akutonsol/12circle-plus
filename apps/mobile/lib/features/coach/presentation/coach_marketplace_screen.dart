@@ -198,10 +198,12 @@ class _CoachMarketplaceScreenState extends ConsumerState<CoachMarketplaceScreen>
           content: Text('Request sent! Your coach will be notified.'),
           backgroundColor: _brand));
       }
-    } catch (_) {
+    } catch (e) {
+      // Refused, not failed: the card was drawn before the status read arrived.
+      if (e is StateError) ref.invalidate(_myRelationshipStatusProvider);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Failed to send request. Try again.'),
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e is StateError ? e.message : 'Failed to send request. Try again.'),
           backgroundColor: _err));
       }
     }
