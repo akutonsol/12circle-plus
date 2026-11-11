@@ -8,6 +8,18 @@ class CoachRelationshipService {
   Future<void> requestCoach(String coachId, {String? message}) async {
     final clientId = _db.auth.currentUser?.id;
     if (clientId == null) return;
+    // The upsert below rewrites `status` on an existing row. Over an ACTIVE row
+    // that demotes the client's own coach to pending — off the coach's roster,
+    // and the client off coach-guided access — and RLS allows it: 113 lets a
+    // client amend their own row. A request is for a coach they are not with.
+    final existing = await _db
+        .from('coach_client_relationships')
+        .select('status')
+        .eq('client_id', clientId)
+        .eq('coach_id', coachId);
+    if ((existing as List).any((r) => r['status'] == 'active')) {
+      throw StateError('This coach is already your coach.');
+    }
     await _db.from('coach_client_relationships').upsert({
       'client_id': clientId,
       'coach_id': coachId,
