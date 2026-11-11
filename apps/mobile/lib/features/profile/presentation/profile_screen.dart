@@ -810,7 +810,7 @@ class MyCoachSection extends ConsumerWidget {
     'Found another coach',
   ];
 
-  Future<void> _showCancelDialog(BuildContext context, WidgetRef ref, String relationshipId) async {
+  Future<void> _showCancelDialog(BuildContext context, WidgetRef ref, String coachId) async {
     String? selectedReason;
     final customCtrl = TextEditingController();
 
@@ -907,7 +907,10 @@ class MyCoachSection extends ConsumerWidget {
         ]),
       )));
 
-    if (confirmed == true) {
+    final clientId = Supabase.instance.client.auth.currentUser?.id;
+    if (confirmed == true && clientId != null) {
+      // The coach on the card, not the newest relationship: a client may hold
+      // several, and a later request to another coach is newer than this one.
       await Supabase.instance.client
           .from('coach_client_relationships')
           .update({
@@ -917,7 +920,9 @@ class MyCoachSection extends ConsumerWidget {
             'cancel_reason_custom': customCtrl.text.trim().isEmpty ? null : customCtrl.text.trim(),
             'cancelled_at':        DateTime.now().toIso8601String(),
           })
-          .eq('id', relationshipId);
+          .eq('client_id', clientId)
+          .eq('coach_id', coachId)
+          .eq('status', 'active');
       onCoachCancelled();
     }
     customCtrl.dispose();
@@ -926,9 +931,7 @@ class MyCoachSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final coachAsync = ref.watch(assignedCoachProvider);
-    final relAsync   = ref.watch(clientRelationshipProvider);
     final coach      = coachAsync.valueOrNull;
-    final rel        = relAsync.valueOrNull;
     final section    = coachSectionFor(coachAsync);
 
     // F-15: a failed read must not become "No coach assigned yet".
@@ -997,8 +1000,7 @@ class MyCoachSection extends ConsumerWidget {
               ])),
             const Divider(color: Color(0x1A4B444F), height: 1),
             GestureDetector(
-              onTap: rel == null ? null
-                : () => _showCancelDialog(context, ref, rel['id'] as String),
+              onTap: () => _showCancelDialog(context, ref, coach['id'] as String),
               child: const Padding(
                 padding: EdgeInsets.symmetric(vertical: 14),
                 child: Text('Cancel Coach',
