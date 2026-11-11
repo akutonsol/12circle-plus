@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/ai_nutrition_service.dart';
 import 'ai_text.dart';
 import 'chat_turn.dart';
@@ -61,8 +62,11 @@ class AiNutritionNotifier extends StateNotifier<List<ChatMessage>> {
         imageFile: image,
       );
 
+      // Signed out (or switched account) while this was in flight.
+      if (!mounted) return;
       state = [...state, ChatMessage(content: response, isUser: false, timestamp: DateTime.now())];
     } catch (e) {
+      if (!mounted) return;
       // FIT-090. Marked `failed`, so the bubble draws a notice instead of the
       // coach and `apiHistory` keeps it out of the next request.
       state = [...state, ChatMessage(
@@ -102,8 +106,15 @@ class AiNutritionNotifier extends StateNotifier<List<ChatMessage>> {
   }
 }
 
+// The chat, the plan and the list are the signed-in user's: what they eat,
+// weigh and asked about. Signing out only navigates to /login, so each one is
+// rebuilt for whoever signs in next (QAX-SES-01) instead of being shown to
+// them — and the chat's turns sent to the AI as their history.
 final aiNutritionNotifierProvider = StateNotifierProvider<AiNutritionNotifier, List<ChatMessage>>(
-  (ref) => AiNutritionNotifier(ref.watch(aiNutritionServiceProvider)),
+  (ref) {
+    ref.watch(currentUserProvider);
+    return AiNutritionNotifier(ref.watch(aiNutritionServiceProvider));
+  },
 );
 
 class MealPlanNotifier extends StateNotifier<AiText> {
@@ -130,8 +141,10 @@ class MealPlanNotifier extends StateNotifier<AiText> {
         dietaryRestrictions: restrictions,
         days: days,
       );
+      if (!mounted) return;
       state = AiText.ready(plan);
     } catch (e) {
+      if (!mounted) return;
       // NOT written into the content slot. FIT-093 is a screen of its own.
       state = const AiText.failed();
     } finally {
@@ -141,7 +154,10 @@ class MealPlanNotifier extends StateNotifier<AiText> {
 }
 
 final mealPlanNotifierProvider = StateNotifierProvider<MealPlanNotifier, AiText>(
-  (ref) => MealPlanNotifier(ref.watch(aiNutritionServiceProvider)),
+  (ref) {
+    ref.watch(currentUserProvider);
+    return MealPlanNotifier(ref.watch(aiNutritionServiceProvider));
+  },
 );
 
 class GroceryListNotifier extends StateNotifier<AiText> {
@@ -154,8 +170,10 @@ class GroceryListNotifier extends StateNotifier<AiText> {
     isLoading = true;
     try {
       final list = await _service.generateGroceryList(mealPlan: mealPlan);
+      if (!mounted) return;
       state = AiText.ready(list);
     } catch (e) {
+      if (!mounted) return;
       state = const AiText.failed();
     } finally {
       isLoading = false;
@@ -164,5 +182,8 @@ class GroceryListNotifier extends StateNotifier<AiText> {
 }
 
 final groceryListNotifierProvider = StateNotifierProvider<GroceryListNotifier, AiText>(
-  (ref) => GroceryListNotifier(ref.watch(aiNutritionServiceProvider)),
+  (ref) {
+    ref.watch(currentUserProvider);
+    return GroceryListNotifier(ref.watch(aiNutritionServiceProvider));
+  },
 );
