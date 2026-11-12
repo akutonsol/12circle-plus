@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../scoring/data/score_engine.dart';
 
 const _bg    = Color(0xFF030303);
@@ -226,7 +227,14 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         await _db.from('coach_availability')
             .update({'is_booked': false}).eq('id', call['availability_slot_id']);
       }
-      if (_coachId != null) {
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('Could not cancel. Try again.')));
+      return;
+    }
+    // Best-effort, and reported: the cancel above is saved, and a failed
+    // notification thrown from here read as a failed cancel (N3).
+    if (_coachId != null) {
+      try {
         await _db.from('notifications').insert({
           'recipient_id': _coachId,
           'type': 'session_cancelled',
@@ -234,12 +242,12 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
           'body': 'A client cancelled their scheduled session.',
           'read': false,
         });
+      } catch (e) {
+        reportError('BookingScreen._cancelBooking.notify', e);
       }
-      messenger.showSnackBar(const SnackBar(content: Text('Session cancelled.')));
-      _load();
-    } catch (_) {
-      messenger.showSnackBar(const SnackBar(content: Text('Could not cancel. Try again.')));
     }
+    messenger.showSnackBar(const SnackBar(content: Text('Session cancelled.')));
+    _load();
   }
 
   Future<void> _book(Map<String, dynamic> slot) async {
@@ -257,8 +265,18 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       });
       await _db.from('coach_availability')
           .update({'is_booked': true}).eq('id', slot['id']);
+    } catch (_) {
+      if (!mounted) return;
+      _showSnack('Could not book — please try again.', Colors.redAccent);
+      return;
+    }
 
-      // Notify the coach about the new booking.
+    // Notify the coach about the new booking.
+    // Best-effort, and reported: the booking above is saved, and a failed
+    // notification thrown from here read as a failed booking — with the slot
+    // still offered, so a retry booked it twice (N3).
+    var notified = false;
+    try {
       final me = await _db.from('user_profiles')
           .select('first_name, last_name').eq('id', uid).maybeSingle();
       final clientName = '${me?['first_name'] ?? ''} ${me?['last_name'] ?? ''}'.trim();
@@ -271,15 +289,15 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         'data'        : {'client_id': uid},
         'read'        : false,
       });
-
-      ScoreEngine().bookSession('${slot['id']}'); // +15
-      if (!mounted) return;
-      _showSnack('Call booked! Your coach has been notified.', _tert);
-      _load();
-    } catch (_) {
-      if (!mounted) return;
-      _showSnack('Could not book — please try again.', Colors.redAccent);
+      notified = true;
+    } catch (e) {
+      reportError('BookingScreen._book.notify', e);
     }
+
+    ScoreEngine().bookSession('${slot['id']}'); // +15
+    if (!mounted) return;
+    _showSnack(notified ? 'Call booked! Your coach has been notified.' : 'Call booked!', _tert);
+    _load();
   }
 
   void _showSnack(String msg, Color color) => ScaffoldMessenger.of(context)
