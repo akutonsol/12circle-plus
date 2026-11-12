@@ -41,7 +41,12 @@ final coachMarketplaceProvider = FutureProvider<List<Map<String, dynamic>>>((ref
 
 // Set of "status:coachId" for the client's active/pending relationships, so a
 // client can hold relationships with multiple coaches at once.
-final _myRelationshipStatusProvider = FutureProvider<Set<String>>((ref) async {
+//
+// autoDispose: read on each visit. Kept for the session, it went stale the
+// moment a relationship changed anywhere else — it is private, so nothing
+// outside this file can invalidate it — and an ended coach still read "Your
+// Coach", with no way to request them again until the app restarted.
+final _myRelationshipStatusProvider = FutureProvider.autoDispose<Set<String>>((ref) async {
   ref.watch(currentUserProvider);
   final rows = await Supabase.instance.client
       .from('coach_client_relationships')
