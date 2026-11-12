@@ -160,19 +160,20 @@ class PaymentService {
   }
 
   /// All of the current user's subscriptions (coach + pro).
+  ///
+  /// A failed read throws. It used to return `[]`, which is a different
+  /// answer: "Stop" then took a paid coach for an unpaid one and ended the
+  /// relationship without cancelling the subscription, and the plan section
+  /// said "Free plan" to a paying member.
   Future<List<Map<String, dynamic>>> getMySubscriptions() async {
     final uid = _uid;
     if (uid == null) return [];
-    try {
-      final data = await _db
-          .from('subscriptions')
-          .select()
-          .eq('user_id', uid)
-          .order('created_at', ascending: false);
-      return List<Map<String, dynamic>>.from(data);
-    } catch (_) {
-      return [];
-    }
+    final data = await _db
+        .from('subscriptions')
+        .select()
+        .eq('user_id', uid)
+        .order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(data);
   }
 
   /// The user's active platform membership tier ('ai_guided' | 'self_guided'),

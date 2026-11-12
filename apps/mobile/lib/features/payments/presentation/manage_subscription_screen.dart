@@ -111,7 +111,17 @@ class _ManageSubscriptionScreenState
     final coachId = rel['coach_id'] as String;
     // If there's a paid coach subscription, cancel it (also ends relationship +
     // notifies via the function); otherwise end the relationship directly.
-    final subs = ref.read(mySubscriptionsProvider).valueOrNull ?? [];
+    // Which one is decided by a fresh read: a failed or unfinished read is not
+    // "no subscription", and ending a paid coach's relationship directly left
+    // the subscription billing.
+    final List<Map<String, dynamic>> subs;
+    try {
+      subs = await ref.refresh(mySubscriptionsProvider.future);
+    } catch (e) {
+      reportError('ManageSubscriptionScreen.stopCoach.subscriptions', e);
+      messenger.showSnackBar(const SnackBar(content: Text('Could not cancel. Try again.')));
+      return;
+    }
     final coachSub = subs.firstWhere(
       (s) => s['kind'] == 'coach' &&
           s['coach_id'] == coachId &&
