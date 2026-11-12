@@ -135,7 +135,18 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
 
     // Downgrade to Free → cancel ALL active platform memberships.
     if (p.kind == null) {
-      final subs = ref.read(mySubscriptionsProvider).valueOrNull ?? [];
+      // Awaited: nothing on this screen watches the subscriptions, so
+      // `valueOrNull` was null until another screen had read them, and the tap
+      // found no membership and did nothing.
+      final List<Map<String, dynamic>> subs;
+      try {
+        subs = await ref.read(mySubscriptionsProvider.future);
+      } catch (_) {
+        messenger.showSnackBar(
+            const SnackBar(content: Text('Could not cancel. Try again.')));
+        return;
+      }
+      if (!mounted) return;
       final memberships = subs
           .where((s) => ['self_guided', 'ai_guided'].contains(s['kind']) &&
               ['active', 'trialing', 'past_due'].contains(s['status']))
@@ -144,13 +155,16 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
       final confirmed = await _confirmDowngradeToFree();
       if (confirmed != true) return;
       if (mounted) setState(() => _loading = true);
+      // The message follows what happened, as /manage-subscription's does: a
+      // failed cancellation left the client billed and was announced as Free.
+      var allOk = true;
       for (final m in memberships) {
-        await paymentSvc.cancelSubscription(m['id'] as String);
+        if (!await paymentSvc.cancelSubscription(m['id'] as String)) allOk = false;
       }
       if (mounted) setState(() => _loading = false);
       _refresh();
-      messenger.showSnackBar(
-          const SnackBar(content: Text('Switched to the Free plan.')));
+      messenger.showSnackBar(SnackBar(content: Text(
+          allOk ? 'Switched to the Free plan.' : 'Could not cancel. Try again.')));
       return;
     }
 
