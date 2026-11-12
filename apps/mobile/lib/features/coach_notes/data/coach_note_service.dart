@@ -40,19 +40,17 @@ class CoachNoteService {
   final _db = Supabase.instance.client;
   String? get _uid => _db.auth.currentUser?.id;
 
+  /// Throws on a failed read: the sheet has a "Could not load notes" state,
+  /// and an empty list read as "No notes yet" for a client who has them.
   Future<List<CoachNote>> getNotes(String clientId) async {
-    try {
-      final data = await _db
-          .from('coach_notes')
-          .select()
-          .eq('client_id', clientId)
-          .order('created_at', ascending: false);
-      return (data as List)
-          .map((m) => CoachNote.fromMap(m as Map<String, dynamic>))
-          .toList();
-    } catch (_) {
-      return [];
-    }
+    final data = await _db
+        .from('coach_notes')
+        .select()
+        .eq('client_id', clientId)
+        .order('created_at', ascending: false);
+    return (data as List)
+        .map((m) => CoachNote.fromMap(m as Map<String, dynamic>))
+        .toList();
   }
 
   Future<bool> addNote(String clientId, String body, {String tag = 'general'}) async {
