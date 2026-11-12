@@ -7,10 +7,16 @@ final _db = Supabase.instance.client;
 final _relSvc = CoachRelationshipService();
 
 // ── Active coach for the current client (returns null if only pending) ────────
+//
+// A failed read throws. It used to return null, which is "no coach": F-15's
+// /profile branch for a failure could never be reached, and a client whose read
+// failed was told "No coach assigned yet — Complete onboarding to choose your
+// coach." Every reader handles the error (`coachSectionFor`, `coachAddressed`,
+// `checkinSubmitLabel`) or reads `valueOrNull`, which is null as before.
 final assignedCoachProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
   final user = ref.watch(currentUserProvider);
   if (user == null) return null;
-  try {
+  {
     // A client may have several active coaches now; this returns the primary
     // (most recent) one for single-coach UI. Use myCoachesProvider for the list.
     final rel = await _db
@@ -29,7 +35,7 @@ final assignedCoachProvider = FutureProvider<Map<String, dynamic>?>((ref) async 
         .select('id, first_name, last_name, avatar_url, coach_title, coach_bio, specialties, certifications, pricing_monthly, years_experience, rating_avg')
         .eq('id', coachId)
         .maybeSingle();
-  } catch (_) { return null; }
+  }
 });
 
 // ── Pending coach request (for showing "Request Sent" state) ─────────────────
