@@ -111,7 +111,12 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
   @override
   Widget build(BuildContext context) {
     final event = widget.event;
-    final dt = DateTime.tryParse(event['event_date'] as String? ?? '') ?? DateTime.now();
+    // `event_date` is a timestamptz and comes back in UTC. The events list
+    // shows it in local time; the ticket showed the UTC day and hour, so an
+    // 18:00 event in New York read 23:00 here.
+    final dt = (DateTime.tryParse(event['event_date'] as String? ?? '') ??
+            DateTime.now())
+        .toLocal();
     final isFree = event['is_free'] as bool? ?? true;
     final price = event['price'];
 
