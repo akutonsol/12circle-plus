@@ -87,6 +87,11 @@ class PostNotifier extends StateNotifier<AsyncValue<List<CommunityPost>>> {
 }
 
 final postNotifierProvider = StateNotifierProvider<PostNotifier, AsyncValue<List<CommunityPost>>>((ref) {
+  // The feed as one account sees it — which posts that account liked
+  // (`isLiked`), its own new posts — so a new one for each account. The
+  // QAX-SES-01 guard sees user reads in a provider's own body, not in the
+  // notifier it constructs, which is how this one was missed.
+  ref.watch(currentUserProvider);
   return PostNotifier(
     ref.watch(liveCommunityServiceProvider),
     ref.watch(communityServiceProvider),
