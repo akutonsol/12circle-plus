@@ -1173,10 +1173,22 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
               if (emailCtrl.text.isEmpty) return;
               setSt(() => sending = true);
               final coachId = _supabase.auth.currentUser?.id ?? '';
-              await ref.read(coachRelServiceProvider).sendInvite(coachId, emailCtrl.text.trim());
+              final messenger = ScaffoldMessenger.of(context);
+              try {
+                await ref.read(coachRelServiceProvider).sendInvite(coachId, emailCtrl.text.trim());
+              } catch (e) {
+                // Said "Invite sent!" over a failed email, and a failed insert
+                // escaped the button with the spinner still turning.
+                reportError('CoachDashboard.sendInvite', e);
+                if (ctx.mounted) setSt(() => sending = false);
+                messenger.showSnackBar(const SnackBar(
+                    content: Text("Couldn't send the invite — check your connection and try again.")));
+                return;
+              }
+              ref.invalidate(sentInvitesProvider);
               if (ctx.mounted) {
                 Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
+                messenger.showSnackBar(
                   const SnackBar(content: Text('Invite sent!'), backgroundColor: _brand));
               }
             },
