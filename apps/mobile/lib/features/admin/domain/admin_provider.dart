@@ -1,12 +1,22 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/config/app_env.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/admin_metrics_service.dart';
 import '../data/admin_trust_service.dart';
 import '../data/admin_service.dart';
 import 'admin_metrics.dart';
 import 'admin_trust.dart';
 
-final adminServiceProvider = Provider<AdminService>((ref) => AdminService());
+// The three service providers watch the signed-in user, and every admin read
+// below watches one of them: each read is asked again for whoever signs in
+// next. The server answers for `auth.uid()`, so these are per-user although
+// none says `auth.currentUser` — and the routes are not gated client-side. Kept
+// for the session, the previous admin's user directory, audit events and
+// capabilities were shown to the next account on the device (QAX-SES-01).
+final adminServiceProvider = Provider<AdminService>((ref) {
+  ref.watch(currentUserProvider);
+  return AdminService();
+});
 
 final platformStatsProvider =
     FutureProvider<Map<String, dynamic>>((ref) async {
@@ -24,8 +34,10 @@ final recentUsersProvider =
 // the approved A11 empty state. None of these providers substitutes an empty
 // model, because zeros would assert measurements nobody is authorized to see.
 
-final adminMetricsServiceProvider =
-    Provider<AdminMetricsService>((ref) => AdminMetricsService());
+final adminMetricsServiceProvider = Provider<AdminMetricsService>((ref) {
+  ref.watch(currentUserProvider);
+  return AdminMetricsService();
+});
 
 final adminActivityOverviewProvider =
     FutureProvider<AdminActivityOverview?>((ref) async =>
@@ -58,8 +70,10 @@ final adminIncidentsProvider = FutureProvider<List<AdminIncident>?>(
 // nothing recorded. The service asks admin_can rather than inferring a permission
 // from an empty read.
 
-final adminTrustServiceProvider =
-    Provider<AdminTrustService>((ref) => AdminTrustService());
+final adminTrustServiceProvider = Provider<AdminTrustService>((ref) {
+  ref.watch(currentUserProvider);
+  return AdminTrustService();
+});
 
 final adminAuditEventsProvider = FutureProvider<List<AdminAuditEvent>?>(
     (ref) async => ref.watch(adminTrustServiceProvider).getAuditEvents());
