@@ -33,7 +33,9 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
           .select()
           .eq('coach_id', uid!)
           .gte('slot_time', DateTime.now().toIso8601String())
-          .order('slot_time');
+          // Soonest first, stated: postgrest-dart orders DESCENDING when
+          // `ascending` is omitted, which listed these furthest first.
+          .order('slot_time', ascending: true);
 
       // Upcoming booked sessions, with the client who booked.
       final calls = await _db
@@ -44,7 +46,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
           .eq('coach_id', uid)
           .eq('status', 'scheduled')
           .gte('scheduled_at', DateTime.now().toIso8601String())
-          .order('scheduled_at');
+          .order('scheduled_at', ascending: true);
 
       if (!mounted) return;
       setState(() {

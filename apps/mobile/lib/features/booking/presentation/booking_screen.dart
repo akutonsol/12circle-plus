@@ -182,12 +182,14 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         .eq('coach_id', coachId).eq('is_booked', false)
         .gte('slot_time', now.toIso8601String())
         .lt('slot_time', twoWeeksOut.toIso8601String())
-        .order('slot_time');
+        // Soonest first, stated: postgrest-dart orders DESCENDING when
+        // `ascending` is omitted, which listed these furthest first.
+        .order('slot_time', ascending: true);
     final bookedData = await _db
         .from('coaching_calls').select()
         .eq('client_id', uid).eq('coach_id', coachId).eq('status', 'scheduled')
         .gte('scheduled_at', now.toIso8601String())
-        .order('scheduled_at');
+        .order('scheduled_at', ascending: true);
     if (!mounted) return;
     setState(() {
       _slots  = List<Map<String, dynamic>>.from(slotsData as List);
