@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/utils/web_logout.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../coaching_mode/domain/coaching_mode_provider.dart';
@@ -584,10 +585,18 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
     // state for self/AI, they must end coaching first. (No prompt for a plain
     // self<->AI switch, where there's no coach involved.)
     if (_selected != CoachingMode.coachGuided) {
-      List<Map<String, dynamic>> coaches = const [];
+      // A failed read is not "no coach": switching on it left the client
+      // Self/AI-Guided with the coaching still active, never asked to end it.
+      final List<Map<String, dynamic>> coaches;
       try {
         coaches = await widget.ref.read(myCoachesProvider.future);
-      } catch (_) {}
+      } catch (e) {
+        reportError('CoachingModeSheet.apply.coaches', e);
+        if (!mounted) return;
+        messenger.showSnackBar(const SnackBar(
+          content: Text('Could not save coaching mode.')));
+        return; // keep the sheet open: nothing has changed
+      }
       if (!mounted) return;
       if (coaches.isNotEmpty) {
         final confirmed = await _confirmEndCoaching(coaches);
@@ -595,11 +604,24 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
         if (!mounted) return;
         setState(() => _saving = true);
         final svc = CoachRelationshipService();
-        for (final c in coaches) {
-          final coachId = c['coach_id'] as String?;
-          if (coachId != null) {
-            await svc.cancelCoach(coachId, 'switched_to_self_serve', null);
+        try {
+          for (final c in coaches) {
+            final coachId = c['coach_id'] as String?;
+            if (coachId != null) {
+              await svc.cancelCoach(coachId, 'switched_to_self_serve', null);
+            }
           }
+        } catch (e) {
+          // Coaching did not end, so the mode does not change either.
+          reportError('CoachingModeSheet.apply.cancelCoach', e);
+          widget.ref.invalidate(myCoachesProvider);
+          widget.ref.invalidate(assignedCoachProvider);
+          widget.ref.invalidate(clientRelationshipProvider);
+          if (!mounted) return;
+          setState(() => _saving = false);
+          messenger.showSnackBar(const SnackBar(
+            content: Text('Could not save coaching mode.')));
+          return;
         }
         widget.ref.invalidate(myCoachesProvider);
         widget.ref.invalidate(assignedCoachProvider);
