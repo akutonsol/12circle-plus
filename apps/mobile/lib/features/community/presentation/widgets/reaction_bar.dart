@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../data/models/post_model.dart';
 import 'reaction_picker.dart';
@@ -41,7 +42,9 @@ class ReactionBar extends StatelessWidget {
                 Expanded(
                     child: ReactionPicker(
                       reactions: post.reactions,
-                      uid: 'me',
+                      // The reactions carry real user ids, so 'me' never
+                      // marked the one I left once the feed had loaded.
+                      uid: Supabase.instance.client.auth.currentUser?.id,
                       onReact: onReact,
                     ),
                   ),
