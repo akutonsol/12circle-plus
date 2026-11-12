@@ -88,6 +88,11 @@ class _NotificationWatcherState extends ConsumerState<NotificationWatcher> {
   bool _primed = false;
   StreamSubscription? _sub;
   String? _uid;
+  Timer? _retry;
+  Duration _retryDelay = _firstRetry;
+
+  static const _firstRetry = Duration(seconds: 2);
+  static const _maxRetry = Duration(minutes: 1);
 
   @override
   void initState() {
@@ -100,15 +105,22 @@ class _NotificationWatcherState extends ConsumerState<NotificationWatcher> {
     final uid = Supabase.instance.client.auth.currentUser?.id;
     if (uid == null || uid == _uid) return;
     _uid = uid;
+    _retry?.cancel();
+    _retryDelay = _firstRetry;
     _sub?.cancel();
     _seen.clear();
     _primed = false;
+    _listen(uid);
+  }
+
+  void _listen(String uid) {
     try {
       _sub = Supabase.instance.client
           .from('notifications')
           .stream(primaryKey: ['id'])
           .eq('recipient_id', uid)
           .listen((rows) {
+        _retryDelay = _firstRetry;
         for (final r in rows) {
           final id = r['id']?.toString();
           if (id == null || _seen.contains(id)) continue;
@@ -124,12 +136,33 @@ class _NotificationWatcherState extends ConsumerState<NotificationWatcher> {
           }
         }
         _primed = true;
-      }, onError: (_) {});
+      }, onError: (_) {}, onDone: () => _listenAgainLater(uid));
     } catch (_) {}
+  }
+
+  /// The stream ends for good when one of its reads fails — supabase's stream
+  /// builder unsubscribes and closes on a failed fetch, at start or on any
+  /// reconnect — and `uid == _uid` kept [_subscribe] from ever opening another.
+  /// One offline moment left this tab with no notifications and none of the
+  /// refreshes above until it was reloaded. Listen again, backing off while it
+  /// keeps failing. [_seen] and [_primed] are kept, so whatever arrived while
+  /// it was down is new and is acted on.
+  void _listenAgainLater(String uid) {
+    if (!mounted || _uid != uid) return;
+    _retry?.cancel();
+    final delay = _retryDelay;
+    _retryDelay = delay * 2 > _maxRetry ? _maxRetry : delay * 2;
+    _retry = Timer(delay, () {
+      if (!mounted || _uid != uid) return;
+      if (Supabase.instance.client.auth.currentUser?.id != uid) return;
+      _sub?.cancel();
+      _listen(uid);
+    });
   }
 
   @override
   void dispose() {
+    _retry?.cancel();
     _sub?.cancel();
     super.dispose();
   }
