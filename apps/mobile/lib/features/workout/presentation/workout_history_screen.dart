@@ -90,8 +90,11 @@ class _SessionCardState extends ConsumerState<_SessionCard> {
     final calories = s['calories_burned'] as int? ?? 0;
     final sessionId = s['id'] as String;
 
+    // `completed_at` is a timestamptz and comes back in UTC: its own month and
+    // day are the UTC date, which put an evening session west of UTC on the
+    // next day and an early one east of UTC on the day before.
     final date = completedAt != null
-        ? _formatDate(DateTime.parse(completedAt))
+        ? _formatDate(DateTime.parse(completedAt).toLocal())
         : 'Unknown date';
     final durationStr = '${duration ~/ 60}:${(duration % 60).toString().padLeft(2, '0')}';
 
