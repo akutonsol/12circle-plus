@@ -167,8 +167,11 @@ class CoachProgramService {
         .from('program_workouts')
         .select()
         .eq('program_id', programId)
-        .order('week_number')
-        .order('sort_order');
+        // Stated, not defaulted: postgrest-dart orders DESCENDING when
+        // `ascending` is omitted, which read every program last week first and
+        // each week Sunday first. `sort_order` is the day's index, Monday = 0.
+        .order('week_number', ascending: true)
+        .order('sort_order', ascending: true);
     return List<Map<String, dynamic>>.from(data);
   }
 
