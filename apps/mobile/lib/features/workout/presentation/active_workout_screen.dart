@@ -541,12 +541,15 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// Dismisses the rest/overtime alarm (the user is starting the next set).
   /// Banks any overtime as idle time, then clears the timer (which stops the
   /// siren via the widget's dispose).
-  void _dismissRest() {
-    final rt = ref.read(restTimerProvider);
+  ///
+  /// [app] for a caller past an await, when `ref` may already be disposed.
+  void _dismissRest([ProviderContainer? app]) {
+    final rt = app != null ? app.read(restTimerProvider) : ref.read(restTimerProvider);
     if (rt == null) return;
     final over = DateTime.now().difference(rt.end).inSeconds;
     if (over > 0) _idleSeconds += over;
-    ref.read(restTimerProvider.notifier).state = null;
+    (app != null ? app.read(restTimerProvider.notifier) : ref.read(restTimerProvider.notifier))
+        .state = null;
   }
 
   /// FIT-017 · "Add 30 seconds". The arithmetic and its two rules live in
@@ -653,6 +656,11 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   Future<void> _completeWorkout() async {
     final workout = ref.read(selectedWorkoutProvider);
     if (workout == null) return;
+    // Everything after the awaits below goes through the app's container, not
+    // `ref`: the screen can be left while the save is in flight, and `ref`
+    // throws once it is disposed — which skipped the reset, every re-read and
+    // clearing the selection, so the finished workout was started again.
+    final app = ProviderScope.containerOf(context, listen: false);
 
     _dismissRest(); // bank any in-progress overtime + silence the siren
     setState(() => _saving = true);
@@ -727,42 +735,42 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     if (mounted) setState(() => _saveFailedCompleting = false);
     // Captured before the reset below wipes it — FIT-018's stats come from
     // here, and reading them after would make every session read 0 sets.
-    final completedSets = ref
+    final completedSets = app
         .read(activeWorkoutProvider)
         .values
         .where((st) => st['completed'] == true)
         .toList(growable: false);
-    ref.read(activeWorkoutProvider.notifier).reset();
+    app.read(activeWorkoutProvider.notifier).reset();
     // The session id is spent for logging purposes, but the feedback sheet
     // still has to name the session it is rating, so hand it the captured id.
     final finishedSessionId = _sessionId;
     _sessionId = null;
     // The session is archived — stop offering it as resumable, and drop the
     // restored copy so a later cold start doesn't rebuild a finished workout.
-    ref.invalidate(activeSessionProvider);
-    ref.invalidate(activeWorkoutRestorationProvider);
+    app.invalidate(activeSessionProvider);
+    app.invalidate(activeWorkoutRestorationProvider);
     // Its training day is now done: re-read the program so Home and the
     // Workouts tab stop offering it.
-    ref.invalidate(assignedWorkoutsProvider);
-    ref.invalidate(todaysWorkoutProvider);
-    ref.invalidate(myAssignedProgramProvider);
+    app.invalidate(assignedWorkoutsProvider);
+    app.invalidate(todaysWorkoutProvider);
+    app.invalidate(myAssignedProgramProvider);
     // Nothing else re-reads these, and none of them dispose: without this the
     // streak, totals and score stay as they were before the workout until the
     // app restarts.
-    ref.invalidate(totalWorkoutCountProvider);
-    ref.invalidate(weeklyWorkoutCountProvider);
-    ref.invalidate(currentStreakProvider);
-    ref.invalidate(workoutHistoryProvider);
-    ref.invalidate(completionRateProvider);
-    ref.invalidate(programAdherenceProvider);
-    ref.invalidate(personalRecordsProvider);
-    ref.invalidate(loggedExerciseNamesProvider);
-    ref.invalidate(exerciseProgressionProvider);
-    ref.invalidate(todayScoreProvider);
-    ref.invalidate(weekScoresProvider);
-    ref.invalidate(myScoreProvider);
-    ref.invalidate(recentScoreEventsProvider);
-    ref.invalidate(myBadgeIdsProvider);
+    app.invalidate(totalWorkoutCountProvider);
+    app.invalidate(weeklyWorkoutCountProvider);
+    app.invalidate(currentStreakProvider);
+    app.invalidate(workoutHistoryProvider);
+    app.invalidate(completionRateProvider);
+    app.invalidate(programAdherenceProvider);
+    app.invalidate(personalRecordsProvider);
+    app.invalidate(loggedExerciseNamesProvider);
+    app.invalidate(exerciseProgressionProvider);
+    app.invalidate(todayScoreProvider);
+    app.invalidate(weekScoresProvider);
+    app.invalidate(myScoreProvider);
+    app.invalidate(recentScoreEventsProvider);
+    app.invalidate(myBadgeIdsProvider);
 
     if (mounted) {
       showDialog(
@@ -791,7 +799,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
           // the root navigator; this screen's own context reaches the shell's.
           onDone: () {
             Navigator.pop(dialogContext);
-            _leaveFinishedWorkout();
+            _leaveFinishedWorkout(app);
             context.go('/home');
           },
         ),
@@ -799,7 +807,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     } else {
       // Finish Early → Skip can pop this screen before the dialog is raised.
       // Clearing here too means a completed workout is never left selected.
-      _leaveFinishedWorkout();
+      _leaveFinishedWorkout(app);
     }
     // Guarded: _completeWorkout awaits four network round-trips, and Finish
     // Early → Skip pops this screen while they are still in flight. An
@@ -815,8 +823,10 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// opening a fresh in-progress session for it. That resurrected session then
   /// became the newest one and took over the Resume card. Clearing the
   /// selection is what makes completion final.
-  void _leaveFinishedWorkout() {
-    ref.read(selectedWorkoutProvider.notifier).state = null;
+  ///
+  /// Through [app], not `ref`: this also runs after the screen is gone.
+  void _leaveFinishedWorkout(ProviderContainer app) {
+    app.read(selectedWorkoutProvider.notifier).state = null;
   }
 
   @override
@@ -1712,6 +1722,10 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// is left on the screen to try again.
   Future<void> _endWorkout() async {
     final sid = _sessionId;
+    // Through the app's container after the await, as in _completeWorkout:
+    // `ref` throws once the screen is gone, and the ended workout stayed
+    // selected.
+    final app = ProviderScope.containerOf(context, listen: false);
     if (sid != null) {
       try {
         await _sessions.abandonSession(sid);
@@ -1724,15 +1738,15 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       }
     }
     _timer?.cancel();
-    _dismissRest();
+    _dismissRest(app);
     _sessionId = null;
-    ref.read(activeWorkoutProvider.notifier).reset();
+    app.read(activeWorkoutProvider.notifier).reset();
     // The workout must not stay selected: the Zone treats an in-memory
     // selection as authoritative, so re-entering would start a fresh session
     // for a workout the client just ended.
-    ref.read(selectedWorkoutProvider.notifier).state = null;
-    ref.invalidate(activeSessionProvider);
-    ref.invalidate(activeWorkoutRestorationProvider);
+    app.read(selectedWorkoutProvider.notifier).state = null;
+    app.invalidate(activeSessionProvider);
+    app.invalidate(activeWorkoutRestorationProvider);
     if (mounted) context.go('/home');
   }
 }
