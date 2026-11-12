@@ -6,8 +6,11 @@ import '../data/models/action_item.dart';
 final actionItemServiceProvider =
     Provider<ActionItemService>((ref) => ActionItemService());
 
-/// Client's own action items.
-final myActionItemsProvider = FutureProvider<List<ActionItem>>((ref) async {
+/// Client's own action items. Auto-disposed, so each visit reads them again:
+/// kept for the session, a failed read — or the list before the coach's
+/// latest task — was the answer until the app restarted.
+final myActionItemsProvider =
+    FutureProvider.autoDispose<List<ActionItem>>((ref) async {
   ref.watch(currentUserProvider);
   return ref.watch(actionItemServiceProvider).getMyActionItems();
 });
