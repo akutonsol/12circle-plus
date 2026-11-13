@@ -237,7 +237,10 @@ void main() {
           .readAsStringSync();
       final body = src.substring(src.indexOf('Future<void> _completeWorkout()'));
       final method = body.substring(0, body.indexOf('\n  }\n'));
-      expect(method, contains('ref.invalidate(assignedWorkoutsProvider)'));
+      // Through the app's container, not `ref`: the screen can be left while
+      // the save is in flight, and `ref` then throws before reaching this
+      // (workout_finish_after_leaving_test.dart).
+      expect(method, contains('app.invalidate(assignedWorkoutsProvider)'));
     });
   });
 }
