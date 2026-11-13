@@ -102,10 +102,14 @@ class NutritionService {
     }
   }
 
+  // The three reads below throw when they fail. They returned zeros and `[]`,
+  // which is "nothing logged today": FIT-022's failure state on the meals
+  // dashboard could never be shown, and a client who had logged three meals
+  // saw 0 kcal and "+ Log a meal" — and may well have logged them again.
   Future<Map<String, double>> getTodayTotals() async {
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) return {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0};
-    try {
+    {
       final today = DateTime.now();
       final start = DateTime(today.year, today.month, today.day);
       final end = start.add(const Duration(days: 1));
@@ -123,15 +127,13 @@ class NutritionService {
         fat      += (row['fat']      as num?)?.toDouble() ?? 0;
       }
       return {'calories': calories, 'protein': protein, 'carbs': carbs, 'fat': fat};
-    } catch (e) {
-      return {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0};
     }
   }
 
   Future<List<Map<String, dynamic>>> getLogsForDate(DateTime date) async {
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) return [];
-    try {
+    {
       final start = DateTime(date.year, date.month, date.day);
       final end = start.add(const Duration(days: 1));
       final data = await _supabase
@@ -142,15 +144,13 @@ class NutritionService {
           .lt('logged_at', end.toIso8601String())
           .order('logged_at', ascending: true);
       return List<Map<String, dynamic>>.from(data);
-    } catch (e) {
-      return [];
     }
   }
 
   Future<List<Map<String, dynamic>>> getTodayLogs() async {
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) return [];
-    try {
+    {
       final today = DateTime.now();
       final start = DateTime(today.year, today.month, today.day);
       final end = start.add(const Duration(days: 1));
@@ -162,8 +162,6 @@ class NutritionService {
           .lt('logged_at', end.toIso8601String())
           .order('logged_at', ascending: true);
       return List<Map<String, dynamic>>.from(data);
-    } catch (e) {
-      return [];
     }
   }
 
