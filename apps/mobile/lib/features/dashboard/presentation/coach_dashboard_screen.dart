@@ -1492,7 +1492,8 @@ List<String> _generateCoachRecs(
     final uid = c['id'] as String;
     return !checkins.any((ch) => ch['user_id'] == uid);
   }).length;
-  final highStress = checkins.where((c) => (c['stress_level'] as num? ?? 0) >= 7).length;
+  // 1–5, as asked (checkin_columns.dart): `>= 7` could never be met.
+  final highStress = checkins.where((c) => isHighStress(c['stress_level'] as num?)).length;
   final lowEnergy  = checkins.where((c) => (checkinEnergy(c) ?? 10) <= 2).length;
   final programRate = clients.where((c) => c['program_name'] != null).length / total * 100;
 
@@ -1556,7 +1557,8 @@ class _CoachSuccessMetrics extends StatelessWidget {
           _MetricCell('Program Rate', '$progRate%',
             int.tryParse(progRate) != null && int.parse(progRate) >= 70 ? _tertiary : _error),
           _MetricCell('Avg Energy', avgEnergy.toStringAsFixed(1),
-            avgEnergy >= 6 ? _tertiary : avgEnergy >= 3 ? const Color(0xFFFFD060) : _error),
+            // Energy is 1–5: green needed 6 and could never be shown.
+            avgEnergy >= 4 ? _tertiary : avgEnergy >= 3 ? const Color(0xFFFFD060) : _error),
           _MetricCell('Retention', '$retentionRate%',
             int.tryParse(retentionRate) != null && int.parse(retentionRate) >= 80 ? _tertiary : _error),
         ]),
