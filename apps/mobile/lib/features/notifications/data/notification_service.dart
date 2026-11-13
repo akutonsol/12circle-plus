@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'notification_model.dart';
 
@@ -18,15 +20,55 @@ class NotificationService {
     return (rows as List).map((r) => AppNotification.fromJson(r)).toList();
   }
 
+  static const _firstRetry = Duration(seconds: 2);
+  static const _maxRetry = Duration(minutes: 1);
+
+  /// The signed-in user's notifications, live, for as long as it is listened
+  /// to.
+  ///
+  /// supabase's `.stream()` ends for good when one of its reads fails: it
+  /// unsubscribes and closes on a failed fetch, at start or on a reconnect.
+  /// Returned as it was, one offline moment froze the bell badge (re-counted
+  /// only when this emits) and the open Notifications list for the rest of
+  /// the session. When it ends it is now opened again, backing off while it
+  /// keeps failing. Errors are still passed on.
   Stream<List<AppNotification>> streamNotifications() {
     final uid = _uid;
     if (uid == null) return const Stream.empty();
-    return _db
-        .from('notifications')
-        .stream(primaryKey: ['id'])
-        .eq('recipient_id', uid)
-        .order('created_at', ascending: false)
-        .map((rows) => rows.map(AppNotification.fromJson).toList());
+    late final StreamController<List<AppNotification>> out;
+    StreamSubscription<List<AppNotification>>? sub;
+    Timer? retry;
+    var delay = _firstRetry;
+    void open() {
+      sub = _db
+          .from('notifications')
+          .stream(primaryKey: ['id'])
+          .eq('recipient_id', uid)
+          .order('created_at', ascending: false)
+          .map((rows) => rows.map(AppNotification.fromJson).toList())
+          .listen(
+        (list) {
+          delay = _firstRetry;
+          out.add(list);
+        },
+        onError: out.addError,
+        onDone: () {
+          if (out.isClosed) return;
+          retry = Timer(delay, open);
+          delay = delay * 2 > _maxRetry ? _maxRetry : delay * 2;
+        },
+      );
+    }
+
+    out = StreamController<List<AppNotification>>(
+      onListen: open,
+      onCancel: () {
+        retry?.cancel();
+        out.close();
+        return sub?.cancel();
+      },
+    );
+    return out.stream;
   }
 
   Future<int> fetchUnreadCount() async {
