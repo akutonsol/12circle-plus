@@ -56,10 +56,16 @@ enum NotificationGroup {
 /// "This week" means the **last seven days**, not the calendar week: a
 /// Monday-morning member would otherwise see Sunday's coach reply filed under
 /// `Earlier`, which is true of the calendar and wrong about their week.
+///
+/// Both days are the user's own. `createdAt` arrives parsed from the row as UTC,
+/// and its day was read off as-is: in Sydney a 07:00 notification (21:00 UTC the
+/// day before) was filed under "Earlier this week" beside the time "07:00", and
+/// in New York an evening one moved into the next day's "Today".
 NotificationGroup groupFor(DateTime createdAt, {DateTime? now}) {
-  final n = now ?? DateTime.now();
+  final n = (now ?? DateTime.now()).toLocal();
+  final c = createdAt.toLocal();
   final today = DateTime(n.year, n.month, n.day);
-  final d = DateTime(createdAt.year, createdAt.month, createdAt.day);
+  final d = DateTime(c.year, c.month, c.day);
   final days = today.difference(d).inDays;
   if (days <= 0) return NotificationGroup.today;
   if (days < 7) return NotificationGroup.earlierThisWeek;
