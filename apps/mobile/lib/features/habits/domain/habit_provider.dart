@@ -120,7 +120,24 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
 
   Future<void> reload() => _load();
 
-  Future<void> toggleComplete(String habitId) async {
+  /// Puts back [original] — only that habit, so a toggle that failed does not
+  /// undo another one that saved meanwhile.
+  void _restore(Habit original) {
+    if (!mounted) return;
+    final now = state.valueOrNull;
+    if (now == null) return;
+    state = AsyncValue.data(
+        [for (final h in now) h.id == original.id ? original : h]);
+  }
+
+  /// Ticks or unticks a habit and says whether it was saved (EC-12).
+  ///
+  /// The tick shows at once, as before. It ended `catch (_) {}`: a write that
+  /// failed stayed ticked on screen with nothing said, the next load reverted
+  /// it, and the score had already been awarded from the unsaved state. Now a
+  /// failed write puts the habit back and returns false for the screen to say
+  /// so, and points are awarded only for a tick that was saved.
+  Future<bool> toggleComplete(String habitId) async {
     final habits = state.valueOrNull ?? [];
     final habit = habits.firstWhere((h) => h.id == habitId, orElse: () => habits.first);
     final newCompleted = !habit.isCompletedToday;
@@ -133,10 +150,14 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
         currentValue: newCompleted ? h.targetValue : 0);
     }).toList());
 
-    // Persist to Supabase (only if real DB habit)
     try {
       await _svc.logHabit(habitId, completed: newCompleted, value: newCompleted ? habit.targetValue.toDouble() : 0);
-      // Update score
+    } catch (_) {
+      _restore(habit);
+      return false;
+    }
+    // Saved. Scoring is best-effort and never undoes a saved tick.
+    try {
       final updated = state.valueOrNull ?? [];
       final completed = updated.where((h) => h.isCompletedToday).length;
       await _score.addHabitPoints(completed, updated.length);
@@ -148,9 +169,12 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
         if (updated.isNotEmpty && completed >= updated.length) await engine.allHabitsToday();
       }
     } catch (_) {}
+    return true;
   }
 
-  Future<void> updateValue(String habitId, int value) async {
+  /// Sets a counted habit's value and says whether it was saved; a failed
+  /// write puts the habit back (EC-12).
+  Future<bool> updateValue(String habitId, int value) async {
     final habits = state.valueOrNull ?? [];
     final habit = habits.firstWhere((h) => h.id == habitId);
     final isCompleted = value >= habit.targetValue;
@@ -160,7 +184,11 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
     }).toList());
     try {
       await _svc.logHabit(habitId, value: value.toDouble(), completed: isCompleted);
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      _restore(habit);
+      return false;
+    }
   }
 
   void incrementValue(String habitId) {
