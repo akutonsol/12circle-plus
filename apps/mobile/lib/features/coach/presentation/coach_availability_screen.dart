@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 
 const _bg    = Color(0xFF030303);
 const _card  = Color(0xFF0E0B16);
@@ -84,6 +85,14 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
         await _db.from('coach_availability')
             .update({'is_booked': false}).eq('id', call['availability_slot_id']);
       }
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('Could not cancel. Try again.')));
+      return;
+    }
+    // Best-effort, and reported: the cancel above is saved, and a failed
+    // notification thrown from here read as a failed cancel (N3).
+    var notified = false;
+    try {
       await _db.from('notifications').insert({
         'recipient_id': call['client_id'],
         'type': 'session_cancelled',
@@ -91,11 +100,13 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
         'body': 'Your coach had to cancel a scheduled session. You can rebook any time.',
         'read': false,
       });
-      messenger.showSnackBar(const SnackBar(content: Text('Session cancelled — client notified.')));
-      _load();
-    } catch (_) {
-      messenger.showSnackBar(const SnackBar(content: Text('Could not cancel. Try again.')));
+      notified = true;
+    } catch (e) {
+      reportError('CoachAvailabilityScreen._cancelSession.notify', e);
     }
+    messenger.showSnackBar(SnackBar(content: Text(
+        notified ? 'Session cancelled — client notified.' : 'Session cancelled.')));
+    _load();
   }
 
   void _showAddSheet() => showModalBottomSheet(
