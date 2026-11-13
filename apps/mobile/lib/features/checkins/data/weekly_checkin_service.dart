@@ -120,8 +120,8 @@ class WeeklyCheckinService {
           .from('nutrition_logs')
           .select('calories, logged_at')
           .eq('user_id', userId)
-          .gte('logged_at', weekStart.toIso8601String())
-          .lt('logged_at', weekEnd.toIso8601String());
+          .gte('logged_at', weekStart.toUtc().toIso8601String())
+          .lt('logged_at', weekEnd.toUtc().toIso8601String());
       final logs = [
         for (final r in (rows as List))
           if (DateTime.tryParse('${r['logged_at']}') != null)

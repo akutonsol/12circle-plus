@@ -56,22 +56,24 @@ final weeklyActivityProvider = FutureProvider<List<double>>((ref) async {
     final monday = now.subtract(Duration(days: now.weekday - 1));
     final weekStart = DateTime(monday.year, monday.month, monday.day);
     final weekEnd   = weekStart.add(const Duration(days: 7));
+    // Both columns are timestamptz: the local week goes out as UTC instants, or
+    // Postgres reads Monday 00:00 local as Monday 00:00 UTC.
 
     // Nutrition logs this week
     final nutrition = await Supabase.instance.client
         .from('nutrition_logs')
         .select('logged_at')
         .eq('user_id', uid)
-        .gte('logged_at', weekStart.toIso8601String())
-        .lt('logged_at', weekEnd.toIso8601String());
+        .gte('logged_at', weekStart.toUtc().toIso8601String())
+        .lt('logged_at', weekEnd.toUtc().toIso8601String());
 
     // Coaching calls this week (any status)
     final calls = await Supabase.instance.client
         .from('coaching_calls')
         .select('scheduled_at')
         .eq('client_id', uid)
-        .gte('scheduled_at', weekStart.toIso8601String())
-        .lt('scheduled_at', weekEnd.toIso8601String());
+        .gte('scheduled_at', weekStart.toUtc().toIso8601String())
+        .lt('scheduled_at', weekEnd.toUtc().toIso8601String());
 
     // Count activity per weekday (0=Mon … 6=Sun)
     final counts = List<int>.filled(7, 0);
