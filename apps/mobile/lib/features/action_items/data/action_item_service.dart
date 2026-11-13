@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import 'models/action_item.dart';
 import '../../scoring/data/score_engine.dart';
 
@@ -10,6 +11,10 @@ class ActionItemService {
   String? get _uid => _db.auth.currentUser?.id;
 
   /// Client: their assigned items, newest/most-urgent first.
+  ///
+  /// Throws on a failed read: /action-items states "Could not load your action
+  /// items", and the `[]` this returned instead read as "No action items yet /
+  /// Your coach will assign tasks here." to a client with tasks waiting.
   Future<List<ActionItem>> getMyActionItems() async {
     final uid = _uid;
     if (uid == null) return [];
@@ -24,8 +29,9 @@ class ActionItemService {
       return (data as List)
           .map((m) => ActionItem.fromMap(m as Map<String, dynamic>))
           .toList();
-    } catch (_) {
-      return [];
+    } catch (e) {
+      reportError('ActionItemService.getMyActionItems', e);
+      rethrow;
     }
   }
 
