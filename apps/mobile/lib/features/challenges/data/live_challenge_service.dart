@@ -1,10 +1,14 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../scoring/data/score_engine.dart';
 import 'models/challenge_model.dart';
 
 class LiveChallengeService {
   final _db = Supabase.instance.client;
 
+  /// Throws on a failed read. Every reader states a failure — Challenges'
+  /// own F-15 state, What's On and Activity — and the `[]` this returned
+  /// instead reached all three as "No challenges here".
   Future<List<Challenge>> getActiveChallenges() async {
     try {
       final uid = _db.auth.currentUser?.id;
@@ -62,8 +66,9 @@ class LiveChallengeService {
           badges: [],
         );
       }).toList();
-    } catch (_) {
-      return [];
+    } catch (e) {
+      reportError('LiveChallengeService.getActiveChallenges', e);
+      rethrow;
     }
   }
 
