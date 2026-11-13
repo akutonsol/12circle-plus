@@ -47,14 +47,19 @@ final streakProvider = FutureProvider<int>((ref) async {
 });
 
 // ── Upcoming Classes (next 5 from Supabase) ───────────────────────────────────
+//
+// "Next" needs both halves of the query. `.order()` sorts DESCENDING unless
+// told otherwise (postgrest-dart), so with `limit(5)` these were the five
+// FURTHEST away, latest first; and a local time sent with no zone is read by
+// Postgres as UTC, which moved "now" by the UTC offset. Same for events below.
 final upcomingClassesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   try {
-    final now = DateTime.now().toIso8601String();
+    final now = DateTime.now().toUtc().toIso8601String();
     final rows = await Supabase.instance.client
         .from('classes')
         .select('*, public_profiles!coach_id(first_name, last_name)')
         .gte('scheduled_at', now)
-        .order('scheduled_at')
+        .order('scheduled_at', ascending: true)
         .limit(5);
     return List<Map<String, dynamic>>.from(rows as List);
   } catch (_) {
@@ -65,12 +70,12 @@ final upcomingClassesProvider = FutureProvider<List<Map<String, dynamic>>>((ref)
 // ── Upcoming Events (next 5 from Supabase) ────────────────────────────────────
 final upcomingEventsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   try {
-    final now = DateTime.now().toIso8601String();
+    final now = DateTime.now().toUtc().toIso8601String();
     final rows = await Supabase.instance.client
         .from('events')
         .select()
         .gte('event_date', now)
-        .order('event_date')
+        .order('event_date', ascending: true)
         .limit(5);
     return List<Map<String, dynamic>>.from(rows as List);
   } catch (_) {

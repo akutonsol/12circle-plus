@@ -276,9 +276,11 @@ class _DirectoryNotificationsPanel extends ConsumerWidget {
                     ...classes.map((c) => _NotifItem(
                       icon: Icons.fitness_center_rounded,
                       iconColor: _C.primary,
-                      title: c['name'] as String? ?? 'Class',
+                      // `classes` and `events` have `title` and `max_capacity`; there is no
+                      // `name` or `capacity`, so every row read "Class · 0 spots".
+                      title: c['title'] as String? ?? 'Class',
                       subtitle: _fmtDate(c['scheduled_at'] as String?),
-                      badge: '${c['capacity'] as int? ?? 0} spots',
+                      badge: '${c['max_capacity'] as int? ?? 0} spots',
                       onTap: () { Navigator.pop(context); context.go('/appointments'); },
                     )),
                   ]);
@@ -297,7 +299,7 @@ class _DirectoryNotificationsPanel extends ConsumerWidget {
                     ...events.map((e) => _NotifItem(
                       icon: Icons.event_rounded,
                       iconColor: _C.teal,
-                      title: e['name'] as String? ?? 'Event',
+                      title: e['title'] as String? ?? 'Event',
                       subtitle: _fmtDate(e['event_date'] as String?),
                       badge: e['location'] as String? ?? '',
                       onTap: () { Navigator.pop(context); context.go('/book-call'); },
