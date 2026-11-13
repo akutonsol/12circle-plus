@@ -94,8 +94,10 @@ final insightsProvider = FutureProvider.autoDispose<InsightsData>((ref) async {
         .from('workout_logs')
         .select('id')
         .eq('user_id', uid)
+        // The user's own Monday midnight, as the UTC instant it is: a zoneless
+        // local string is read as UTC (the class #69 fixed in two siblings).
         .gte('completed_at',
-            DateTime(weekStart.year, weekStart.month, weekStart.day).toIso8601String());
+            DateTime(weekStart.year, weekStart.month, weekStart.day).toUtc().toIso8601String());
 
     return InsightsData(
       todayScore: todayScore,
