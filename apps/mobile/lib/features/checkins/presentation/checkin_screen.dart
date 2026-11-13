@@ -126,7 +126,7 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
           .select('*, coach:coach_id(first_name, last_name)')
           .eq('client_id', uid)
           .eq('status', 'scheduled')
-          .gte('scheduled_at', now.toIso8601String())
+          .gte('scheduled_at', now.toUtc().toIso8601String())
           // The NEXT ten, stated: postgrest-dart orders DESCENDING when
           // `ascending` is omitted, so this kept the ten furthest calls.
           .order('scheduled_at', ascending: true)

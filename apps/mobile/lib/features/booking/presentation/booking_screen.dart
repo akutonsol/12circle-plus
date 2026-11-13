@@ -178,18 +178,21 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
 
     final now         = DateTime.now();
     final twoWeeksOut = now.add(const Duration(days: 14));
+    // `slot_time` and `scheduled_at` are timestamptz and are written as UTC
+    // (coach_availability_screen). A zoneless local `now` is read by Postgres as
+    // UTC: west of UTC slots that had already started were still offered.
     final slotsData = await _db
         .from('coach_availability').select()
         .eq('coach_id', coachId).eq('is_booked', false)
-        .gte('slot_time', now.toIso8601String())
-        .lt('slot_time', twoWeeksOut.toIso8601String())
+        .gte('slot_time', now.toUtc().toIso8601String())
+        .lt('slot_time', twoWeeksOut.toUtc().toIso8601String())
         // Soonest first, stated: postgrest-dart orders DESCENDING when
         // `ascending` is omitted, which listed these furthest first.
         .order('slot_time', ascending: true);
     final bookedData = await _db
         .from('coaching_calls').select()
         .eq('client_id', uid).eq('coach_id', coachId).eq('status', 'scheduled')
-        .gte('scheduled_at', now.toIso8601String())
+        .gte('scheduled_at', now.toUtc().toIso8601String())
         .order('scheduled_at', ascending: true);
     if (!mounted) return;
     setState(() {
