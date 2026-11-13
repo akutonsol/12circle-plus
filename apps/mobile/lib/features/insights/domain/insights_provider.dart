@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../checkins/domain/checkin_columns.dart';
 /// Aggregated, real performance data for the Insights screen.
@@ -41,7 +42,9 @@ class InsightsData {
       );
 }
 
-final insightsProvider = FutureProvider<InsightsData>((ref) async {
+/// Auto-disposed, so each visit to /insights reads again: kept for the
+/// session, one failed read would be the answer until the app restarted.
+final insightsProvider = FutureProvider.autoDispose<InsightsData>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
   ref.watch(currentUserProvider);
   final db = Supabase.instance.client;
@@ -110,7 +113,11 @@ final insightsProvider = FutureProvider<InsightsData>((ref) async {
           ? DateTime.tryParse(checkin!['created_at'] as String)
           : null,
     );
-  } catch (_) {
-    return InsightsData.empty();
+  } catch (e) {
+    // Not `InsightsData.empty()`: that rendered as real numbers under "Real
+    // numbers from your 12 Circle activity." — score 0, no workouts, no
+    // history — and the screen's "Could not load insights." was unreachable.
+    reportError('insightsProvider', e);
+    rethrow;
   }
 });
