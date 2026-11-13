@@ -8,6 +8,9 @@ import '../domain/coach_note_provider.dart';
 /// the existing notes and an inline composer.
 Future<void> showCoachNotesSheet(
     BuildContext context, WidgetRef ref, String clientId, String clientName) {
+  // Read on each opening. The family outlives the sheet, so a failed read
+  // would otherwise be shown again every time it is opened.
+  ref.invalidate(clientNotesProvider(clientId));
   return showModalBottomSheet(
     context: context,
     isScrollControlled: true,
@@ -46,12 +49,20 @@ class _NotesSheetState extends ConsumerState<_NotesSheet> {
   Future<void> _add() async {
     if (_ctrl.text.trim().isEmpty) return;
     setState(() => _saving = true);
-    await ref
+    final saved = await ref
         .read(coachNoteServiceProvider)
         .addNote(widget.clientId, _ctrl.text.trim(), tag: _tag);
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (!saved) {
+      // Keep what the coach typed: clearing it on a failed save lost the note
+      // with nothing to say it was never kept.
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not save note. Try again.')));
+      return;
+    }
     _ctrl.clear();
     ref.invalidate(clientNotesProvider(widget.clientId));
-    if (mounted) setState(() => _saving = false);
   }
 
   @override
