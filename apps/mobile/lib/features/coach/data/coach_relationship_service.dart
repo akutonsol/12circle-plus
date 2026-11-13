@@ -121,6 +121,10 @@ class CoachRelationshipService {
   }
 
   // ── Send email invite to a client (creates row + sends the email) ─────────
+  //
+  // Throws if either step fails. The email is the invite — the client is sent
+  // nothing else — so a failed send is a failed invite. It was swallowed, and
+  // the coach was told "Invite sent!" for an email that never left.
   Future<String> sendInvite(String coachId, String email) async {
     final result = await _db.from('coach_invites').insert({
       'coach_id': coachId,
@@ -128,10 +132,8 @@ class CoachRelationshipService {
     }).select().single();
     final token = result['token'] as String?;
     // Deliver the actual email.
-    try {
-      await _db.functions.invoke('send-invite-email',
-          body: {'email': email, 'type': 'client', if (token != null) 'token': token});
-    } catch (_) {}
+    await _db.functions.invoke('send-invite-email',
+        body: {'email': email, 'type': 'client', if (token != null) 'token': token});
     return token ?? '';
   }
 
