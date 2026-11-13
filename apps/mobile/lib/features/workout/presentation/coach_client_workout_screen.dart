@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../domain/workout_day.dart';
 import '../domain/workout_provider.dart';
 import '../../../core/widgets/named_icon_button.dart';
 
@@ -180,18 +181,10 @@ class _ClientCard extends ConsumerWidget {
     );
   }
 
+  // Calendar days, not elapsed hours: 23:59 last night is "Yesterday" at 09:00.
   String _formatLastWorkout(String? raw) {
     if (raw == null) return 'No workouts yet';
-    try {
-      final dt = DateTime.parse(raw);
-      final diff = DateTime.now().difference(dt);
-      if (diff.inDays == 0) return 'Today';
-      if (diff.inDays == 1) return 'Yesterday';
-      if (diff.inDays < 7) return '${diff.inDays} days ago';
-      return '${(diff.inDays / 7).round()} weeks ago';
-    } catch (_) {
-      return raw.substring(0, 10);
-    }
+    return workoutDaysAgo(raw) ?? localWorkoutDate(raw);
   }
 }
 
@@ -272,7 +265,7 @@ class _ExpandedDetails extends ConsumerWidget {
                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text(title, style: const TextStyle(color: _white, fontSize: 12, fontWeight: FontWeight.w600)),
                       const SizedBox(height: 2),
-                      Text(date.length >= 10 ? date.substring(0, 10) : date,
+                      Text(localWorkoutDate(date),
                         style: TextStyle(color: _muted.withValues(alpha: 0.4), fontSize: 10)),
                     ])),
                     if (duration > 0)

@@ -14,6 +14,7 @@ import '../../checkins/domain/checkin_columns.dart';
 import '../../coach/domain/program_readiness.dart';
 import '../../workout/data/program_schedule.dart' show programWeekLabel;
 import '../domain/workout_streak.dart';
+import '../../workout/domain/workout_day.dart';
 const _bg    = Color(0xFF030303);
 const _card  = Color(0xFF0E0B16);
 const _brd   = Color(0xFF1A1020);
@@ -985,7 +986,8 @@ class _ProgressTab extends StatelessWidget {
     int streak = 0;
     double avgPerWeek = 0;
     if (workouts.isNotEmpty) {
-      lastWorkoutStr = (workouts.first['completed_at'] as String? ?? '').split('T')[0];
+      // The local day, as the streak below counts it — not the UTC date.
+      lastWorkoutStr = localWorkoutDate(workouts.first['completed_at'] as String? ?? '');
       // D7: consecutive workout days that reach today or yesterday.
       streak = currentWorkoutStreak(workouts.map((w) => w['completed_at'] as String?));
       final oldest = workouts.last;
@@ -1060,7 +1062,7 @@ class _ProgressTab extends StatelessWidget {
             const Text('RECENT SESSIONS', style: TextStyle(color: _mut, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
             const SizedBox(height: 6),
             ...workouts.take(4).map((w) {
-              final dateStr = (w['completed_at'] as String? ?? '').split('T')[0];
+              final dateStr = localWorkoutDate(w['completed_at'] as String? ?? '');
               // A `workout_sessions` row (`clientDetailProvider` selects its title and
               // seconds), not a name and minutes. A session that recorded no duration
               // shows none, rather than a "0m" nobody measured.
