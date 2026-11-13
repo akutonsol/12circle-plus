@@ -49,19 +49,24 @@ class PostNotifier extends StateNotifier<AsyncValue<List<CommunityPost>>> {
   /// FIT-065/066. The provider used to hardcode `'like'`, so four of the five
   /// reaction types could be READ by this app and never written by it.
   Future<void> toggleReaction(String postId, ReactionType type) async {
+    // Mine is the row with my user id: what getPosts loads, and what the
+    // write above stores. A placeholder id matched nothing that was loaded, so
+    // taking back a reaction left before the feed loaded counted it again.
+    final me = Supabase.instance.client.auth.currentUser?.id;
+    if (me == null) return; // the service writes nothing signed out
     await _svc.toggleReaction(postId, reactionWire(type));
     final posts = state.valueOrNull ?? [];
     state = AsyncValue.data(posts.map((p) {
       if (p.id != postId) return p;
-      // Optimistic: same one again takes it back, a different one switches.
-      final mine = p.reactions.where((r) => r.userId == 'me').toList();
+      // Same one again takes it back, a different one switches.
+      final mine = p.reactions.where((r) => r.userId == me).toList();
       final had = mine.isEmpty ? null : mine.first.type;
-      final others = p.reactions.where((r) => r.userId != 'me').toList();
+      final others = p.reactions.where((r) => r.userId != me).toList();
       final newReactions = had == type
           ? others
-          : [...others, PostReaction(userId: 'me', type: type)];
+          : [...others, PostReaction(userId: me, type: type)];
       final newIsLiked =
-          newReactions.any((r) => r.userId == 'me' && r.type == ReactionType.like);
+          newReactions.any((r) => r.userId == me && r.type == ReactionType.like);
       return CommunityPost(
         id: p.id, userId: p.userId, userName: p.userName,
         userRole: p.userRole, content: p.content, type: p.type,

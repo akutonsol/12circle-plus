@@ -16,8 +16,7 @@ import '../../domain/reaction_choice.dart';
 class ReactionPicker extends StatelessWidget {
   final List<PostReaction> reactions;
 
-  /// The signed-in user, for "which one did I leave". `'me'` is what the
-  /// provider's optimistic update writes.
+  /// The signed-in user, for "which one did I leave".
   final String? uid;
 
   final ValueChanged<ReactionType> onReact;
