@@ -179,17 +179,17 @@ class MessagingService {
     }
   }
 
+  /// A thread's messages, oldest first. **The error propagates** (EC-13): this
+  /// returned `[]` on failure, so a thread that did not load read as one with
+  /// nothing in it — "Start the conversation!" — and a client concluded their
+  /// coach had never replied. The chat screen states the failure instead.
   Future<List<Map<String, dynamic>>> getMessages(String conversationId) async {
-    try {
-      final data = await supabase
-          .from('messages')
-          .select()
-          .eq('conversation_id', conversationId)
-          .order('sent_at', ascending: true);
-      return List<Map<String, dynamic>>.from(data);
-    } catch (e) {
-      return [];
-    }
+    final data = await supabase
+        .from('messages')
+        .select()
+        .eq('conversation_id', conversationId)
+        .order('sent_at', ascending: true);
+    return List<Map<String, dynamic>>.from(data);
   }
 
   Stream<List<Map<String, dynamic>>> messagesStream(String conversationId) {

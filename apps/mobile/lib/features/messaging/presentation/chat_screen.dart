@@ -117,7 +117,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     if (convId != null && mounted) {
       setState(() => _conversationId = convId);
-      final msgs = await _service.getMessages(convId);
+      final List<Map<String, dynamic>> msgs;
+      try {
+        msgs = await _service.getMessages(convId);
+      } catch (e, st) {
+        // Not an empty thread: the screen's failure state, with its retry.
+        reportError('ChatScreen._init.getMessages', e, st);
+        if (mounted) {
+          setState(() {
+            _messages = const [];
+            _loadFailed = true;
+            _loading = false;
+          });
+        }
+        return;
+      }
       if (mounted) {
         // An empty conversation is EMPTY. It previously fell back to
         // `getSampleMessages()`, which put four hardcoded messages on screen as
