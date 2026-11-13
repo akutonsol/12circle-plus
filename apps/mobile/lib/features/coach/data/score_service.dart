@@ -32,7 +32,9 @@ class ScoreService {
         .select()
         .eq('user_id', userId)
         .gte('score_date', start.toIso8601String().split('T')[0])
-        .order('score_date');
+        // Oldest first, stated: postgrest-dart orders DESCENDING when
+        // `ascending` is omitted, and Activity reads `last` as the latest day.
+        .order('score_date', ascending: true);
     return List<Map<String, dynamic>>.from(data);
   }
 

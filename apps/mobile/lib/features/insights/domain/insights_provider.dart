@@ -62,7 +62,10 @@ final insightsProvider = FutureProvider.autoDispose<InsightsData>((ref) async {
         .select()
         .eq('user_id', uid)
         .gte('score_date', weekAgo.toIso8601String().split('T')[0])
-        .order('score_date');
+        // Oldest first, stated: postgrest-dart orders DESCENDING when
+        // `ascending` is omitted. `last7` is drawn left to right, and the
+        // fallback below takes `rows.last` as the most recent day.
+        .order('score_date', ascending: true);
     final rows = List<Map<String, dynamic>>.from(scores);
 
     int t(Map<String, dynamic> r, String k) => (r[k] as num?)?.toInt() ?? 0;
