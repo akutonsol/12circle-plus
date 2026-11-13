@@ -65,8 +65,14 @@ String? excerpt(String? text, {int max = 48}) {
   return '${(space > max ~/ 2 ? cut.substring(0, space) : cut).trimRight()}…';
 }
 
+/// Auto-disposed so that each visit to the dashboard reads it again. Kept for
+/// the session, it was read once and never again: nothing invalidates it (the
+/// dashboard's refreshes name the other providers), so a client the coach had
+/// just reviewed, answered or assigned kept their "Review", "Reply" or
+/// "Assign" row, and a new client never appeared, until the app restarted.
+/// Every row leaves the dashboard (`context.go`), so coming back is a new visit.
 final coachTriageSignalsProvider =
-    FutureProvider<List<ClientSignals>>((ref) async {
+    FutureProvider.autoDispose<List<ClientSignals>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
   ref.watch(currentUserProvider);
   final coachId = _db.auth.currentUser?.id;
