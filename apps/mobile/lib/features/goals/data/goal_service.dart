@@ -1,10 +1,14 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import 'models/goal.dart';
 
 class GoalService {
   final _db = Supabase.instance.client;
   String? get _uid => _db.auth.currentUser?.id;
 
+  /// Throws on a failed read: /goals states "Could not load goals", and the
+  /// `[]` this returned instead read as "No goals yet" to a client who had set
+  /// them.
   Future<List<Goal>> getMyGoals() async {
     final uid = _uid;
     if (uid == null) return [];
@@ -18,8 +22,9 @@ class GoalService {
       return (data as List)
           .map((m) => Goal.fromMap(m as Map<String, dynamic>))
           .toList();
-    } catch (_) {
-      return [];
+    } catch (e) {
+      reportError('GoalService.getMyGoals', e);
+      rethrow;
     }
   }
 
