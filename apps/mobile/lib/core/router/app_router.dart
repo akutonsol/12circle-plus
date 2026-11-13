@@ -196,6 +196,12 @@ final routerProvider = Provider<GoRouter>((ref) {
         return path == '/reset-password' ? null : '/reset-password';
       }
 
+      // Open signed in as well as signed out: Settings' "Change password"
+      // (FIT-030) sends a signed-in user here to request the reset email. As an
+      // auth route it was redirected straight back to /home (or the coach's
+      // dashboard), so the control did nothing at all.
+      if (path == '/forgot-password') return null;
+
       final isAuthRoute = path == '/login' ||
           path == '/signup' ||
           path == '/forgot-password' ||
