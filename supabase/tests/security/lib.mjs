@@ -368,9 +368,17 @@ export const n = (b) => (Array.isArray(b) ? b.length : 0);
  *  existed to protect. The audit path was healthy the entire time.
  *
  *  So a delta built on a number that may be a capped page is reported as UNMEASURABLE
- *  rather than as a pass or a fail. Count with [countExact] and it cannot happen. */
-export function checkDelta(name, { before, after, expected = 1, detail = '' }) {
-  if (before === PAGE_LIMIT || after === PAGE_LIMIT) {
+ *  rather than as a pass or a fail. Count with [countExact] and it cannot happen.
+ *
+ *  `exact: true` says both numbers came from [countExact], and only then is the
+ *  refusal skipped. A content-range total is never a page: 1000 there means one
+ *  thousand, not "a thousand or more". Without the flag the refusal stood even after
+ *  every caller had moved to countExact, and on 2026-11-13 it failed P2 B3 when
+ *  `billing_entitlement` (+3 a run) landed on exactly 1000 — the same run then read
+ *  1000 -> 1001, which no capped page can. It is opt-in, never inferred, so a delta
+ *  over page lengths still cannot pass at the cap by omission. */
+export function checkDelta(name, { before, after, expected = 1, exact = false, detail = '' }) {
+  if (exact !== true && (before === PAGE_LIMIT || after === PAGE_LIMIT)) {
     return check(`${name} — UNMEASURABLE`, false,
       `before=${before} after=${after}: one side is exactly PAGE_LIMIT, so this is a ` +
       'capped page and the delta is invisible in both directions. Use countExact(). ' +
