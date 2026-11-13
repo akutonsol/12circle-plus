@@ -79,15 +79,21 @@ class _ProgressScreenState extends State<ProgressScreen>
           .order('logged_at', ascending: false)
           .limit(30);
 
-      final measurementHistory = await Supabase.instance.client
+      // The LATEST 24, oldest first (the chart's order). Ascending with
+      // `limit(24)` kept the first 24 ever, and `.last` of those was taken as
+      // "latest": from the 25th entry on, the latest values, "Updated…", the
+      // waist chart and the comparison froze on the 24th, and a new log never
+      // appeared (#76 fixed the weight and photo reads on this screen).
+      final measurementRows = await Supabase.instance.client
           .from('body_measurements')
           .select()
           .eq('user_id', uid)
-          .order('logged_at', ascending: true)
+          .order('logged_at', ascending: false)
           .limit(24);
-      final measurements = (measurementHistory as List).isNotEmpty
-          ? (measurementHistory as List).last as Map<String, dynamic>
-          : null;
+      final measurementHistory =
+          List<Map<String, dynamic>>.from(measurementRows as List).reversed.toList();
+      final measurements =
+          measurementHistory.isNotEmpty ? measurementHistory.last : null;
 
       final photoLogs = await Supabase.instance.client
           .from('progress_photo_logs')
