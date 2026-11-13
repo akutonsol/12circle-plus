@@ -277,7 +277,9 @@ class _ProgressScreenState extends State<ProgressScreen>
                         measurements: _latestMeasurements,
                         history: _measurementHistory,
                         frontPhotoUrl: _frontUrl,
-                        latestGalleryUrl: _galleryUrls.values.lastOrNull,
+                        // Filled from the photo logs newest first, so the
+                        // latest is the first of them, not the last.
+                        latestGalleryUrl: _galleryUrls.values.firstOrNull,
                         onLog: () => _showLogMeasurementSheet(context),
                       ),
                       _PhotosTab(
@@ -579,13 +581,18 @@ class _WeightTab extends StatelessWidget {
                         Expanded(
                           child: CustomPaint(
                             size: Size.infinite,
-                            painter: _WeightChartPainter(logs: logs),
+                            // `logs` is newest first, for the list below; a
+                            // chart reads left to right, oldest to latest, and
+                            // ends on the latest weigh-in.
+                            painter: _WeightChartPainter(
+                                logs: logs.reversed.toList()),
                           ),
                         ),
                         const SizedBox(height: 8),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: _chartLabels(logs).map((l) => Text(l,
+                          children: _chartLabels(logs.reversed.toList())
+                              .map((l) => Text(l,
                             style: TextStyle(color: _C.outline.withValues(alpha: 0.5),
                               fontSize: 9, fontWeight: FontWeight.w600)))
                               .toList(),
