@@ -75,7 +75,7 @@ const after = await fetch(`${URL_}/rest/v1/audit_events?select=id,actor_id,subje
 const rows = await after.json();
 const afterAll = await countExact('audit_events?category=eq.admin_action');
 checkDelta('the role change EMITTED an admin_action Event (A2 IN; A3 application arm)',
-  { before: nBefore, after: afterAll, expected: 1 });
+  { before: nBefore, after: afterAll, expected: 1, exact: true });
 const row = rows[0] ?? {};
 check('the actor is the calling admin and provenance is GROUNDED (A3 sub-ruling 3)',
   row.actor_id === admin.id && row.actor_provenance === 'grounded',
@@ -345,9 +345,10 @@ const relAfterMeta = await countExact('audit_events?category=eq.relationship_cha
 // `expected: 0` through checkDelta rather than a bare `===`. An "emits nothing"
 // assertion is blind to saturation in the OTHER direction: two capped pages always
 // look equal, so a spurious event would be invisible exactly when the population is
-// large. checkDelta refuses to answer instead of answering wrongly.
+// large. checkDelta refuses to answer instead of answering wrongly — unless both
+// sides are countExact totals, which are never pages; `exact: true` says so.
 checkDelta('an INCIDENTAL metadata change emits NOTHING (B2: not every metadata change)',
-  { before: relBefore, after: relAfterMeta, expected: 0 });
+  { before: relBefore, after: relAfterMeta, expected: 0, exact: true });
 
 await fetch(`${URL_}/rest/v1/coach_client_relationships?id=eq.${relId}`, {
   method: 'PATCH', headers: SH, body: JSON.stringify({ status: 'active' }),
@@ -378,7 +379,7 @@ await fetch(`${URL_}/rest/v1/subscriptions?id=eq.${subId}`, {
 });
 const billAfterRoll = await countExact('audit_events?category=eq.billing_entitlement');
 checkDelta('a period rollover is NOT an entitlement change and emits nothing',
-  { before: billBefore, after: billAfterRoll, expected: 0 });
+  { before: billBefore, after: billAfterRoll, expected: 0, exact: true });
 
 await fetch(`${URL_}/rest/v1/subscriptions?id=eq.${subId}`, {
   method: 'PATCH', headers: SH, body: JSON.stringify({ plan_tier: 'premium' }),
@@ -400,7 +401,7 @@ await fetch(`${URL_}/rest/v1/user_profiles?id=eq.${subj.id}`, {
 });
 const legacyAfter = await countExact('audit_events?category=eq.billing_entitlement');
 checkDelta('writing the LEGACY membership_tier emits nothing — it is not authoritative (B3)',
-  { before: legacyBefore, after: legacyAfter, expected: 0 });
+  { before: legacyBefore, after: legacyAfter, expected: 0, exact: true });
 
 // ─────────────────────────────────────────────────────────────────────────────
 section('B4 · phi_correction — changed column NAMES only, never values');

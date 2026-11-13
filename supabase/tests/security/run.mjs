@@ -49,6 +49,8 @@ import { results, beginSuite } from './lib.mjs';
 
 
 const SUITES = [
+  // H-01 first: offline, no request made. It checks the delta instrument P2 relies on.
+  ['H-01  checkDelta measurability',   './h01-check-delta-measurability.mjs'],
   ['D-01  coach_client_relationships', './d01-coach-client-relationships.mjs'],
   ['D-02  role escalation / PAR-Q',    './d02-role-escalation.mjs'],
   ['D-03  weekly_checkins',            './d03-weekly-checkins.mjs'],
