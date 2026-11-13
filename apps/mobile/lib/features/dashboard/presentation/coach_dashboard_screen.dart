@@ -77,11 +77,32 @@ final coachClientsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) as
         .eq('status', 'active');
     final clientIds = (rels as List).map((r) => r['client_id'] as String).toList();
     if (clientIds.isEmpty) return [];
+    // Every field the dashboard reads from a roster row, fetched. The select
+    // named six columns while the risk counts read `risk_level`, the retention
+    // figure `created_at` and the program figures `coaching_mode` and
+    // `program_name` — so High Risk and At-Risk were always 0, the PAR-Q
+    // warning never fired, and Program Rate and Retention were always 0%.
     final data = await _supabase
         .from('user_profiles')
-        .select('id, first_name, last_name, email, avatar_url, role')
+        .select('id, first_name, last_name, email, avatar_url, role, '
+            'risk_level, coaching_mode, created_at')
         .inFilter('id', clientIds);
-    return List<Map<String, dynamic>>.from(data);
+    // `program_name` is no column (no migration adds one): a client has a
+    // program when they have an ACTIVE assignment (`assignProgram`).
+    final assigned = await _supabase
+        .from('workout_program_assignments')
+        .select('client_id, workout_programs(name)')
+        .inFilter('client_id', clientIds)
+        .eq('status', 'active');
+    final programOf = <String, String>{
+      for (final a in (assigned as List))
+        a['client_id'] as String:
+            ((a['workout_programs'] as Map?)?['name'] as String?) ?? 'Program',
+    };
+    return [
+      for (final c in List<Map<String, dynamic>>.from(data))
+        {...c, 'program_name': programOf[c['id']]},
+    ];
   }
 });
 
@@ -1477,6 +1498,13 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
 }
 
 // ── AI Recommendation Generator ───────────────────────────────────────────────
+@visibleForTesting
+List<String> generateCoachRecs(
+  List<Map<String, dynamic>> clients,
+  List<Map<String, dynamic>> checkins,
+  List<Map<String, dynamic>> workouts,
+) => _generateCoachRecs(clients, checkins, workouts);
+
 List<String> _generateCoachRecs(
   List<Map<String, dynamic>> clients,
   List<Map<String, dynamic>> checkins,
@@ -1487,7 +1515,8 @@ List<String> _generateCoachRecs(
   if (total == 0) return recs;
 
   final highRisk = clients.where((c) => c['risk_level'] == 'high').length;
-  final noProgram = clients.where((c) => c['program_name'] == null && c['coaching_mode'] == 'coached').length;
+  // `coach_guided` is the stored value (007's CHECK); 'coached' never matched.
+  final noProgram = clients.where((c) => c['program_name'] == null && c['coaching_mode'] == 'coach_guided').length;
   final missedCI  = clients.where((c) {
     final uid = c['id'] as String;
     return !checkins.any((ch) => ch['user_id'] == uid);
