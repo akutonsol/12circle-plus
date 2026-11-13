@@ -204,6 +204,17 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
   }
 
   Future<void> _save() async {
+    // Never save a form that was not filled from the stored profile. A failed
+    // read arrives here as `null` (currentUserProfileProvider catches), which
+    // left every field empty; Save then sent null height, weight, goal weight,
+    // phone and gender over the real values and said "Profile updated
+    // successfully".
+    if (!_loaded) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text("Your details didn't load, so nothing was saved. Go back and try again."),
+        backgroundColor: _err, behavior: SnackBarBehavior.floating));
+      return;
+    }
     if (_fnCtrl.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('First name is required'),
