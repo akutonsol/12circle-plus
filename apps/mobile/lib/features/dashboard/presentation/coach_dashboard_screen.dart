@@ -186,7 +186,9 @@ final clientWorkoutLogsProvider = FutureProvider<List<Map<String, dynamic>>>((re
         .select('user_id, workout_title, completed_at, duration_seconds')
         .inFilter('user_id', ids)
         .eq('status', 'completed')
-        .gte('completed_at', start.toIso8601String())
+        // The instant of local Monday midnight. A zoneless string is read as
+        // UTC, so the week began at Monday 00:00 UTC, not the coach's Monday.
+        .gte('completed_at', start.toUtc().toIso8601String())
         .order('completed_at', ascending: false);
     // `duration_seconds` here; `duration_minutes` on the old table. Converted
     // at the boundary so the four call sites below are untouched.

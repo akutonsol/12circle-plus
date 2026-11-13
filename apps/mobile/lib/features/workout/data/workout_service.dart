@@ -296,7 +296,9 @@ class WorkoutService {
         .from('workout_logs')
         .select('id')
         .eq('user_id', uid)
-        .gte('completed_at', start.toIso8601String());
+        // The instant of local Monday midnight. A zoneless string is read as
+        // UTC, so the week began at Monday 00:00 UTC, not the user's Monday.
+        .gte('completed_at', start.toUtc().toIso8601String());
     return (data as List).length;
   }
 
