@@ -8,7 +8,10 @@ class CoachRevenueService {
   Future<Map<String, double>> getMetrics() async {
     final coachId = _db.auth.currentUser?.id;
     if (coachId == null) return _empty;
-    try {
+    // **A failed read propagates (EC-14).** This ended `catch (_) { return
+    // _empty; }` (every figure zero), so a coach on a bad connection read
+    // "Lifetime 0" and "Active subscribers 0" as fact.
+    {
       final payments = List<Map<String, dynamic>>.from(await _db
           .from('payments')
           .select('coach_payout, client_source, status, created_at')
@@ -65,8 +68,6 @@ class CoachRevenueService {
         'marketplace': market,
         'direct': direct,
       };
-    } catch (_) {
-      return _empty;
     }
   }
 

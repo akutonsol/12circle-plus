@@ -99,21 +99,26 @@ class PaymentService {
   }
 
   /// Coach: connected-account balance {pending, available} in cents.
+  ///
+  /// **Throws when it cannot be read (EC-14).** It answered
+  /// `{'pending': 0, 'available': 0}` for any failure: a zero balance stated as
+  /// fact, made from a network error. A figure that was not read is not zero.
   Future<Map<String, dynamic>> connectBalance() async {
-    try {
-      final res = await _db.functions.invoke('stripe-connect', body: {'action': 'balance'});
-      if (res.data is Map) return Map<String, dynamic>.from(res.data as Map);
-    } catch (_) {}
-    return {'pending': 0, 'available': 0};
+    final res = await _db.functions.invoke('stripe-connect', body: {'action': 'balance'});
+    if (res.data is Map) return Map<String, dynamic>.from(res.data as Map);
+    throw StateError('stripe-connect balance: unexpected response');
   }
 
   /// Coach: current Connect status {connected, charges_enabled, payouts_enabled}.
+  ///
+  /// **Throws when it cannot be read (EC-14).** It answered `connected: false`
+  /// for any failure, so a connected coach on a bad connection was told they
+  /// were not connected and offered onboarding again. Status is tri-state:
+  /// connected, not connected (the function says so), or unknown (an error).
   Future<Map<String, dynamic>> connectStripeStatus() async {
-    try {
-      final res = await _db.functions.invoke('stripe-connect', body: {'action': 'status'});
-      if (res.data is Map) return Map<String, dynamic>.from(res.data as Map);
-    } catch (_) {}
-    return {'connected': false, 'charges_enabled': false, 'payouts_enabled': false};
+    final res = await _db.functions.invoke('stripe-connect', body: {'action': 'status'});
+    if (res.data is Map) return Map<String, dynamic>.from(res.data as Map);
+    throw StateError('stripe-connect status: unexpected response');
   }
 
   /// Opens the Stripe Customer Portal (manage / update card).

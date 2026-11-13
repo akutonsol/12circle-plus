@@ -147,19 +147,21 @@ class _Bullet extends StatelessWidget {
 class _RevenueSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final m = ref.watch(coachRevenueProvider).valueOrNull ?? const <String, double>{};
-    final bal = ref.watch(coachBalanceProvider).valueOrNull ?? const <String, dynamic>{};
-    String d(num? v) => '\$${(v ?? 0).toStringAsFixed(0)}';
-    final pending = ((bal['pending'] as num?)?.toDouble() ?? 0) / 100.0;
-    final completed = ((bal['paid'] as num?)?.toDouble() ?? 0) / 100.0;
+    // A figure that was not read shows a dash, never zero (EC-14): a failed or
+    // pending read is not a zero balance.
+    final m = ref.watch(coachRevenueProvider).valueOrNull;
+    final bal = ref.watch(coachBalanceProvider).valueOrNull;
+    String d(num? v) => v == null ? '—' : '\$${v.toStringAsFixed(0)}';
+    final pending = bal == null ? null : ((bal['pending'] as num?)?.toDouble() ?? 0) / 100.0;
+    final completed = bal == null ? null : ((bal['paid'] as num?)?.toDouble() ?? 0) / 100.0;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Text('REVENUE', style: TextStyle(color: _muted, fontSize: 11,
           fontWeight: FontWeight.w700, letterSpacing: 1)),
       const SizedBox(height: 10),
       Row(children: [
-        _metric('This month', d(m['monthly']), _mint),
+        _metric('This month', d(m?['monthly']), _mint),
         const SizedBox(width: 10),
-        _metric('Lifetime', d(m['lifetime']), _brand),
+        _metric('Lifetime', d(m?['lifetime']), _brand),
       ]),
       const SizedBox(height: 10),
       Row(children: [
@@ -169,15 +171,15 @@ class _RevenueSection extends ConsumerWidget {
       ]),
       const SizedBox(height: 10),
       Row(children: [
-        _metric('Marketplace', d(m['marketplace']), _brand),
+        _metric('Marketplace', d(m?['marketplace']), _brand),
         const SizedBox(width: 10),
-        _metric('Direct', d(m['direct']), _mint),
+        _metric('Direct', d(m?['direct']), _mint),
       ]),
       const SizedBox(height: 10),
       Row(children: [
-        _metric('Active subscribers', '${(m['active_subscribers'] ?? 0).toInt()}', _amber),
+        _metric('Active subscribers', m == null ? '—' : '${(m['active_subscribers'] ?? 0).toInt()}', _amber),
         const SizedBox(width: 10),
-        _metric('Active packages', '${(m['active_packages'] ?? 0).toInt()}', _brand),
+        _metric('Active packages', m == null ? '—' : '${(m['active_packages'] ?? 0).toInt()}', _brand),
       ]),
     ]);
   }

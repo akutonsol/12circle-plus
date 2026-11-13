@@ -571,7 +571,10 @@ class _ConnectBanner extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = ref.watch(coachConnectStatusProvider).valueOrNull;
-    final ready = s != null && s['connected'] == true && s['charges_enabled'] == true;
+    // Unknown (still reading, or the read failed) is not "not connected": only
+    // a status that says so prompts the coach to connect (EC-14).
+    if (s == null) return const SizedBox.shrink();
+    final ready = s['connected'] == true && s['charges_enabled'] == true;
     if (ready) return const SizedBox.shrink();
     return GestureDetector(
       onTap: () => context.push('/coach-payments'),
