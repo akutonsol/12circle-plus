@@ -124,8 +124,11 @@ class ComplianceService {
         .select('user_id, completed_at')
         .inFilter('user_id', clientIds)
         .eq('status', 'completed')
+        // The coach's Monday midnight as a UTC instant: zoneless is read as UTC,
+        // which began the week at Monday 00:00 UTC (the class #69 fixed).
         .gte('completed_at',
             DateTime(weekStart.year, weekStart.month, weekStart.day)
+                .toUtc()
                 .toIso8601String());
 
     final checkins = await _db
