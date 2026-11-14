@@ -105,6 +105,23 @@ final currentUserProfileProvider = FutureProvider<Map<String, dynamic>?>((ref) a
   }
 });
 
+/// The signed-in member's first name: the profile's (the one Personal Info
+/// edits), then the sign-up metadata, then the email's local part — the order
+/// the app scaffold already uses.
+///
+/// Activity and Directory greeted the member from the sign-up metadata only,
+/// which nothing updates: a name corrected in Personal Info changed in Profile
+/// and the scaffold but the greeting kept the sign-up name on those two.
+final currentFirstNameProvider = Provider<String>((ref) {
+  final user = ref.watch(currentUserProvider);
+  final profile = ref.watch(currentUserProfileProvider).valueOrNull;
+  final fromProfile = (profile?['first_name'] as String?)?.trim() ?? '';
+  if (fromProfile.isNotEmpty) return fromProfile;
+  final fromSignup = (user?.userMetadata?['first_name'] as String?)?.trim() ?? '';
+  if (fromSignup.isNotEmpty) return fromSignup;
+  return user?.email?.split('@').first ?? '';
+});
+
 final currentUserDisplayNameProvider = Provider<String>((ref) {
   final user = ref.watch(currentUserProvider);
   if (user == null) return 'Coach';

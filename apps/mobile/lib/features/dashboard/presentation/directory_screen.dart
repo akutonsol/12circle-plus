@@ -79,9 +79,7 @@ class _DirectoryScreenState extends ConsumerState<DirectoryScreen> {
   Widget build(BuildContext context) {
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light.copyWith(statusBarColor: Colors.transparent));
     final topPad = MediaQuery.of(context).padding.top;
-    final currentUser = ref.watch(currentUserProvider);
-    final metaFirst = currentUser?.userMetadata?['first_name'] as String? ?? '';
-    final userName = metaFirst.isNotEmpty ? metaFirst : currentUser?.email?.split('@').first ?? '';
+    final userName = ref.watch(currentFirstNameProvider);
 
     return Scaffold(
       backgroundColor: _C.bg,
