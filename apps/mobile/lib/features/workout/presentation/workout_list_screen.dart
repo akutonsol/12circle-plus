@@ -140,8 +140,9 @@ class _WorkoutListScreenState extends ConsumerState<WorkoutListScreen> {
     super.dispose();
   }
 
-  void _startWorkout(Workout workout) {
-    ref.read(selectedWorkoutProvider.notifier).state = workout;
+  Future<void> _startWorkout(Workout workout) async {
+    await selectWorkoutForZone(ref, workout);
+    if (!mounted) return;
     context.go('/active-workout');
   }
 

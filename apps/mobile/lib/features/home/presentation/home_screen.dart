@@ -1036,13 +1036,14 @@ class _FitnessSessionCard extends ConsumerWidget {
     // FIT-014 alike; the card had three words depending on coaching mode.
     const btnLabel = HomeSession.beginLabel;
 
-    void onStart() {
+    Future<void> onStart() async {
       // A session that exists is started. Nothing else is invented: with no
       // assignment the card sends the client to their plan rather than
       // starting a workout that is not theirs.
       final w = session.workout;
       if (w != null) {
-        ref.read(selectedWorkoutProvider.notifier).state = w;
+        await selectWorkoutForZone(ref, w);
+        if (!context.mounted) return;
         context.go('/active-workout');
         return;
       }

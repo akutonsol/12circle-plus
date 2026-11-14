@@ -476,9 +476,10 @@ class _FeaturedCard extends ConsumerWidget {
       btnLabel = 'Start Workout';
     }
 
-    void onAction() {
+    Future<void> onAction() async {
       if (inProgress != null) {
-        ref.read(selectedWorkoutProvider.notifier).state = inProgress;
+        await selectWorkoutForZone(ref, inProgress);
+        if (!context.mounted) return;
         context.go('/active-workout');
       } else {
         context.go('/workouts');
