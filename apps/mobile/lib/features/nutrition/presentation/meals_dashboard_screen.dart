@@ -32,13 +32,13 @@ const _blue  = nutBlue;
 final _svcProvider = Provider<NutritionService>((ref) => NutritionService());
 
 /// Public so FIT-022's failure card can retry it.
-final nutritionTotalsProvider = FutureProvider<Map<String, double>>((ref) async {
-  ref.watch(currentUserProvider);
-  return ref.watch(_svcProvider).getTodayTotals();
-});
+/// Today's totals: the shared read (`todayNutritionProvider`), so a meal logged
+/// on any screen refreshes this one too.
+final nutritionTotalsProvider = todayNutritionProvider;
 
+// Read again on each visit: a meal logged on another screen appears here.
 final _logsForDateProvider =
-    FutureProvider.family<List<Map<String, dynamic>>, DateTime>((ref, date) async {
+    FutureProvider.autoDispose.family<List<Map<String, dynamic>>, DateTime>((ref, date) async {
   ref.watch(currentUserProvider);
   return ref.watch(_svcProvider).getLogsForDate(date);
 });
@@ -238,9 +238,8 @@ class _MealsDashboardScreenState
       builder: (_) => AddMealSheet(initialMode: mode, onLogged: () async {
         await Future.delayed(const Duration(milliseconds: 300));
         if (mounted) {
-          ref.invalidate(nutritionTotalsProvider);
           ref.invalidate(_logsForDateProvider(_selectedDate));
-          ref.invalidate(todayNutritionProvider);
+          refreshAfterMealLogged(ref.invalidate);
         }
       }));
   }

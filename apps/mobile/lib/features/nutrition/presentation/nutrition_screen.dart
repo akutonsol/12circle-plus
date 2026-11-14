@@ -18,11 +18,10 @@ const _tertiary = Color(0xFF6FFBBE);
 const _error    = Color(0xFFFFB4AB);
 
 final _svcProvider = Provider<NutritionService>((ref) => NutritionService());
-final _totalsProvider = FutureProvider<Map<String, double>>((ref) async {
-  ref.watch(currentUserProvider);
-  return ref.watch(_svcProvider).getTodayTotals();
-});
-final _logsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+/// Today's totals: the shared read, refreshed by a meal logged on any screen.
+final _totalsProvider = todayNutritionProvider;
+// Read again on each visit: a meal logged on another screen appears here.
+final _logsProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
   ref.watch(currentUserProvider);
   return ref.watch(_svcProvider).getTodayLogs();
 });
@@ -239,8 +238,8 @@ class _NutritionScreenState extends ConsumerState<NutritionScreen> {
       builder: (_) => _AddMealSheet(onLogged: () async {
         await Future.delayed(const Duration(milliseconds: 300));
         if (mounted) {
-          ref.invalidate(_totalsProvider);
           ref.invalidate(_logsProvider);
+          refreshAfterMealLogged(ref.invalidate);
         }
       }));
   }
