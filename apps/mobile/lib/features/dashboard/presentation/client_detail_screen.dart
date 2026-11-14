@@ -496,18 +496,18 @@ class _ClientTimeline extends StatelessWidget {
     }
     if (weights.isNotEmpty) {
       final first = weights.last;
-      events.add({'date': first['logged_at'] as String? ?? '',
+      events.add({'date': localDayOf(first['logged_at'] as String?),
         'label': 'First Weight Logged: ${first['weight_kg']}kg',
         'icon': 'weight', 'color': 'tert'});
       if (weights.length > 1) {
         final latest = weights.first;
-        events.add({'date': latest['logged_at'] as String? ?? '',
+        events.add({'date': localDayOf(latest['logged_at'] as String?),
           'label': 'Latest Weight: ${latest['weight_kg']}kg',
           'icon': 'weight', 'color': 'mut'});
       }
     }
     if (photos.isNotEmpty) {
-      events.add({'date': photos.last['logged_at'] as String? ?? '',
+      events.add({'date': localDayOf(photos.last['logged_at'] as String?),
         'label': 'First Progress Photo', 'icon': 'photo', 'color': 'pri'});
     }
     if (checkins.isNotEmpty) {
@@ -1139,7 +1139,7 @@ class _ProgressTab extends StatelessWidget {
                 Text('${w['weight_kg']} kg',
                   style: const TextStyle(color: _wht, fontSize: 12, fontWeight: FontWeight.w600)),
                 const Spacer(),
-                Text((w['logged_at'] as String).split('T')[0],
+                Text(localDayOf(w['logged_at'] as String?),
                   style: const TextStyle(color: _mut, fontSize: 11)),
               ]))),
           ],
@@ -2046,4 +2046,20 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
         const SnackBar(content: Text('Habits assigned!'), backgroundColor: _brand));
     }
   }
+}
+
+/// `yyyy-mm-dd` of a stored instant in the viewer's own zone, or '' when absent.
+///
+/// The timeline and the weigh-in list took the first ten characters of the
+/// stored string, which is the UTC date: a client's 21:00 weigh-in in New York
+/// was listed under the next day. A date-only value (`week_start_date`) has no
+/// time and is returned as it is.
+@visibleForTesting
+String localDayOf(String? iso) {
+  if (iso == null || iso.isEmpty) return '';
+  if (iso.length <= 10) return iso;
+  final d = DateTime.tryParse(iso)?.toLocal();
+  if (d == null) return iso.length >= 10 ? iso.substring(0, 10) : iso;
+  return '${d.year.toString().padLeft(4, '0')}-'
+      '${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 }

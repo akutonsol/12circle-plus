@@ -341,11 +341,16 @@ class _ProgressScreenState extends State<ProgressScreen>
           .from('progress-photos')
           .uploadBinary(storagePath, bytes,
             fileOptions: FileOptions(contentType: 'image/$ext', upsert: false));
+      // Every progress log's `logged_at` is timestamptz and goes out as a UTC
+      // instant. Local time with no zone is read by Postgres as UTC, so the
+      // dates and times this screen converts back (`toLocal`) were shifted by
+      // the user's offset: a 01:00 weigh-in in New York read as the day before,
+      // a 21:00 one in Sydney as tomorrow, and "Updated 5h ago" just after.
       await Supabase.instance.client.from('progress_photo_logs').insert({
         'user_id': uid,
         'storage_path': storagePath,
         'side': 'gallery',
-        'logged_at': DateTime.now().toIso8601String(),
+        'logged_at': DateTime.now().toUtc().toIso8601String(),
       });
       ScoreService().addCheckinPoints();
       ScoreEngine().progressPhotos();
@@ -1242,7 +1247,7 @@ class LogMeasurementSheetState extends State<LogMeasurementSheet> {
     setState(() { _saving = true; _error = null; });
     try {
       final data = <String, dynamic>{
-        'logged_at': DateTime.now().toIso8601String(),
+        'logged_at': DateTime.now().toUtc().toIso8601String(),
       };
       for (final f in _fields) {
         final v = double.tryParse(_ctrls[f.$2]!.text.trim());
@@ -1435,7 +1440,7 @@ class LogWeightSheetState extends State<LogWeightSheet> {
       await (widget.writeRow ?? _supabaseProgressInsert)('weight_logs', {
         'weight_kg': kg,
         'note': _noteCtrl.text.trim().isEmpty ? null : _noteCtrl.text.trim(),
-        'logged_at': DateTime.now().toIso8601String(),
+        'logged_at': DateTime.now().toUtc().toIso8601String(),
       });
     } catch (e, s) {
       reportError('LogWeightSheet._save', e, s);
