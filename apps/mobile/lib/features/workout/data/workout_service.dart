@@ -172,13 +172,16 @@ class WorkoutService {
     // Update-or-insert on the identity. Done as update-then-insert rather than
     // a PostgREST upsert so it works against databases where the partial unique
     // index on (session_id, set_id) cannot serve as an ON CONFLICT target.
-    final existing = await _supabase
+    // ONE update expression, used for the first try and for the fallback below,
+    // so this remains a single write site for the schema contract guard.
+    Future<List<dynamic>> updateRow() => _supabase
         .from('workout_set_logs')
         .update(payload)
         .eq('session_id', sessionId)
         .eq('set_id', setId)
         .select('id');
-    if ((existing as List).isEmpty) {
+    final existing = await updateRow();
+    if (existing.isEmpty) {
       try {
         await _supabase.from('workout_set_logs').insert({
           ...payload,
@@ -190,11 +193,7 @@ class WorkoutService {
         // Another writer (a second device, a restore) created this set's row
         // between our update and our insert. The row exists now: update it.
         if (e.code != '23505') rethrow;
-        await _supabase
-            .from('workout_set_logs')
-            .update(payload)
-            .eq('session_id', sessionId)
-            .eq('set_id', setId);
+        await updateRow();
       }
     }
   }
