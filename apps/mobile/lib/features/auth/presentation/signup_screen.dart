@@ -2,12 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/auth_provider.dart';
 import '../../../core/errors/auth_error_text.dart';
 import '../../../core/observability/app_failure.dart';
 import 'widgets/auth_design.dart';
 
 enum _Role { client, coach, vendor }
+
+/// Shown when the account was created but needs its email confirmed first.
+const signupConfirmEmailMessage =
+    'Account created — check your email to confirm it, then sign in.';
 
 class SignupScreen extends ConsumerStatefulWidget {
   const SignupScreen({super.key});
@@ -66,6 +71,16 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
       },
       data: (_) async {
         if (!mounted) return;
+        // No session yet: the project asks new accounts to confirm their email
+        // first. This went straight to /intake anyway — an auth route, so the
+        // router let a signed-OUT member through — and they filled in every
+        // step with nothing saved (each save needs a user), then met intake
+        // again at their first sign-in. Say what to do, and go to sign-in.
+        if (Supabase.instance.client.auth.currentSession == null) {
+          _showError(signupConfirmEmailMessage);
+          context.go('/login');
+          return;
+        }
         final role = _selectedRole.name;
         if (role == 'coach') {
           context.go('/coach-dashboard');
