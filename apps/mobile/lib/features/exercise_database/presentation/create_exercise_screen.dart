@@ -680,6 +680,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     setState(() => _saving = false);
     if (!mounted) return;
     if (id != null) {
+      refreshExerciseLists(ref.invalidate);
       if (reviewSubmitError != null) {
         // Saved, but not queued: say so rather than leave it invisible to reviewers.
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -726,8 +727,16 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
             TextButton(
               onPressed: () {
                 Navigator.of(dctx).pop();
-                ref.read(myExercisesNotifierProvider.notifier).submitForGlobal(_savedId!).then((_) {
+                ref.read(myExercisesNotifierProvider.notifier).submitForGlobal(_savedId!).then((ok) {
                   if (!mounted) return;
+                  // The result was ignored: a submission that failed still said
+                  // "Published to the Global Library!".
+                  if (!ok) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                        content: Text("Couldn't submit to the Global Library — try again.")));
+                    return;
+                  }
+                  refreshExerciseLists(ref.invalidate);
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Published to the Global Library!')));
                   context.pop();

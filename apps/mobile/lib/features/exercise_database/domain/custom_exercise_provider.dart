@@ -19,6 +19,14 @@ final globalApprovedExercisesProvider = FutureProvider<List<ExerciseDetail>>((re
   return ref.read(customExerciseSvcProvider).getGlobalApprovedExercises();
 });
 
+/// Re-reads the two lists the Exercise Database shows. They do not dispose and
+/// nothing else re-reads them: a coach who saved, edited or submitted an
+/// exercise went "Back to Library" to a list without it.
+void refreshExerciseLists(void Function(ProviderOrFamily) invalidate) {
+  invalidate(myExercisesProvider);
+  invalidate(globalApprovedExercisesProvider);
+}
+
 // Notifier for create/update/delete operations
 class MyExercisesNotifier extends StateNotifier<AsyncValue<List<ExerciseDetail>>> {
   final CustomExerciseService _svc;
