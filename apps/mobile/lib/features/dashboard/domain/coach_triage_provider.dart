@@ -172,10 +172,16 @@ final coachTriageSignalsProvider =
   if (programIds.isNotEmpty) {
     for (final p in (await _db
             .from('workout_programs')
-            .select('id, plan')
+            .select('id, plan, duration_weeks')
             .inFilter('id', programIds)) as List) {
-      final weeks = (p['plan'] as Map?)?['duration_weeks'];
-      final n = weeks is num ? weeks.toInt() : int.tryParse('$weeks');
+      // The engine's plan states its length; a Program Builder program has no
+      // plan (093 fills it only for generated ones) and states it in the
+      // `duration_weeks` column, which the client's own page already counts
+      // weeks from. Reading only the plan meant "Block ends · needs next" never
+      // fired for any program a coach built by hand.
+      int? asWeeks(Object? v) => v is num ? v.toInt() : int.tryParse('$v');
+      final n = asWeeks((p['plan'] as Map?)?['duration_weeks']) ??
+          asWeeks(p['duration_weeks']);
       if (n != null && n > 0) durations[p['id'] as String] = n;
     }
   }
@@ -202,6 +208,19 @@ final coachTriageSignalsProvider =
     endsOn[uid] = _weekdays[end.weekday - 1];
   }
 
+  // ── At risk · the AI drop-off score ──────────────────────────────────────
+  // `ClientSignals.churnRisk` and its threshold (`churnRiskThreshold`, the 50
+  // the dashboard's AI panel already uses) were defined but never fed, so a
+  // client the coaching engine rated likely to drop off never reached "Needs you
+  // today" unless they had also gone silent. Same RPC as the AI panel; errors
+  // propagate like every other read here.
+  final churn = <String, int>{};
+  for (final r in (await _db.rpc('coach_client_ai_signals')) as List) {
+    final uid = r['client_id'] as String?;
+    final c = r['churn_risk'];
+    if (uid != null && c is num) churn[uid] = c.round();
+  }
+
   return [
     for (final id in ids)
       ClientSignals(
@@ -214,6 +233,7 @@ final coachTriageSignalsProvider =
         blockEndsOn: endsOn[id],
         hasNextBlock: hasNext.contains(id),
         unansweredMessage: asked[id],
+        churnRisk: churn[id],
       ),
   ];
 });
