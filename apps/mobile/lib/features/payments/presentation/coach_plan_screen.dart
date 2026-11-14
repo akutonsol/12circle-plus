@@ -87,13 +87,10 @@ class _CoachPlanCardState extends ConsumerState<_CoachPlanCard> {
 
   Future<void> _subscribe() async {
     setState(() => _loading = true);
-    final ok = await launchCheckout(context, ref,
-        kind: 'coach_plan', tier: widget.plan.tier);
+    // launchCheckout reports its own failure -- including "you already have a
+    // coach plan", which a second checkout would have billed twice.
+    await launchCheckout(context, ref, kind: 'coach_plan', tier: widget.plan.tier);
     if (mounted) setState(() => _loading = false);
-    if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Could not start checkout. Try again.')));
-    }
     ref.invalidate(coachPlanTierProvider);
   }
 

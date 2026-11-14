@@ -2,6 +2,26 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+/// create-checkout said no to a purchase the user already has (409
+/// `already_subscribed`), with the reason to show them.
+class CheckoutRefused implements Exception {
+  const CheckoutRefused(this.message);
+  final String message;
+  @override
+  String toString() => 'CheckoutRefused: $message';
+}
+
+/// The refusal inside a failed create-checkout call, or null when the failure
+/// is anything else (a fault, which stays a plain "could not start").
+CheckoutRefused? checkoutRefusal(FunctionException e) {
+  final d = e.details;
+  if (e.status != 409 || d is! Map || d['code'] != 'already_subscribed') return null;
+  final msg = d['error'];
+  return CheckoutRefused(msg is String && msg.isNotEmpty
+      ? msg
+      : 'You already have this plan.');
+}
+
 /// Module 16 — Payments (Stripe).
 /// The app never touches the secret key; it asks the `create-checkout` Edge
 /// Function for a hosted Checkout URL and opens it, then reads subscription /
@@ -46,6 +66,13 @@ class PaymentService {
         mode: kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
         webOnlyWindowName: kIsWeb ? '_self' : null,
       );
+    } on FunctionException catch (e) {
+      // create-checkout refuses a second live subscription for what the user
+      // already pays for (409 already_subscribed). That is an answer, not a
+      // fault: "try again" would never work, so the caller is told why.
+      final refused = checkoutRefusal(e);
+      if (refused != null) throw refused;
+      return false;
     } catch (_) {
       return false;
     }
@@ -59,6 +86,9 @@ class PaymentService {
       final res = await _db.functions
           .invoke('update-subscription', body: {'newKind': newKind});
       final data = res.data;
+      // A membership whose payment is failing: fix the payment, never buy a
+      // second membership while Stripe retries the first.
+      if (data is Map && data['paymentIssue'] == true) return 'payment_issue';
       if (data is Map && data['needsCheckout'] == true) return 'needs_checkout';
       if (data is Map && (data['ok'] == true)) return 'changed';
       return 'error';
