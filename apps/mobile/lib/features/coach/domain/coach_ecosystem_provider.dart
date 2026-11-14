@@ -142,6 +142,7 @@ final sentInvitesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) asy
 final coachLeaderboardProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
   ref.watch(currentUserProvider);
+  ref.watch(tableTickerProvider('user_scores')); // live: clients' points move it
   final coachId = Supabase.instance.client.auth.currentUser?.id;
   if (coachId == null) return [];
   return _scoreSvc.getCoachLeaderboard(coachId);

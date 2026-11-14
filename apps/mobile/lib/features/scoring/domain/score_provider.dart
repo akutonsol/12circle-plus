@@ -32,8 +32,13 @@ final myBadgeIdsProvider = FutureProvider<Set<String>>((ref) async {
   return ref.watch(scoreEngineProvider).myBadgeIds();
 });
 
+// The leaderboards follow user_scores like myScoreProvider does. They watched
+// only scoreRefreshProvider -- bumped by pull-to-refresh on the My Score tab --
+// so after points were earned the hero card showed the new total while the
+// member's own leaderboard row and rank kept the old one for the session.
 final globalLeaderboardProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   ref.watch(scoreRefreshProvider);
+  ref.watch(tableTickerProvider('user_scores'));
   return ref.watch(scoreEngineProvider).leaderboardGlobal();
 });
 
@@ -41,6 +46,7 @@ final globalLeaderboardProvider = FutureProvider<List<Map<String, dynamic>>>((re
 final coachLeaderboardProvider =
     FutureProvider.family<List<Map<String, dynamic>>, String>((ref, coachId) async {
   ref.watch(scoreRefreshProvider);
+  ref.watch(tableTickerProvider('user_scores'));
   return ref.watch(scoreEngineProvider).leaderboardCoach(coachId);
 });
 
