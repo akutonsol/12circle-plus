@@ -78,7 +78,9 @@ final programSessionStatusProvider =
         final logs = await db
             .from('workout_set_logs')
             .select('id')
-            .eq('session_id', e.value['id']);
+            .eq('session_id', e.value['id'])
+            // Confirmed sets only (104): a set merely typed into is not done.
+            .eq('completed', true);
         e.value['logged_sets'] = (logs as List).length;
       }
     }
