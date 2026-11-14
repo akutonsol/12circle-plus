@@ -1045,11 +1045,10 @@ class _ProgressTab extends StatelessWidget {
       final s2 = (allCheckins.last['stress_level'] as num?)?.toDouble() ?? 0;
       stressTrend = s1 < s2 ? '↑ Improving' : s1 > s2 ? '↓ Worsening' : '→ Stable';
     }
-    final checkInInsights = <String>[];
-    if (avgEnergy < 3) checkInInsights.add('⚠ Consistently low energy — review sleep and recovery');
-    if (avgStress > 7) checkInInsights.add('⚠ High chronic stress — consider deload week');
-    if (allCheckins.length >= 4 && avgMood < 3) checkInInsights.add('⚠ Low mood pattern — check in via call');
-    if (checkInInsights.isEmpty && allCheckins.isNotEmpty) checkInInsights.add('✓ No flags — client trending well');
+    // On the check-in's own 1–5 scale (see checkin_columns.dart).
+    final checkInInsights = checkinInsights(
+        count: allCheckins.length, avgEnergy: avgEnergy,
+        avgStress: avgStress, avgMood: avgMood);
 
     // ── Nutrition Intelligence ──
     double? weightDelta;
@@ -1192,7 +1191,7 @@ class _ProgressTab extends StatelessWidget {
             Row(children: [
               _IntelStat('Avg Energy', avgEnergy.toStringAsFixed(1), _tert),
               _IntelStat('Avg Stress', avgStress.toStringAsFixed(1),
-                avgStress >= 7 ? _red : avgStress >= 4 ? _amber : _green),
+                isHighStress(avgStress) ? _red : avgStress >= 3 ? _amber : _green),
               _IntelStat('Avg Mood', avgMood.toStringAsFixed(1), _pri),
             ]),
             const SizedBox(height: 10),

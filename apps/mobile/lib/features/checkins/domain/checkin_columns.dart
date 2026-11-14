@@ -42,3 +42,31 @@ num? checkinSleepHours(Map<String, dynamic> row) =>
 /// string, and `coach_review_queue` — the reader this helper replaces — already
 /// accepted both, so a tighter helper would have been a regression.
 num? _asNum(Object? v) => v is num ? v : num.tryParse('${v ?? ''}');
+
+/// Energy and stress are asked on a 1–5 scale: the form's `NumberPicker` has
+/// five tiles, the hub prints "of 5", and the form itself raises the coach
+/// notice at stress 4. These are `needsCoachAttention`'s thresholds.
+const kCheckinScaleMax = 5;
+
+/// Stress at or above the level the form flags for the coach (4 of 5).
+bool isHighStress(num? stress) => stress != null && stress >= 4;
+
+/// The flags the coach's client page raises from a client's check-in averages.
+///
+/// They were judged as if the scales ran to 10: "High chronic stress" needed an
+/// average above 7, which a 1–5 answer can never reach, so a client reporting
+/// 5 of 5 every week was shown "✓ No flags — client trending well".
+List<String> checkinInsights({
+  required int count,
+  required double avgEnergy,
+  required double avgStress,
+  required double avgMood,
+}) {
+  final out = <String>[];
+  if (count == 0) return out;
+  if (avgEnergy < 3) out.add('⚠ Consistently low energy — review sleep and recovery');
+  if (isHighStress(avgStress)) out.add('⚠ High chronic stress — consider deload week');
+  if (count >= 4 && avgMood < 3) out.add('⚠ Low mood pattern — check in via call');
+  if (out.isEmpty) out.add('✓ No flags — client trending well');
+  return out;
+}
