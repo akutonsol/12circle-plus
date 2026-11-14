@@ -58,10 +58,11 @@ class ClassNotifier extends StateNotifier<List<FitnessClass>> {
   ClassNotifier(List<FitnessClass> initial, this._liveSvc) : super(initial);
 
   Future<void> bookClass(String classId) async {
-    await _liveSvc.bookClass(classId);
+    // The server's answer, not this list's (possibly stale) idea of "full".
+    final status = await _liveSvc.bookClass(classId);
     state = state.map((c) {
       if (c.id != classId) return c;
-      if (c.isFull) return _withWaitlist(c);
+      if (status == 'waitlisted') return _withWaitlist(c);
       return FitnessClass(
         id: c.id, title: c.title, description: c.description,
         category: c.category, status: c.status, startTime: c.startTime,

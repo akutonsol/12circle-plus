@@ -1,6 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'models/class_model.dart';
-import '../../notifications/data/notification_service.dart';
 
 class LiveClassService {
   final _db = Supabase.instance.client;
@@ -116,30 +115,30 @@ class LiveClassService {
     );
   }
 
-  /// Books a class, honouring capacity limits. If the class is full the
-  /// booking is placed on the waitlist instead of confirmed (Module 13).
-  /// Returns the resulting status: 'confirmed' or 'waitlisted'.
+  /// Asks for a seat and returns what the server gave: 'confirmed', or
+  /// 'waitlisted' when the class is full (Module 13).
+  ///
+  /// The seat is decided by the database (migration 188), where every booking
+  /// is visible. This used to count confirmed bookings itself -- but a client
+  /// can read only its OWN bookings, so the count was 0 or 1, never "full":
+  /// every booking was confirmed and classes overbooked. It also kept
+  /// `classes.current_enrolled` and promoted the waitlist from here, writes RLS
+  /// turns into zero-row no-ops (a client may not write the class row or
+  /// another user's booking); the database now does both.
   Future<String> bookClass(String classId) async {
     final uid = _db.auth.currentUser?.id;
     if (uid == null) return 'confirmed';
-
-    // Determine capacity and current confirmed count.
-    final cls = await _db.from('classes')
-        .select('max_capacity').eq('id', classId).maybeSingle();
-    final maxCapacity = (cls?['max_capacity'] as int?) ?? 20;
-    final confirmed = await _confirmedCount(classId);
-
-    final status = confirmed >= maxCapacity ? 'waitlisted' : 'confirmed';
-    await _db.from('class_bookings').upsert({
+    final row = await _db.from('class_bookings').upsert({
       'class_id': classId,
       'user_id': uid,
-      'status': status,
-    }, onConflict: 'class_id,user_id');
-
-    await _syncEnrollment(classId);
-    return status;
+      'status': 'confirmed',
+    }, onConflict: 'class_id,user_id').select('status').single();
+    return (row['status'] as String?) ?? 'confirmed';
   }
 
+  /// Gives up the place. A freed confirmed seat is handed to the earliest
+  /// waitlisted booking -- and that person told -- by the database
+  /// (migration 188); the client can neither see nor write anyone else's booking.
   Future<void> cancelBooking(String classId) async {
     final uid = _db.auth.currentUser?.id;
     if (uid == null) return;
@@ -147,47 +146,6 @@ class LiveClassService {
         .update({'status': 'cancelled'})
         .eq('class_id', classId)
         .eq('user_id', uid);
-    // Free seat → promote the earliest waitlisted booking to confirmed.
-    await _promoteFromWaitlist(classId);
-    await _syncEnrollment(classId);
-  }
-
-  Future<int> _confirmedCount(String classId) async {
-    final rows = await _db.from('class_bookings')
-        .select('user_id').eq('class_id', classId).eq('status', 'confirmed');
-    return (rows as List).length;
-  }
-
-  /// Recompute current_enrolled for a single class from confirmed bookings.
-  Future<void> _syncEnrollment(String classId) async {
-    final count = await _confirmedCount(classId);
-    await _db.from('classes')
-        .update({'current_enrolled': count})
-        .eq('id', classId);
-  }
-
-  /// Promote the oldest waitlisted booking to confirmed if capacity allows.
-  Future<void> _promoteFromWaitlist(String classId) async {
-    final cls = await _db.from('classes')
-        .select('max_capacity').eq('id', classId).maybeSingle();
-    final maxCapacity = (cls?['max_capacity'] as int?) ?? 20;
-    if (await _confirmedCount(classId) >= maxCapacity) return;
-    final next = await _db.from('class_bookings')
-        .select('id, user_id')
-        .eq('class_id', classId)
-        .eq('status', 'waitlisted')
-        .order('booked_at', ascending: true)
-        .limit(1)
-        .maybeSingle();
-    if (next == null) return;
-    await _db.from('class_bookings')
-        .update({'status': 'confirmed'}).eq('id', next['id']);
-    await NotificationService().notifyUser(
-      recipientId: next['user_id'] as String,
-      type: 'class',
-      title: 'You\'re In!',
-      body: 'A spot opened up — your class booking is now confirmed.',
-    );
   }
 
   ClassCategory _parseCategory(String t) => switch (t) {
