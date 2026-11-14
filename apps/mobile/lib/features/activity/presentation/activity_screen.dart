@@ -42,9 +42,7 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
     SystemChrome.setSystemUIOverlayStyle(
         SystemUiOverlayStyle.light.copyWith(statusBarColor: Colors.transparent));
     final topPad = MediaQuery.of(context).padding.top;
-    final user = ref.watch(currentUserProvider);
-    final metaFirst = user?.userMetadata?['first_name'] as String? ?? '';
-    final userName = metaFirst.isNotEmpty ? metaFirst : user?.email?.split('@').first ?? '';
+    final userName = ref.watch(currentFirstNameProvider);
 
     return Scaffold(
       backgroundColor: _C.bg,
