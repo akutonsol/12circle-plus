@@ -3292,7 +3292,9 @@ class _Step6Page extends StatelessWidget {
                     const SizedBox(width: 12),
                     const Expanded(
                       child: Text(
-                        '"This helps Coach Sarah know how much education to provide."',
+                        // A placeholder coach was named here, quoted to every member —
+                        // self-guided ones included.
+                        '"This helps your coach know how much education to provide."',
                         style: TextStyle(color: _onSurfV, fontSize: 13,
                           fontStyle: FontStyle.italic, height: 1.5)),
                     ),
@@ -4687,7 +4689,8 @@ class _Step11Page extends StatelessWidget {
                       child: _BentoCard(
                         icon: Icons.calendar_today_outlined,
                         label: 'TRAINING',
-                        value: data.trainingDays > 0 ? '${data.trainingDays} Days/Wk' : '4 Days/Wk',
+                        // Unchosen is unchosen, not four days a week.
+                        value: data.trainingDays > 0 ? '${data.trainingDays} Days/Wk' : '—',
                       ),
                     ),
                   ],
@@ -4718,16 +4721,9 @@ class _Step11Page extends StatelessWidget {
                             color: _onSurf, fontSize: 18, fontWeight: FontWeight.w700)),
                         ],
                       ),
-                      const Spacer(),
-                      const Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text('2,450', style: TextStyle(
-                            color: _primary, fontSize: 22, fontWeight: FontWeight.w800)),
-                          Text('KCAL/DAY', style: TextStyle(
-                            color: _onSurfV, fontSize: 10, letterSpacing: 1)),
-                        ],
-                      ),
+                      // No calorie figure here. This printed "2,450 KCAL/DAY" for
+                      // every new member, whatever they had entered: the real
+                      // targets are set afterwards by the plan, not on this page.
                     ],
                   ),
                 ),
