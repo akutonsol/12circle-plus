@@ -166,13 +166,29 @@ String _actionLabel(String a) => switch (a) {
   _ => a.replaceAll('_', ' '),
 };
 
+/// "+5" for an award, "−5" for a penalty. Penalties are stored negative
+/// (`penalize_points`, 054) and the row printed `'+$pts'`: "+-5".
+@visibleForTesting
+String scoreEventPoints(int pts) => pts < 0 ? '−${-pts}' : '+$pts';
+
+/// The event's day in the member's own zone, `yyyy-mm-dd`. It printed the first
+/// ten characters of `created_at`, which is the UTC date: an evening event in
+/// New York was listed under tomorrow.
+@visibleForTesting
+String scoreEventDay(String? createdAt) {
+  final d = createdAt == null ? null : DateTime.tryParse(createdAt)?.toLocal();
+  if (d == null) return (createdAt ?? '').split('T').first;
+  return '${d.year.toString().padLeft(4, '0')}-'
+      '${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+}
+
 class _EventRow extends StatelessWidget {
   final Map<String, dynamic> e;
   const _EventRow(this.e);
   @override
   Widget build(BuildContext context) {
     final pts = (e['points'] as num?)?.toInt() ?? 0;
-    final when = (e['created_at'] as String? ?? '').split('T').first;
+    final when = scoreEventDay(e['created_at'] as String?);
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -183,7 +199,7 @@ class _EventRow extends StatelessWidget {
             style: const TextStyle(color: _white, fontSize: 13, fontWeight: FontWeight.w600)),
           Text(when, style: const TextStyle(color: _muted, fontSize: 11)),
         ])),
-        Text('+$pts', style: const TextStyle(color: _gold, fontSize: 16, fontWeight: FontWeight.w800)),
+        Text(scoreEventPoints(pts), style: const TextStyle(color: _gold, fontSize: 16, fontWeight: FontWeight.w800)),
       ]),
     );
   }
