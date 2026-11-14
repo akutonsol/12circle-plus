@@ -62,6 +62,53 @@ Deno.serve(async (req: Request) => {
 
     const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
+    // K-08 · a second live subscription for what the user already pays for is a
+    // double charge: nothing here checked, and every call minted another Stripe
+    // subscription. Refuse BEFORE any Stripe call (no customer, no session).
+    //   membership  -> any live self/AI membership: change it in place
+    //                  (update-subscription), never buy a second one;
+    //   coach_plan  -> any live coach plan: two plans bill twice and the later
+    //                  webhook overwrites max_clients;
+    //   coach       -> a live subscription to THIS coach.
+    // Recurring packages are not checked: the subscription row does not record
+    // which package it is, and whether two packages from one coach may run at
+    // once is an open owner decision.
+    const LIVE = ['active', 'trialing', 'past_due', 'incomplete', 'unpaid'];
+    const sameProduct: Record<string, string[]> = {
+      self_guided: ['self_guided', 'ai_guided'],
+      ai_guided: ['self_guided', 'ai_guided'],
+      coach_plan: ['coach_plan'],
+      coach: ['coach'],
+    };
+    if (sameProduct[kind]) {
+      if (kind === 'coach' && !coachId) return json({ error: 'coachId required' }, 400);
+      let existingQuery = db
+        .from('subscriptions')
+        .select('id, kind, status')
+        .eq('user_id', user.id)
+        .in('kind', sameProduct[kind])
+        .in('status', LIVE);
+      if (kind === 'coach') existingQuery = existingQuery.eq('coach_id', coachId!);
+      const { data: existing, error: existingError } = await existingQuery.limit(1).maybeSingle();
+      if (existingError) {
+        // Unknown is not "none": a failed check must not become a second charge.
+        return json({ error: 'Could not check your current subscriptions. Try again.' }, 503);
+      }
+      if (existing) {
+        return json({
+          error: kind === 'coach_plan'
+            ? 'You already have a coach plan. Change or cancel it from Billing first.'
+            : kind === 'coach'
+              ? 'You already subscribe to this coach.'
+              : 'You already have a membership. Change your plan instead of buying a second one.',
+          code: 'already_subscribed',
+          subscriptionId: existing.id,
+          existingKind: existing.kind,
+          existingStatus: existing.status,
+        }, 409);
+      }
+    }
+
     // Reuse or create the Stripe customer for this user.
     const { data: profile } = await db
       .from('user_profiles')
