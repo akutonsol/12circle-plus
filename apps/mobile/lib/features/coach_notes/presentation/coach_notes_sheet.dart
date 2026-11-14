@@ -122,10 +122,22 @@ class _NotesSheetState extends ConsumerState<_NotesSheet> {
                     itemCount: notes.length,
                     itemBuilder: (_, i) => _NoteTile(
                         note: notes[i],
+                        // A delete that failed escaped unhandled with nothing
+                        // said (and `ref` was used after the sheet might have
+                        // closed); save and read already report (#78).
                         onDelete: () async {
-                          await ref
-                              .read(coachNoteServiceProvider)
-                              .deleteNote(notes[i].id);
+                          final messenger = ScaffoldMessenger.of(context);
+                          try {
+                            await ref
+                                .read(coachNoteServiceProvider)
+                                .deleteNote(notes[i].id);
+                          } catch (_) {
+                            if (!mounted) return;
+                            messenger.showSnackBar(const SnackBar(
+                                content: Text("Couldn't delete the note — try again.")));
+                            return;
+                          }
+                          if (!mounted) return;
                           ref.invalidate(clientNotesProvider(widget.clientId));
                         }),
                   ),
