@@ -7,6 +7,7 @@ import '../domain/nutrition_provider.dart';
 import 'widgets/coach_insight_card.dart';
 import 'widgets/food_added_dialog.dart';
 import '../../../core/widgets/named_icon_button.dart';
+import 'widgets/nutrition_load_failed.dart';
 
 const _bg       = Color(0xFF030303);
 const _card     = Color(0xFF0E0B16);
@@ -89,6 +90,12 @@ class _NutritionScreenState extends ConsumerState<NutritionScreen> {
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
               child: Column(children: [
+                // Targets that could not be read are not shown -- not replaced by
+                // defaults that read as the client's plan (nor advice built on them).
+                if (goals is AsyncError) ...[
+                  const NutritionTargetsLoadFailed(),
+                  const SizedBox(height: 16),
+                ] else ...[
                 // Calorie card
                 Container(
                   padding: const EdgeInsets.all(20),
@@ -142,6 +149,7 @@ class _NutritionScreenState extends ConsumerState<NutritionScreen> {
                   calorieGoal: calGoal,
                 ),
                 const SizedBox(height: 16),
+                ],
                 // Water tracker
                 Container(
                   padding: const EdgeInsets.all(16),
