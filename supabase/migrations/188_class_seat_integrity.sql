@@ -18,10 +18,14 @@
 --      only write policy is the coach's ("coaches manage classes"). Zero rows, no
 --      error. On QA 3 classes already disagree with their bookings, and the cards
 --      ("N spots left", "Full") read that column.
---   3. WAITLIST PROMOTION IS A FALSE SUCCESS. _promoteFromWaitlist UPDATEs ANOTHER
---      user's booking (blocked by "users manage own bookings": zero rows) and then
---      notifies that user "You're In! ... your class booking is now confirmed" --
---      while their booking is still waitlisted.
+--   3. NOBODY IS EVER PROMOTED FROM THE WAITLIST. _promoteFromWaitlist looks for the
+--      earliest waitlisted booking -- which a client cannot see (own rows only), so
+--      after a client cancels it finds none and the freed seat is never handed on.
+--      For a caller who CAN read the waitlist (the class's coach, an admin) it is a
+--      false success: its UPDATE of another user's booking is blocked by "users
+--      manage own bookings" (zero rows, no error) and it then notifies that user
+--      "You're In! ... your class booking is now confirmed" while the booking is
+--      still waitlisted.
 --
 -- THE FIX. Decision-free: the rules are the ones the app already states (the
 -- capacity default of 20 included -- `max_capacity ?? 20` in the client). Only
