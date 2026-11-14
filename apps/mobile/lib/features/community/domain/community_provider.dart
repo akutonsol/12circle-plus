@@ -134,15 +134,8 @@ final postListProvider = Provider<List<CommunityPost>>((ref) {
 final liveGroupsProvider = FutureProvider<List<CommunityGroup>>((ref) async {
   ref.watch(currentUserProvider);
   final svc = ref.watch(liveCommunityServiceProvider);
-  final live = await svc.getGroups();
-  if (live.isEmpty) {
-    return ref.watch(communityServiceProvider).getSampleGroups()
-        .map((g) => CommunityGroup(
-              id: g.id, name: g.name, description: g.description,
-              emoji: g.emoji, memberCount: g.memberCount, isJoined: false))
-        .toList();
-  }
-  return live;
+  // No groups is no groups — never the sample ones (see getGroups).
+  return svc.getGroups();
 });
 
 class GroupNotifier extends StateNotifier<List<CommunityGroup>> {
@@ -194,12 +187,9 @@ class GroupNotifier extends StateNotifier<List<CommunityGroup>> {
 
 final groupNotifierProvider = StateNotifierProvider<GroupNotifier, List<CommunityGroup>>((ref) {
   final svc = ref.watch(liveCommunityServiceProvider);
-  final sample = ref.watch(communityServiceProvider).getSampleGroups()
-      .map((g) => CommunityGroup(
-            id: g.id, name: g.name, description: g.description,
-            emoji: g.emoji, memberCount: g.memberCount, isJoined: false))
-      .toList();
-  final notifier = GroupNotifier(sample, svc);
+  // Starts with nothing until the real groups arrive; it started with the
+  // five sample groups, shown on Community and Activity while loading.
+  final notifier = GroupNotifier(const [], svc);
   ref.listen<AsyncValue<List<CommunityGroup>>>(
     liveGroupsProvider,
     (_, next) => next.whenData(notifier.initialize),

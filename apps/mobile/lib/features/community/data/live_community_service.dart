@@ -151,13 +151,18 @@ class LiveCommunityService {
     }
   }
 
+  /// The real groups, A–Z. **A failed read propagates**: it answered `[]`,
+  /// which `liveGroupsProvider` then replaced with five sample groups
+  /// ("Transformation Squad · 248 members"…) whose ids are not rows, so a
+  /// member was shown invented groups and a Join on one failed in silence.
   Future<List<CommunityGroup>> getGroups() async {
-    try {
+    {
       final uid = _db.auth.currentUser?.id;
       final data = await _db
           .from('community_groups')
           .select()
-          .order('name');
+          // A–Z, stated: a bare `order()` is descending in postgrest-dart.
+          .order('name', ascending: true);
       final members = List<Map<String, dynamic>>.from(
           await _db.from('community_group_members').select('group_id, user_id'));
       final myIds = uid == null
@@ -175,8 +180,6 @@ class LiveCommunityService {
           isJoined: myIds.contains(gid),
         );
       }).toList();
-    } catch (_) {
-      return [];
     }
   }
 
