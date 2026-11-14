@@ -59,7 +59,7 @@ class _MyScoreTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final score = ref.watch(myScoreProvider).valueOrNull;
     final events = ref.watch(recentScoreEventsProvider).valueOrNull ?? [];
-    final cycle = (score?['current_cycle_score'] as num?)?.toInt() ?? 0;
+    final cycle = cycleScoreOf(score);
     final lifetime = (score?['lifetime_score'] as num?)?.toInt() ?? 0;
     final level = (score?['level'] as num?)?.toInt() ?? 1;
     final rank = score?['rank'] as String? ?? 'Bronze';

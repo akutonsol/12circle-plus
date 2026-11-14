@@ -287,7 +287,7 @@ class _ScoreCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s     = ref.watch(myScoreProvider).valueOrNull;
-    final total = (s?['current_cycle_score'] as num?)?.toInt() ?? 0;
+    final total = cycleScoreOf(s);
 
     return GestureDetector(
       onTap: onExpand,
@@ -351,7 +351,7 @@ class _WellnessPulsePanel extends ConsumerWidget {
     final community = score['community_points'] as int? ?? 0;
     final streak    = ref.watch(currentStreakProvider).valueOrNull ?? 0;
     final cScore    = ref.watch(myScoreProvider).valueOrNull;
-    final cCycle    = (cScore?['current_cycle_score'] as num?)?.toInt() ?? 0;
+    final cCycle    = cycleScoreOf(cScore);
     final cLevel    = (cScore?['level'] as num?)?.toInt() ?? 1;
     final cRank     = cScore?['rank'] as String? ?? 'Bronze';
     final topPad    = MediaQuery.of(context).padding.top;
