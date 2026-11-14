@@ -86,17 +86,32 @@ final habitsWithStatusProvider = FutureProvider<List<Map<String, dynamic>>>((ref
 // ── Score ────────────────────────────────────────────────────
 final todayScoreProvider = FutureProvider<Map<String, dynamic>>((ref) async {
   ref.watch(currentUserProvider);
+  // Live: `daily_scores` is written by habits, community posts, progress logs,
+  // check-ins and workouts, and is in the realtime publication (037). Without
+  // the ticker only a finished workout or check-in re-read this, so a habit
+  // ticked or a post made left the Wellness Pulse and Activity as they were.
+  ref.watch(tableTickerProvider('daily_scores'));
   return _scoreSvc.getTodayScore();
 });
 
 final weekScoresProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   ref.watch(currentUserProvider);
+  // Live: `daily_scores` is written by habits, community posts, progress logs,
+  // check-ins and workouts, and is in the realtime publication (037). Without
+  // the ticker only a finished workout or check-in re-read this, so a habit
+  // ticked or a post made left the Wellness Pulse and Activity as they were.
+  ref.watch(tableTickerProvider('daily_scores'));
   return _scoreSvc.getWeekScores();
 });
 
 final monthScoresProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
   ref.watch(currentUserProvider);
+  // Live: `daily_scores` is written by habits, community posts, progress logs,
+  // check-ins and workouts, and is in the realtime publication (037). Without
+  // the ticker only a finished workout or check-in re-read this, so a habit
+  // ticked or a post made left the Wellness Pulse and Activity as they were.
+  ref.watch(tableTickerProvider('daily_scores'));
   final userId = Supabase.instance.client.auth.currentUser?.id;
   if (userId == null) return [];
   final now = DateTime.now();
