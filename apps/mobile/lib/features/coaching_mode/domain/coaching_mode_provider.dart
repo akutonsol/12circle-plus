@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/notifications/notification_watcher.dart' show refreshForNotification;
 import '../../auth/domain/auth_provider.dart';
 import '../../payments/domain/entitlements.dart';
 import '../../workout/domain/workout_provider.dart';
@@ -108,6 +109,15 @@ class CoachingModeNotifier extends StateNotifier<AsyncValue<CoachingMode>> {
     // PaywallGate (which reads it for `isCoach`) and stalls active checkout.
     _ref.invalidate(clientPlanProvider);          // server-resolved effective plan
     _ref.invalidate(assignedWorkoutsProvider);    // plan just regenerated/deactivated
+    // `generate_client_plan` / `deactivate_self_generated_plan` also replace the
+    // member's habits, nutrition targets and program assignment, and send no
+    // notification — so the re-reads a coach's assignment triggers never ran.
+    // Habits kept listing deactivated habits (and logging against them), and
+    // Nutrition, Meals and the program kept the old plan. Same re-reads as the
+    // notifications, from the one list that defines them.
+    for (final type in const ['program_assigned', 'nutrition_assigned', 'habits_assigned']) {
+      refreshForNotification(type, _ref.invalidate);
+    }
   }
 }
 
