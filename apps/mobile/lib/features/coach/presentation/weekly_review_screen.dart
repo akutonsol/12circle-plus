@@ -78,10 +78,9 @@ class _State extends ConsumerState<WeeklyReviewScreen> {
     final id = _commId;
     if (id == null) return;
     setState(() => _busy = true);
-    await _svc.updateCommunication(id, _clientCtl.text, _coachCtl.text);
-    final ok = await _svc.sendCommunication(id);
+    final r = await sendReviewedCommunication(_svc, id, _clientCtl.text, _coachCtl.text);
     if (!mounted) return;
-    setState(() { _busy = false; _sent = ok; _status = ok ? 'Sent to client ✓' : 'Send failed.'; });
+    setState(() { _busy = false; _sent = r.sent; _status = r.status; });
   }
 
   @override
@@ -194,4 +193,22 @@ class _State extends ConsumerState<WeeklyReviewScreen> {
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
         contentPadding: const EdgeInsets.all(12))),
   ]);
+}
+
+/// Saves the coach's edits, then sends — and sends nothing the coach did not
+/// approve.
+///
+/// The save's result was ignored: when it failed, the unedited draft went to
+/// the client anyway and the coach was told "Sent to client ✓". Now a failed
+/// save sends nothing and says so. (`send_communication` returns void and
+/// cannot report a row it did not change; that needs the RPC to return a count.)
+@visibleForTesting
+Future<({bool sent, String status})> sendReviewedCommunication(
+    CoachProgramService svc, String id, String clientText, String coachText) async {
+  final saved = await svc.updateCommunication(id, clientText, coachText);
+  if (!saved) {
+    return (sent: false, status: "Your edits weren't saved, so nothing was sent. Try again.");
+  }
+  final ok = await svc.sendCommunication(id);
+  return (sent: ok, status: ok ? 'Sent to client ✓' : 'Send failed.');
 }
