@@ -51,3 +51,20 @@ final clientScoreProvider =
   ref.watch(tableTickerProvider('user_scores'));
   return ref.watch(scoreEngineProvider).clientScore(clientId);
 });
+
+/// This month's points from a `user_scores` row: 0 when the row's period is an
+/// earlier month.
+///
+/// `current_cycle_score` resets only on the next award (`award_points`, 035),
+/// so on the 1st — until the member earned something — Home, the Score screen
+/// and the AI insight showed LAST month's total as "This month", while the
+/// leaderboard, which filters `current_period = to_char(now(), 'YYYY-MM')`,
+/// already left them out. The period is the server's: a UTC `YYYY-MM`.
+int cycleScoreOf(Map<String, dynamic>? s, {DateTime? now}) {
+  if (s == null) return 0;
+  final n = (now ?? DateTime.now()).toUtc();
+  final period = '${n.year.toString().padLeft(4, '0')}-${n.month.toString().padLeft(2, '0')}';
+  final p = s['current_period'] as String?;
+  if (p != null && p != period) return 0;
+  return (s['current_cycle_score'] as num?)?.toInt() ?? 0;
+}

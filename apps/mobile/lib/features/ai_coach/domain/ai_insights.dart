@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../coach/domain/coach_ecosystem_provider.dart'
     show todayScoreProvider, weekScoresProvider;
-import '../../scoring/domain/score_provider.dart' show myScoreProvider;
+import '../../scoring/domain/score_provider.dart' show cycleScoreOf, myScoreProvider;
 import '../../workout/domain/workout_provider.dart'
     show currentStreakProvider, weeklyWorkoutCountProvider, assignedWorkoutsProvider;
 
@@ -94,7 +94,7 @@ final aiWeeklyReviewProvider = Provider<AiWeeklyReview>((ref) {
 /// A progress insight headline derived from today's score + overall standing.
 final aiProgressInsightProvider = Provider<String>((ref) {
   final s     = ref.watch(myScoreProvider).valueOrNull;
-  final cycle = (s?['current_cycle_score'] as num?)?.toInt() ?? 0;
+  final cycle = cycleScoreOf(s);
   final rank  = s?['rank'] as String? ?? 'Bronze';
   final level = (s?['level'] as num?)?.toInt() ?? 1;
   final today = ref.watch(todayScoreProvider).valueOrNull ?? const {};
