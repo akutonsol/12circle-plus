@@ -111,7 +111,7 @@ final currentUserProfileProvider = FutureProvider<Map<String, dynamic>?>((ref) a
 ///
 /// Activity and Directory greeted the member from the sign-up metadata only,
 /// which nothing updates: a name corrected in Personal Info changed in Profile
-/// and the scaffold but "Good morning, <signup name>" stayed on those two.
+/// and the scaffold but the greeting kept the sign-up name on those two.
 final currentFirstNameProvider = Provider<String>((ref) {
   final user = ref.watch(currentUserProvider);
   final profile = ref.watch(currentUserProfileProvider).valueOrNull;
