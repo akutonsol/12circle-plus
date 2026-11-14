@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show AsyncValueGetter;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -91,7 +92,13 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
                   fontWeight: FontWeight.w700)),
               const Spacer(),
               GestureDetector(
-                onTap: () => ref.read(notificationsProvider.notifier).markAllRead(),
+                onTap: () async {
+                  final ok = await ref.read(notificationsProvider.notifier).markAllRead();
+                  if (!ok && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                        content: Text("Couldn't mark them read — try again.")));
+                  }
+                },
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                   decoration: BoxDecoration(
@@ -224,7 +231,8 @@ class _GroupHeader extends StatelessWidget {
 class _NotificationCard extends StatelessWidget {
   final AppNotification notification;
   final VoidCallback onTap;
-  final VoidCallback onDismiss;
+  /// Deletes the notification; true when the server took it.
+  final AsyncValueGetter<bool> onDismiss;
   const _NotificationCard({
     required this.notification,
     required this.onTap,
@@ -249,7 +257,16 @@ class _NotificationCard extends StatelessWidget {
           color: _C.errCont.withValues(alpha: 0.6),
           borderRadius: BorderRadius.circular(16)),
         child: const Icon(Icons.delete_outline_rounded, color: _C.error, size: 24)),
-      onDismissed: (_) => onDismiss(),
+      // Delete first, dismiss only if it was deleted: a row whose delete failed
+      // slides back, still there, and the member is told.
+      confirmDismiss: (_) async {
+        final ok = await onDismiss();
+        if (!ok && context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text("Couldn't delete that — try again.")));
+        }
+        return ok;
+      },
       child: GestureDetector(
         onTap: onTap,
         child: AnimatedContainer(

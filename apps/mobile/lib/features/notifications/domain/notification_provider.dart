@@ -47,23 +47,50 @@ class NotificationsNotifier extends StateNotifier<AsyncValue<List<AppNotificatio
     }
   }
 
-  Future<void> markRead(String id) async {
-    await _svc.markRead(id);
-    state = state.whenData((list) => list
-        .map((n) => n.id == id ? n.copyWith(read: true) : n)
-        .toList());
+  // These three say whether the server took the change, and change the list
+  // only when it did. They threw: a failed delete left a row the swipe had
+  // already dismissed in the tree ("A dismissed Dismissible widget is still
+  // part of the tree"), still unread, with the error unhandled; a failed
+  // mark-read threw from a tap.
+
+  Future<bool> markRead(String id) async {
+    try {
+      await _svc.markRead(id);
+    } catch (_) {
+      return false;
+    }
+    if (mounted) {
+      state = state.whenData((list) => list
+          .map((n) => n.id == id ? n.copyWith(read: true) : n)
+          .toList());
+    }
+    return true;
   }
 
-  Future<void> markAllRead() async {
-    await _svc.markAllRead();
-    state = state.whenData((list) => list
-        .map((n) => n.copyWith(read: true))
-        .toList());
+  Future<bool> markAllRead() async {
+    try {
+      await _svc.markAllRead();
+    } catch (_) {
+      return false;
+    }
+    if (mounted) {
+      state = state.whenData((list) => list
+          .map((n) => n.copyWith(read: true))
+          .toList());
+    }
+    return true;
   }
 
-  Future<void> delete(String id) async {
-    await _svc.deleteNotification(id);
-    state = state.whenData((list) => list.where((n) => n.id != id).toList());
+  Future<bool> delete(String id) async {
+    try {
+      await _svc.deleteNotification(id);
+    } catch (_) {
+      return false;
+    }
+    if (mounted) {
+      state = state.whenData((list) => list.where((n) => n.id != id).toList());
+    }
+    return true;
   }
 
   Future<void> refresh() => _load();
