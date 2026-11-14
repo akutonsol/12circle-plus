@@ -130,7 +130,9 @@ class _ProgressionChart extends ConsumerWidget {
           children: [
             // ── PR stats row ───────────────────────────────────────────────
             Row(children: [
-              _StatCard(label: 'Current PR', value: '${latestWeight.toStringAsFixed(1)}kg', color: _brand),
+              // The PR is the heaviest set on record, not the latest session's
+              // best: 100 kg last week and 60 kg today read "Current PR 60.0kg".
+              _StatCard(label: 'Current PR', value: '${maxWeight.toStringAsFixed(1)}kg', color: _brand),
               const SizedBox(width: 10),
               _StatCard(label: 'Total Gain', value: '${gain >= 0 ? '+' : ''}${gain.toStringAsFixed(1)}kg', color: gain >= 0 ? _teal : _muted),
               const SizedBox(width: 10),
