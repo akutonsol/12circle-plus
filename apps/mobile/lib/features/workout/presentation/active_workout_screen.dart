@@ -137,6 +137,11 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   bool _paused = false;
   Timer? _timer;
   bool _saving = false;
+  /// The round each circuit is on, keyed by the circuit's first exercise
+  /// index. It lived in a local inside the circuit's StatefulBuilder builder,
+  /// which every rebuild -- including the +/- taps' own setState -- reset to 1,
+  /// so the counter could never leave "Round 1".
+  final Map<int, int> _circuitRound = {};
 
   /// EC-05 / N-07: an essential write did not land, so the workout is not
   /// filed and the screen must not say it is.
@@ -1176,8 +1181,9 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     Workout workout,
   ) {
     const circuitColor = Color(0xFFA855F7); // brand purple
+    final roundKey = group.indices.first;
+    final currentRound = _circuitRound[roundKey] ?? 1;
     return StatefulBuilder(builder: (ctx, setSB) {
-      int currentRound = 1; // tracked locally via StatefulBuilder
       return Container(
         margin: const EdgeInsets.only(bottom: 16),
         decoration: BoxDecoration(
@@ -1211,14 +1217,14 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
                   borderRadius: BorderRadius.circular(999)),
                 child: Row(children: [
                   GestureDetector(
-                    onTap: () { if (currentRound > 1) setSB(() => currentRound--); },
+                    onTap: () { if (currentRound > 1) setState(() => _circuitRound[roundKey] = currentRound - 1); },
                     child: const Icon(Icons.remove_rounded, color: _muted, size: 16)),
                   const SizedBox(width: 6),
                   Text('Round $currentRound',
                     style: const TextStyle(color: _white, fontSize: 12, fontWeight: FontWeight.w700)),
                   const SizedBox(width: 6),
                   GestureDetector(
-                    onTap: () { if (currentRound < group.circuitRounds) setSB(() => currentRound++); },
+                    onTap: () { if (currentRound < group.circuitRounds) setState(() => _circuitRound[roundKey] = currentRound + 1); },
                     child: const Icon(Icons.add_rounded, color: circuitColor, size: 16)),
                 ])),
             ])),
