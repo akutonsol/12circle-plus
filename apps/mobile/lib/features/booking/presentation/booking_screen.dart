@@ -199,10 +199,23 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
     });
   }
 
-  void _selectCoach(String coachId) {
+  /// Switches to another of the client's coaches. A read that fails here ends
+  /// in the screen's error state, as it does on first load: `_applyCoach` was
+  /// called without being awaited or caught, so a failed slots read left the
+  /// spinner up for good and the error unhandled.
+  Future<void> _selectCoach(String coachId) async {
     if (coachId == _coachId) return;
     setState(() => _state = _BookingState.loading);
-    _applyCoach(coachId);
+    try {
+      await _applyCoach(coachId);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _slots  = [];
+        _booked = [];
+        _state  = _BookingState.error;
+      });
+    }
   }
 
   Future<void> _cancelBooking(Map<String, dynamic> call) async {
