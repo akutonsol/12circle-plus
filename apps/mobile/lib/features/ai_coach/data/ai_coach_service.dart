@@ -203,13 +203,16 @@ class AICoachService {
     final uid = _db.auth.currentUser?.id;
     if (uid == null) return [];
     try {
+      // The LATEST [limit] exchanges, returned oldest first. Ascending with
+      // `limit` kept the first ever: after more than ten exchanges, reopening
+      // the chat always showed the same opening ten and never the latest.
       final data = await _db
           .from('ai_conversations')
           .select()
           .eq('user_id', uid)
-          .order('created_at', ascending: true)
+          .order('created_at', ascending: false)
           .limit(limit);
-      return List<Map<String, dynamic>>.from(data as List);
+      return List<Map<String, dynamic>>.from(data as List).reversed.toList();
     } catch (_) {
       return [];
     }
