@@ -17,13 +17,17 @@ class LiveClassService {
       final uid = _db.auth.currentUser?.id;
       // Include classes that started up to 4h ago so in-progress (live) ones
       // still surface; the mapping derives live/upcoming/completed from time.
-      final from = DateTime.now().subtract(const Duration(hours: 4));
+      // `scheduled_at` is timestamptz: "4h ago" goes out as a UTC instant (a
+      // zoneless local time is read as UTC), and the 40 kept are the SOONEST —
+      // postgrest-dart's `order()` is descending unless told otherwise, so the
+      // limit kept the 40 furthest and dropped today's classes.
+      final from = DateTime.now().subtract(const Duration(hours: 4)).toUtc();
       final data = await _db
           .from('classes')
           .select('*, public_profiles!coach_id(id, first_name, last_name, avatar_url)')
           .eq('status', 'scheduled')
           .gte('scheduled_at', from.toIso8601String())
-          .order('scheduled_at')
+          .order('scheduled_at', ascending: true)
           .limit(40);
 
       if ((data as List).isEmpty) return [];
@@ -75,7 +79,10 @@ class LiveClassService {
     final enrolled = c['current_enrolled'] as int? ?? 0;
     final max = c['max_capacity'] as int? ?? 20;
     final classId = c['id'] as String;
-    final start = DateTime.parse(c['scheduled_at'] as String);
+    // The stored instant, in the viewer's own zone: cards, the detail screen
+    // and the coach's list print its hour and day, and live/upcoming compare it
+    // with `now`.
+    final start = DateTime.parse(c['scheduled_at'] as String).toLocal();
     final mins = c['duration_minutes'] as int? ?? 60;
     final end = start.add(Duration(minutes: mins));
     final now = DateTime.now();
@@ -218,7 +225,10 @@ class LiveClassService {
       'is_online': isOnline,
       'location': isOnline ? 'Online' : location,
       'meeting_link': isOnline ? meetingLink : null,
-      'scheduled_at': scheduledAt.toIso8601String(),
+      // The instant, stated as UTC: the picker's time is local, and timestamptz
+      // reads a zoneless time as UTC — an 18:00 class in New York was stored as
+      // 13:00 there, went "Live" five hours early and showed 13:00 in What's On.
+      'scheduled_at': scheduledAt.toUtc().toIso8601String(),
       'duration_minutes': durationMinutes,
       'max_capacity': isOnline ? 9999 : maxCapacity,
       'current_enrolled': 0,
@@ -247,7 +257,8 @@ class LiveClassService {
           .select('*, public_profiles!coach_id(id, first_name, last_name, avatar_url)')
           .eq('coach_id', uid)
           .neq('status', 'cancelled')
-          .order('scheduled_at');
+          // Upcoming first, stated: a bare `order()` is descending.
+          .order('scheduled_at', ascending: true);
       return (data as List)
           .map<FitnessClass>((c) => _mapRow(Map<String, dynamic>.from(c), {}, {}))
           .toList();

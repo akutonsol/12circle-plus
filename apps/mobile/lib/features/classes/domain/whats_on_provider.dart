@@ -20,13 +20,16 @@ import 'whats_on.dart';
 /// the catch made sure nobody ever saw it.
 final whatsOnEventsProvider =
     FutureProvider<List<Map<String, dynamic>>>((ref) async {
-  final now = DateTime.now().toIso8601String();
+  // A UTC instant, as Home's Upcoming panel sends it (#89): zoneless is read as UTC.
+  final now = DateTime.now().toUtc().toIso8601String();
   final data = await Supabase.instance.client
       .from('events')
       .select()
       .eq('status', 'upcoming')
       .gte('event_date', now)
-      .order('event_date')
+      // The 30 SOONEST: a bare `order()` is descending, so the limit kept the
+      // furthest 30 and dropped this week's events (as #89 found on Home).
+      .order('event_date', ascending: true)
       .limit(30);
   return List<Map<String, dynamic>>.from(data as List);
 });
