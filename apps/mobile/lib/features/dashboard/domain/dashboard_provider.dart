@@ -1,8 +1,8 @@
+import '../../classes/domain/class_provider.dart' show refreshClassesProvider;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../data/dashboard_service.dart';
 import '../../auth/domain/auth_provider.dart';
-import '../../classes/domain/class_provider.dart' show refreshClassesProvider;
 
 final dashboardServiceProvider = Provider<DashboardService>((ref) => DashboardService());
 
