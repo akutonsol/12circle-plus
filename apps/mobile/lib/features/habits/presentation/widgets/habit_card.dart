@@ -48,11 +48,22 @@ class _HabitCardState extends ConsumerState<HabitCard> {
     final isSimple = widget.habit.targetValue == 1;
     final done = widget.habit.isCompletedToday;
 
-    void toggle() {
-      ref
+    // A write that did not save is put back by the notifier and said here,
+    // never left ticked in silence (EC-12).
+    void notSaved() {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text(
+            "Couldn't save that — check your connection and try again.")));
+    }
+
+    Future<void> toggle() async {
+      if (!done) _onComplete();
+      final ok = await ref
           .read(liveHabitNotifierProvider.notifier)
           .toggleComplete(widget.habit.id);
-      if (!done) _onComplete();
+      if (!ok) notSaved();
     }
 
     return Stack(
@@ -217,7 +228,8 @@ class _HabitCardState extends ConsumerState<HabitCard> {
                           AppAnimations.hapticLight();
                           ref
                               .read(liveHabitNotifierProvider.notifier)
-                              .updateValue(widget.habit.id, value.toInt());
+                              .updateValue(widget.habit.id, value.toInt())
+                              .then((ok) { if (!ok) notSaved(); });
                         },
                         onChangeEnd: (value) {
                           if (value >= widget.habit.targetValue) _onComplete();
