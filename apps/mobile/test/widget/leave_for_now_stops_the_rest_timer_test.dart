@@ -53,7 +53,7 @@ void main() {
   setUpAll(() async {
     await Supabase.initialize(
       url: 'http://127.0.0.1:1',
-      anonKey: 'test-anon-key',
+      publishableKey: 'test-publishable-key',
       httpClient: _EmptyClient(),
       authOptions: FlutterAuthClientOptions(
         localStorage: const EmptyLocalStorage(),
