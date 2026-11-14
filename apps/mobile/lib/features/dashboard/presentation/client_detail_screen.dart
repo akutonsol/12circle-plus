@@ -576,6 +576,24 @@ class _ClientTimeline extends StatelessWidget {
 }
 
 // ── Assessment Tab ─────────────────────────────────────────────────────────────
+/// What the Custom Price field says: blank clears the override; a number sets
+/// it; anything else is refused.
+///
+/// A typo was read as blank. `double.tryParse` answers null for "150/mo" or
+/// "1,500", null CLEARED the client's price, and the coach was told "Custom
+/// price cleared — using your standard rate." Unreadable input now changes
+/// nothing and says why.
+@visibleForTesting
+({double? price, String? error}) parseCustomPrice(String raw) {
+  final t = raw.trim();
+  if (t.isEmpty) return (price: null, error: null);
+  final v = double.tryParse(t);
+  if (v == null || v < 0) {
+    return (price: null, error: 'Enter the monthly price as a number, like 150.');
+  }
+  return (price: v, error: null);
+}
+
 /// Coach sets a custom monthly price for THIS client (overrides their global
 /// rate). Leaving it blank and saving clears the override.
 void _showCustomPriceDialog(BuildContext context, String clientId) {
@@ -611,9 +629,21 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
         ),
         TextButton(
           onPressed: () async {
-            final raw = ctrl.text.trim();
-            final value = raw.isEmpty ? null : double.tryParse(raw);
-            await CoachRelationshipService().setClientPrice(clientId, value);
+            final parsed = parseCustomPrice(ctrl.text);
+            if (parsed.error != null) {
+              ScaffoldMessenger.of(dctx).showSnackBar(SnackBar(content: Text(parsed.error!)));
+              return;
+            }
+            final value = parsed.price;
+            try {
+              await CoachRelationshipService().setClientPrice(clientId, value);
+            } catch (_) {
+              // A write that failed escaped here unhandled, with nothing said.
+              if (!dctx.mounted) return;
+              ScaffoldMessenger.of(dctx).showSnackBar(const SnackBar(
+                  content: Text("Couldn't save the price — try again.")));
+              return;
+            }
             if (!dctx.mounted) return;
             Navigator.pop(dctx);
             ScaffoldMessenger.of(dctx).showSnackBar(SnackBar(
