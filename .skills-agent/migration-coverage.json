@@ -1,14 +1,14 @@
 {
   "summary": {
-    "authored": 187,
-    "range": "000–186",
+    "authored": 193,
+    "range": "000–192",
     "planAssignedRange": "123-131",
     "planFloor": 132,
     "qaRef": "eyqtldjqpgpljlqvpowh",
     "appliedThrough": 181,
     "preProgramme": 123,
     "preAssigned": 9,
-    "outsideByRule": 55,
+    "outsideByRule": 61,
     "unexplained": 0,
     "contiguous": true,
     "allDeclared": true
@@ -1320,6 +1320,48 @@
     {
       "migration": "186",
       "file": "supabase/migrations/186_restore_program_engine_prescription.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "187",
+      "file": "supabase/migrations/187_booking_slot_integrity.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "188",
+      "file": "supabase/migrations/188_class_seat_integrity.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "189",
+      "file": "supabase/migrations/189_communication_writes_report_no_change.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "190",
+      "file": "supabase/migrations/190_pr_detection_confirmed_sets_only.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "191",
+      "file": "supabase/migrations/191_realtime_publishes_workout_set_logs.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "192",
+      "file": "supabase/migrations/192_relationship_price_and_source_server_owned.sql",
       "inManifest": true,
       "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
       "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
