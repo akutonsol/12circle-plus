@@ -24,13 +24,5 @@
     "docs/REMEDIATION_PROGRESS.md",
     "docs/adr"
   ],
-  "exceptions": [
-    "supabase/migrations/187_booking_slot_integrity.sql",
-    "supabase/migrations/188_class_seat_integrity.sql",
-    "supabase/migrations/189_communication_writes_report_no_change.sql",
-    "supabase/migrations/190_pr_detection_confirmed_sets_only.sql",
-    "supabase/migrations/191_realtime_publishes_workout_set_logs.sql",
-    "supabase/migrations/192_relationship_price_and_source_server_owned.sql",
-    "supabase/expected_applied.json"
-  ]
+  "exceptions": []
 }
