@@ -1,3 +1,4 @@
+import '../../classes/domain/class_provider.dart' show refreshClassesProvider;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../data/dashboard_service.dart';
@@ -56,6 +57,10 @@ final streakProvider = FutureProvider<int>((ref) async {
 // FURTHEST away, latest first; and a local time sent with no zone is read by
 // Postgres as UTC, which moved "now" by the UTC offset. Same for events below.
 final upcomingClassesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  // Read again when a coach creates or cancels a class (the bump Classes
+  // already follows). Nothing re-read this, so the Directory's and Activity's
+  // Upcoming kept the old five until the app restarted.
+  ref.watch(refreshClassesProvider);
   try {
     final now = DateTime.now().toUtc().toIso8601String();
     final rows = await Supabase.instance.client
