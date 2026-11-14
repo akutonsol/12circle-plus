@@ -55,7 +55,9 @@ class _MealsDashboardScreenState
     extends ConsumerState<MealsDashboardScreen> {
   late DateTime _selectedDate;
   String _mealFilter = 'breakfast';
-  int    _water      = 3;
+  // Glasses tapped on this screen. It began at 3, so every visit showed
+  // "3 / 8" glasses drunk before the member had tapped anything. Not saved.
+  int    _water      = 0;
   @override
   void initState() {
     super.initState();
