@@ -197,10 +197,14 @@ class WorkoutService {
 
   // ── History ───────────────────────────────────────────────────────────────
 
+  // These two read errors propagate (A-G5's rule, below). They answered [], so
+  // offline Workout History said "No workouts yet — complete your first
+  // workout" and an expanded session "No per-set data recorded"; the screen's
+  // "Could not load history" and "Failed to load sets" could never show.
   Future<List<Map<String, dynamic>>> getWorkoutHistory({int limit = 20}) async {
     final uid = _uid;
     if (uid == null) return [];
-    try {
+    {
       final data = await _supabase
           .from('workout_sessions')
           .select()
@@ -209,11 +213,11 @@ class WorkoutService {
           .order('completed_at', ascending: false)
           .limit(limit);
       return List<Map<String, dynamic>>.from(data as List);
-    } catch (_) { return []; }
+    }
   }
 
   Future<List<Map<String, dynamic>>> getSessionSetLogs(String sessionId) async {
-    try {
+    {
       final data = await _supabase
           .from('workout_set_logs')
           .select()
@@ -223,7 +227,7 @@ class WorkoutService {
           .order('exercise_name', ascending: true)
           .order('set_number', ascending: true);
       return List<Map<String, dynamic>>.from(data as List);
-    } catch (_) { return []; }
+    }
   }
 
   // ── Progression data for a single exercise ────────────────────────────────
