@@ -63,8 +63,7 @@ final insightsProvider = FutureProvider.autoDispose<InsightsData>((ref) async {
         .eq('user_id', uid)
         .gte('score_date', weekAgo.toIso8601String().split('T')[0])
         // Oldest first, stated: postgrest-dart orders DESCENDING when
-        // `ascending` is omitted. `last7` is drawn left to right, and the
-        // fallback below takes `rows.last` as the most recent day.
+        // `ascending` is omitted. `last7` is drawn left to right.
         .order('score_date', ascending: true);
     final rows = List<Map<String, dynamic>>.from(scores);
 
@@ -76,8 +75,11 @@ final insightsProvider = FutureProvider.autoDispose<InsightsData>((ref) async {
     final todayScore = todayRow.isNotEmpty ? t(todayRow.first, 'total_score') : 0;
     final trend = weekAvg == 0 ? 0.0 : ((todayScore - weekAvg) / weekAvg) * 100;
 
-    // Today's category breakdown (fallback to most recent row).
-    final ref0 = todayRow.isNotEmpty ? todayRow.first : (rows.isNotEmpty ? rows.last : <String, dynamic>{});
+    // Today's category breakdown — today's only. It fell back to the most
+    // recent row, so on a day with no points yet "Today's Breakdown" showed an
+    // earlier day's (Monday's "Workout 30/30" on a Thursday) beneath a ring
+    // that, rightly, said today was 0.
+    final ref0 = todayRow.isNotEmpty ? todayRow.first : const <String, dynamic>{};
 
     final checkin = await db
         .from('weekly_checkins')
