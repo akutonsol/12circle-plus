@@ -33,7 +33,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
           .from('coach_availability')
           .select()
           .eq('coach_id', uid!)
-          .gte('slot_time', DateTime.now().toIso8601String())
+          .gte('slot_time', DateTime.now().toUtc().toIso8601String())
           // Soonest first, stated: postgrest-dart orders DESCENDING when
           // `ascending` is omitted, which listed these furthest first.
           .order('slot_time', ascending: true);
@@ -46,7 +46,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
               'client:client_id(first_name, last_name, avatar_url)')
           .eq('coach_id', uid)
           .eq('status', 'scheduled')
-          .gte('scheduled_at', DateTime.now().toIso8601String())
+          .gte('scheduled_at', DateTime.now().toUtc().toIso8601String())
           .order('scheduled_at', ascending: true);
 
       if (!mounted) return;
