@@ -126,13 +126,14 @@ class _NotesSheetState extends ConsumerState<_NotesSheet> {
                         // said (and `ref` was used after the sheet might have
                         // closed); save and read already report (#78).
                         onDelete: () async {
+                          final messenger = ScaffoldMessenger.of(context);
                           try {
                             await ref
                                 .read(coachNoteServiceProvider)
                                 .deleteNote(notes[i].id);
                           } catch (_) {
                             if (!mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                            messenger.showSnackBar(const SnackBar(
                                 content: Text("Couldn't delete the note — try again.")));
                             return;
                           }
