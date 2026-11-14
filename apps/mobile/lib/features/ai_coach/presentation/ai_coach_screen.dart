@@ -949,12 +949,13 @@ class _CoachPersonaCardState extends State<_CoachPersonaCard> {
     if (mounted) setState(() { _style = (p['style']?.toString() ?? 'motivational'); _loading = false; });
   }
   Future<void> _select(String style, String tone) async {
+    final previous = _style;
     setState(() => _style = style);
-    await _svc.setPersona(style: style, tone: tone);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Coach style updated — your next brief will match.')));
-    }
+    final r = await changeCoachStyle(_svc, style: style, tone: tone);
+    if (!mounted) return;
+    // A style that was not saved is not shown as chosen.
+    if (!r.saved) setState(() => _style = previous);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(r.message)));
   }
 
   @override
@@ -1108,5 +1109,22 @@ class _AddMemoryDialogState extends State<_AddMemoryDialog> {
         },
         child: const Text('Save', style: TextStyle(color: _pri, fontWeight: FontWeight.w700))),
     ],
+  );
+}
+
+/// Saves the AI coach's style and says what happened.
+///
+/// `setPersona` answers false when the write fails, and this ignored it: the
+/// new style stayed highlighted and the member was told "Coach style updated —
+/// your next brief will match" for a style that was never saved.
+@visibleForTesting
+Future<({bool saved, String message})> changeCoachStyle(AICoachService svc,
+    {required String style, required String tone}) async {
+  final saved = await svc.setPersona(style: style, tone: tone);
+  return (
+    saved: saved,
+    message: saved
+        ? 'Coach style updated — your next brief will match.'
+        : "Couldn't change the coach style — try again.",
   );
 }
