@@ -5,6 +5,7 @@ import '../../coach/domain/coach_ecosystem_provider.dart'
 import '../../scoring/domain/score_provider.dart' show cycleScoreOf, myScoreProvider;
 import '../../workout/domain/workout_provider.dart'
     show currentStreakProvider, weeklyWorkoutCountProvider, assignedWorkoutsProvider;
+import '../../workout/domain/plan_summary.dart' show todaysSession;
 
 /// AI-Guided coaching content, derived from the client's real activity data
 /// (score breakdown, streak, weekly history, assigned plan). This is the
@@ -27,7 +28,11 @@ final aiDailySuggestionsProvider = Provider<List<AiSuggestion>>((ref) {
   final habits    = (score['habits_points']    as int?) ?? 0;
   final streak    = ref.watch(currentStreakProvider).valueOrNull ?? 0;
   final assigned  = ref.watch(assignedWorkoutsProvider).valueOrNull ?? const [];
-  final todayTitle = assigned.isNotEmpty ? assigned.first.title : null;
+  // Today's session by Home's own rule (`todaysSession`: scheduled for today
+  // and not yet done). This took the plan's first workout, so on a Wednesday
+  // Home said "Lower Body" while the briefing said "Upper Body" — and it named
+  // a workout on rest days and after the day's session was finished.
+  final todayTitle = todaysSession(assigned)?.title;
 
   final out = <AiSuggestion>[];
   if (streak >= 3) {
