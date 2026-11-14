@@ -23,9 +23,12 @@ final liveHabitsProvider = FutureProvider<List<Habit>>((ref) async {
   final streaks = results[2] as Map<String, int>;
   final logMap  = {for (final l in logs) l['habit_id'] as String: l};
 
-  if (raw.isEmpty) {
-    return HabitService().getDefaultHabits();
-  }
+  // No habits is no habits. This returned `getDefaultHabits()` — eight sample
+  // habits with invented streaks (7, 4, 12…), "Supplements" already done today
+  // and ids '1'–'8' that are not rows — so a client with none was shown a week
+  // of progress they never made, the Habits screen's "No habits yet" state could
+  // never appear, and reminders were scheduled for habits that do not exist.
+  if (raw.isEmpty) return const [];
 
   return raw.map((h) {
     final id = h['id'] as String;
@@ -83,7 +86,8 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
 
       List<Habit> habits;
       if (raw.isEmpty) {
-        habits = HabitService().getDefaultHabits();
+        // None assigned or added: the screen says so (see liveHabitsProvider).
+        habits = const [];
       } else {
         habits = raw.map((h) {
           final id = h['id'] as String;
@@ -210,7 +214,8 @@ final liveHabitNotifierProvider = StateNotifierProvider<LiveHabitNotifier, Async
 
 // Backwards-compat shim for screens that watch habitNotifierProvider
 final habitNotifierProvider = Provider<List<Habit>>((ref) {
-  return ref.watch(liveHabitNotifierProvider).valueOrNull ?? HabitService().getDefaultHabits();
+  // Nothing known yet is nothing — never the sample habits' invented streaks.
+  return ref.watch(liveHabitNotifierProvider).valueOrNull ?? const [];
 });
 
 final adherenceScoreProvider = Provider<double>((ref) {
