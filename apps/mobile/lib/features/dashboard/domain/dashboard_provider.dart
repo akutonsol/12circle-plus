@@ -12,8 +12,17 @@ final dashboardDataProvider = FutureProvider<Map<String, dynamic>>((ref) async {
   return service.getDashboardData();
 });
 
-final waterIntakeProvider = StateProvider<int>((ref) => 0);
-final stepsProvider = StateProvider<int>((ref) => 6240);
+/// Glasses tapped today on this device, for whoever is signed in now. It did
+/// not watch the user, so a second account on the same device started with the
+/// first one's glasses.
+final waterIntakeProvider = StateProvider<int>((ref) {
+  ref.watch(currentUserProvider);
+  return 0;
+});
+
+/// Steps today — unknown: nothing in the app counts steps. This was a constant
+/// 6240, shown to every member as their own steps with a 62% bar.
+final stepsProvider = StateProvider<int?>((ref) => null);
 
 // ── Streak (consecutive active days from daily_scores) ────────────────────────
 final streakProvider = FutureProvider<int>((ref) async {

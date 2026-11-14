@@ -509,14 +509,14 @@ class _StepsCard extends ConsumerWidget {
             color: _C.teal.withValues(alpha: 0.15)),
           child: const Icon(Icons.directions_walk_rounded, color: _C.teal, size: 18)),
         const SizedBox(height: 10),
-        Text('$steps',
+        Text(steps == null ? '—' : '$steps',
           style: const TextStyle(color: _C.onSurface, fontSize: 24, fontWeight: FontWeight.w800, height: 1)),
         Text('steps', style: TextStyle(color: _C.teal.withValues(alpha: 0.8), fontSize: 12)),
         const SizedBox(height: 6),
         ClipRRect(
           borderRadius: BorderRadius.circular(3),
           child: LinearProgressIndicator(
-            value: (steps / 10000).clamp(0.0, 1.0),
+            value: ((steps ?? 0) / 10000).clamp(0.0, 1.0),
             minHeight: 4,
             backgroundColor: Colors.white.withValues(alpha: 0.07),
             valueColor: const AlwaysStoppedAnimation<Color>(_C.teal))),
