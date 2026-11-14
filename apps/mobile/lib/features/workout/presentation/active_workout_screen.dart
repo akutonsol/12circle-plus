@@ -1702,6 +1702,11 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// Resume banner offers it and the stored cursor puts the client back on the
   /// set they left.
   void _leaveForNow() {
+    // Leaving is not training, as pausing is not (FIT-002): stop the rest
+    // countdown. `restTimerProvider` is app-wide, so a rest left running sounded
+    // the overtime alarm on return, took 5 points and then 5 every 20 seconds,
+    // and booked the whole absence as rest overrun.
+    _dismissRest();
     final sid = _sessionId;
     if (sid != null) {
       // Fire-and-forget: the elapsed clock is a convenience, and losing it must
