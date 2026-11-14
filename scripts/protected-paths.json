@@ -24,8 +24,5 @@
     "docs/REMEDIATION_PROGRESS.md",
     "docs/adr"
   ],
-  "exceptions": [
-    "supabase/migrations/188_class_seat_integrity.sql",
-    "supabase/expected_applied.json"
-  ]
+  "exceptions": []
 }
