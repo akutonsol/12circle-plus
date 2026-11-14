@@ -179,6 +179,8 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
 
   bool _showRpeFor(String name) => _showRpe[name] ?? true;
 
+  AppLifecycleListener? _lifecycle;
+
   @override
   void initState() {
     super.initState();
@@ -186,7 +188,19 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_paused) return;
       setState(() => _elapsedSeconds++);
+      // A checkpoint every 30 s of training. Elapsed time was saved only on
+      // pause, Leave For Now and dispose, so a browser refresh or an app kill
+      // (neither runs dispose) restored the clock to 0: 40 minutes in, the
+      // session resumed at 0:00 and the finished workout recorded only the
+      // time after the refresh — duration, minutes and calories alike.
+      if (_elapsedSeconds % 30 == 0) _saveElapsed();
     });
+    // And whenever the app goes to the background, which is often the last
+    // chance before the OS kills it.
+    _lifecycle = AppLifecycleListener(
+      onHide: () => _saveElapsed(),
+      onPause: () => _saveElapsed(),
+    );
     _startSession();
     _loadExerciseMeta();
     // The warm-up prompt is raised by _startSession once the session is known:
@@ -642,6 +656,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   @override
   void dispose() {
     _timer?.cancel();
+    _lifecycle?.dispose();
     _scrollController.dispose();
     _saveElapsed(); // persist elapsed time so resume can restore it
     super.dispose();
