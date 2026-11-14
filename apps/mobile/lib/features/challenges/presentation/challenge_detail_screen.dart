@@ -196,10 +196,21 @@ class ChallengeDetailScreen extends ConsumerWidget {
                   const SizedBox(height: 24),
                   if (!challenge.isJoined && challenge.status != ChallengeStatus.completed)
                     ElevatedButton(
-                      onPressed: () {
-                        ref.read(challengeNotifierProvider.notifier).joinChallenge(challenge.id);
-                        AppAnimations.hapticSuccess();
-                        context.pop();
+                      // The join's result decides, as on the challenge card:
+                      // it was ignored, so a join that failed still played the
+                      // success haptic and closed the screen as if it had worked.
+                      onPressed: () async {
+                        final ok = await ref
+                            .read(challengeNotifierProvider.notifier)
+                            .joinChallenge(challenge.id);
+                        if (!context.mounted) return;
+                        if (ok) {
+                          AppAnimations.hapticSuccess();
+                          context.pop();
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                              content: Text('Unable to join — please try again.')));
+                        }
                       },
                       child: const Text('Join Challenge'),
                     ).animate(delay: 700.ms).fadeIn(duration: 400.ms),
