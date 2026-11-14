@@ -4,6 +4,7 @@ import 'package:circle_fitness/features/workout/data/models/workout_model.dart';
 import 'package:circle_fitness/features/workout/data/workout_session_store.dart';
 import 'package:circle_fitness/features/workout/domain/workout_provider.dart';
 import 'package:circle_fitness/features/workout/domain/workout_session_manager.dart';
+import 'package:circle_fitness/features/workout/presentation/zone_entry.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

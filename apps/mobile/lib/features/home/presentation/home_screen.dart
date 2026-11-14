@@ -19,6 +19,7 @@ import '../../ai_coach/presentation/ai_briefing_sheet.dart';
 import '../../../core/widgets/app_top_nav.dart';
 import '../../../core/widgets/blood_drop.dart';
 import '../domain/home_session_card.dart';
+import '../../workout/presentation/zone_entry.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 class _C {

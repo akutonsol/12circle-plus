@@ -7,6 +7,7 @@ import '../../auth/domain/auth_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../dashboard/domain/dashboard_provider.dart';
 import '../../workout/domain/workout_provider.dart';
+import '../../workout/presentation/zone_entry.dart';
 
 // ── Colors (matches Stitch design system) ────────────────────────────────────
 class _C {

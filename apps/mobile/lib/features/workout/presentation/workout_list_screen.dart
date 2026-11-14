@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../../shared/widgets/app_scaffold.dart';
 import '../data/models/workout_model.dart';
 import '../domain/workout_provider.dart';
+import 'zone_entry.dart';
 
 class _C {
   static const surfaceContainer    = Color(0xFF201F20);
