@@ -60,7 +60,11 @@ class NutritionService {
       'fat': fat,
       'amount_g': servingSize,
       'serving_unit': servingUnit,
-      'logged_at': DateTime.now().toIso8601String(),
+      // The instant, stated as UTC. `logged_at` is timestamptz, which reads a
+      // time with no zone as UTC: local wall time written that way recorded the
+      // wrong moment, and every reader that converts it back (`mealTime`, the
+      // weekly bars, check-in compliance) showed it shifted by the user's offset.
+      'logged_at': DateTime.now().toUtc().toIso8601String(),
     });
     // 12 Circle Score: +5 for the meal log, then re-check goal/day bonuses.
     await ScoreEngine().mealLogged(DateTime.now().microsecondsSinceEpoch.toString());
@@ -106,6 +110,9 @@ class NutritionService {
   // which is "nothing logged today": FIT-022's failure state on the meals
   // dashboard could never be shown, and a client who had logged three meals
   // saw 0 kcal and "+ Log a meal" — and may well have logged them again.
+  //
+  // The day is the user's own: local midnight to local midnight, sent as the UTC
+  // instants they are. A zoneless local string is read by Postgres as UTC.
   Future<Map<String, double>> getTodayTotals() async {
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) return {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0};
@@ -117,8 +124,8 @@ class NutritionService {
           .from('nutrition_logs')
           .select()
           .eq('user_id', userId)
-          .gte('logged_at', start.toIso8601String())
-          .lt('logged_at', end.toIso8601String());
+          .gte('logged_at', start.toUtc().toIso8601String())
+          .lt('logged_at', end.toUtc().toIso8601String());
       double calories = 0, protein = 0, carbs = 0, fat = 0;
       for (final row in (data as List)) {
         calories += (row['calories'] as num?)?.toDouble() ?? 0;
@@ -140,8 +147,8 @@ class NutritionService {
           .from('nutrition_logs')
           .select()
           .eq('user_id', userId)
-          .gte('logged_at', start.toIso8601String())
-          .lt('logged_at', end.toIso8601String())
+          .gte('logged_at', start.toUtc().toIso8601String())
+          .lt('logged_at', end.toUtc().toIso8601String())
           .order('logged_at', ascending: true);
       return List<Map<String, dynamic>>.from(data);
     }
@@ -158,8 +165,8 @@ class NutritionService {
           .from('nutrition_logs')
           .select()
           .eq('user_id', userId)
-          .gte('logged_at', start.toIso8601String())
-          .lt('logged_at', end.toIso8601String())
+          .gte('logged_at', start.toUtc().toIso8601String())
+          .lt('logged_at', end.toUtc().toIso8601String())
           .order('logged_at', ascending: true);
       return List<Map<String, dynamic>>.from(data);
     }
