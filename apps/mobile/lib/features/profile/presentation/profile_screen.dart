@@ -918,7 +918,7 @@ class MyCoachSection extends ConsumerWidget {
             'cancelled_by':        'client',
             'cancel_reason':       selectedReason,
             'cancel_reason_custom': customCtrl.text.trim().isEmpty ? null : customCtrl.text.trim(),
-            'cancelled_at':        DateTime.now().toIso8601String(),
+            'cancelled_at':        DateTime.now().toUtc().toIso8601String(),
           })
           .eq('client_id', clientId)
           .eq('coach_id', coachId)

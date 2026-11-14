@@ -26,7 +26,7 @@ class CoachRelationshipService {
       'status': 'pending',
       'initiated_by': 'client',
       'request_message': message,
-      'pending_at': DateTime.now().toIso8601String(),
+      'pending_at': DateTime.now().toUtc().toIso8601String(),
     }, onConflict: 'client_id,coach_id');
     // Notify coach
     // Best-effort, and reported: the change above is saved, and a failed
@@ -59,8 +59,8 @@ class CoachRelationshipService {
   Future<void> approveRequest(String relationshipId, String clientId) async {
     final rows = await _db.from('coach_client_relationships').update({
       'status': 'active',
-      'activated_at': DateTime.now().toIso8601String(),
-    }).eq('id', relationshipId).select('id');
+      'activated_at': DateTime.now().toUtc().toIso8601String(),
+    }).eq('id', relationshipId).eq('status', 'pending').select('id');
     _requireAnswered(rows);
     // Notify client
     // Best-effort, and reported: the change above is saved, and a failed
@@ -82,7 +82,7 @@ class CoachRelationshipService {
   Future<void> declineRequest(String relationshipId, String clientId) async {
     final rows = await _db.from('coach_client_relationships').update({
       'status': 'rejected',
-    }).eq('id', relationshipId).select('id');
+    }).eq('id', relationshipId).eq('status', 'pending').select('id');
     _requireAnswered(rows);
     // Best-effort, and reported: the change above is saved, and a failed
     // notification thrown from here read as a failed save (N3).
@@ -146,7 +146,7 @@ class CoachRelationshipService {
       'cancelled_by': 'client',
       'cancel_reason': reason,
       'cancel_reason_custom': customReason,
-      'cancelled_at': DateTime.now().toIso8601String(),
+      'cancelled_at': DateTime.now().toUtc().toIso8601String(),
     }).eq('client_id', clientId).eq('coach_id', coachId).eq('status', 'active');
     // Notify the coach that the client has ended the relationship.
     // Best-effort, and reported: the change above is saved, and a failed
