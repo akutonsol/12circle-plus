@@ -300,7 +300,7 @@ class DashboardScreen extends ConsumerWidget {
     final steps = ref.watch(stepsProvider);
 
     final items = [
-      _M('STEPS',   '6,240',    '62%', ' of 10k', steps/10000.0, _S.primaryCont, Icons.bolt),
+      _M('STEPS',   steps == null ? '—' : '$steps', '', ' of 10k', (steps ?? 0)/10000.0, _S.primaryCont, Icons.bolt),
       _M('WATER',   '$water/8', '50%', '',         water/8.0,    _S.secondary,   Icons.water_drop),
       _M('PROTEIN', '85g',      '71%', ' of goal', 0.71,         _S.primary,     Icons.restaurant_outlined),
       _M('SLEEP',   '7.4h',     'Good','',          0.92,         Color(0xFFfbbf24), Icons.bedtime_outlined),
