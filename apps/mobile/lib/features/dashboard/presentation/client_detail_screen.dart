@@ -660,6 +660,20 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
 
 /// Coach insight: the client's chosen training days + time (from onboarding,
 /// confirmed when they picked a package).
+/// What a card says instead of its data when it has none to show yet: '…'
+/// while the first read is in flight, [failed] when it could not be read, and
+/// null once there is an answer (which may itself be "nothing").
+///
+/// The schedule and score cards used `valueOrNull`, which is null in all three
+/// cases, so a failed read showed "Client hasn't set a schedule yet." and
+/// "0 · 0 · Lvl 1 Bronze" as if they were the client's.
+@visibleForTesting
+String? unreadNote(AsyncValue<Object?> v, {required String failed}) {
+  if (v.hasValue) return null;
+  if (v.hasError) return failed;
+  return '…';
+}
+
 class _ClientScheduleCard extends ConsumerWidget {
   final String clientId;
   const _ClientScheduleCard({required this.clientId});
@@ -675,6 +689,7 @@ class _ClientScheduleCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final schedAsync = ref.watch(clientScheduleProvider(clientId));
     final sched = schedAsync.valueOrNull;
+    final unread = unreadNote(schedAsync, failed: "Couldn't load the schedule.");
     final dayKeys = (sched?['days'] as List?)?.map((d) => '$d').toList() ?? [];
     final time = sched?['session_time'] as String?;
     final dayTimes = (sched?['day_times'] as Map?) ?? {};
@@ -685,7 +700,9 @@ class _ClientScheduleCard extends ConsumerWidget {
       const Text('TRAINING SCHEDULE',
           style: TextStyle(color: _mut, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1)),
       const SizedBox(height: 10),
-      if (sched == null)
+      if (unread != null)
+        Text(unread, style: const TextStyle(color: _mut, fontSize: 13))
+      else if (sched == null)
         const Text('Client hasn’t set a schedule yet.', style: TextStyle(color: _mut, fontSize: 13))
       else ...[
         // Each training day with its own time (falls back to the default time).
@@ -1410,18 +1427,22 @@ class _ClientScoreCard extends ConsumerWidget {
   const _ClientScoreCard({required this.clientId});
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final s = ref.watch(clientScoreProvider(clientId)).valueOrNull;
-    final cycle = (s?['current_cycle_score'] as num?)?.toInt() ?? 0;
-    final lifetime = (s?['lifetime_score'] as num?)?.toInt() ?? 0;
-    final level = (s?['level'] as num?)?.toInt() ?? 1;
-    final rank = s?['rank'] as String? ?? 'Bronze';
+    final async = ref.watch(clientScoreProvider(clientId));
+    final s = async.valueOrNull;
+    // Not read yet, or not readable: no figure. `valueOrNull` made both read
+    // "0 · 0 · Lvl 1 Bronze" — a client's real score shown as a beginner's.
+    final known = unreadNote(async, failed: '') == null;
+    final cycle = known ? '${(s?['current_cycle_score'] as num?)?.toInt() ?? 0}' : '—';
+    final lifetime = known ? '${(s?['lifetime_score'] as num?)?.toInt() ?? 0}' : '—';
+    final level = known ? 'Lvl ${(s?['level'] as num?)?.toInt() ?? 1}' : '—';
+    final rank = known ? (s?['rank'] as String? ?? 'Bronze') : 'Level';
     return _cardBox(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Text('12 CIRCLE SCORE', style: TextStyle(color: _mut, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1)),
       const SizedBox(height: 10),
       Row(children: [
-        _scoreCell('$cycle', 'This month', _tert),
-        _scoreCell('$lifetime', 'Lifetime', _pri),
-        _scoreCell('Lvl $level', rank, _brand),
+        _scoreCell(cycle, 'This month', _tert),
+        _scoreCell(lifetime, 'Lifetime', _pri),
+        _scoreCell(level, rank, _brand),
       ]),
     ]));
   }
