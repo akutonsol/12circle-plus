@@ -233,6 +233,10 @@ class WorkoutService {
   // ── Progression data for a single exercise ────────────────────────────────
 
   /// Returns list of {date, max_weight, total_volume, sets_count} sorted by date asc.
+  // Records, progression, volume and the logged-exercise list count only sets
+  // the client CONFIRMED (`completed`, 104). Editing a set writes a row with
+  // `completed: false` — an empty weight is filled with the prescribed load —
+  // so a 140 kg deadlift typed into and never done showed as a 140 kg PR.
   Future<List<Map<String, dynamic>>> getExerciseProgression(String exerciseName) async {
     final uid = _uid;
     if (uid == null) return [];
@@ -241,6 +245,7 @@ class WorkoutService {
           .from('workout_set_logs')
           .select('weight_kg, reps, logged_at')
           .eq('user_id', uid)
+          .eq('completed', true)
           .eq('exercise_name', exerciseName)
           // Explicit direction — the default is descending. The rows are
           // regrouped by date and re-sorted below, so this only makes the
@@ -271,7 +276,8 @@ class WorkoutService {
       final rows = await _supabase
           .from('workout_set_logs')
           .select('exercise_name')
-          .eq('user_id', uid);
+          .eq('user_id', uid)
+          .eq('completed', true);
       final names = (rows as List).map((r) => r['exercise_name'] as String? ?? '').toSet().toList();
       names.sort();
       return names;
@@ -362,6 +368,7 @@ class WorkoutService {
           .from('workout_set_logs')
           .select('exercise_name, weight_kg, reps')
           .eq('user_id', uid)
+          .eq('completed', true)
           .gt('weight_kg', 0);
       final rows = List<Map<String, dynamic>>.from(data as List);
       final prs = <String, Map<String, dynamic>>{};
@@ -383,7 +390,8 @@ class WorkoutService {
     final data = await _supabase
         .from('workout_set_logs')
         .select('weight_kg, reps')
-        .eq('user_id', uid);
+        .eq('user_id', uid)
+        .eq('completed', true);
     double total = 0;
     for (final row in (data as List)) {
       total += ((row['weight_kg'] as num?)?.toDouble() ?? 0) * ((row['reps'] as int?) ?? 0);
@@ -411,6 +419,7 @@ class WorkoutService {
           .from('workout_set_logs')
           .select('exercise_name, weight_kg, reps')
           .eq('user_id', clientId)
+          .eq('completed', true)
           .gt('weight_kg', 0);
       final rows = List<Map<String, dynamic>>.from(data as List);
       final prs = <String, Map<String, dynamic>>{};
