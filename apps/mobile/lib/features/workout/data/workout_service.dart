@@ -3,6 +3,7 @@ import 'models/exercise_model.dart';
 import 'models/workout_model.dart';
 import 'models/workout_log_model.dart';
 import '../../dashboard/domain/workout_streak.dart';
+import '../domain/workout_day.dart';
 
 class WorkoutService {
   // Resolved on use, not in the constructor: the sample workout/exercise
@@ -253,7 +254,10 @@ class WorkoutService {
           .order('logged_at', ascending: true);
       final grouped = <String, Map<String, dynamic>>{};
       for (final row in (rows as List)) {
-        final date = (row['logged_at'] as String).substring(0, 10);
+        // The member's own day (#81's rule): the first ten characters are the
+        // UTC date, so an evening session in New York was plotted on tomorrow
+        // and one that crossed UTC midnight became two points.
+        final date = localWorkoutDate(row['logged_at'] as String);
         final weight = (row['weight_kg'] as num?)?.toDouble() ?? 0.0;
         final reps = (row['reps'] as int?) ?? 0;
         if (!grouped.containsKey(date)) {
