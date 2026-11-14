@@ -553,12 +553,9 @@ class _PanelScoreSection extends StatelessWidget {
               child: Text('$total',
                 style: const TextStyle(color: Colors.white,
                   fontSize: 52, fontWeight: FontWeight.w900, height: 1.0))),
-            Row(mainAxisSize: MainAxisSize.min, children: const [
-              Icon(Icons.trending_up_rounded, color: Color(0xFF6FFBBE), size: 14),
-              SizedBox(width: 2),
-              Text('+4%', style: TextStyle(color: Color(0xFF6FFBBE),
-                fontSize: 11, fontWeight: FontWeight.w700)),
-            ]),
+            // No trend line. This drew a constant "+4%" (rising, green) under
+            // every member's score — the same figure for everyone, measured
+            // from nothing. A trend belongs here only once one is computed.
           ]),
           _RingDot(progress: total / 100.0),
         ])),
