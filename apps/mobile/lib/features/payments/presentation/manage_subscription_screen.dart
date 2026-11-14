@@ -305,6 +305,15 @@ class _ManageSubscriptionScreenState
   }
 }
 
+/// "Renews m/d/yyyy" on the member's own day. `current_period_end` is a UTC
+/// instant and was printed as parsed — the UTC date, a day late for a US
+/// evening renewal.
+@visibleForTesting
+String renewsLabel(String? periodEnd) {
+  final d = DateTime.tryParse(periodEnd ?? '')?.toLocal();
+  return d == null ? 'Active' : 'Renews ${d.month}/${d.day}/${d.year}';
+}
+
 class _SubRow extends StatelessWidget {
   final Map<String, dynamic> sub;
   final VoidCallback onCancel;
@@ -312,7 +321,6 @@ class _SubRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final renews = DateTime.tryParse(sub['current_period_end'] as String? ?? '');
     final cancel = sub['cancel_at_period_end'] == true;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -338,11 +346,7 @@ class _SubRow extends StatelessWidget {
                             fontWeight: FontWeight.w700)),
                     const SizedBox(height: 2),
                     Text(
-                      cancel
-                          ? 'Cancels at period end'
-                          : renews != null
-                              ? 'Renews ${renews.month}/${renews.day}/${renews.year}'
-                              : 'Active',
+                      cancel ? 'Cancels at period end' : renewsLabel(sub['current_period_end'] as String?),
                       style: const TextStyle(color: _muted, fontSize: 12),
                     ),
                   ],
