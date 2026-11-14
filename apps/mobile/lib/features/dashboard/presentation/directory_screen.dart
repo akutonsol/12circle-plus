@@ -7,6 +7,7 @@ import '../../auth/domain/auth_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../dashboard/domain/dashboard_provider.dart';
 import '../../workout/domain/workout_provider.dart';
+import '../../workout/presentation/zone_entry.dart';
 
 // ── Colors (matches Stitch design system) ────────────────────────────────────
 class _C {
@@ -476,9 +477,10 @@ class _FeaturedCard extends ConsumerWidget {
       btnLabel = 'Start Workout';
     }
 
-    void onAction() {
+    Future<void> onAction() async {
       if (inProgress != null) {
-        ref.read(selectedWorkoutProvider.notifier).state = inProgress;
+        await selectWorkoutForZone(ref, inProgress);
+        if (!context.mounted) return;
         context.go('/active-workout');
       } else {
         context.go('/workouts');

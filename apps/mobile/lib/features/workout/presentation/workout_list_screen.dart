@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../../shared/widgets/app_scaffold.dart';
 import '../data/models/workout_model.dart';
 import '../domain/workout_provider.dart';
+import 'zone_entry.dart';
 
 class _C {
   static const surfaceContainer    = Color(0xFF201F20);
@@ -140,8 +141,9 @@ class _WorkoutListScreenState extends ConsumerState<WorkoutListScreen> {
     super.dispose();
   }
 
-  void _startWorkout(Workout workout) {
-    ref.read(selectedWorkoutProvider.notifier).state = workout;
+  Future<void> _startWorkout(Workout workout) async {
+    await selectWorkoutForZone(ref, workout);
+    if (!mounted) return;
     context.go('/active-workout');
   }
 
