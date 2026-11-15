@@ -4180,7 +4180,7 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
               'client_id':     uid,
               'status':        'active',
               'initiated_by':  'client',
-              'activated_at':  DateTime.now().toIso8601String(),
+              'activated_at':  DateTime.now().toUtc().toIso8601String(),
             }, onConflict: 'coach_id,client_id');
         // Intake yields a single coach: cancel any other active relationship
         // (e.g. a coach picked earlier then changed) so re-selecting replaces
@@ -4191,7 +4191,7 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
               'status':       'cancelled',
               'cancelled_by': 'client',
               'cancel_reason': 'switched_during_intake',
-              'cancelled_at': DateTime.now().toIso8601String(),
+              'cancelled_at': DateTime.now().toUtc().toIso8601String(),
             })
             .eq('client_id', uid)
             .eq('status', 'active')
