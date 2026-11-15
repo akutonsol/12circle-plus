@@ -22,7 +22,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 // The member logged 135 and was shown a different number in a different unit.
 
 /// A set the member entered as 135 lb, as the workout screen stores it.
-const _135lbInKg = 135 * kgPerLb; // 61.23496995
+const entered135lbInKg = 135 * kgPerLb; // 61.23496995
 
 class _Server extends http.BaseClient {
   @override
@@ -34,7 +34,7 @@ class _Server extends http.BaseClient {
               'session_id': 's1',
               'exercise_name': 'Bench Press',
               'set_number': 1,
-              'weight_kg': _135lbInKg,
+              'weight_kg': entered135lbInKg,
               'reps': 8,
               'completed': true,
             },
@@ -77,11 +77,11 @@ void main() {
 
   group('formatLoad', () {
     test('a load entered in lb comes back as entered', () {
-      expect(formatLoad(_135lbInKg, metric: false), '135 lb');
+      expect(formatLoad(entered135lbInKg, metric: false), '135 lb');
       expect(formatLoad(100, metric: false), '220.5 lb');
     });
     test('metric shows kg rounded to 0.1, without a trailing .0', () {
-      expect(formatLoad(_135lbInKg, metric: true), '61.2 kg');
+      expect(formatLoad(entered135lbInKg, metric: true), '61.2 kg');
       expect(formatLoad(100, metric: true), '100 kg');
       expect(formatLoad(62.5, metric: true), '62.5 kg');
     });
