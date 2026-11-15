@@ -241,6 +241,12 @@ class _ExerciseDatabaseScreenState extends ConsumerState<ExerciseDatabaseScreen>
                       style: TextStyle(color: _C.primary, fontSize: 11,
                         fontWeight: FontWeight.w700))),
               ]),
+              // Your exercises / published exercises could not be read: say so,
+              // rather than showing the built-in library as if it were all.
+              if (myAsync.hasError || globalAsync.hasError) ...[
+                const SizedBox(height: 8),
+                ExerciseListsLoadFailed(onRetry: () => refreshExerciseLists(ref.invalidate)),
+              ],
             ])),
 
           // ── Grid ──────────────────────────────────────────────────────────
@@ -492,4 +498,21 @@ class _NoImage extends StatelessWidget {
     child: const Center(
       child: Icon(Icons.fitness_center_outlined,
         color: Color(0xFF4B444F), size: 32)));
+}
+
+/// Shown when the coach's own or the published exercises could not be read:
+/// the list below then holds only the built-in library.
+class ExerciseListsLoadFailed extends StatelessWidget {
+  const ExerciseListsLoadFailed({super.key, required this.onRetry});
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        const Icon(Icons.cloud_off_rounded, color: Color(0xFFFFB4AB), size: 16),
+        const SizedBox(width: 6),
+        const Expanded(
+          child: Text("Couldn't load your and the published exercises — showing the built-in library only.",
+            style: TextStyle(color: Color(0xFFFFB4AB), fontSize: 12))),
+        TextButton(onPressed: onRetry, child: const Text('Try again')),
+      ]);
 }

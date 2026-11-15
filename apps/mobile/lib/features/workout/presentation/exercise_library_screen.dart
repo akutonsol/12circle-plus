@@ -7,6 +7,7 @@ import '../../exercise_database/domain/exercise_database_provider.dart';
 import '../../exercise_database/domain/custom_exercise_provider.dart';
 import '../../exercise_database/data/exercise_database_service.dart';
 import '../../exercise_database/data/models/exercise_detail_model.dart';
+import '../../exercise_database/presentation/exercise_database_screen.dart' show ExerciseListsLoadFailed;
 
 class _C {
   static const bg                   = Color(0xFF0E0E0F);
@@ -72,8 +73,8 @@ class _ExerciseLibraryScreenState extends ConsumerState<ExerciseLibraryScreen> {
     // Static library + global-approved custom exercises (so coach-published
     // exercises show up for clients). Dedup by id.
     final builtIn = _service.getAllExercises();
-    final globalCustom =
-        ref.watch(globalApprovedExercisesProvider).whenOrNull(data: (d) => d) ?? [];
+    final globalAsync = ref.watch(globalApprovedExercisesProvider);
+    final globalCustom = globalAsync.whenOrNull(data: (d) => d) ?? [];
     final seen = <String>{};
     final allExercises = <ExerciseDetail>[];
     for (final ex in [...globalCustom, ...builtIn]) {
@@ -91,6 +92,13 @@ class _ExerciseLibraryScreenState extends ConsumerState<ExerciseLibraryScreen> {
     return AppScaffold(
       showBackButton: true,
       body: Column(children: [
+        // Coach-published exercises could not be read: the list below is the
+        // built-in library only, and it says so.
+        if (globalAsync.hasError)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+            child: ExerciseListsLoadFailed(
+              onRetry: () => ref.invalidate(globalApprovedExercisesProvider))),
 
         // ── Search + tabs ──────────────────────────────────────────────────
         Container(

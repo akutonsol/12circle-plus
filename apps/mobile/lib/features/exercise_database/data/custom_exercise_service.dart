@@ -33,7 +33,11 @@ class CustomExerciseService {
           .eq('coach_id', uid)
           .order('created_at', ascending: false);
       return (rows as List).map((r) => ExerciseDetail.fromJson(r)).toList();
-    } catch (_) { return []; }
+    } on PostgrestException {
+      // A failed read is not "no exercises" (error contract): it surfaces, and
+      // the screens say so rather than showing a library missing them.
+      rethrow;
+    }
   }
 
   /// Tracking flags for an exercise matching [name] in the global library.
@@ -91,9 +95,13 @@ class CustomExerciseService {
           .select()
           .eq('visibility', 'global')
           .eq('submission_status', 'approved')
-          .order('name');
+          // A to Z, stated: postgrest-dart orders DESCENDING when `ascending`
+          // is omitted, which listed the published exercises Z to A.
+          .order('name', ascending: true);
       return (rows as List).map((r) => ExerciseDetail.fromJson(r)).toList();
-    } catch (_) { return []; }
+    } on PostgrestException {
+      rethrow; // a failed read is not "no published exercises"
+    }
   }
 
   // ── Create ────────────────────────────────────────────────────────────────
