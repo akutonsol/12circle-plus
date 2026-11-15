@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../data/models/workout_model.dart';
 import '../domain/exercise_brief.dart';
+import '../domain/load_format.dart';
 import '../domain/workout_provider.dart';
 import 'widgets/exercise_brief_sheet.dart';
 
@@ -269,16 +270,17 @@ class _MetricStrip extends StatelessWidget {
 }
 
 /// `row` — 22px index / title+prescription / info icon.
-class _ExerciseRow extends StatelessWidget {
+class _ExerciseRow extends ConsumerWidget {
   final int index;
   final WorkoutExercise exercise;
   const _ExerciseRow({required this.index, required this.exercise});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final metric = ref.watch(memberPrefersMetricProvider);
     final name = exercise.exercise.name;
-    final prescription = prescriptionLine(exercise);
-    final brief = exerciseBrief(exercise);
+    final prescription = prescriptionLine(exercise, metric: metric);
+    final brief = exerciseBrief(exercise, metric: metric);
 
     // The board declares each session row as `el: "button"` and its annotation
     // says the info icon "opens form and instructions". Both are honoured —
@@ -300,7 +302,7 @@ class _ExerciseRow extends StatelessWidget {
     // reminder of what an unasserted action costs.
     return Semantics(
       button: open != null,
-      label: rowLabel(index, exercise),
+      label: rowLabel(index, exercise, metric: metric),
       hint: rowHint(exercise),
       // The composed label already carries position, movement and
       // prescription. Excluding the children stops it being announced twice —

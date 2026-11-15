@@ -1,4 +1,5 @@
 import '../data/models/workout_model.dart';
+import 'load_format.dart';
 
 /// FIT-016 · what the session row's info control opens.
 ///
@@ -81,7 +82,8 @@ String? _clean(String? s) {
   return (t == null || t.isEmpty) ? null : t;
 }
 
-/// `4 × 6 · 65 kg · rest 120 s` — assembled only from fields that are set.
+/// `4 × 6 · 65 kg · rest 120 s` — assembled only from fields that are set, the
+/// load in the member's unit ([metric] false: `4 × 6 · 143.3 lb · rest 120 s`).
 ///
 /// A missing weight or rest is omitted rather than rendered as `0`; null and
 /// zero are different answers on `WorkoutSet.weightKg` and the model says so.
@@ -90,26 +92,23 @@ String? _clean(String? s) {
 /// unilateral/per-side field exists on `Exercise` or `WorkoutSet`, so `each` is
 /// NOT emitted: inventing it would assert something about the prescription that
 /// the data does not say. Recorded rather than guessed.
-String prescriptionLine(WorkoutExercise exercise) {
+String prescriptionLine(WorkoutExercise exercise, {bool metric = true}) {
   final sets = exercise.sets;
   if (sets.isEmpty) return 'No sets prescribed';
   final first = sets.first;
   final parts = <String>['${sets.length} × ${first.reps}'];
   final kg = first.weightKg;
-  if (kg != null && kg > 0) {
-    final s = kg == kg.roundToDouble() ? kg.toStringAsFixed(0) : kg.toString();
-    parts.add('$s kg');
-  }
+  if (kg != null && kg > 0) parts.add(formatLoad(kg, metric: metric));
   final rest = first.restSeconds;
   if (rest != null && rest > 0) parts.add('rest $rest s');
   return parts.join(' · ');
 }
 
-ExerciseBrief exerciseBrief(WorkoutExercise exercise) {
+ExerciseBrief exerciseBrief(WorkoutExercise exercise, {bool metric = true}) {
   final e = exercise.exercise;
   return ExerciseBrief(
     name: e.name,
-    prescription: prescriptionLine(exercise),
+    prescription: prescriptionLine(exercise, metric: metric),
     coachNote: _clean(exercise.notes),
     form: _clean(e.description),
     steps: e.instructions
@@ -123,8 +122,8 @@ ExerciseBrief exerciseBrief(WorkoutExercise exercise) {
 
 /// The row's accessible name — the board's own label shape, verbatim:
 /// `1 Back squat 4 × 6 · 65 kg · rest 120 s`.
-String rowLabel(int index, WorkoutExercise exercise) =>
-    '$index ${exercise.exercise.name} ${prescriptionLine(exercise)}';
+String rowLabel(int index, WorkoutExercise exercise, {bool metric = true}) =>
+    '$index ${exercise.exercise.name} ${prescriptionLine(exercise, metric: metric)}';
 
 /// What the row's action does, for assistive technology.
 ///

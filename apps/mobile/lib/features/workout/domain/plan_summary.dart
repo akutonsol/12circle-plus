@@ -1,4 +1,5 @@
 import '../data/models/workout_model.dart';
+import 'load_format.dart';
 
 /// Pure derivations behind FIT-014's hero card.
 ///
@@ -29,12 +30,13 @@ Workout? todaysSession(List<Workout> workouts, {DateTime? now}) {
   return null;
 }
 
-/// "6 exercises · 48 min · heaviest set 62.5 kg".
+/// "6 exercises · 48 min · heaviest set 62.5 kg" -- the load in the member's
+/// unit ([metric] false: "heaviest set 137.8 lb"), as the workout screen shows it.
 ///
 /// Every clause is dropped when the data does not support it. A workout with no
 /// prescribed load must not read "heaviest set 0 kg", and one with no estimate
 /// must not read "0 min" — a fabricated figure is worse than a missing one.
-String workoutSummaryLine(Workout w) {
+String workoutSummaryLine(Workout w, {bool metric = true}) {
   final parts = <String>[];
 
   final n = w.exercises.length;
@@ -44,10 +46,7 @@ String workoutSummaryLine(Workout w) {
 
   final heaviest = heaviestPrescribedLoad(w);
   if (heaviest != null) {
-    final v = heaviest == heaviest.roundToDouble()
-        ? heaviest.toStringAsFixed(0)
-        : heaviest.toString();
-    parts.add('heaviest set $v kg');
+    parts.add('heaviest set ${formatLoad(heaviest, metric: metric)}');
   }
 
   return parts.join(' · ');

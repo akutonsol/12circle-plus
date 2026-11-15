@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:circle_fitness/features/workout/data/models/exercise_model.dart';
 import 'package:circle_fitness/features/workout/data/models/workout_model.dart';
+import 'package:circle_fitness/features/workout/domain/load_format.dart';
 import 'package:circle_fitness/features/workout/domain/workout_provider.dart';
 import 'package:circle_fitness/features/workout/presentation/workout_detail_screen.dart';
 
@@ -61,7 +62,12 @@ Workout _workout(List<WorkoutExercise> exercises) => Workout(
 
 Future<void> _pump(WidgetTester tester, Workout w) async {
   await tester.pumpWidget(ProviderScope(
-    overrides: [selectedWorkoutProvider.overrideWith((ref) => w)],
+    overrides: [
+      selectedWorkoutProvider.overrideWith((ref) => w),
+      // A metric member, so the labels below read kg (loads show in the
+      // member's unit -- prescribed_loads_in_the_members_unit_test).
+      memberPrefersMetricProvider.overrideWithValue(true),
+    ],
     child: const MaterialApp(home: WorkoutDetailScreen()),
   ));
   await tester.pumpAndSettle();
