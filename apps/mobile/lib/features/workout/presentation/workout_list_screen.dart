@@ -446,7 +446,13 @@ class _AssignedWorkoutCard extends ConsumerWidget {
     final s = sessionStatusFor(statusMap, workout);
     final status = s?['status'] as String?;
     final inProgress = status == 'in_progress';
-    final completed = status == 'completed';
+    // Done means done IN THIS ASSIGNMENT -- the rule program_schedule.dart
+    // already applies (completed at or after the assignment's assigned_at) and
+    // puts on workout.isCompleted. The status map keeps the newest completed
+    // session for a workout id from ANY time, so a program assigned again (the
+    // same program_workouts ids) showed every day finished in the earlier block
+    // as "Completed" with AGAIN, while Today and the Train hub said not done.
+    final completed = !inProgress && workout.isCompleted;
 
     final totalSets = workout.exercises.fold<int>(0, (sum, e) => sum + e.sets.length);
     final loggedSets = (s?['logged_sets'] as int?) ?? 0;
