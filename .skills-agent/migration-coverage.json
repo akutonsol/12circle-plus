@@ -1,14 +1,14 @@
 {
   "summary": {
-    "authored": 193,
-    "range": "000–192",
+    "authored": 195,
+    "range": "000–194",
     "planAssignedRange": "123-131",
     "planFloor": 132,
     "qaRef": "eyqtldjqpgpljlqvpowh",
     "appliedThrough": 192,
     "preProgramme": 123,
     "preAssigned": 9,
-    "outsideByRule": 61,
+    "outsideByRule": 63,
     "unexplained": 0,
     "contiguous": true,
     "allDeclared": true
@@ -1362,6 +1362,20 @@
     {
       "migration": "192",
       "file": "supabase/migrations/192_relationship_price_and_source_server_owned.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "193",
+      "file": "supabase/migrations/193_paid_access_not_from_self_activation.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "194",
+      "file": "supabase/migrations/194_accept_coach_invite.sql",
       "inManifest": true,
       "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
       "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"

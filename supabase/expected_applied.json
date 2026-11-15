@@ -56,7 +56,16 @@
           "gate": "Owner approval of the QA window for the ordered batch 182 -> 183 -> 184 -> 185 -> 186 (route A, approved in principle 2026-10-25); never alone, never before 183. Capture pg_get_functiondef of materialize_program_week_engine first. After applying: read back the engine body, then the live suites alone. The Program Builder flag ENGINE_WEEK_GENERATION stays OFF until this is applied AND verified on the target database. Usefulness additionally needs EB-4 (intelligence content populated) — without it the engine correctly refuses with ENGINE_NO_SELECTION."
         }
       },
-      "pending": {}
+      "pending": {
+        "193": {
+          "reason": "Owner decision 1 (Julia, 2026-11-15, 'Data sharing only'): an unpaid coaching relationship the client activated by themselves shares data with the coach but does not unlock Coach-Guided. Adds coach_client_relationships.activated_by (client | coach | invite | system), set by trigger on every transition into active and not choosable by any caller; client_plan() grants coach_guided from a relationship only when it was not client-activated (a paid coach subscription still grants it). Rows activated before 193 have no recorded activator and keep their access (implementation choice, flagged to the owner). Locally replay-verified (supabase/tests/local/policy_193_194_replay.sh: pre-fix 12 of 17 FAIL, post-fix 18/18 PASS; applied twice, idempotent). NOT applied to QA.",
+          "gate": "A separate owner-approved QA apply window (193 and 194 together, 193 first), then the live QA suites and CI. Product consequence to accept at apply time: a client who self-activates a coach (e.g. by choosing one in intake) gets data sharing only until they pay or the coach approves."
+        },
+        "194": {
+          "reason": "Owner decision 4 (Julia, 2026-11-15, 'Active, coach-invited'): accept_coach_invite(token) -- pending, unexpired, sent to the caller's VERIFIED email (auth.users), single use, one 42501 refusal for every failure -- activates the relationship (initiated_by coach, activated_by invite, client_source coach_invited), consumes the invite and notifies both parties. Also: set_relationship_client_source matched coach_invites against user_profiles.email, which authenticated users may UPDATE (verified on QA 2026-11-15) -- a client could claim 0% commission; it now matches the verified auth.users email. Locally replay-verified (see 193). NOT applied to QA.",
+          "gate": "The same owner-approved QA apply window as 193, after 193, then the live QA suites and CI. The app's invite redemption (PendingInvite) keeps a token and retries while 194 is not applied."
+        }
+      }
     }
   }
 }
