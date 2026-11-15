@@ -1473,14 +1473,23 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
   String _key(Map<String, String> a) => a['text'] ?? '';
   String _text(Map<String, String> a) => _edited[_key(a)] ?? a['text'] ?? '';
 
-  void _openSheet(Widget sheet) {
-    showModalBottomSheet(
+  /// Opens an assign sheet and answers whether it SAVED: the sheets pop with
+  /// `true` only after their write succeeded; closing one, or a failed save,
+  /// answers false.
+  Future<bool> _openSheet(Widget sheet) async {
+    final saved = await showModalBottomSheet<bool>(
       context: context, backgroundColor: _card, isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => sheet);
+    return saved ?? false;
   }
 
-  void _approve(Map<String, String> a) {
+  /// "Approve" routes to the real action -- and the recommendation is cleared
+  /// only when that action was actually done. It used to open the sheet and
+  /// clear the item at once: closing the sheet, or a save that failed, still
+  /// hid the recommendation for the rest of the visit, and the coach believed
+  /// it was handled.
+  Future<void> _approve(Map<String, String> a) async {
     final icon = a['icon'] ?? '';
     final opensService = icon == 'fitness' || icon == 'nutrition' || icon == 'habit' || icon == 'checkin';
     // Services stay locked until the client is on a paid plan with this coach.
@@ -1491,24 +1500,28 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
       return;
     }
     // Route to the real action so "Approve" actually does the thing.
+    final bool done;
     switch (icon) {
       case 'fitness':
-        _openSheet(_AssignProgramSheet(clientId: widget.clientId, ref: ref));
+        done = await _openSheet(_AssignProgramSheet(clientId: widget.clientId, ref: ref));
         break;
       case 'nutrition':
-        _openSheet(_AssignNutritionSheet(clientId: widget.clientId, ref: ref));
+        done = await _openSheet(_AssignNutritionSheet(clientId: widget.clientId, ref: ref));
         break;
       case 'habit':
-        _openSheet(_AssignHabitsSheet(clientId: widget.clientId, ref: ref));
+        done = await _openSheet(_AssignHabitsSheet(clientId: widget.clientId, ref: ref));
         break;
       case 'checkin':
-        showAssignActionItemSheet(context, ref, widget.clientId);
+        done = await showAssignActionItemSheet(context, ref, widget.clientId);
         break;
       default:
+        // Nothing to save: acknowledging the recommendation IS the action.
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('Marked done: ${_text(a)}'),
           behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 2)));
+        done = true;
     }
+    if (!mounted || !done) return;
     setState(() => _cleared.add(_key(a)));
   }
 
@@ -1783,7 +1796,7 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
       return;
     }
     if (mounted) {
-      Navigator.pop(context);
+      Navigator.pop(context, true); // saved: the Action Center may clear the item
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Program assigned!'), backgroundColor: _brand));
     }
@@ -1932,7 +1945,7 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       return;
     }
     if (mounted) {
-      Navigator.pop(context);
+      Navigator.pop(context, true); // saved: the Action Center may clear the item
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Nutrition plan saved!'), backgroundColor: _brand));
     }
@@ -2091,7 +2104,7 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
       return;
     }
     if (mounted) {
-      Navigator.pop(context);
+      Navigator.pop(context, true); // saved: the Action Center may clear the item
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Habits assigned!'), backgroundColor: _brand));
     }
