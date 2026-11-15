@@ -24,8 +24,5 @@
     "docs/REMEDIATION_PROGRESS.md",
     "docs/adr"
   ],
-  "exceptions": [
-    "supabase/migrations/195_coach_bookings_need_coach_guided_access.sql",
-    "supabase/expected_applied.json"
-  ]
+  "exceptions": []
 }
