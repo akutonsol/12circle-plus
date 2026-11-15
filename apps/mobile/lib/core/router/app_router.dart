@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../features/auth/domain/auth_provider.dart';
+import '../../features/coach/data/pending_invite.dart';
+import '../../features/coach/domain/coach_provider.dart' show assignedCoachProvider, myCoachesProvider;
 import '../../features/auth/presentation/login_screen.dart';
 import '../../features/auth/presentation/signup_screen.dart';
 import '../../features/auth/presentation/forgot_password_screen.dart';
@@ -112,6 +114,18 @@ final passwordRecoveryNotifier = ValueNotifier<bool>(false);
 /// URL; the login screen shows it once and clears it. Null = no pending error.
 final authErrorNotifier = ValueNotifier<String?>(null);
 
+/// Redeems a remembered coach invite (owner decision 4, PendingInvite) for the
+/// signed-in account, and refreshes what a new coach changes.
+void _redeemInvite(Ref ref) {
+  PendingInvite.redeem(Supabase.instance.client).then((outcome) {
+    if (outcome == InviteOutcome.linked) {
+      ref.invalidate(assignedCoachProvider);
+      ref.invalidate(myCoachesProvider);
+      ref.invalidate(clientPlanProvider);
+    }
+  });
+}
+
 class _RouterNotifier extends ChangeNotifier {
   final Ref _ref;
   bool _disposed = false;
@@ -132,6 +146,8 @@ class _RouterNotifier extends ChangeNotifier {
       // by reloadForLogout() (web) or context.go (mobile) in the UI layer,
       // avoiding the ShellRoute nested-navigator disposal assertion.
       if (!hadSession && hasSession) {
+        // A coach invite opened before signing in is redeemed now.
+        _redeemInvite(_ref);
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!_disposed) notifyListeners();
         });
@@ -186,6 +202,17 @@ final routerProvider = Provider<GoRouter>((ref) {
     redirect: (context, state) async {
       final isAuthenticated = Supabase.instance.client.auth.currentSession != null;
       final path = state.matchedLocation;
+
+      // Owner decision 4: the invite email links to /signup?invite=<token>.
+      // Remember the token whatever comes next -- sign-up, an email
+      // confirmation, sign-in -- and redeem it once signed in.
+      if (path == '/signup') {
+        final token = state.uri.queryParameters['invite'];
+        if (token != null && token.isNotEmpty) {
+          await PendingInvite.capture(token);
+          if (isAuthenticated) _redeemInvite(ref);
+        }
+      }
 
       // Let the animated splash play; it hands off to /onboarding itself.
       if (path == '/splash') return null;
