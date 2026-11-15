@@ -5,6 +5,13 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../scoring/data/score_engine.dart';
 
+/// Whether a failed booking failed because the slot is no longer free: the
+/// database refuses a slot that already holds a live call with 23505 (the
+/// one-live-call-per-slot index and its trigger, migration 187). That is not a
+/// fault to retry -- the client should pick another time.
+bool slotWasTaken(Object error) =>
+    error is PostgrestException && error.code == '23505';
+
 const _bg    = Color(0xFF030303);
 const _card  = Color(0xFF0E0B16);
 const _brd   = Color(0xFF1A1020);
@@ -240,11 +247,10 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
     );
     if (confirmed != true) return;
     try {
+      // The slot is reopened by the database (migration 187), not here: a client
+      // cannot write coach_availability, so its `is_booked = false` update
+      // matched zero rows and reopened nothing.
       await _db.from('coaching_calls').update({'status': 'cancelled'}).eq('id', call['id']);
-      if (call['availability_slot_id'] != null) {
-        await _db.from('coach_availability')
-            .update({'is_booked': false}).eq('id', call['availability_slot_id']);
-      }
     } catch (_) {
       messenger.showSnackBar(const SnackBar(content: Text('Could not cancel. Try again.')));
       return;
@@ -272,6 +278,10 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
     final uid = _db.auth.currentUser?.id;
     if (uid == null || _coachId == null) return;
     try {
+      // One write. The slot is marked booked by the database, which also refuses
+      // a slot someone else has just taken (migration 187, 23505). The client's
+      // own `is_booked = true` update matched zero rows -- a client cannot write
+      // coach_availability -- so the slot stayed on offer and was booked twice.
       await _db.from('coaching_calls').insert({
         'client_id'          : uid,
         'coach_id'           : _coachId,
@@ -281,10 +291,13 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         'call_type'          : slot['type'] ?? 'check_in',
         'status'             : 'scheduled',
       });
-      await _db.from('coach_availability')
-          .update({'is_booked': true}).eq('id', slot['id']);
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
+      if (slotWasTaken(e)) {
+        _showSnack('That time was just taken — pick another.', Colors.redAccent);
+        _load();                       // the list still offers it; show what is free
+        return;
+      }
       _showSnack('Could not book — please try again.', Colors.redAccent);
       return;
     }
