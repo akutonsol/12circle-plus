@@ -69,6 +69,7 @@ declare
   v_expected text[] := ARRAY[${arr(expected)}];
   v_authored text[] := ARRAY[${arr(authored)}];
   v_pending  text   := '${lit(pending.join(', ') || '(none)')}';
+  v_excluded text[] := ARRAY[${arr(excluded.sort())}];
   v_min      text;
   v_max      text;
 begin
@@ -101,10 +102,17 @@ begin
     || ' L-3  stale ledger rows (no authored migration): ' || v_n || ' — ' || v_list || E'\\n';
 
   -- L-4 · holes in what is actually applied, between its own bounds.
+  --      A version DECLARED excluded for this environment (below the frontier,
+  --      deliberately not applied, with a reason and a gate) is a documented gap,
+  --      not a hole -- owner decision, 2026-11-15, when 187-192 were applied to QA
+  --      above the excluded 182-186. Any gap NOT so declared still fails.
+  --      coalesce(): an empty exclusion list renders as ARRAY[NULL], and
+  --      NOT (v = ANY(ARRAY[NULL])) is NULL, which would hide every hole.
   select min(version), max(version) into v_min, v_max from supabase_migrations.schema_migrations;
   select count(*), coalesce(string_agg(v, ', ' order by v), '—') into v_n, v_list
     from unnest(v_authored) v
    where v > v_min and v < v_max
+     and not coalesce(v = any(v_excluded), false)
      and not exists (select 1 from supabase_migrations.schema_migrations m where m.version = v);
   v_res := v_res || case when v_n = 0 then 'PASS' else 'FAIL' end
     || ' L-4  holes in the applied sequence (' || coalesce(v_min,'—') || '-' || coalesce(v_max,'—')
@@ -121,6 +129,8 @@ begin
   --        never written into the ledger to make this check green: a row
   --        inserted ahead of the migration makes a later db push skip it.
   v_res := v_res || 'INFO authored and PENDING for ${lit(ENV)} (declared, not applied): ' || v_pending || E'\\n';
+  v_res := v_res || 'INFO declared EXCLUDED for ${lit(ENV)} (below the frontier, not applied): '
+    || coalesce(array_to_string(v_excluded, ', '), '(none)') || E'\\n';
 
   raise exception E'\\n=== ENV-3 LEDGER (${lit(ENV)}) ===\\n%', v_res;
 end;
