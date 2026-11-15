@@ -22,13 +22,31 @@ class ResumeWorkoutBanner extends ConsumerStatefulWidget {
 
 class _ResumeWorkoutBannerState extends ConsumerState<ResumeWorkoutBanner> {
   bool _dismissed = false;
+  bool _discarding = false;
 
+  /// Discards the in-progress session -- and hides the banner only once the
+  /// server has it. It used to hide first and swallow a failed abandon: the
+  /// session stayed in_progress (and a user may hold only one, so it blocked
+  /// the next workout) while the banner said it was gone.
   Future<void> _dismiss(WorkoutSessionRecord session) async {
-    setState(() => _dismissed = true);
+    if (_discarding) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    setState(() => _discarding = true);
     try {
       await ref.read(workoutSessionManagerProvider).abandonSession(session.id);
-    } catch (_) {}
-    if (mounted) ref.invalidate(activeSessionProvider);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _discarding = false);
+      messenger?.showSnackBar(const SnackBar(
+          content: Text("Couldn't discard the workout. It's still in progress — try again.")));
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _discarding = false;
+      _dismissed = true;
+    });
+    ref.invalidate(activeSessionProvider);
   }
 
   Future<void> _resume(WorkoutSessionRecord session) async {
