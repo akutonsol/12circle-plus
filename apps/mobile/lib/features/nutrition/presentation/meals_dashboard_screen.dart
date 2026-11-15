@@ -78,6 +78,7 @@ class _MealsDashboardScreenState
     AsyncValue<List<Map<String, dynamic>>> logsAsync,
     BuildContext context, {
     required bool totalsFailed,
+    required bool targetsFailed,
   }) {
     final items = <Widget>[
       _MealTabs(
@@ -99,11 +100,18 @@ class _MealsDashboardScreenState
       ]);
     } else if (_isToday) {
       items.addAll([
-        _CalorieCard(cal: cal, protein: protein, carbs: carbs, fat: fat,
-          calGoal: calGoal, proteinGoal: proteinGoal, carbGoal: carbGoal, fatGoal: fatGoal),
-        const SizedBox(height: 12),
-        _CoachCard(protein: protein, cal: cal, proteinGoal: proteinGoal, calGoal: calGoal),
-        const SizedBox(height: 12),
+        // Targets that could not be read are not shown -- not replaced by
+        // defaults that read as the client's plan (nor advice built on them).
+        if (targetsFailed) ...[
+          const NutritionTargetsLoadFailed(),
+          const SizedBox(height: 12),
+        ] else ...[
+          _CalorieCard(cal: cal, protein: protein, carbs: carbs, fat: fat,
+            calGoal: calGoal, proteinGoal: proteinGoal, carbGoal: carbGoal, fatGoal: fatGoal),
+          const SizedBox(height: 12),
+          _CoachCard(protein: protein, cal: cal, proteinGoal: proteinGoal, calGoal: calGoal),
+          const SizedBox(height: 12),
+        ],
         _WaterCard(
           glasses: _water,
           onTap: (i) => setState(() =>
@@ -227,7 +235,8 @@ class _MealsDashboardScreenState
                             cal, protein, carbs, fat,
                             calGoal, proteinGoal, carbGoal, fatGoal,
                             logsAsync, context,
-                            totalsFailed: totals is AsyncError))),
+                            totalsFailed: totals is AsyncError,
+                            targetsFailed: goals is AsyncError))),
                     ])))),
           ])));
   }

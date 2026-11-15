@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../meals_dashboard_screen.dart' show nutritionTotalsProvider;
+import '../../domain/nutrition_provider.dart' show nutritionGoalsProvider;
 
 /// FIT-022 · "Loading & failure — the two patterns every data screen inherits",
 /// drawn on Nutrition.
@@ -83,3 +84,59 @@ const _card  = Color(0xFF0E0B16);
 const _white = Colors.white;
 const _muted = Color(0xFFCFC2D6);
 const _error = Color(0xFFFFB4AB);
+
+/// The coach's nutrition TARGETS could not be read. Shown instead of the
+/// targets block (ring, "x / N kcal", macro bars, coach advice) -- never default
+/// numbers in their place, which read as the client's real plan.
+class NutritionTargetsLoadFailed extends ConsumerWidget {
+  const NutritionTargetsLoadFailed({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: _card,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: _error.withValues(alpha: 0.35)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Icon(Icons.cloud_off_rounded, color: _error, size: 18),
+            const SizedBox(width: 8),
+            Semantics(
+              header: true,
+              container: true,
+              child: const Text("Couldn't load your targets",
+                style: TextStyle(
+                  color: _error, fontSize: 15, fontWeight: FontWeight.w700)),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          const Text(
+            'Your nutrition plan is unchanged. Only your targets failed to load, '
+            'so they are not shown.',
+            style: TextStyle(color: _muted, fontSize: 13, height: 1.5)),
+          const SizedBox(height: 14),
+          Semantics(
+            button: true,
+            child: GestureDetector(
+              onTap: () => ref.invalidate(nutritionGoalsProvider),
+              behavior: HitTestBehavior.opaque,
+              child: Container(
+                constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                alignment: Alignment.center,
+                padding: const EdgeInsets.symmetric(horizontal: 18),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.12))),
+                child: const Text('Try again',
+                  style: TextStyle(
+                    color: _white, fontSize: 13, fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ),
+        ]),
+      );
+}

@@ -35,28 +35,32 @@ void refreshAfterMealLogged(void Function(ProviderOrFamily) invalidate) {
 
 /// Returns the active coach-assigned macro goals for the current user.
 /// Falls back to sensible defaults if no plan has been assigned.
+///
+/// A failed read is an ERROR, not the defaults. It used to `catch (_)` and
+/// return the defaults, so a client whose coach set 1500 kcal / 160 g protein
+/// was shown "x / 2000 kcal", a 120 g protein ring and protein advice built on
+/// 120 g -- with nothing saying the plan had not loaded (error contract: a
+/// failed read is never shown as data). The screens show that the targets
+/// could not be loaded. "No plan assigned" (row == null) still returns the
+/// defaults: whether to show them is a product decision this does not touch.
 final nutritionGoalsProvider = FutureProvider<Map<String, double>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
   ref.watch(currentUserProvider);
   final userId = Supabase.instance.client.auth.currentUser?.id;
   if (userId == null) return _defaultGoals;
-  try {
-    final row = await Supabase.instance.client
-        .from('client_nutrition_plans')
-        .select('calories_target, protein_g, carbs_g, fat_g')
-        .eq('client_id', userId)
-        .eq('is_active', true)
-        .maybeSingle();
-    if (row == null) return _defaultGoals;
-    return {
-      'calories': (row['calories_target'] as num?)?.toDouble() ?? _defaultGoals['calories']!,
-      'protein':  (row['protein_g']       as num?)?.toDouble() ?? _defaultGoals['protein']!,
-      'carbs':    (row['carbs_g']         as num?)?.toDouble() ?? _defaultGoals['carbs']!,
-      'fat':      (row['fat_g']           as num?)?.toDouble() ?? _defaultGoals['fat']!,
-    };
-  } catch (_) {
-    return _defaultGoals;
-  }
+  final row = await Supabase.instance.client
+      .from('client_nutrition_plans')
+      .select('calories_target, protein_g, carbs_g, fat_g')
+      .eq('client_id', userId)
+      .eq('is_active', true)
+      .maybeSingle();
+  if (row == null) return _defaultGoals;
+  return {
+    'calories': (row['calories_target'] as num?)?.toDouble() ?? _defaultGoals['calories']!,
+    'protein':  (row['protein_g']       as num?)?.toDouble() ?? _defaultGoals['protein']!,
+    'carbs':    (row['carbs_g']         as num?)?.toDouble() ?? _defaultGoals['carbs']!,
+    'fat':      (row['fat_g']           as num?)?.toDouble() ?? _defaultGoals['fat']!,
+  };
 });
 
 const _defaultGoals = {
