@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:circle_fitness/core/realtime/realtime.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/home/presentation/home_screen.dart';
 import 'package:circle_fitness/features/nutrition/data/nutrition_service.dart';
@@ -258,8 +259,12 @@ void main() {
     ]);
     final c = ProviderContainer(overrides: [
       currentUserProvider.overrideWithValue(Supabase.instance.client.auth.currentUser),
+      // The week now follows coaching_calls changes (realtime); one tick, as
+      // the repo's other provider tests stub it.
+      tableTickerProvider.overrideWith((ref, table) => Stream.value(0)),
     ]);
     addTearDown(c.dispose);
+    c.listen(weeklyActivityProvider, (_, __) {});
     final bars = await c.read(weeklyActivityProvider.future);
     expect(bars[0], 1.0, reason: "Monday's meal lights Monday");
     expect(bars.sublist(1).every((b) => b == 0.05), isTrue,
