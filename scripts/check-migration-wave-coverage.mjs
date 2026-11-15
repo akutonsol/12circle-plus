@@ -64,7 +64,15 @@ const qa = manifest.environments?.qa ?? {};
 // version tested Number.isInteger on it, got false, and reported every one of
 // the 182 migrations as undeclared — a type error presented as a finding.
 const appliedThrough = Number.parseInt(String(qa.applied_through ?? ''), 10);
-const excluded = new Set((qa.excluded ?? []).map((x) => parseInt(String(x), 10)));
+// `excluded` is declared like `pending` -- an object keyed by version, each with
+// a reason and a gate (supabase/expected_applied.json's own rules, and how
+// check-migration-manifest.mjs and env3-live-check.mjs read it). This read it as
+// an array, which held only while `excluded` was empty: the first real exclusion
+// crashed the guard (`.map is not a function`). Both shapes are accepted.
+const excludedDecl = qa.excluded ?? {};
+const excluded = new Set(
+  (Array.isArray(excludedDecl) ? excludedDecl : Object.keys(excludedDecl))
+    .map((x) => parseInt(String(x), 10)));
 const pending = new Set(Object.keys(qa.pending ?? {}).map((x) => parseInt(x, 10)));
 const isDeclared = (n) =>
   excluded.has(n) || pending.has(n)
