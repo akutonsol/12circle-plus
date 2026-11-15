@@ -57,7 +57,18 @@ class ScoreScreen extends ConsumerWidget {
 class _MyScoreTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final score = ref.watch(myScoreProvider).valueOrNull;
+    // A failed or unfinished read is not a score of zero: it said "0 points,
+    // Level 1, Bronze" to a member whose score simply had not loaded. A member
+    // with no score row yet (value null) does see real zeros.
+    final scoreAsync = ref.watch(myScoreProvider);
+    if (!scoreAsync.hasValue) {
+      return scoreAsync.hasError
+          ? ScoreLoadFailed(
+              message: "Couldn't load your score.",
+              onRetry: () => ref.invalidate(myScoreProvider))
+          : const Center(child: CircularProgressIndicator());
+    }
+    final score = scoreAsync.value;
     final events = ref.watch(recentScoreEventsProvider).valueOrNull ?? [];
     final cycle = cycleScoreOf(score);
     final lifetime = (score?['lifetime_score'] as num?)?.toInt() ?? 0;
@@ -109,7 +120,10 @@ class _MyScoreTab extends ConsumerWidget {
           Row(children: [
             Expanded(child: _stat('Lifetime', '$lifetime', Icons.all_inclusive_rounded)),
             const SizedBox(width: 12),
-            Expanded(child: _stat('Badges', '${ref.watch(myBadgeIdsProvider).valueOrNull?.length ?? 0}', Icons.military_tech_rounded)),
+            Expanded(child: _stat('Badges',
+                // Unknown is "—", not 0.
+                ref.watch(myBadgeIdsProvider).whenOrNull(data: (d) => '${d.length}') ?? '—',
+                Icons.military_tech_rounded)),
           ]),
           const SizedBox(height: 20),
           const Text('RECENT POINTS', style: TextStyle(color: _muted, fontSize: 11,
@@ -249,7 +263,17 @@ class _BadgesTab extends ConsumerWidget {
 class _LeaderboardTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final rows = ref.watch(globalLeaderboardProvider).valueOrNull ?? [];
+    // "No scores this month yet -- be the first" was also what a FAILED read
+    // said. Only a read that worked and found nobody says it now.
+    final boardAsync = ref.watch(globalLeaderboardProvider);
+    if (!boardAsync.hasValue) {
+      return boardAsync.hasError
+          ? ScoreLoadFailed(
+              message: "Couldn't load the leaderboard.",
+              onRetry: () => ref.invalidate(globalLeaderboardProvider))
+          : const Center(child: CircularProgressIndicator());
+    }
+    final rows = boardAsync.value ?? [];
     final myId = Supabase.instance.client.auth.currentUser?.id;
     if (rows.isEmpty) {
       return const Center(child: Padding(padding: EdgeInsets.all(32),
@@ -286,4 +310,25 @@ class _LeaderboardTab extends ConsumerWidget {
       },
     );
   }
+}
+
+/// A score read that failed: said, with a way to retry -- never shown as zero.
+class ScoreLoadFailed extends StatelessWidget {
+  const ScoreLoadFailed({super.key, required this.message, required this.onRetry});
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.cloud_off_rounded, color: _muted, size: 32),
+            const SizedBox(height: 10),
+            Text(message, textAlign: TextAlign.center, style: const TextStyle(color: _muted)),
+            const SizedBox(height: 8),
+            TextButton(onPressed: onRetry, child: const Text('Try again')),
+          ]),
+        ),
+      );
 }
