@@ -571,9 +571,18 @@ section('12 · migration coverage reconciliation');
       out.rows.every((x) => /NOT ESTABLISHED HERE/.test(x.appliedStatus)));
     check('the QA project is confirmed from the manifest itself, not from a name',
       out.summary.qaRef === 'eyqtldjqpgpljlqvpowh', `ref=${out.summary.qaRef}`);
+    // The frontier is read from the manifest, not pinned here: it was the literal
+    // 181 and broke the first time a QA apply moved the frontier. What this
+    // asserts is unchanged -- the STRING in the manifest is coerced to a number.
+    const declaredFrontier = JSON.parse(fs.readFileSync(
+      path.join(ROOT, 'supabase', 'expected_applied.json'), 'utf8'))
+      .environments.qa.applied_through;
     check('declaration is derived from applied_through, which is a STRING in the '
         + 'manifest and must be coerced',
-      out.summary.allDeclared === true && out.summary.appliedThrough === 181);
+      typeof declaredFrontier === 'string'
+        && out.summary.allDeclared === true
+        && out.summary.appliedThrough === Number.parseInt(declaredFrontier, 10),
+      `manifest="${declaredFrontier}" tool=${out.summary.appliedThrough}`);
   }
 }
 
