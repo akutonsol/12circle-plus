@@ -561,8 +561,7 @@ class _PRRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final metric = prefersMetric(
-        ref.watch(currentUserProfileProvider).valueOrNull?['unit_preference'] as String?);
+    final metric = ref.watch(memberPrefersMetricProvider);
     final name   = pr['exercise_name'] as String? ?? '';
     final weight = (pr['weight_kg'] as num?)?.toDouble() ?? 0;
     final reps   = pr['reps'] as int? ?? 0;

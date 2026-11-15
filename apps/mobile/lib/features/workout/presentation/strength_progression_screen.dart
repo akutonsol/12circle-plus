@@ -2,7 +2,6 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../auth/domain/auth_provider.dart';
 import '../domain/load_format.dart';
 import '../domain/workout_provider.dart';
 import '../../../core/widgets/named_icon_button.dart';
@@ -106,8 +105,7 @@ class _ProgressionChart extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final progression = ref.watch(exerciseProgressionProvider(exerciseName));
-    final metric = prefersMetric(
-        ref.watch(currentUserProfileProvider).valueOrNull?['unit_preference'] as String?);
+    final metric = ref.watch(memberPrefersMetricProvider);
     return progression.when(
       loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
       error: (_, __) => const Center(child: Text('No data yet', style: TextStyle(color: _muted))),

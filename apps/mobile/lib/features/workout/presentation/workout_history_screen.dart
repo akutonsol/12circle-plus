@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../shared/widgets/app_scaffold.dart';
-import '../../auth/domain/auth_provider.dart';
 import '../data/workout_service.dart';
 import '../domain/load_format.dart';
 import '../domain/workout_provider.dart';
@@ -205,8 +204,7 @@ class _ExerciseLogSection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final metric = prefersMetric(
-        ref.watch(currentUserProfileProvider).valueOrNull?['unit_preference'] as String?);
+    final metric = ref.watch(memberPrefersMetricProvider);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
