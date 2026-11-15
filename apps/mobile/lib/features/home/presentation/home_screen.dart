@@ -20,6 +20,7 @@ import '../../../core/widgets/app_top_nav.dart';
 import '../../../core/widgets/blood_drop.dart';
 import '../domain/home_session_card.dart';
 import '../../workout/presentation/zone_entry.dart';
+import '../../../core/realtime/realtime.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 class _C {
@@ -49,6 +50,11 @@ class _C {
 final weeklyActivityProvider = FutureProvider<List<double>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
   ref.watch(currentUserProvider);
+  // A call booked or cancelled -- here, by the coach, or on another device --
+  // moves this week's bars. Nothing re-read them: a booked call left its day's
+  // bar unchanged until the app restarted. coaching_calls is in the realtime
+  // publication; meals refresh through refreshAfterMealLogged.
+  ref.watch(tableTickerProvider('coaching_calls'));
   final uid = Supabase.instance.client.auth.currentUser?.id;
   // Signed out is not a failure — there is genuinely nothing to show.
   if (uid == null) return List.filled(7, 0.0);
