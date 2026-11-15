@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:circle_fitness/features/workout/data/models/exercise_model.dart';
 import 'package:circle_fitness/features/workout/data/models/workout_model.dart';
+import 'package:circle_fitness/features/workout/domain/load_format.dart';
 import 'package:circle_fitness/features/workout/domain/workout_provider.dart';
 import 'package:circle_fitness/features/workout/presentation/workout_detail_screen.dart';
 
@@ -67,6 +68,9 @@ final _workoutB = Workout(
 Widget _host(Workout? selected) => ProviderScope(
       overrides: [
         selectedWorkoutProvider.overrideWith((ref) => selected),
+        // A metric member: the prescriptions below read kg (loads show in the
+        // member's unit -- prescribed_loads_in_the_members_unit_test).
+        memberPrefersMetricProvider.overrideWithValue(true),
       ],
       child: const MaterialApp(home: WorkoutDetailScreen()),
     );
@@ -116,7 +120,8 @@ void main() {
     });
 
     testWidgets('switching A -> B replaces the content entirely', (t) async {
-      final container = ProviderContainer();
+      final container = ProviderContainer(
+          overrides: [memberPrefersMetricProvider.overrideWithValue(true)]);
       addTearDown(container.dispose);
       container.read(selectedWorkoutProvider.notifier).state = _workoutA;
 

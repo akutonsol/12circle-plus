@@ -1006,7 +1006,8 @@ class _TodayHeroCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final summary = workoutSummaryLine(workout);
+    final metric = ref.watch(memberPrefersMetricProvider);
+    final summary = workoutSummaryLine(workout, metric: metric);
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
       child: ClipRRect(
