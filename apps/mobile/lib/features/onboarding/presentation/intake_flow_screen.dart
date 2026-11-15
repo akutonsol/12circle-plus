@@ -12,6 +12,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/intake_data.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../../core/observability/app_failure.dart';
+import '../../coach/data/coach_relationship_service.dart';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const _bg      = Color(0xFF0A0A0B);
@@ -4185,17 +4186,20 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
         // Intake yields a single coach: cancel any other active relationship
         // (e.g. a coach picked earlier then changed) so re-selecting replaces
         // rather than accumulates. Multi-coach is added later via marketplace.
-        await Supabase.instance.client
+        //
+        // Each through the one end-coaching policy (owner decision 2): a coach
+        // the client was PAYING is cancelled at the end of the paid period and
+        // coaching with them lasts until then; an unpaid one ends now.
+        final others = await Supabase.instance.client
             .from('coach_client_relationships')
-            .update({
-              'status':       'cancelled',
-              'cancelled_by': 'client',
-              'cancel_reason': 'switched_during_intake',
-              'cancelled_at': DateTime.now().toUtc().toIso8601String(),
-            })
+            .select('coach_id')
             .eq('client_id', uid)
             .eq('status', 'active')
             .neq('coach_id', coach['id'] as String);
+        for (final o in (others as List)) {
+          await CoachRelationshipService()
+              .cancelCoach(o['coach_id'] as String, 'switched_during_intake', null);
+        }
         linked = true;
         ref.invalidate(assignedCoachProvider);
         // Notify coach. Best-effort, and reported: the link above is saved, and

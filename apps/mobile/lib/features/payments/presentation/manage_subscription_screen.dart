@@ -91,8 +91,9 @@ class _ManageSubscriptionScreenState
         title: Text('Stop working with ${coachName.isEmpty ? 'this coach' : coachName}?',
             style: const TextStyle(color: _white, fontWeight: FontWeight.w800)),
         content: const Text(
-          'Your coaching ends immediately and your coach will be notified. '
-          'The remaining period is not reimbursed.',
+          'If you pay for this coach, coaching continues until the end of the '
+          'period you have paid for, then ends. Otherwise it ends now. Your '
+          'coach will be notified.',
           style: TextStyle(color: _muted, height: 1.4),
         ),
         actions: [
@@ -109,42 +110,21 @@ class _ManageSubscriptionScreenState
     if (ok != true) return;
 
     final coachId = rel['coach_id'] as String;
-    // If there's a paid coach subscription, cancel it (also ends relationship +
-    // notifies via the function); otherwise end the relationship directly.
-    // Which one is decided by a fresh read: a failed or unfinished read is not
-    // "no subscription", and ending a paid coach's relationship directly left
-    // the subscription billing.
-    final List<Map<String, dynamic>> subs;
+    // One policy for every way of ending coaching (owner decision 2): a paid
+    // coaching subscription -- coach OR monthly package; this used to look for
+    // 'coach' only and so left package subscriptions billing -- is cancelled at
+    // the end of the paid period and coaching lasts until then; without one the
+    // relationship ends now. The message follows what actually happened.
+    String message;
     try {
-      subs = await ref.refresh(mySubscriptionsProvider.future);
+      final end = await CoachRelationshipService()
+          .cancelCoach(coachId, 'client_cancelled', null);
+      message = end.describe();
     } catch (e) {
-      reportError('ManageSubscriptionScreen.stopCoach.subscriptions', e);
-      messenger.showSnackBar(const SnackBar(content: Text('Could not cancel. Try again.')));
-      return;
+      reportError('ManageSubscriptionScreen.stopCoach', e);
+      message = 'Could not end coaching. Nothing was changed. Try again.';
     }
-    final coachSub = subs.firstWhere(
-      (s) => s['kind'] == 'coach' &&
-          s['coach_id'] == coachId &&
-          ['active', 'trialing', 'past_due'].contains(s['status']),
-      orElse: () => <String, dynamic>{},
-    );
-    // The message follows what happened, as `_cancelPlan`'s does: a failed
-    // cancellation left the client billed and was announced as ended.
-    bool ended;
-    if (coachSub.isNotEmpty) {
-      ended = await ref.read(paymentServiceProvider).cancelSubscription(coachSub['id'] as String);
-    } else {
-      try {
-        await CoachRelationshipService().cancelCoach(coachId, 'client_cancelled', null);
-        ended = true;
-      } catch (e) {
-        reportError('ManageSubscriptionScreen.stopCoach', e);
-        ended = false;
-      }
-    }
-    messenger.showSnackBar(SnackBar(content: Text(ended
-        ? 'Coaching ended. Your coach has been notified.'
-        : 'Could not cancel. Try again.')));
+    messenger.showSnackBar(SnackBar(content: Text(message)));
     ref.invalidate(myCoachesProvider);
     ref.invalidate(mySubscriptionsProvider);
     ref.invalidate(clientPlanProvider);

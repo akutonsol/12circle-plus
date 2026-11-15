@@ -137,10 +137,48 @@ class CoachRelationshipService {
     return token ?? '';
   }
 
-  // ── Cancel as client (ends relationship + notifies the coach) ─────────────
-  Future<void> cancelCoach(String coachId, String? reason, String? customReason) async {
+  // ── End coaching as client ───────────────────────────────────────────────
+  /// Ends the client's coaching with [coachId] -- the ONE policy every "end
+  /// coaching" path uses (Profile's Cancel Coach, Settings' switch to Self/AI,
+  /// Manage Subscription's Stop, the intake coach switch).
+  ///
+  /// OWNER DECISION 2, 2026-11-15 (Julia): a paid coaching subscription is
+  /// cancelled at the END of the period already paid for, and coaching lasts
+  /// until then -- no refund needed. So:
+  ///   * a live paid coaching subscription with this coach (coach or monthly
+  ///     package) is cancelled at period end through `cancel-subscription`, and
+  ///     the relationship stays active; the Stripe webhook ends it when the
+  ///     subscription does. Returns [CoachingEnd.at] that date.
+  ///   * no paid subscription: the relationship ends now, as before.
+  /// Before this, every path except one ended only the relationship and left
+  /// the subscription billing -- and the one that cancelled missed monthly
+  /// packages, the coaching subscription the app actually sells.
+  ///
+  /// Throws if a cancellation fails; nothing is then changed locally.
+  Future<CoachingEnd> cancelCoach(String coachId, String? reason, String? customReason) async {
     final clientId = _db.auth.currentUser?.id;
-    if (clientId == null) return;
+    if (clientId == null) return const CoachingEnd.now();
+    final paid = await _db
+        .from('subscriptions')
+        .select('id, current_period_end')
+        .eq('user_id', clientId)
+        .eq('coach_id', coachId)
+        .inFilter('kind', const ['coach', 'package_monthly'])
+        .inFilter('status', const ['active', 'trialing', 'past_due']);
+    if ((paid as List).isNotEmpty) {
+      DateTime? endsAt;
+      for (final s in paid) {
+        final res = await _db.functions
+            .invoke('cancel-subscription', body: {'subscriptionId': s['id']});
+        final d = res.data;
+        if (d is! Map || d['ok'] != true) {
+          throw StateError('Your coaching could not be ended. Try again.');
+        }
+        final at = DateTime.tryParse('${d['endsAt'] ?? s['current_period_end'] ?? ''}');
+        if (at != null && (endsAt == null || at.isAfter(endsAt))) endsAt = at;
+      }
+      return CoachingEnd.at((endsAt ?? DateTime.now()).toLocal());
+    }
     await _db.from('coach_client_relationships').update({
       'status': 'cancelled',
       'cancelled_by': 'client',
@@ -169,6 +207,7 @@ class CoachRelationshipService {
     } catch (e) {
       reportError('CoachRelationshipService.cancelCoach.notify', e);
     }
+    return const CoachingEnd.now();
   }
 
   // ── Coach pricing ─────────────────────────────────────────
@@ -224,5 +263,23 @@ class CoachRelationshipService {
         .order('created_at', ascending: false)
         .limit(1)
         .maybeSingle();
+  }
+}
+
+/// What ending coaching did: ended now, or (a paid subscription) ends at
+/// [endsAt], the end of the period already paid for.
+class CoachingEnd {
+  const CoachingEnd.now() : endsAt = null;
+  const CoachingEnd.at(DateTime this.endsAt);
+  final DateTime? endsAt;
+  bool get scheduled => endsAt != null;
+
+  /// One sentence for the client.
+  String describe() {
+    final at = endsAt;
+    if (at == null) return 'Coaching ended. Your coach has been notified.';
+    const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return 'Your coaching continues until ${m[at.month - 1]} ${at.day}, the end of the '
+        'period you have paid for, then ends. Your coach has been notified.';
   }
 }

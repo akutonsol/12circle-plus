@@ -206,6 +206,43 @@ Deno.serve(async (req: Request) => {
           update = update.neq('status', 'canceled');
         }
         await must(update, 'update subscription status');
+
+        // OWNER DECISION 2, 2026-11-15: a coaching subscription that ends --
+        // the period-end cancellation the client asked for, a Billing Portal
+        // cancel, or retries exhausted -- ends the coaching it paid for. Until
+        // this event the relationship stays active ("coaching lasts until then").
+        if (event.type === 'customer.subscription.deleted') {
+          const { data: row, error: rowError } = await db.from('subscriptions')
+            .select('user_id, kind, coach_id')
+            .eq('stripe_subscription_id', sub.id)
+            .maybeSingle();
+          if (rowError) throw new Error(`read ended subscription failed: ${rowError.message}`);
+          const coachScoped = row?.kind === 'coach' || row?.kind === 'package_monthly';
+          if (coachScoped && row?.coach_id && row?.user_id) {
+            await must(db.from('coach_client_relationships')
+              .update({
+                status: 'cancelled',
+                cancelled_by: 'billing',
+                cancel_reason: 'subscription_ended',
+                cancelled_at: new Date().toISOString(),
+              })
+              .eq('client_id', row.user_id)
+              .eq('coach_id', row.coach_id)
+              .eq('status', 'active'), 'end coaching relationship');
+            try {
+              await db.from('notifications').insert({
+                recipient_id: row.coach_id,
+                type: 'coaching_ended',
+                title: 'Coaching has ended',
+                body: 'A client\'s coaching subscription has ended, and so has the coaching relationship.',
+                data: { client_id: row.user_id },
+                read: false,
+              });
+            } catch (e) {
+              console.error('stripe-webhook: coach notification failed:', e);
+            }
+          }
+        }
         break;
       }
     }

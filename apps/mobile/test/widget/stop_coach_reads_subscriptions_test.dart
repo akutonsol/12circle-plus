@@ -26,7 +26,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 const _uid = '00000000-0000-4000-8000-0000000005b5';
 const _ended = 'Coaching ended. Your coach has been notified.';
-const _failed = 'Could not cancel. Try again.';
+const _failed = 'Could not end coaching. Nothing was changed. Try again.';
+/// Owner decision 2: a paid coach continues to the end of the paid period.
+const _continues = 'continues until';
 const _free = 'You’re on the Free plan. Upgrade any time to unlock more.';
 
 String _b64(Map<String, Object?> m) =>
@@ -82,6 +84,8 @@ class _Server extends http.BaseClient {
   bool subscriptionsFail = false;
   bool paid = true;
   final writes = <String>[];
+  /// Subscriptions cancel-subscription was asked to cancel.
+  final cancelled = <String>[];
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
@@ -89,10 +93,15 @@ class _Server extends http.BaseClient {
     if (request.method != 'GET') writes.add('${request.method} $path');
     if (path.endsWith('/subscriptions')) {
       if (subscriptionsFail) return _json({'message': 'offline'}, 500, request);
-      return _json([
-        {'id': 'sub-m', 'kind': 'ai_guided', 'status': 'active'},
-        if (paid) {'id': 'sub-c', 'kind': 'coach', 'coach_id': 'coach-a', 'status': 'active'},
-      ], 200, request);
+      return _json(_filtered([
+        {'id': 'sub-m', 'user_id': _uid, 'kind': 'ai_guided', 'status': 'active', 'coach_id': null},
+        if (paid) {'id': 'sub-c', 'user_id': _uid, 'kind': 'coach', 'coach_id': 'coach-a', 'status': 'active',
+                    'current_period_end': '2026-12-01T00:00:00Z'},
+      ], request.url.queryParameters), 200, request);
+    }
+    if (path.endsWith('/functions/v1/cancel-subscription')) {
+      cancelled.add(jsonDecode(await request.finalize().bytesToString())['subscriptionId'] as String);
+      return _json({'ok': true, 'endsAt': '2026-12-01T00:00:00Z'}, 200, request);
     }
     if (path.endsWith('/notifications')) return _json([], 201, request);
     final single =
@@ -122,6 +131,18 @@ const _coach = {
   'coach': {'first_name': 'Avery', 'last_name': 'Stone'},
 };
 
+/// PostgREST's `eq.` / `in.(…)` filters, applied to a list of rows.
+List<Map<String, Object?>> _filtered(List<Map<String, Object?>> rows, Map<String, String> q) =>
+    rows.where((r) => q.entries.every((e) {
+          final v = e.value;
+          if (v.startsWith('eq.')) return '${r[e.key]}' == v.substring(3);
+          if (v.startsWith('in.(') && v.endsWith(')')) {
+            return v.substring(4, v.length - 1).split(',')
+                .map((x) => x.replaceAll('"', '')).contains('${r[e.key]}');
+          }
+          return true;
+        })).toList();
+
 void main() {
   late _Server server;
   late _Payments payments;
@@ -136,6 +157,7 @@ void main() {
       authOptions: FlutterAuthClientOptions(
         localStorage: _SeededSession(),
         pkceAsyncStorage: _MemoryStore(),
+        detectSessionInUri: false,
       ),
       debug: false,
     );
@@ -145,7 +167,8 @@ void main() {
     server
       ..subscriptionsFail = false
       ..paid = true
-      ..writes.clear();
+      ..writes.clear()
+      ..cancelled.clear();
     payments = _Payments();
   });
 
@@ -168,6 +191,13 @@ void main() {
     await tester.tap(find.text('Stop'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Yes, stop'));
+    // Ending a PAID coach now goes through the cancel-subscription function.
+    // The functions client encodes/decodes in an isolate, which does not run
+    // under the widget test's fake clock: give it real time, then settle.
+    for (var i = 0; i < 10; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 30)));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
     await tester.pumpAndSettle();
   }
 
@@ -196,16 +226,18 @@ void main() {
     testWidgets('a paid coach is stopped by cancelling the subscription', (tester) async {
       await stop(tester);
 
-      expect(payments.cancelled, ['sub-c']);
+      // Through cancel-subscription, at the end of the paid period (decision 2):
+      // the relationship stays until the subscription ends.
+      expect(server.cancelled, ['sub-c']);
       expect(server.writes, isNot(contains('PATCH /rest/v1/coach_client_relationships')));
-      expect(find.text(_ended), findsOneWidget);
+      expect(find.textContaining(_continues), findsOneWidget);
     });
 
     testWidgets('an unpaid coach is stopped by ending the relationship', (tester) async {
       server.paid = false;
       await stop(tester);
 
-      expect(payments.cancelled, isEmpty);
+      expect(server.cancelled, isEmpty);
       expect(server.writes, contains('PATCH /rest/v1/coach_client_relationships'));
       expect(find.text(_ended), findsOneWidget);
     });
