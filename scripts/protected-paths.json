@@ -24,11 +24,5 @@
     "docs/REMEDIATION_PROGRESS.md",
     "docs/adr"
   ],
-  "exceptions": [
-    "supabase/migrations/193_paid_access_not_from_self_activation.sql",
-    "supabase/migrations/194_accept_coach_invite.sql",
-    "supabase/expected_applied.json",
-    "docs/decision-log.md",
-    "docs/MASTER_PRODUCT_DECISIONS.md"
-  ]
+  "exceptions": []
 }
