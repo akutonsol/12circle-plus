@@ -240,22 +240,22 @@ void main() {
   });
 
   // ── INT-304 · CON-06, the timestamp that crosses the wire ─────────────────
-  group('INT-304 consent_date is written as a naive local timestamp', () {
-    test('DEFECT CON-06: consent_date carries no zone marker', () {
+  // CON-06 was: DateTime.now().toIso8601String() rendered local time with no
+  // offset, and Postgres read it into timestamptz AS UTC -- a client at UTC-5
+  // recorded consent five hours early. Fixed by sending .toUtc(); these now pin
+  // the fix on both write paths.
+  group('INT-304 consent_date is written as a real instant (CON-06)', () {
+    test('consent_date carries a zone marker', () {
       final iso = _complete().toSupabase()['consent_date'] as String;
       expect(iso, isNotEmpty);
-      expect(iso.endsWith('Z'), isFalse,
-          reason: 'DateTime.now().toIso8601String() renders local time with no '
-              'offset; Postgres reads it into timestamptz AS UTC, so a client '
-              'at UTC-5 records consent five hours early. Migration 108 fixed '
-              'exactly this for workout_sessions.started_at and nowhere else.');
-      expect(RegExp(r'[+-]\d{2}:\d{2}$').hasMatch(iso), isFalse);
-      expect(DateTime.parse(iso).isUtc, isFalse);
+      expect(iso.endsWith('Z') || RegExp(r'[+-]\d{2}:\d{2}$').hasMatch(iso), isTrue,
+          reason: 'a zoneless value is read by Postgres as UTC');
+      expect(DateTime.parse(iso).isUtc, isTrue);
     });
 
-    test('both write paths share the defect, so a fix must cover both', () {
+    test('both write paths carry it, as the fix had to', () {
       final partial = _complete().toSupabasePartial(6)['consent_date'] as String;
-      expect(DateTime.parse(partial).isUtc, isFalse);
+      expect(DateTime.parse(partial).isUtc, isTrue);
     });
 
     test('no consent means no consent_date is claimed', () {

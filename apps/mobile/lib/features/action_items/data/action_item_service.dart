@@ -92,7 +92,7 @@ class ActionItemService {
     try {
       await _db.from('action_items').update({
         'status': 'completed',
-        'completed_at': DateTime.now().toIso8601String(),
+        'completed_at': DateTime.now().toUtc().toIso8601String(),
         if (proofUrl != null) 'proof_url': proofUrl,
         if (notes != null) 'client_notes': notes,
       }).eq('id', id).eq('client_id', uid);

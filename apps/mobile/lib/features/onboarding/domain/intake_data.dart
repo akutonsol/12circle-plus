@@ -216,7 +216,7 @@ class IntakeData {
     if (targetTimeline.isNotEmpty) m['target_timeline'] = targetTimeline;
     if (consentAgreed) {
       m['consent_agreed'] = true;
-      m['consent_date'] = DateTime.now().toIso8601String();
+      m['consent_date'] = DateTime.now().toUtc().toIso8601String();
     }
 
     return m;
@@ -253,7 +253,7 @@ class IntakeData {
     'food_allergies': foodAllergies,
     'target_timeline': targetTimeline,
     'consent_agreed': consentAgreed,
-    'consent_date': consentAgreed ? DateTime.now().toIso8601String() : null,
+    'consent_date': consentAgreed ? DateTime.now().toUtc().toIso8601String() : null,
     'risk_score': riskScore,
     'risk_level': riskLevel,
     'risk_flags': riskFlags.join(','),

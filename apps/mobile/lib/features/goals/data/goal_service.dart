@@ -76,7 +76,7 @@ class GoalService {
     if (uid == null) throw StateError('Not signed in — the goal was not updated.');
     await _db.from('goals').update({
       'status': 'completed',
-      'completed_at': DateTime.now().toIso8601String(),
+      'completed_at': DateTime.now().toUtc().toIso8601String(),
     }).eq('id', id).eq('client_id', uid);
   }
 
