@@ -608,7 +608,12 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
           for (final c in coaches) {
             final coachId = c['coach_id'] as String?;
             if (coachId != null) {
-              await svc.cancelCoach(coachId, 'switched_to_self_serve', null);
+              // A paid coach is cancelled at the end of the paid period and
+              // coaching lasts until then (owner decision 2): say so.
+              final end = await svc.cancelCoach(coachId, 'switched_to_self_serve', null);
+              if (end.scheduled) {
+                messenger.showSnackBar(SnackBar(content: Text(end.describe())));
+              }
             }
           }
         } catch (e) {

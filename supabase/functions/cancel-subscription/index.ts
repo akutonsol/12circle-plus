@@ -43,11 +43,86 @@ Deno.serve(async (req: Request) => {
     // Load the row and confirm ownership.
     const { data: sub } = await db
       .from('subscriptions')
-      .select('id, user_id, kind, coach_id, stripe_subscription_id')
+      .select('id, user_id, kind, coach_id, stripe_subscription_id, current_period_end')
       .eq('id', subscriptionId)
       .maybeSingle();
     if (!sub) return json({ error: 'Subscription not found' }, 404);
     if (sub.user_id !== user.id) return json({ error: 'Forbidden' }, 403);
+
+    // OWNER DECISION 2, 2026-11-15 (Julia): ending COACHING cancels the paid
+    // coaching subscription at the END of the period already paid for, and
+    // coaching lasts until then -- no refund needed. A coaching subscription
+    // (coach, or the monthly package the app sells) is therefore scheduled to
+    // cancel at period end; the relationship stays active and the Stripe webhook
+    // ends it when the subscription is deleted. Platform memberships keep the
+    // immediate cancellation below.
+    //
+    // The same K-07 invariant: nothing local changes unless Stripe accepted the
+    // change. A subscription Stripe already reports gone falls through to the
+    // immediate path, whose end state it already is.
+    const coachScoped = sub.kind === 'coach' || sub.kind === 'package_monthly';
+    if (coachScoped && sub.stripe_subscription_id) {
+      let scheduled: { endsAt: string | null } | null = null;
+      try {
+        const updated = await stripe.subscriptions.update(sub.stripe_subscription_id, {
+          cancel_at_period_end: true,
+        });
+        scheduled = {
+          endsAt: updated.current_period_end
+            ? new Date(updated.current_period_end * 1000).toISOString()
+            : (sub.current_period_end as string | null) ?? null,
+        };
+      } catch (e) {
+        const err = e as { code?: string; raw?: { code?: string } };
+        let gone = (err?.code ?? err?.raw?.code) === 'resource_missing';
+        if (!gone) {
+          try {
+            const remote = await stripe.subscriptions.retrieve(sub.stripe_subscription_id);
+            gone = remote?.status === 'canceled';
+          } catch (probe) {
+            const pErr = probe as { code?: string; raw?: { code?: string } };
+            gone = (pErr?.code ?? pErr?.raw?.code) === 'resource_missing';
+          }
+        }
+        if (!gone) {
+          console.error('Stripe period-end cancel failed -- nothing changed (K-07):', e);
+          return json({
+            error: 'stripe_cancel_failed',
+            message: 'Your coaching could not be ended with the payment provider. '
+                   + 'Nothing has changed. Please try again.',
+          }, 502);
+        }
+        // Already gone at Stripe: continue to the immediate path below.
+      }
+
+      if (scheduled) {
+        const { error: rowError } = await db.from('subscriptions')
+          .update({ cancel_at_period_end: true })
+          .eq('id', sub.id);
+        if (rowError) {
+          // Stripe has it scheduled; a retry repeats an idempotent update.
+          console.error('cancel-subscription: local cancel_at_period_end failed:', rowError);
+          return json({ error: 'Could not record the cancellation. Try again.' }, 500);
+        }
+        // Tell the coach when coaching ends (best effort; the schedule is saved).
+        try {
+          const { data: client } = await db.from('user_profiles')
+            .select('first_name, last_name').eq('id', sub.user_id).maybeSingle();
+          const name = [client?.first_name, client?.last_name].filter(Boolean).join(' ') || 'A client';
+          const when = scheduled.endsAt ? new Date(scheduled.endsAt).toDateString() : 'the end of their paid period';
+          await db.from('notifications').insert({
+            recipient_id: sub.coach_id,
+            type: 'coaching_ending',
+            title: 'A client is ending coaching',
+            body: `${name} has cancelled. Coaching continues until ${when}, the end of the period they paid for.`,
+            read: false,
+          });
+        } catch (e) {
+          console.error('cancel-subscription: coach notification failed:', e);
+        }
+        return json({ ok: true, endsAt: scheduled.endsAt });
+      }
+    }
 
     // Cancel immediately at Stripe (no refund for the remaining period).
     //
@@ -105,7 +180,8 @@ Deno.serve(async (req: Request) => {
       .eq('id', sub.id);
 
     // A coach subscription also ends the relationship + notifies the coach.
-    if (sub.kind === 'coach' && sub.coach_id) {
+    // (A coaching subscription only reaches here when Stripe already had it gone.)
+    if (coachScoped && sub.coach_id) {
       await db.from('coach_client_relationships')
         .update({ status: 'cancelled' })
         .eq('client_id', sub.user_id)

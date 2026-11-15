@@ -6,6 +6,8 @@ import 'package:go_router/go_router.dart';
 import 'dart:math' as math;
 import '../../../core/utils/web_logout.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../../core/observability/app_failure.dart';
+import '../../coach/data/coach_relationship_service.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coaching_mode/domain/coaching_mode_provider.dart';
 import '../../payments/domain/entitlements.dart';
@@ -811,6 +813,8 @@ class MyCoachSection extends ConsumerWidget {
   ];
 
   Future<void> _showCancelDialog(BuildContext context, WidgetRef ref, String coachId) async {
+    // Captured before any await, so the outcome can be reported afterwards.
+    final messenger = ScaffoldMessenger.maybeOf(context);
     String? selectedReason;
     final customCtrl = TextEditingController();
 
@@ -911,18 +915,24 @@ class MyCoachSection extends ConsumerWidget {
     if (confirmed == true && clientId != null) {
       // The coach on the card, not the newest relationship: a client may hold
       // several, and a later request to another coach is newer than this one.
-      await Supabase.instance.client
-          .from('coach_client_relationships')
-          .update({
-            'status':              'cancelled',
-            'cancelled_by':        'client',
-            'cancel_reason':       selectedReason,
-            'cancel_reason_custom': customCtrl.text.trim().isEmpty ? null : customCtrl.text.trim(),
-            'cancelled_at':        DateTime.now().toUtc().toIso8601String(),
-          })
-          .eq('client_id', clientId)
-          .eq('coach_id', coachId)
-          .eq('status', 'active');
+      //
+      // Through the one end-coaching policy (owner decision 2). This screen
+      // used to end only the relationship, leaving a paid coaching subscription
+      // billing; now a paid subscription is cancelled at the end of the paid
+      // period (coaching lasts until then) and an unpaid relationship ends now.
+      String message;
+      try {
+        final end = await CoachRelationshipService().cancelCoach(
+          coachId,
+          selectedReason,
+          customCtrl.text.trim().isEmpty ? null : customCtrl.text.trim(),
+        );
+        message = end.describe();
+      } catch (e) {
+        reportError('MyCoachSection.cancelCoach', e);
+        message = 'Could not end coaching. Nothing was changed. Try again.';
+      }
+      messenger?.showSnackBar(SnackBar(content: Text(message)));
       onCoachCancelled();
     }
     customCtrl.dispose();
