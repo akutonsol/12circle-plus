@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../domain/load_format.dart';
 import '../domain/workout_provider.dart';
 import '../../../core/widgets/named_icon_button.dart';
 
@@ -104,6 +105,7 @@ class _ProgressionChart extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final progression = ref.watch(exerciseProgressionProvider(exerciseName));
+    final metric = ref.watch(memberPrefersMetricProvider);
     return progression.when(
       loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
       error: (_, __) => const Center(child: Text('No data yet', style: TextStyle(color: _muted))),
@@ -132,9 +134,9 @@ class _ProgressionChart extends ConsumerWidget {
             Row(children: [
               // The PR is the heaviest set on record, not the latest session's
               // best: 100 kg last week and 60 kg today read "Current PR 60.0kg".
-              _StatCard(label: 'Current PR', value: '${maxWeight.toStringAsFixed(1)}kg', color: _brand),
+              _StatCard(label: 'Current PR', value: formatLoad(maxWeight, metric: metric), color: _brand),
               const SizedBox(width: 10),
-              _StatCard(label: 'Total Gain', value: '${gain >= 0 ? '+' : ''}${gain.toStringAsFixed(1)}kg', color: gain >= 0 ? _teal : _muted),
+              _StatCard(label: 'Total Gain', value: '${gain >= 0 ? '+' : ''}${formatLoad(gain, metric: metric)}', color: gain >= 0 ? _teal : _muted),
               const SizedBox(width: 10),
               _StatCard(label: 'Total Sets', value: '$totalSets', color: _amber),
             ]),
@@ -192,7 +194,7 @@ class _ProgressionChart extends ConsumerWidget {
                 decoration: BoxDecoration(color: _card, borderRadius: BorderRadius.circular(12), border: Border.all(color: _border)),
                 child: Row(children: [
                   Expanded(child: Text(date, style: const TextStyle(color: _muted, fontSize: 12))),
-                  _Pill(label: '${weight.toStringAsFixed(1)}kg', color: _primary),
+                  _Pill(label: formatLoad(weight, metric: metric), color: _primary),
                   const SizedBox(width: 8),
                   _Pill(label: 'Vol ${vol.toStringAsFixed(0)}', color: _teal),
                   const SizedBox(width: 8),

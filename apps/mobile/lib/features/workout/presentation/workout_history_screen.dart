@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../shared/widgets/app_scaffold.dart';
 import '../data/workout_service.dart';
+import '../domain/load_format.dart';
 import '../domain/workout_provider.dart';
 
 class _C {
@@ -196,13 +197,14 @@ class _SessionLogs extends ConsumerWidget {
   }
 }
 
-class _ExerciseLogSection extends StatelessWidget {
+class _ExerciseLogSection extends ConsumerWidget {
   final String name;
   final List<Map<String, dynamic>> sets;
   const _ExerciseLogSection({required this.name, required this.sets});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final metric = ref.watch(memberPrefersMetricProvider);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -247,7 +249,7 @@ class _ExerciseLogSection extends StatelessWidget {
                     style: const TextStyle(color: _C.tertiary, fontSize: 13,
                       fontWeight: FontWeight.w700))),
                 Expanded(child: Text(
-                  weight != null ? '${weight}kg' : '—',
+                  weight is num ? formatLoad(weight, metric: metric) : '—',
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: _C.onSurface, fontSize: 13))),
                 Expanded(child: Text('$reps',

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/workout/data/workout_service.dart';
 import 'package:circle_fitness/features/workout/domain/workout_provider.dart';
 import 'package:circle_fitness/features/workout/presentation/strength_progression_screen.dart';
@@ -100,6 +101,8 @@ void main() {
     addTearDown(tester.view.reset);
     await tester.pumpWidget(ProviderScope(
       overrides: [
+        // Metric, so the card reads kg (loads show in the member's unit).
+        currentUserProfileProvider.overrideWith((ref) async => {'unit_preference': 'metric'}),
         loggedExerciseNamesProvider.overrideWith((ref) async => ['Deadlift']),
         exerciseProgressionProvider('Deadlift').overrideWith((ref) async => [
               {'date': '2026-11-05', 'max_weight': 100.0, 'total_volume': 500.0, 'sets_count': 1},
@@ -111,8 +114,8 @@ void main() {
     await tester.pumpAndSettle();
     // The stat card: a Column holding its value above its label.
     final card = find.ancestor(of: find.text('Current PR'), matching: find.byType(Column)).first;
-    expect(find.descendant(of: card, matching: find.text('100.0kg')), findsOneWidget,
-        reason: 'THE defect: "Current PR 60.0kg" — the latest session, not the record');
+    expect(find.descendant(of: card, matching: find.text('100 kg')), findsOneWidget,
+        reason: 'THE defect: "Current PR 60 kg" — the latest session, not the record');
   });
 
   test("a session is plotted on the member's own day", () async {

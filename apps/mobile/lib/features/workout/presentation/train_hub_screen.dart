@@ -9,6 +9,7 @@ import '../../exercise_database/data/exercise_database_service.dart';
 import '../../exercise_database/data/models/exercise_detail_model.dart';
 import '../../exercise_database/domain/exercise_database_provider.dart';
 import '../data/models/workout_model.dart';
+import '../domain/load_format.dart';
 import '../domain/plan_summary.dart';
 import '../domain/week_row.dart' show thisWeeksSessions;
 import 'train_palette.dart';
@@ -554,12 +555,13 @@ class _NavTile extends StatelessWidget {
 }
 
 // ── PR Row ────────────────────────────────────────────────────────────────────
-class _PRRow extends StatelessWidget {
+class _PRRow extends ConsumerWidget {
   final Map<String, dynamic> pr;
   const _PRRow({required this.pr});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final metric = ref.watch(memberPrefersMetricProvider);
     final name   = pr['exercise_name'] as String? ?? '';
     final weight = (pr['weight_kg'] as num?)?.toDouble() ?? 0;
     final reps   = pr['reps'] as int? ?? 0;
@@ -576,7 +578,7 @@ class _PRRow extends StatelessWidget {
         Expanded(child: Text(name,
           style: const TextStyle(color: _C.onSurface, fontSize: 13,
             fontWeight: FontWeight.w600))),
-        Text('${weight.toStringAsFixed(1)} kg × $reps',
+        Text('${formatLoad(weight, metric: metric)} × $reps',
           style: const TextStyle(color: _C.amber, fontSize: 13,
             fontWeight: FontWeight.w700)),
       ]));
