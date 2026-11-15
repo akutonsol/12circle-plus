@@ -24,7 +24,5 @@
     "docs/REMEDIATION_PROGRESS.md",
     "docs/adr"
   ],
-  "exceptions": [
-    "supabase/expected_applied.json"
-  ]
+  "exceptions": []
 }
