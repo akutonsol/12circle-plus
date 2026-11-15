@@ -115,6 +115,47 @@ class WorkoutService {
       throw ArgumentError.value(
           setId, 'setId', 'a set log must carry the identity of the set it records');
     }
+    // Saves of ONE set run one after another, in the order they were asked for.
+    // The screen fires a save on every edit and on confirm without awaiting, so
+    // two saves of a set overlapped: both updates found no row, both inserted,
+    // and the later insert failed 23505 -- losing its values (often the
+    // confirmation itself) and telling the client "Could not save set."
+    final key = '$sessionId/$setId';
+    final previous = _setSaves[key] ?? Future<void>.value();
+    final save = previous
+        .then((_) {}, onError: (Object _) {})  // an earlier failure was already reported
+        .then((_) => _writeSetLog(
+              uid: uid, sessionId: sessionId, setId: setId,
+              exerciseName: exerciseName, exerciseInstanceId: exerciseInstanceId,
+              libraryExerciseId: libraryExerciseId, setNumber: setNumber,
+              reps: reps, weightKg: weightKg, rpe: rpe, notes: notes,
+              tempo: tempo, completed: completed));
+    _setSaves[key] = save;
+    try {
+      await save;
+    } finally {
+      if (identical(_setSaves[key], save)) _setSaves.remove(key);
+    }
+  }
+
+  /// The save currently queued last for each `session/set`.
+  final Map<String, Future<void>> _setSaves = {};
+
+  Future<void> _writeSetLog({
+    required String uid,
+    required String sessionId,
+    required String setId,
+    required String exerciseName,
+    required String exerciseInstanceId,
+    required String? libraryExerciseId,
+    required int setNumber,
+    required int reps,
+    required double weightKg,
+    required double? rpe,
+    required String? notes,
+    required String? tempo,
+    required bool completed,
+  }) async {
     final cleanNotes = (notes != null && notes.isNotEmpty) ? notes : null;
     final payload = {
       'exercise_name': exerciseName,
@@ -131,19 +172,29 @@ class WorkoutService {
     // Update-or-insert on the identity. Done as update-then-insert rather than
     // a PostgREST upsert so it works against databases where the partial unique
     // index on (session_id, set_id) cannot serve as an ON CONFLICT target.
-    final existing = await _supabase
+    // ONE update expression, used for the first try and for the fallback below,
+    // so this remains a single write site for the schema contract guard.
+    Future<List<dynamic>> updateRow() => _supabase
         .from('workout_set_logs')
         .update(payload)
         .eq('session_id', sessionId)
         .eq('set_id', setId)
         .select('id');
-    if ((existing as List).isEmpty) {
-      await _supabase.from('workout_set_logs').insert({
-        ...payload,
-        'session_id': sessionId,
-        'user_id': uid,
-        'set_id': setId,
-      });
+    final existing = await updateRow();
+    if (existing.isEmpty) {
+      try {
+        await _supabase.from('workout_set_logs').insert({
+          ...payload,
+          'session_id': sessionId,
+          'user_id': uid,
+          'set_id': setId,
+        });
+      } on PostgrestException catch (e) {
+        // Another writer (a second device, a restore) created this set's row
+        // between our update and our insert. The row exists now: update it.
+        if (e.code != '23505') rethrow;
+        await updateRow();
+      }
     }
   }
 
