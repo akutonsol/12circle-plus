@@ -44,6 +44,14 @@ on conflict (id) do nothing;
 update public.user_profiles set role='coach' where id in
   ('a1000000-0000-0000-0000-0000000000a1','b1000000-0000-0000-0000-0000000000b1');
 
+-- Clients C1..C3 are coach A's clients (activated server-side), as a booking
+-- client must be once migration 195 requires Coach-Guided access to the coach.
+-- Harmless before 195: the booking assertions below are about the slot.
+insert into public.coach_client_relationships(coach_id,client_id,status,initiated_by) values
+  ('a1000000-0000-0000-0000-0000000000a1','c1000000-0000-0000-0000-0000000000c1','active','coach'),
+  ('a1000000-0000-0000-0000-0000000000a1','c2000000-0000-0000-0000-0000000000c2','active','coach'),
+  ('a1000000-0000-0000-0000-0000000000a1','c3000000-0000-0000-0000-0000000000c3','active','coach');
+
 -- Slots: S1,S2 coach A · S3 coach B · S4 coach A, flagged booked with no call.
 insert into public.coach_availability(id,coach_id,slot_time,is_booked) values
   ('51000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-0000000000a1', now()+interval '2 days', false),

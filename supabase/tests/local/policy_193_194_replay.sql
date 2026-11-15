@@ -114,6 +114,32 @@ begin
 end $$;
 
 -- ===========================================================================
+-- 195 · decision 1 in the database: booking a coach's call needs Coach-Guided access
+-- ===========================================================================
+insert into public.coach_availability(id,coach_id,slot_time) values
+  ('5b000000-0000-0000-0000-000000000001','a2000000-0000-0000-0000-0000000000a2', now()+interval '2 days'),
+  ('5b000000-0000-0000-0000-000000000002','a2000000-0000-0000-0000-0000000000a2', now()+interval '3 days');
+do $$
+declare r text;
+begin
+  -- C3 self-activated its relationship with coach A (D5): data sharing only.
+  r := pg_temp.run_as('c2300000-0000-0000-0000-0000000000c3', format(
+    'insert into public.coaching_calls(client_id,coach_id,availability_slot_id,scheduled_at,status) values (%L,%L,%L,now()+interval ''2 days'',''scheduled'')',
+    'c2300000-0000-0000-0000-0000000000c3','a2000000-0000-0000-0000-0000000000a2','5b000000-0000-0000-0000-000000000001'));
+  insert into res values ('B1 a self-activated (unpaid) client cannot book the coach through the API', r='42501', r);
+  -- C2's relationship was approved by coach A (D4): Coach-Guided.
+  r := pg_temp.run_as('c2200000-0000-0000-0000-0000000000c2', format(
+    'insert into public.coaching_calls(client_id,coach_id,availability_slot_id,scheduled_at,status) values (%L,%L,%L,now()+interval ''3 days'',''scheduled'')',
+    'c2200000-0000-0000-0000-0000000000c2','a2000000-0000-0000-0000-0000000000a2','5b000000-0000-0000-0000-000000000002'));
+  insert into res values ('B2 a coach-approved client books (positive control)', r='ok', r);
+  -- A client with NO relationship at all, booking any coach.
+  r := pg_temp.run_as('c2500000-0000-0000-0000-0000000000c5', format(
+    'insert into public.coaching_calls(client_id,coach_id,scheduled_at,status) values (%L,%L,now()+interval ''4 days'',''scheduled'')',
+    'c2500000-0000-0000-0000-0000000000c5','a2000000-0000-0000-0000-0000000000a2'));
+  insert into res values ('B3 a stranger cannot book a coach they have no access to', r='42501', r);
+end $$;
+
+-- ===========================================================================
 -- 194 · decision 4: invites can be accepted; source from the VERIFIED email
 -- ===========================================================================
 insert into public.coach_invites(id,coach_id,invitee_email,token,status,expires_at) values

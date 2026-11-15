@@ -64,6 +64,10 @@
         "194": {
           "reason": "Owner decision 4 (Julia, 2026-11-15, 'Active, coach-invited'): accept_coach_invite(token) -- pending, unexpired, sent to the caller's VERIFIED email (auth.users), single use, one 42501 refusal for every failure -- activates the relationship (initiated_by coach, activated_by invite, client_source coach_invited), consumes the invite and notifies both parties. Also: set_relationship_client_source matched coach_invites against user_profiles.email, which authenticated users may UPDATE (verified on QA 2026-11-15) -- a client could claim 0% commission; it now matches the verified auth.users email. Locally replay-verified (see 193). NOT applied to QA.",
           "gate": "The same owner-approved QA apply window as 193, after 193, then the live QA suites and CI. The app's invite redemption (PendingInvite) keeps a token and retries while 194 is not applied."
+        },
+        "195": {
+          "reason": "Owner decision 1, enforced in the database: a client books a coach's call only with Coach-Guided access to that coach -- has_coach_guided_access(client, coach): an active relationship not client-activated (193), or a live coaching subscription with that coach. coaching_calls' client write arm was only client_id = auth.uid(), so any client could book any coach through the API; the app's paywall only hid the screen. Calls the coach or the server create are unaffected. Locally replay-verified (policy_193_194_replay.sh). NOT applied to QA.",
+          "gate": "The same owner-approved QA apply window as 193-194, after 193, then the live QA suites and CI."
         }
       }
     }
