@@ -635,7 +635,7 @@ class CustomExerciseService {
       await _db.from('coach_exercise_media').upsert({
         'coach_id': uid, 'exercise_id': exerciseId,
         'note': note, 'focus': focus ?? [], 'video_ref': videoRef,
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }, onConflict: 'coach_id,exercise_id');
       return true;
     } catch (e) { lastError = e; return false; }
@@ -755,7 +755,7 @@ class CustomExerciseService {
         'coach_id': uid, 'exercise_id': exerciseId,
         'voice_url': url, 'voice_duration_ms': durationMs,
         'voice_expires_at': expiresAt?.toIso8601String(),
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }, onConflict: 'coach_id,exercise_id');
       return true;
     } catch (e) { lastError = e; return false; }
@@ -884,7 +884,7 @@ class CustomExerciseService {
       await _db.from('custom_exercises').update({
         // Platform-wide publishing: goes live for all clients immediately.
         'submission_status': 'approved',
-        'submitted_at': DateTime.now().toIso8601String(),
+        'submitted_at': DateTime.now().toUtc().toIso8601String(),
         'visibility': 'global',
       }).eq('id', exerciseId);
       return true;
@@ -914,7 +914,7 @@ class CustomExerciseService {
         'submission_status': 'approved',
         'visibility': 'global',
         'last_reviewed_by': _uid,
-        'approved_at': DateTime.now().toIso8601String(),
+        'approved_at': DateTime.now().toUtc().toIso8601String(),
       }).eq('id', exerciseId);
       return true;
     } catch (_) { return false; }

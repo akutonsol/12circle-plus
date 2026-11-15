@@ -63,13 +63,13 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
           'user_id': uid,
           'provider': provider,
           'connected': true,
-          'connected_at': DateTime.now().toIso8601String(),
+          'connected_at': DateTime.now().toUtc().toIso8601String(),
         }, onConflict: 'user_id,provider');
         if (!mounted) return;
         setState(() => _connected.add(provider));
       } else {
         await Supabase.instance.client.from('user_integrations')
-            .update({'connected': false, 'disconnected_at': DateTime.now().toIso8601String()})
+            .update({'connected': false, 'disconnected_at': DateTime.now().toUtc().toIso8601String()})
             .eq('user_id', uid)
             .eq('provider', provider);
         if (!mounted) return;

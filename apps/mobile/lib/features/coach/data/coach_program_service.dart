@@ -407,7 +407,7 @@ class CoachProgramService {
       'logged_date': today,
       'value': value,
       'completed': completed,
-      'logged_at': DateTime.now().toIso8601String(),
+      'logged_at': DateTime.now().toUtc().toIso8601String(),
     }, onConflict: 'habit_id,logged_date');
   }
 

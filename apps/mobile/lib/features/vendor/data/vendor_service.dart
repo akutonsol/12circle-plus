@@ -99,7 +99,7 @@ class VendorService {
 
   Future<void> setCheckedIn(String registrationId, bool checkedIn) async {
     await _db.from('event_registrations').update({
-      'checked_in_at': checkedIn ? DateTime.now().toIso8601String() : null,
+      'checked_in_at': checkedIn ? DateTime.now().toUtc().toIso8601String() : null,
       'status': checkedIn ? 'attended' : 'registered',
     }).eq('id', registrationId);
   }

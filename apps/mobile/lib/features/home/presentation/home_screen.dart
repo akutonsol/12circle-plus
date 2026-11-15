@@ -1317,7 +1317,7 @@ void _showRateCoachDialog(BuildContext context, String coachId) {
                   'rating': selectedStars,
                   'review_text': textCtrl.text.trim().isEmpty
                     ? null : textCtrl.text.trim(),
-                  'created_at': DateTime.now().toIso8601String(),
+                  'created_at': DateTime.now().toUtc().toIso8601String(),
                 }, onConflict: 'coach_id,client_id');
                 final reviews = await Supabase.instance.client
                     .from('coach_reviews').select('rating')
