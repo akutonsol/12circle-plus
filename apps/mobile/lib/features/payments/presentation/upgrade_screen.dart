@@ -121,7 +121,6 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
 
   Future<void> _onCta() async {
     final p = widget.plan;
-    final current = widget.current;
     // Capture ancestors up front so we never touch a defunct context after an
     // await (embedded checkout can navigate this screen away mid-flow).
     final messenger = ScaffoldMessenger.of(context);
@@ -168,20 +167,31 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
       return;
     }
 
-    // Paid membership target.
+    // Paid membership target. Always ask the server to change an existing
+    // membership in place first -- whatever plan this screen shows: a member
+    // who also has a coach shows as Coach-Guided while a membership still bills,
+    // and skipping this sent them to buy a SECOND membership.
     if (mounted) setState(() => _loading = true);
-    final onMembership =
-        current == ClientPlan.selfGuided || current == ClientPlan.aiGuided;
-    if (onMembership) {
-      final result = await paymentSvc.changeMembership(p.kind!);
-      if (result == 'changed') {
-        if (mounted) setState(() => _loading = false);
-        _refresh();
-        messenger.showSnackBar(
-            SnackBar(content: Text('Your plan is now ${p.name}.')));
-        return;
-      }
-      // 'needs_checkout' or 'error' → fall through to checkout.
+    final result = await paymentSvc.changeMembership(p.kind!);
+    if (result == 'changed') {
+      if (mounted) setState(() => _loading = false);
+      _refresh();
+      messenger.showSnackBar(
+          SnackBar(content: Text('Your plan is now ${p.name}.')));
+      return;
+    }
+    // Only an explicit "there is no membership to change" may lead to a new
+    // checkout. An error used to fall through to one too -- including when the
+    // swap had gone through at Stripe and only the reply was lost: two
+    // memberships, both billed.
+    if (result != 'needs_checkout') {
+      if (mounted) setState(() => _loading = false);
+      messenger.showSnackBar(SnackBar(content: Text(result == 'payment_issue'
+          ? 'Your current membership has a payment problem. Update your '
+              'payment method in Billing, then change your plan.'
+          : "Couldn't change your plan. Try again.")));
+      _refresh();
+      return;
     }
     // OWNER DIRECTION, 2026-10-12: do not create a new checkout session after
     // the client has navigated away from the upgrade flow.
@@ -200,13 +210,11 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
     // by the `!mounted` check immediately below. Cancelling mid-flight is what
     // would orphan a paid session.
     if (!mounted) return;
-    final ok = await launchCheckout(context, ref, kind: p.kind!);
+    // launchCheckout reports its own failure (one message, the server's reason
+    // when it refused a duplicate).
+    await launchCheckout(context, ref, kind: p.kind!);
     if (!mounted) return; // embedded checkout navigated away; success screen refreshes
     setState(() => _loading = false);
-    if (!ok) {
-      messenger.showSnackBar(const SnackBar(
-          content: Text('Could not start checkout. Try again.')));
-    }
     _refresh();
   }
 

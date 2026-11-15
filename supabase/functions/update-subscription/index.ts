@@ -56,6 +56,19 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     if (!sub?.stripe_subscription_id) {
+      // A membership whose payment is failing is still a membership: Stripe is
+      // retrying it. Sending this member to a new checkout created a SECOND
+      // subscription while the first kept billing. They fix the payment first.
+      const { data: troubled, error: troubledError } = await db
+        .from('subscriptions')
+        .select('id, status')
+        .eq('user_id', user.id)
+        .in('kind', ['self_guided', 'ai_guided'])
+        .in('status', ['past_due', 'incomplete', 'unpaid'])
+        .limit(1)
+        .maybeSingle();
+      if (troubledError) return json({ error: 'Could not read your membership' }, 503);
+      if (troubled) return json({ paymentIssue: true, status: troubled.status });
       // No membership to change — caller should start a normal checkout.
       return json({ needsCheckout: true });
     }

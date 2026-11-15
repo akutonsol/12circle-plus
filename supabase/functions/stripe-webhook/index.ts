@@ -41,6 +41,19 @@ function subStatusFields(sub: Stripe.Subscription): {
   };
 }
 
+// Every database write is checked. supabase-js reports a failed write as
+// `{ error }` instead of throwing, so a payment whose access write failed used to
+// answer Stripe 200 and was never retried: paid, with no access. Throwing lands
+// in the handler's catch, which answers 500, and Stripe redelivers. The writes
+// are idempotent (conflict targets on every upsert), so a redelivery is safe.
+// deno-lint-ignore no-explicit-any
+async function must(write: PromiseLike<{ error: any }>, what: string): Promise<void> {
+  const { error } = await write;
+  if (error) throw new Error(`${what} failed: ${error.message ?? error}`);
+}
+
+const LIVE_SUBSCRIPTION = new Set(['active', 'trialing']);
+
 Deno.serve(async (req: Request) => {
   const sig = req.headers.get('stripe-signature');
   if (!sig) return new Response('Missing signature', { status: 400 });
@@ -68,7 +81,7 @@ Deno.serve(async (req: Request) => {
           const subId = session.subscription as string;
           const sub = await stripe.subscriptions.retrieve(subId);
           const coachScoped = kind === 'coach' || kind === 'package_monthly';
-          await db.from('subscriptions').upsert({
+          await must(db.from('subscriptions').upsert({
             user_id: meta.user_id,
             kind,
             coach_id: coachScoped ? meta.coach_id : null,
@@ -84,54 +97,47 @@ Deno.serve(async (req: Request) => {
               stripe_account_id: meta.stripe_account_id ?? null,
             } : {}),
             ...subStatusFields(sub),
-          }, { onConflict: 'stripe_subscription_id' });
+          }, { onConflict: 'stripe_subscription_id' }), 'record subscription');
 
-          // A client→coach subscription also activates the coaching relationship.
-          if (coachScoped && meta.coach_id) {
-            await db.from('coach_client_relationships').upsert({
-              client_id: meta.user_id,
-              coach_id: meta.coach_id,
-              status: 'active',
-            }, { onConflict: 'client_id,coach_id' });
+          // A client→coach subscription also activates the coaching relationship
+          // -- only while the subscription is actually live.
+          if (coachScoped && meta.coach_id && LIVE_SUBSCRIPTION.has(sub.status)) {
+            await activateRelationship(meta.user_id, meta.coach_id, session.created);
           }
 
           // A coach platform plan sets the coach's client capacity.
           if (kind === 'coach_plan') {
             const limits: Record<string, number> = { starter: 25, growth: 100, elite: 100000 };
-            await db.from('user_profiles')
+            await must(db.from('user_profiles')
               .update({ max_clients: limits[meta.plan_tier ?? 'starter'] ?? 25 })
-              .eq('id', meta.user_id);
+              .eq('id', meta.user_id), 'set coach capacity');
           }
         } else if (kind === 'event_ticket') {
           // Mark the pending payment paid and grant the registration.
           if (meta.payment_id) {
-            await db.from('payments').update({
+            await must(db.from('payments').update({
               status: 'paid',
               stripe_payment_intent_id: (session.payment_intent as string) ?? null,
-            }).eq('id', meta.payment_id);
+            }).eq('id', meta.payment_id), 'mark ticket payment paid');
           }
-          await db.from('event_registrations').upsert({
+          await must(db.from('event_registrations').upsert({
             event_id: meta.event_id,
             user_id: meta.user_id,
             status: 'registered',
             paid: true,
             payment_id: meta.payment_id || null,
-          }, { onConflict: 'event_id,user_id' });
+          }, { onConflict: 'event_id,user_id' }), 'grant event registration');
         } else if (kind === 'package') {
           // One-time package (per_session / bulk). Mark paid, activate the
           // coaching relationship, and grant session credits if any.
           if (meta.payment_id) {
-            await db.from('payments').update({
+            await must(db.from('payments').update({
               status: 'paid',
               stripe_payment_intent_id: (session.payment_intent as string) ?? null,
-            }).eq('id', meta.payment_id);
+            }).eq('id', meta.payment_id), 'mark package payment paid');
           }
           if (meta.coach_id) {
-            await db.from('coach_client_relationships').upsert({
-              client_id: meta.user_id,
-              coach_id: meta.coach_id,
-              status: 'active',
-            }, { onConflict: 'client_id,coach_id' });
+            await activateRelationship(meta.user_id, meta.coach_id, session.created);
           }
           const sessions = Number(meta.sessions ?? 0);
           if (sessions > 0 && meta.coach_id) {
@@ -150,13 +156,14 @@ Deno.serve(async (req: Request) => {
             // payment_id. It is only reachable when payment_id is present —
             // Postgres treats NULLs as distinct — so a manual grant with no
             // payment still inserts, and two of them do not collide.
-            await db.from('client_session_credits').upsert({
+            const grant = db.from('client_session_credits').upsert({
               client_id: meta.user_id,
               coach_id: meta.coach_id,
               package_id: meta.package_id || null,
               payment_id: meta.payment_id || null,
               sessions_total: sessions,
             }, { onConflict: 'payment_id', ignoreDuplicates: true });
+            await must(grant, 'grant session credits');
           }
         }
         break;
@@ -187,9 +194,18 @@ Deno.serve(async (req: Request) => {
             ? new Date(sub.canceled_at * 1000).toISOString()
             : new Date().toISOString();
         }
-        await db.from('subscriptions')
+        // K-23 · 'canceled' is terminal in Stripe: a canceled subscription is
+        // never live again. An `updated` event that arrives after the
+        // `deleted` one (Stripe does not order deliveries) used to overwrite
+        // 'canceled' with the stale live status -- restoring access nobody pays
+        // for. Only the deletion itself may touch a canceled row.
+        let update = db.from('subscriptions')
           .update(fields)
           .eq('stripe_subscription_id', sub.id);
+        if (event.type === 'customer.subscription.updated') {
+          update = update.neq('status', 'canceled');
+        }
+        await must(update, 'update subscription status');
         break;
       }
     }
@@ -202,3 +218,31 @@ Deno.serve(async (req: Request) => {
     return new Response(`Handler error: ${e}`, { status: 500 });
   }
 });
+
+// Declared after the handler on purpose: function declarations are hoisted, and
+// the handler verifies the Stripe signature before any database access -- this
+// keeps that order visible in the source too.
+// Activates the coaching relationship a purchase pays for -- but never undoes a
+// cancellation that happened AFTER the purchase. Stripe delivers at least once
+// and out of order: a late or redelivered checkout.session.completed used to set
+// a relationship the client had since ended back to 'active'.
+async function activateRelationship(clientId: string, coachId: string, purchasedAt: number) {
+  const { data: rel, error } = await db
+    .from('coach_client_relationships')
+    .select('status, cancelled_at')
+    .eq('client_id', clientId)
+    .eq('coach_id', coachId)
+    .maybeSingle();
+  if (error) throw new Error(`read relationship failed: ${error.message}`);
+  if (rel?.status === 'cancelled' && rel.cancelled_at &&
+      new Date(rel.cancelled_at).getTime() > purchasedAt * 1000) {
+    console.warn('stripe-webhook: purchase predates the cancellation; relationship left cancelled',
+      { clientId, coachId });
+    return;
+  }
+  await must(db.from('coach_client_relationships').upsert({
+    client_id: clientId,
+    coach_id: coachId,
+    status: 'active',
+  }, { onConflict: 'client_id,coach_id' }), 'activate relationship');
+}
