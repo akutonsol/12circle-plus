@@ -5,7 +5,7 @@
 #   assignment_196_replay.sh              run against an existing replay ($QAX_DB, default lr)
 #   assignment_196_replay.sh --build NNN  first (re)build $QAX_DB from shim.sql + migrations 000-NNN
 #                                            (same build as beta_manual_loop_replay.sh; NNN=195 gives
-#                                            the pre-fix replay, NNN=196 the post-fix one)
+#                                            the pre-fix replay, NNN=197 the post-fix one)
 #
 #   exit 0 every assertion PASSed   1 an assertion FAILed   2 a credential is set
 #   3 no server   5 psql failed   6 too few results   7 build failed
@@ -42,6 +42,6 @@ if grep -q 'ERROR' <<<"$out"; then grep 'ERROR' <<<"$out" | head -5 >&2; echo "P
 res=$(printf '%s\n' "$out" | grep -E '^(PASS|FAIL)\|' || true)
 printf '%s\n' "$res"
 n=$(printf '%s\n' "$res" | grep -c . || true)
-(( n >= ${MIN_RESULTS:-8} )) || { echo "TOO-FEW|$n results" >&2; exit 6; }
+(( n >= ${MIN_RESULTS:-10} )) || { echo "TOO-FEW|$n results" >&2; exit 6; }
 ! printf '%s\n' "$res" | grep -q '^FAIL|' || exit 1
 echo "ALL $n PASSED"

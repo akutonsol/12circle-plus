@@ -1,5 +1,6 @@
--- Migration 196 regression: a client cannot assign itself someone else's program
--- (and so read it). LOCAL REPLAY only (loopback scratch DB). One transaction,
+-- Migrations 196-197 regression: a client cannot assign itself someone else's
+-- program, and a coach cannot assign another coach's program (either way, the
+-- assignment row was the key to reading it). LOCAL REPLAY only (loopback scratch DB). One transaction,
 -- always ROLLED BACK. Client writes are issued as `authenticated` with the
 -- caller's JWT claims, so RLS applies as on the platform. Every refusal has a
 -- positive control. Output: one `PASS|id|detail` or `FAIL|id|detail` per assertion.
@@ -112,6 +113,26 @@ begin
   -- C4 the client still reads its own assignments.
   n := pg_temp.sees(x, format('public.workout_program_assignments where client_id=%L', x));
   insert into res values ('C4 a client still reads its own assignments', n>=1, 'sees='||n);
+
+  -- 197 · S4 coach A assigns coach B's PRIVATE program PB to A's own client C.
+  n := pg_temp.sees('a9600000-0000-0000-0000-0000000000a1',
+         format('public.program_workouts where program_id=%L', 'b9600000-0000-0000-0000-00000000bbbb'));
+  r := pg_temp.run_as('a9600000-0000-0000-0000-0000000000a1', format(
+    'insert into public.workout_program_assignments(program_id,client_id,coach_id,status) values (%L,%L,%L,''active'')',
+    'b9600000-0000-0000-0000-00000000bbbb', 'c9600000-0000-0000-0000-0000000000c1', 'a9600000-0000-0000-0000-0000000000a1'));
+  insert into res values ('S4 a coach cannot assign another coach''s program to its client, and cannot read it',
+    r<>'ok' and pg_temp.sees('a9600000-0000-0000-0000-0000000000a1',
+      format('public.program_workouts where program_id=%L', 'b9600000-0000-0000-0000-00000000bbbb'))=0,
+    'before='||n||' insert='||r);
+
+  -- 197 · S5 coach A repoints its own (replaced) assignment of PA at B's PB.
+  r := pg_temp.run_as('a9600000-0000-0000-0000-0000000000a1', format(
+    'update public.workout_program_assignments set program_id=%L where client_id=%L and coach_id=%L',
+    'b9600000-0000-0000-0000-00000000bbbb', 'c9600000-0000-0000-0000-0000000000c1', 'a9600000-0000-0000-0000-0000000000a1'));
+  insert into res select 'S5 …nor by repointing its own assignment at that program',
+    bool_and(a.program_id='a9600000-0000-0000-0000-00000000aaaa'), 'update='||r||' programs='||string_agg(a.program_id::text, ',')
+    from public.workout_program_assignments a
+   where a.client_id='c9600000-0000-0000-0000-0000000000c1' and a.coach_id='a9600000-0000-0000-0000-0000000000a1';
 end $$;
 
 select case when ok then 'PASS' else 'FAIL' end || '|' || id || '|' || detail from res order by id;

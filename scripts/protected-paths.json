@@ -24,8 +24,5 @@
     "docs/REMEDIATION_PROGRESS.md",
     "docs/adr"
   ],
-  "exceptions": [
-    "supabase/migrations/197_coaches_assign_only_their_own_programs.sql",
-    "supabase/expected_applied.json"
-  ]
+  "exceptions": []
 }
