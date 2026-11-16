@@ -88,7 +88,7 @@ beta-ready on this evidence alone.
 | #165 `fix/webhook-reads-current-subscription` @ `3fa490a` | Webhook writes the subscription as Stripe holds it now — a late `updated` event can no longer restore access after `past_due` | node test 4/4 (wiring case fails on main); Flutter webhook source tests 55; CI 7/7 (`43880220835`) | open |
 | #166 `fix/workout-brief-uses-the-library` @ `6b172df` | An assigned movement's brief shows the built-in library's form and steps (exact normalised name match) | 2 FAIL on main → 7/7; suite 2690; CI 7/7 (`43881848146`) | open |
 
-## Migration readiness, 182–199
+## Migration readiness, 182–200
 
 Live ledger (ENV-3, run `43792727007`): QA applied through **192**; 182–186 **excluded**
 (declared, gated); 193–196 **pending**. Each was replay-verified locally; none is on QA.
@@ -348,6 +348,67 @@ The proposal narrows the active-coach arm to programs the client owns or that ha
 Workout history reads `workout_sessions` (own rows), never the program tables, so it is unaffected.
 Applying it is **owner decision 14**; it would become migration 200 with this file as its test.
 
+## Ownership and storage — final policy (round 4, 2026-11-16)
+
+Direction given in chat on 2026-11-16 for decisions **14, 15, 15b**. Implemented as
+**prepared, unapplied** changes; each still needs Julia's approval and a decision-log entry
+(§2) when approved. Nothing is applied or merged.
+
+### Decision 15 — exercise media (revised migration 199, PR #168)
+
+| Exercise | Upload / replace / delete media | Read |
+|---|---|---|
+| **Platform** (`coach_id` null, shared) | **content editors only** — `is_content_editor()`: `admin` or `content_manager` | everyone (public) |
+| **Private** (coach-owned) | **its coach, or an admin** | everyone (public) |
+| Other coaches | cannot replace shared or another coach's media | read / use |
+
+- `content_manager` is a real, implemented role: assigned only by `admin_set_user_role()`
+  (`handle_new_user` never lets a registrant pick it); `is_content_editor()` (083) already
+  authorizes the content pipeline (`review_exercise_content`, `review_attribute`,
+  `finalize_intelligence`, `rebuild_*`, `seed_warmup_library`); the app gates the Content Center,
+  review queue and intelligence review to `admin`/`content_manager`. **Gap closed:** before 199 the
+  role had *no* working media path (`update_exercise_media` refused it — replay S3 FAILS on 000-198).
+- Server paths covered: storage INSERT/UPDATE/DELETE policies and `update_exercise_media` (one rule:
+  `can_write_exercise_media`); `can_delete_exercise_media` delegates to it.
+- App: the exercise screen's **Edit** button shows only where the database accepts the edit
+  (`canEditExercise`; `test/unit/exercise_edit_rights_test.dart` — wiring fails on main).
+- Replay `storage_199_replay.sh`: **37 assertions — 20 FAIL on 000-198, 37/37 on 000-199 and QA shape.**
+  Manifest: the existing `199` entry's reason updated; no new entry.
+
+### Decision 15b — coach media stays public (documented, no change)
+
+| Path | Who writes (after 199) | Who reads | Public-URL dependency |
+|---|---|---|---|
+| `coach-transformations/<coach>/…` | that coach | anyone (shown in the coach directory) | **yes** — `getPublicUrl` stored in `user_profiles.transformation_photo_urls` (coach_business_screen) |
+| `voice/<coach>/…` | that coach | signed at render time | legacy rows may hold a public URL; `coachVoiceSigningPath` accepts both forms |
+| `coach-videos/<coach>/<client>/…` | that coach | API: that coach and client only (199) | none — path stored, no player (OD-57) |
+
+QA holds **0** coach-media objects. **Path to private media:** (1) move transformation photos to
+their own public bucket (e.g. `coach-public`) and rewrite `transformation_photo_urls`; (2) backfill
+any voice rows that still hold public URLs to paths; (3) then set `coach-media` `public = false`
+— videos and voice are already signed. Until (1) lands, `coach-media` stays public, as directed.
+
+### Decision 14 — program history (migration 200, PR stacked on #168)
+
+| Who | Reads a program assigned to the client |
+|---|---|
+| author | yes (unchanged) |
+| the client — its history (O8) | yes (unchanged) |
+| the assigning coach | yes (unchanged) |
+| the client's **active** coach | only client-owned or unowned/generated programs (O11) — **not another coach's (O7)** |
+| admins | yes |
+
+Replay `program_history_200_replay.sh`: **2 FAIL on 000-199 (H1, H2) → 11/11 on 000-200 and QA shape.**
+Ownership matrix with 200, both shapes: O1 ok; O2/O4/O6 refused; O5 0; **O7 0**; O8 1; O9 1; O10 0.
+Workout history reads the client's own session rows — K6 intact.
+
+### Migration chain (all unapplied)
+
+`196, 197` (#161) → `198` (#167) → `199` (#168, revised) → `200` (new PR). Each PR adds exactly
+its own `qa.pending` key; exclusions 182–186 unchanged; `applied_through` 192 unchanged. On
+000-200 and on QA's shape every replay passes: program_history_200 11, storage_199 37, credits_198 8,
+assignment_196 10, policy_193_194 21, integrity_187_192 34.
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
@@ -387,7 +448,8 @@ These are Julia's calls; the recommendation is engineering's view, not a decisio
 | 193–195 | decisions 1 & 4; bookings need Coach-Guided | owner-approved QA window (193 before 195) |
 | 196–197 | program ownership (PR #161) | owner-approved QA window naming 196, 197 |
 | 198 | session credits not coach-writable (PR #167, stacked on #161) | owner-approved QA window naming 198 |
-| 199 | storage writes need ownership (PR stacked on #167) | owner-approved QA window naming 199 — **before any beta media is uploaded** |
+| 199 | storage writes need ownership + decision 15 (PR #168, stacked on #167) | owner-approved QA window naming 199 — **before any beta media is uploaded** |
+| 200 | program history stays with its author — decision 14 (PR stacked on #168) | owner-approved QA window naming 200, after 196–197 |
 | 182–186 | exercise cert scoping, engine guards, nutrition/coach write arms (185) | separate authorization; gates unchanged |
 
 ## External deployment / configuration required
