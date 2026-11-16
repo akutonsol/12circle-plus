@@ -1,4 +1,5 @@
--- Migration 199 regression: storage writes need ownership. LOCAL REPLAY only
+-- Migration 199 regression: storage writes need ownership (with decision 15:
+-- platform exercise media belongs to the content editors). LOCAL REPLAY only
 -- (loopback scratch DB; the shim models storage.objects with RLS, which is what
 -- Supabase Storage enforces). One transaction, always ROLLED BACK. Each write is
 -- issued as `authenticated` with JWT claims. Every refusal has a positive control.
@@ -36,16 +37,18 @@ end $$;
 insert into storage.buckets(id,name,public) values ('exercise-media','exercise-media',true),('coach-media','coach-media',true)
 on conflict (id) do nothing;
 
--- Coaches A, B; admin M; client C (A's client), client D.
+-- Coaches A, B; admin M; content manager K; client C (A's client), client D.
 insert into auth.users(id,email) values
   ('a1990000-0000-0000-0000-0000000000a1','st-coach-a@local'),
   ('b1990000-0000-0000-0000-0000000000b1','st-coach-b@local'),
   ('e1990000-0000-0000-0000-0000000000e1','st-admin@local'),
+  ('f2990000-0000-0000-0000-0000000000f2','st-content-mgr@local'),
   ('c1990000-0000-0000-0000-0000000000c1','st-client-c@local'),
   ('d1990000-0000-0000-0000-0000000000d1','st-client-d@local')
 on conflict (id) do nothing;
 update public.user_profiles set role='coach' where id in ('a1990000-0000-0000-0000-0000000000a1','b1990000-0000-0000-0000-0000000000b1');
 update public.user_profiles set role='admin' where id='e1990000-0000-0000-0000-0000000000e1';
+update public.user_profiles set role='content_manager' where id='f2990000-0000-0000-0000-0000000000f2';
 
 -- A's private exercise XA; a platform exercise XP (coach_id null).
 insert into public.custom_exercises(id,coach_id,name,visibility) values
@@ -60,6 +63,8 @@ insert into storage.objects(bucket_id,name,owner) values
   ('exercise-media','exercises/f1990000-0000-0000-0000-00000000ffff/del_by_client.jpg','a1990000-0000-0000-0000-0000000000a1'),
   ('exercise-media','exercises/f1990000-0000-0000-0000-00000000ffff/del_by_coach.jpg','a1990000-0000-0000-0000-0000000000a1'),
   ('exercise-media','exercises/f1990000-0000-0000-0000-00000000ffff/del_by_admin.jpg','a1990000-0000-0000-0000-0000000000a1'),
+  ('exercise-media','exercises/f1990000-0000-0000-0000-00000000ffff/del_by_cm.jpg','e1990000-0000-0000-0000-0000000000e1'),
+  ('exercise-media','exercises/a1990000-0000-0000-0000-00000000aaaa/del_by_cm.jpg','a1990000-0000-0000-0000-0000000000a1'),
   ('coach-media','coach-videos/a1990000-0000-0000-0000-0000000000a1/c1990000-0000-0000-0000-0000000000c1/1.mp4','a1990000-0000-0000-0000-0000000000a1'),
   ('coach-media','coach-transformations/a1990000-0000-0000-0000-0000000000a1/1.jpg','a1990000-0000-0000-0000-0000000000a1'),
   ('coach-media','coach-transformations/a1990000-0000-0000-0000-0000000000a1/2.jpg','a1990000-0000-0000-0000-0000000000a1');
@@ -69,6 +74,7 @@ declare r text;
   A constant uuid := 'a1990000-0000-0000-0000-0000000000a1';
   B constant uuid := 'b1990000-0000-0000-0000-0000000000b1';
   M constant uuid := 'e1990000-0000-0000-0000-0000000000e1';
+  K constant uuid := 'f2990000-0000-0000-0000-0000000000f2';
   C constant uuid := 'c1990000-0000-0000-0000-0000000000c1';
   D constant uuid := 'd1990000-0000-0000-0000-0000000000d1';
   XA constant text := 'exercises/a1990000-0000-0000-0000-00000000aaaa/';
@@ -99,8 +105,21 @@ begin
   insert into res values ('P1 the owning coach uploads to its private exercise', r = 'ok:1', r);
   r := pg_temp.run_as(A, format(upd, 'exercise-media', XA||'image.jpg'));
   insert into res values ('P2 the owning coach re-uploads (overwrites) its media', r = 'ok:1', r);
+  -- decision 15: platform media is the content editors' (admin, content_manager).
   r := pg_temp.run_as(B, format(ins, 'exercise-media', XP||'video_side.mp4', B));
-  insert into res values ('P3 a coach attaches media to a platform exercise (update_exercise_media rule)', r = 'ok:1', r);
+  insert into res values ('E9 a coach cannot add media to a shared PLATFORM exercise', r not like 'ok%', r);
+  r := pg_temp.run_as(B, format(upd, 'exercise-media', XP||'image.jpg'));
+  insert into res values ('E12 a coach cannot replace a platform exercise''s media', r <> 'ok:1', r);
+  r := pg_temp.run_as(K, format(ins, 'exercise-media', XA||'cm.jpg', K));
+  insert into res values ('E10 a content manager cannot upload to a coach''s PRIVATE exercise', r not like 'ok%', r);
+  r := pg_temp.run_as(K, format(del, 'exercise-media', XA||'del_by_cm.jpg'));
+  insert into res values ('E11 a content manager cannot delete a coach''s private media', r <> 'ok:1', r);
+  r := pg_temp.run_as(K, format(ins, 'exercise-media', XP||'video_front.mp4', K));
+  insert into res values ('P7 a content manager uploads platform media', r = 'ok:1', r);
+  r := pg_temp.run_as(K, format(upd, 'exercise-media', XP||'image.jpg'));
+  insert into res values ('P8 a content manager replaces platform media', r = 'ok:1', r);
+  r := pg_temp.run_as(K, format(del, 'exercise-media', XP||'del_by_cm.jpg'));
+  insert into res values ('P9 a content manager deletes platform media', r = 'ok:1', r);
   r := pg_temp.run_as(M, format(upd, 'exercise-media', XA||'image.jpg'));
   insert into res values ('P4 an admin edits any exercise media', r = 'ok:1', r);
   r := pg_temp.run_as(M, format(del, 'exercise-media', XP||'del_by_admin.jpg'));
@@ -146,7 +165,13 @@ begin
   insert into res values ('R2 a client cannot set media via the RPC', r not like 'ok%', 'rpc='||r);
   r := pg_temp.run_as(B, format('select public.update_exercise_media(%L::uuid, ''https://x/p.jpg'', null)',
          'f1990000-0000-0000-0000-00000000ffff'));
-  insert into res values ('S1 a coach still sets media on a platform exercise via the RPC', r = 'ok:1', 'rpc='||r);
+  insert into res values ('R3 a coach cannot set a platform exercise''s media via the RPC', r not like 'ok%', 'rpc='||r);
+  r := pg_temp.run_as(K, format('select public.update_exercise_media(%L::uuid, ''https://x/k.jpg'', null)',
+         'f1990000-0000-0000-0000-00000000ffff'));
+  insert into res values ('S3 a content manager sets a platform exercise''s media via the RPC', r = 'ok:1', 'rpc='||r);
+  r := pg_temp.run_as(K, format('select public.update_exercise_media(%L::uuid, ''https://x/k2.jpg'', null)',
+         'a1990000-0000-0000-0000-00000000aaaa'));
+  insert into res values ('R4 a content manager cannot set a coach''s private exercise media via the RPC', r not like 'ok%', 'rpc='||r);
   r := pg_temp.run_as(A, format('select public.update_exercise_media(%L::uuid, ''https://x/a.jpg'', null)',
          'a1990000-0000-0000-0000-00000000aaaa'));
   insert into res values ('S2 the owning coach still sets media on its private exercise', r = 'ok:1', 'rpc='||r);

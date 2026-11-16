@@ -3,8 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/exercise_database_provider.dart';
 import '../domain/custom_exercise_provider.dart';
+import '../domain/exercise_edit_rights.dart';
 import '../data/custom_exercise_service.dart';
 import '../data/models/exercise_detail_model.dart';
 import '../../workout/data/models/video_variant_model.dart';
@@ -424,14 +426,19 @@ class _FindVideoCard extends StatelessWidget {
       ])));
 }
 
-// Coach/admin-only: open the create screen in edit mode for this exercise.
+// Open the create screen in edit mode -- only for someone the database lets
+// edit this exercise (canEditExercise: admin; content editors on a platform
+// exercise; the owning coach on a private one).
 class _EditFab extends ConsumerWidget {
   final ExerciseDetail exercise;
   const _EditFab({required this.exercise});
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final role = ref.watch(currentUserProfileProvider).valueOrNull?['role'];
-    if (role != 'coach' && role != 'admin') return const SizedBox.shrink();
+    final role = ref.watch(currentUserProfileProvider).valueOrNull?['role'] as String?;
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (!canEditExercise(role: role, uid: uid, exerciseCoachId: exercise.coachId)) {
+      return const SizedBox.shrink();
+    }
     return FloatingActionButton.extended(
       heroTag: 'ex-edit',
       backgroundColor: _C.surfaceContainerHigh,

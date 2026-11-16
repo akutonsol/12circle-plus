@@ -17,13 +17,15 @@
 -- THE RULES, each mirroring an authority that already exists -- none is new:
 --   exercise-media (paths are exercises/<exercise id>/<file>, CustomExerciseService):
 --     * the path must name an EXISTING exercise (the app uploads after the row);
---     * upload / overwrite: an admin; the owning coach of a PRIVATE exercise
---       (custom_exercises "coaches manage own exercises"); and, for a PLATFORM
---       exercise (coach_id null), a coach or admin -- update_exercise_media's
---       existing rule (072);
---     * delete: an admin, or the owning coach of a private exercise. Platform
---       media is shared, so no single coach deletes it (the app never deletes
---       exercise media at all);
+--     * PLATFORM exercise (coach_id null) -- shared by every coach: upload,
+--       overwrite and delete only by a CONTENT EDITOR, public.is_content_editor()
+--       = admin or content_manager (083; the role that already runs the content
+--       pipeline -- review, intelligence, warm-up seed). Other coaches read and
+--       use platform exercises but cannot replace or remove shared media
+--       (owner decision 15, direction 2026-11-16);
+--     * PRIVATE exercise (coach_id set): upload, overwrite and delete only by its
+--       coach or an admin (custom_exercises "coaches manage own exercises" +
+--       "admin moderate exercises");
 --     * public read is unchanged.
 --   coach-media (paths are <kind>/<uploader id>/..., three call sites):
 --     * upload / overwrite only inside your OWN folder, and only as a coach or
@@ -32,18 +34,18 @@
 --     * read through the API: coach-videos/<coach>/<client>/... only by that coach
 --       or that client; other paths unchanged. Nothing plays the videos today
 --       (OD-57), so nothing that works is taken away.
---   update_exercise_media (072): keeps its coach/admin rule and search_path pin;
---     on a PRIVATE exercise it now also requires the owning coach or an admin, as
---     custom_exercises' own policy does (it was SECURITY DEFINER and bypassed it).
+--   update_exercise_media (072): the same rule as the bucket -- platform exercise:
+--     content editors only; private exercise: its coach or an admin. 072 let any
+--     coach or admin set media on ANY exercise (and refused content_manager, so
+--     the content role had no working media path at all).
 --
 -- NOT CHANGED, AND WHY (owner decisions, recorded in the ledger):
 --   * Both buckets stay PUBLIC: an object URL still serves without a session.
 --     Making coach-media private (SEC-VIDEO-1's stated next step) breaks the
 --     public transformation images, which still use getPublicUrl -- a product/
 --     infra decision.
---   * On a PLATFORM exercise any coach may still replace another coach's media
---     (update_exercise_media's rule). Whether platform media has an owner, and
---     whether content_manager may edit it, is owner decision 15.
+--   * Decision 15b (direction 2026-11-16): coach-media stays PUBLIC until the
+--     public transformation images have their own media location; see the ledger.
 --
 -- Reversible: drop the policies below and recreate 061's and 036's; restore 072's
 -- function body.
@@ -58,14 +60,15 @@ STABLE
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
+  -- Upload, overwrite AND delete use one rule (decision 15): platform media is
+  -- the content editors'; private media is its coach's (and an admin's).
   SELECT CASE
     WHEN (storage.foldername(p_name))[1] IS DISTINCT FROM 'exercises' THEN false
     ELSE COALESCE((
-      SELECT public.is_admin()
-          OR (e.coach_id IS NULL AND EXISTS (
-                SELECT 1 FROM public.user_profiles u
-                 WHERE u.id = (SELECT auth.uid()) AND u.role IN ('coach', 'admin')))
-          OR (e.coach_id IS NOT NULL AND e.coach_id = (SELECT auth.uid()))
+      SELECT CASE
+               WHEN e.coach_id IS NULL THEN public.is_content_editor()
+               ELSE e.coach_id = (SELECT auth.uid()) OR public.is_admin()
+             END
         FROM public.custom_exercises e
        WHERE e.id::text = (storage.foldername(p_name))[2]), false)
   END;
@@ -78,14 +81,7 @@ STABLE
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-  SELECT CASE
-    WHEN (storage.foldername(p_name))[1] IS DISTINCT FROM 'exercises' THEN false
-    ELSE COALESCE((
-      SELECT public.is_admin()
-          OR (e.coach_id IS NOT NULL AND e.coach_id = (SELECT auth.uid()))
-        FROM public.custom_exercises e
-       WHERE e.id::text = (storage.foldername(p_name))[2]), false)
-  END;
+  SELECT public.can_write_exercise_media(p_name);
 $$;
 
 REVOKE ALL ON FUNCTION public.can_write_exercise_media(text) FROM PUBLIC, anon;
@@ -109,8 +105,8 @@ CREATE POLICY "exercise-media overwrite by exercise editor" ON storage.objects
   USING (bucket_id = 'exercise-media' AND public.can_write_exercise_media(name))
   WITH CHECK (bucket_id = 'exercise-media' AND public.can_write_exercise_media(name));
 
-DROP POLICY IF EXISTS "exercise-media delete by owner or admin" ON storage.objects;
-CREATE POLICY "exercise-media delete by owner or admin" ON storage.objects
+DROP POLICY IF EXISTS "exercise-media delete by exercise editor" ON storage.objects;
+CREATE POLICY "exercise-media delete by exercise editor" ON storage.objects
   FOR DELETE TO authenticated
   USING (bucket_id = 'exercise-media' AND public.can_delete_exercise_media(name));
 
@@ -156,7 +152,7 @@ CREATE POLICY "coach media read, videos by coach and client" ON storage.objects
     )
   );
 
--- ── update_exercise_media: a private exercise's media is its coach's ─────────
+-- ── update_exercise_media: the same rule as the bucket ────────────────────────
 CREATE OR REPLACE FUNCTION public.update_exercise_media(p_id uuid, p_image_url text, p_video_variants jsonb)
 RETURNS boolean
 LANGUAGE plpgsql
@@ -164,18 +160,21 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
 declare
-  v_role  text;
+  v_found boolean;
   v_owner uuid;
 begin
-  select role into v_role from user_profiles where id = auth.uid();
-  if v_role is null or v_role not in ('coach', 'admin') then
-    raise exception 'not authorized to add media';
+  select true, coach_id into v_found, v_owner from custom_exercises where id = p_id;
+  if v_found is null then
+    return false;
   end if;
-  select coach_id into v_owner from custom_exercises where id = p_id;
-  -- 199: a PRIVATE exercise (coach_id set) is edited only by its coach or an
-  -- admin, as custom_exercises' own policy says. Platform exercises keep 072's rule.
-  if v_owner is not null and v_owner <> auth.uid() and v_role <> 'admin' then
-    raise exception 'not authorized to add media';
+  -- 199 (decision 15): the bucket's rule. Platform exercise: content editors
+  -- (admin, content_manager). Private exercise: its coach or an admin.
+  if v_owner is null then
+    if not public.is_content_editor() then
+      raise exception 'not authorized to add media' using errcode = '42501';
+    end if;
+  elsif v_owner <> auth.uid() and not public.is_admin() then
+    raise exception 'not authorized to add media' using errcode = '42501';
   end if;
   update custom_exercises
      set image_url = coalesce(p_image_url, image_url),
