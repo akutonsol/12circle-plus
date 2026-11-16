@@ -205,6 +205,11 @@ jobs:
           node scripts/check-migration-wave-coverage.mjs --check
           node tests/skills-agent/coordinator.test.mjs
 
+      - name: Stripe webhook writes the current subscription state
+        # Stripe does not order deliveries; a late `updated` event must not
+        # overwrite a newer status. Fake Stripe client only: no network.
+        run: node --test supabase/tests/functions/current_subscription.test.mjs
+
       - name: Function posture (definer search_path, anon EXECUTE)
         run: |
           set -euo pipefail
