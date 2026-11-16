@@ -15,7 +15,7 @@ evidence. Nothing is marked complete without it.
 | QA Edge Functions | **1 of 19 deployed** (`ai-nutrition` v18, deployed ~2026-09-30 from the pre-rename path) |
 | QA function secrets | `ANTHROPIC_API_KEY` + Supabase defaults only. **No Stripe, no email provider, no `APP_URL`, no YouTube** |
 | QA vault | **empty** — the three AI cron jobs run hourly/daily and skip (`service_role_key` / `project_url` not set) |
-| Vercel | **not used by this repository** — no `vercel.json` or Vercel config is tracked; the Vercel connector is unauthenticated here. Nothing to audit. |
+| Vercel | **no project for this repository** (verified 2026-11-16 via the Vercel connector, read-only): the one team holds `12circle-fitness-staging`, a **Next.js** project belonging to the separate 12 Circle Fitness product, not this Flutter app; no `vercel.json` is tracked here. Web hosting for 12circle-plus remains to be chosen (DEC 12). |
 
 ## Phase status
 
@@ -472,6 +472,7 @@ exists.
 - A coach can assign another coach's program to their client and read it (196 leaves open).
 - QA's only deployed function was built from an older tree; QA's AI nutrition is not main's.
 - Content: 20 of 621 database exercises complete, 0 with media; programs not linked to the library.
+- Nutrition sync verified (2026-11-16): every meal-logging path calls `refreshAfterMealLogged`; no defect.
 
 ## Next autonomous action
 
