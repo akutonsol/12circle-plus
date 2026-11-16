@@ -96,6 +96,25 @@ Live ledger (ENV-3, run `43792727007`): QA applied through **192**; 182–186 **
    PR, then one CI run (live suites + ENV-3).
 3. Route A (182–186) stays separately gated and is applied only as its own ordered push.
 
+## Subscription lifecycle (code trace; nothing exercisable on QA)
+
+| Stage | Code path | State |
+|---|---|---|
+| New subscription / checkout | `create-checkout` (409 `already_subscribed` guard) → `checkout.session.completed` | implemented; idempotent grants (conflict targets); **not deployed on QA** |
+| Signature validation | `constructEventAsync` before any DB access; 400 on a bad signature | implemented |
+| Upgrade / downgrade | `update-subscription` → `customer.subscription.updated` | implemented |
+| Renewal | `customer.subscription.updated` moves the period | state follows; **`invoice.paid` not handled → renewals never reach `payments`** (coach revenue under-counts) |
+| Payment failure | Stripe sets `past_due` → `subscription.updated` | status stored; **`invoice.payment_failed` not handled** (Gate 4.9); grace period is a policy question |
+| Cancel at period end | `cancel-subscription` sets `cancel_at_period_end` (decision 2, #149) | implemented; **not deployed** |
+| Expiration | `customer.subscription.deleted` ends a coaching relationship (`cancelled_by 'billing'`) | implemented |
+| Refund | — | **not handled** (`charge.refunded`); whether a refund revokes access is a decision |
+| Duplicate prevention | 409 guard in checkout/update; webhook `.neq('status','canceled')` | implemented |
+
+Blocked on: a QA Stripe **test-mode** account, keys, webhook secret, price ids, and function
+deployment. Validation script once those exist: checkout → webhook grant → renewal → failed
+renewal → cancel at period end → expiry, each read back from `subscriptions` and
+`client_plan()`.
+
 ## Decisions required (Julia)
 
 1. `ai-generate-workout` tier — the button is on the ungated `/workouts` (every plan) while `canGenerateProgram` says AI-Guided.
@@ -108,6 +127,7 @@ Live ledger (ENV-3, run `43792727007`): QA applied through **192**; 182–186 **
 8. Coach-to-coach program sharing (196 leaves it open).
 9. Scores/challenge progress are client-written — accept for beta, or move scoring server-side.
 10. Rollback strategy (PITR vs forward-only, PD-A26).
+11. Payment failure grace period, and whether a refund revokes access.
 
 ## Migration approvals required
 
