@@ -101,7 +101,7 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
         'checkin_id': widget.checkinId,
         'video_url': videoUrl,
         'notes': _noteCtrl.text.trim().isEmpty ? null : _noteCtrl.text.trim(),
-        'created_at': DateTime.now().toIso8601String(),
+        'created_at': DateTime.now().toUtc().toIso8601String(),
       });
 
       await _db.from('notifications').insert({

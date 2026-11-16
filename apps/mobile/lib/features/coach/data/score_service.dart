@@ -77,7 +77,7 @@ class ScoreService {
       'checkin_points': current['checkin_points'] ?? 0,
       'community_points': current['community_points'] ?? 0,
       ...updates,
-      'updated_at': DateTime.now().toIso8601String(),
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
     };
     merged['total_score'] = (merged['workout_points'] as int) +
         (merged['nutrition_points'] as int) +

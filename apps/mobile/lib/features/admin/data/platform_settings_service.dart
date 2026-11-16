@@ -21,7 +21,7 @@ class PlatformSettingsService {
       await _db.from('platform_settings').upsert({
         'key': 'marketplace_commission_rate',
         'value': rate.toStringAsFixed(4),
-        'updated_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
       }, onConflict: 'key');
       return true;
     } catch (_) {
