@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:circle_fitness/core/realtime/realtime.dart';
 import 'package:circle_fitness/features/dashboard/presentation/coach_dashboard_screen.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -131,8 +132,14 @@ void main() {
   });
 
   Future<List<Map<String, dynamic>>> read() async {
-    final container = ProviderContainer();
+    final container = ProviderContainer(overrides: [
+      // The provider follows weekly_checkins live; no realtime socket here.
+      tableTickerProvider.overrideWith((ref, table) => Stream.value(0)),
+    ]);
     addTearDown(container.dispose);
+    // Kept alive, as the mounted dashboard keeps it: the ticker's first event
+    // re-runs it, and an unlistened provider would be read mid-rebuild.
+    container.listen(clientCheckinsProvider, (_, __) {});
     return container.read(clientCheckinsProvider.future);
   }
 
