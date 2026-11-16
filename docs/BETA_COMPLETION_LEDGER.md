@@ -88,7 +88,7 @@ beta-ready on this evidence alone.
 | #165 `fix/webhook-reads-current-subscription` @ `3fa490a` | Webhook writes the subscription as Stripe holds it now — a late `updated` event can no longer restore access after `past_due` | node test 4/4 (wiring case fails on main); Flutter webhook source tests 55; CI 7/7 (`43880220835`) | open |
 | #166 `fix/workout-brief-uses-the-library` @ `6b172df` | An assigned movement's brief shows the built-in library's form and steps (exact normalised name match) | 2 FAIL on main → 7/7; suite 2690; CI 7/7 (`43881848146`) | open |
 
-## Migration readiness, 182–198
+## Migration readiness, 182–199
 
 Live ledger (ENV-3, run `43792727007`): QA applied through **192**; 182–186 **excluded**
 (declared, gated); 193–196 **pending**. Each was replay-verified locally; none is on QA.
@@ -111,6 +111,7 @@ someone with authority declares it.
 | 196 | A client cannot assign itself another coach's program | 2 restrictive policies | closes program-content read | independent; composes with 185 | none | drop 2 policies | `assignment_196` 8/8 (also QA shape) |
 | 197 | A coach assigns only a program it owns | 2 restrictive policies | closes coach→other coach's program read (O2) and unrelated-coach assignment (O6) | after 196; composes with 185 | none (existing rows untouched) | drop 2 policies | `assignment_196` 10/10 (also QA shape); ownership matrix |
 | 198 | Session credits not coach-writable; balance in range | drop 1 policy; CHECK NOT VALID | closes K-25 (Gate 4.8) | independent | none (QA has 0 credit rows) | recreate policy (028); drop constraint | `credits_198` 8/8 (4 FAIL before) |
+| 199 | Storage writes need ownership (exercise-media, coach-media); RPC respects private ownership | 8 storage policies, 2 helpers, 1 function | closes public-media tampering and coach-video listing | independent | none (QA: 0 exercise-media objects) | recreate 061/036 policies; restore 072 body | `storage_199` 29/29 (14 FAIL before), also QA shape |
 
 **Safe application plan (needs Julia's approval of the exact batch and window):**
 1. Window A — 193, 194, 195 in order, then 196 (or 196 alone first: it is independent).
@@ -278,13 +279,74 @@ No Stripe configuration exists on QA; no test-mode evidence is claimed.
 
 | Area | Finding | Severity | Path |
 |---|---|---|---|
-| Storage `exercise-media` (public) | **any signed-in user can UPDATE or DELETE any object** (policies check only the bucket) — a client could replace or wipe the images every user is served | P1 | recommended: DELETE owner-or-admin; INSERT/UPDATE coach-or-admin scoped to editable exercises; platform-exercise media ownership = **DEC 15** (coaches attach media to platform exercises via a privileged RPC) |
-| Storage `coach-media` (public) | any signed-in user can INSERT (no UPDATE policy; DELETE own) | P2 | restrict INSERT to coaches — DEC 15 |
+| Storage `exercise-media` (public) | **any signed-in user can UPDATE or DELETE any object** (policies check only the bucket) — a client could replace or wipe the images every user is served | P1 | **fixed in 199** (see Storage section) |
+| Storage `coach-media` (public) | any signed-in user could INSERT anywhere and list/sign coach videos to clients | P1 | **fixed in 199** (own-folder writes, videos to coach + client) |
 | Storage `progress-photos`, `chat-media`, `avatars` | owner / participant / own-folder scoped; coach reads active clients' photos | ok | — |
 | Edge Functions | 18 of 19 require a JWT; `stripe-webhook` verifies the Stripe signature | ok | plan checks → #160 |
 | Scores / challenge progress | client-writable own rows | DEC 9 | — |
 | Session credits | coach-writable | fixed in 198 | apply |
 | Program content | O2/O4/O6 | fixed in 196–197 | apply |
+
+## Storage and program history (2026-11-16, round 3)
+
+### Storage authorization — migration 199 (`fix/storage-writes-need-ownership`, stacked on #167)
+
+**What was established (QA read-only + code):**
+- Platform exercises are `custom_exercises` rows with `coach_id` null; private ones carry the
+  coach. Media paths are `exercises/<exercise id>/<file>` (`CustomExerciseService`), uploaded
+  **after** the row exists, with `upsert: true` (overwrite).
+- Who may set media today: `update_exercise_media` (072) — **any coach or admin, on any
+  exercise**; `content_manager` is not included anywhere. It is SECURITY DEFINER, so it also let a
+  coach change another coach's **private** exercise media.
+- Exercises are shared only as platform entries; nothing references media from programs
+  (program rows carry no media), so deleting media breaks exercise display, not programs.
+- coach-media paths are `<kind>/<uploader id>/…` (`coach-transformations`, `coach-videos/<coach>/<client>`,
+  `voice`); coach videos have no player (OD-57).
+
+**Bucket behaviour after 199** (both stay **public**: an object URL serves without a session):
+
+| Bucket | Policy (exact name) | Who |
+|---|---|---|
+| exercise-media | `exercise-media public read` (061, unchanged) | everyone |
+| exercise-media | `exercise-media write by exercise editor` (INSERT) | admin; a private exercise's coach; for a platform exercise, a coach or admin — path must name an existing exercise |
+| exercise-media | `exercise-media overwrite by exercise editor` (UPDATE) | same |
+| exercise-media | `exercise-media delete by owner or admin` (DELETE) | admin; a private exercise's coach. Platform media: admin only |
+| coach-media | `coach media upload to own folder` (INSERT) | a coach/admin, only under `<kind>/<own id>/` |
+| coach-media | `coach media overwrite own folder` (UPDATE, new) | same (a coach's own upsert now works) |
+| coach-media | `coach media manage own` (DELETE, 036, unchanged) | the uploader |
+| coach-media | `coach media read, videos by coach and client` (SELECT) | `coach-videos/<coach>/<client>/…` only that coach or client; other paths any signed-in user |
+
+Dropped: `exercise-media auth write`, `exercise-media auth update`, `exercise-media auth delete`,
+`coach media insert`, `coach media read`. Helpers: `can_write_exercise_media(text)`,
+`can_delete_exercise_media(text)` (definer, search_path pinned, EXECUTE to authenticated only).
+`update_exercise_media` now also requires the owner or an admin on a private exercise.
+
+**Tests** (`supabase/tests/local/storage_199_replay.sh`, 29 assertions, writes as `authenticated`):
+14 FAIL on 000-198 — unauthorized upload (E1, E2, M1), cross-coach upload (E3, M2), unauthorized
+overwrite (E4, E5), unauthorized delete (E6, E7, E8), cross-client/coach video listing (M5, M6),
+own-file re-upload blocked (Q2), RPC cross-coach media (R1) — and **29/29 on 000-199 and on QA's
+shape**. Other replays unchanged on 000-199 (21/21, 34/34, 10/10, 8/8).
+
+**Still open (decisions):** buckets public (URL access without a session — making coach-media
+private breaks public transformation images; DEC 15b); any coach may replace platform-exercise
+media and `content_manager` cannot edit it (DEC 15).
+
+### Program history — O7 / O8 (proposal, not a migration)
+
+`docs/proposals/program_history_O7_O8.sql` measures today and a proposed `can_read_program()`
+inside a rolled-back transaction (QA shape and 000-199, same result):
+
+| Case | Today | Proposed |
+|---|---|---|
+| O7 new coach reads former coach's private program | 1 (silent access) | **0** |
+| O8 client keeps reading it (history) | 1 | 1 |
+| O11 active coach reads the client's generated (unowned) plan | 1 | 1 |
+| O12 author reads its own program | 1 | 1 |
+| H1 client's workout history (own sessions) | 1 | 1 |
+
+The proposal narrows the active-coach arm to programs the client owns or that have no owner.
+Workout history reads `workout_sessions` (own rows), never the program tables, so it is unaffected.
+Applying it is **owner decision 14**; it would become migration 200 with this file as its test.
 
 ## Decision briefs (alternatives · consequences · recommendation)
 
@@ -315,7 +377,7 @@ These are Julia's calls; the recommendation is engineering's view, not a decisio
 12. Beta platforms (web only vs TestFlight / Play internal) and where the web app is hosted.
 13. Exercise media source hierarchy, and approval for content batches (QA writes).
 14. Does program history follow the client (new coach reads a former coach's program; client keeps it) or stay private to its author?
-15. Who may change media on platform exercises (and who may upload to `coach-media`)?
+15. Who may change media on platform exercises (today any coach; content_manager excluded)? 15b. Make coach-media private (breaks public transformation images unless they move)?
 16. Credit refund window when a booked session is cancelled (5b).
 
 ## Migration approvals required
@@ -324,7 +386,8 @@ These are Julia's calls; the recommendation is engineering's view, not a decisio
 |---|---|---|
 | 193–195 | decisions 1 & 4; bookings need Coach-Guided | owner-approved QA window (193 before 195) |
 | 196–197 | program ownership (PR #161) | owner-approved QA window naming 196, 197 |
-| 198 | session credits not coach-writable (PR stacked on #161) | owner-approved QA window naming 198 |
+| 198 | session credits not coach-writable (PR #167, stacked on #161) | owner-approved QA window naming 198 |
+| 199 | storage writes need ownership (PR stacked on #167) | owner-approved QA window naming 199 — **before any beta media is uploaded** |
 | 182–186 | exercise cert scoping, engine guards, nutrition/coach write arms (185) | separate authorization; gates unchanged |
 
 ## External deployment / configuration required
