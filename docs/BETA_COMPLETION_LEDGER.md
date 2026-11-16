@@ -409,6 +409,28 @@ its own `qa.pending` key; exclusions 182–186 unchanged; `applied_through` 192 
 000-200 and on QA's shape every replay passes: program_history_200 11, storage_199 37, credits_198 8,
 assignment_196 10, policy_193_194 21, integrity_187_192 34.
 
+## Controlled-beta release preparation (2026-11-16)
+
+Prepared, nothing executed: **`docs/BETA_RELEASE_RUNBOOK.md`** (merge runbook, QA migration
+runbook, Edge Function deployment plan, Stripe/email checklist, hosting recommendation, native
+checklist) and **`docs/WEEK1_ACCEPTANCE_WALKTHROUGH.md`** (the 14 journeys, P1 first).
+
+- **Merge order simulated:** #165, #160, #162, #163, #166, #161, #167, #168, #169, #164 onto `8f2c8a0`
+  with `git merge-tree` — no textual conflict. `main` has no branch protection; the per-PR gate is the
+  procedure.
+- **QA pre-flight (read-only):** ledger max 192, none of 193–200; 619 active relationships (would be
+  pre-193 — decision 3); 3 pending invites; 0 assignments or credit rows that the new rules would
+  refuse; 0 objects in exercise-media / coach-media; the 5 policies 199 drops exist by name.
+
+**New findings this round**
+
+| Finding | Severity | Path |
+|---|---|---|
+| `send-checkin-reminder` has **no caller check**: any valid project JWT can make it notify and email every active client, repeatedly | P1 (not deployed) | **deployment blocker** — require the service-role caller before deploying; small decision-free fix, not made in this preparation round |
+| `send-invite-email` falls back to `APP_URL = https://12circle.app` when unset — QA invites would link to a production-looking domain | P2 | set `APP_URL` to the hosted QA URL before any invite |
+| Native OAuth redirects to `io.circle12.app://login-callback`, which neither iOS nor Android registers | P2 (web unaffected) | register the scheme + add it to Supabase Auth redirects before native beta |
+| Sign-up may self-select `client`, `coach` or `vendor` (staff roles cannot be chosen) | info | recorded in the walkthrough |
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
@@ -435,7 +457,7 @@ These are Julia's calls; the recommendation is engineering's view, not a decisio
 9. Scores/challenge progress are client-written — accept for beta, or move scoring server-side.
 10. Rollback strategy (PITR vs forward-only, PD-A26).
 11. Payment failure grace period, and whether a refund revokes access.
-12. Beta platforms (web only vs TestFlight / Play internal) and where the web app is hosted.
+12. Beta platforms (web only vs TestFlight / Play internal) and where the web app is hosted (runbook §5 recommends Vercel static, SSO-protected).
 13. Exercise media source hierarchy, and approval for content batches (QA writes).
 14. Does program history follow the client (new coach reads a former coach's program; client keeps it) or stay private to its author?
 15. Who may change media on platform exercises (today any coach; content_manager excluded)? 15b. Make coach-media private (breaks public transformation images unless they move)?
