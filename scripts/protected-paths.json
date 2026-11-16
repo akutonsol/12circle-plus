@@ -24,8 +24,5 @@
     "docs/REMEDIATION_PROGRESS.md",
     "docs/adr"
   ],
-  "exceptions": [
-    "supabase/migrations/196_clients_cannot_self_assign_programs.sql",
-    "supabase/expected_applied.json"
-  ]
+  "exceptions": []
 }
