@@ -15,6 +15,7 @@
 // here, the same belt-and-braces the other AI functions use: the Anthropic key
 // is a paid credential and an unauthenticated caller must never spend it.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { checkPlan } from '../plan_gate.mjs';
 
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') ?? '';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
@@ -147,6 +148,11 @@ Deno.serve(async (req: Request) => {
     });
     const { data: { user } } = await userDb.auth.getUser();
     if (!user) return json({ error: 'Missing or invalid access token' }, 401);
+
+    // Server side of the app's PaywallGate: the tier the app requires at this
+    // function's entry points (plan_gate.mjs).
+    const gate = await checkPlan(userDb, user.id, 'self_guided');
+    if (!gate.ok) return json(gate.body, gate.status);
 
     // ORDER MATTERS, and it is Nest's: guard -> ValidationPipe -> service. The
     // pipe ran before anything touched the Anthropic client, so a malformed body

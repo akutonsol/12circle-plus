@@ -11,6 +11,7 @@
     "test:mobile": "cd apps/mobile && flutter test",
     "test:security": "node supabase/tests/security/run.mjs",
     "test:ai": "node supabase/tests/ai/run.mjs",
+    "test:functions": "node --test supabase/tests/functions/plan_gate.test.mjs",
     "test:contract": "node supabase/tests/contract/run.mjs",
     "build:web:dev": "cd apps/mobile && flutter build web --dart-define-from-file=dart_defines/dev.json",
     "build:web:qa": "cd apps/mobile && flutter build web --dart-define-from-file=dart_defines/qa.json",

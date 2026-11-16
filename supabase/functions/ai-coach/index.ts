@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { checkPlan } from '../plan_gate.mjs';
 
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') ?? '';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
@@ -30,6 +31,11 @@ Deno.serve(async (req: Request) => {
       console.error('Auth error:', authError);
       return json({ error: 'Unauthorized' }, 401);
     }
+
+    // Server side of the app's PaywallGate: the tier the app requires at this
+    // function's entry points (plan_gate.mjs).
+    const gate = await checkPlan(userDb, user.id, 'ai_guided');
+    if (!gate.ok) return json(gate.body, gate.status);
 
     const body = await req.json();
     const { message, mode } = body as {

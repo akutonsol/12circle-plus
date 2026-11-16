@@ -2,6 +2,7 @@
 // Accepts a food photo (base64) OR a text description and returns estimated
 // calories + macros as structured JSON, using Claude vision. Auth required.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { checkPlan } from '../plan_gate.mjs';
 
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') ?? '';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
@@ -43,6 +44,11 @@ Deno.serve(async (req: Request) => {
     });
     const { data: { user } } = await userDb.auth.getUser();
     if (!user) return json({ error: 'Unauthorized' }, 401);
+
+    // Server side of the app's PaywallGate: the tier the app requires at this
+    // function's entry points (plan_gate.mjs).
+    const gate = await checkPlan(userDb, user.id, 'self_guided');
+    if (!gate.ok) return json(gate.body, gate.status);
     if (!ANTHROPIC_API_KEY) return json({ error: 'AI not configured' }, 500);
 
     const { imageBase64, mediaType, description } = await req.json() as {

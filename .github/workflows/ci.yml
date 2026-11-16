@@ -237,6 +237,12 @@ jobs:
       - name: Edge Function JWT posture is declared (E-09)
         run: .github/scripts/check-edge-function-config.sh
 
+      - name: AI functions enforce the app's paywall on the server
+        # The app's PaywallGate hides AI Coach / AI Nutrition from lower plans;
+        # the functions behind them must refuse the same callers, or the paywall
+        # is only a hidden screen. Fakes only: no network, no credential.
+        run: node --test supabase/tests/functions/plan_gate.test.mjs
+
       - name: No environment file names production as a default (ENV-4)
         run: |
           set -euo pipefail
