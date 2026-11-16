@@ -7,6 +7,7 @@
 // against STRIPE_WEBHOOK_SECRET so only Stripe can write here.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import Stripe from 'https://esm.sh/stripe@16.12.0?target=deno';
+import { currentSubscription } from './current_subscription.mjs';
 
 const STRIPE_SECRET_KEY = Deno.env.get('STRIPE_SECRET_KEY') ?? '';
 const WEBHOOK_SECRET = Deno.env.get('STRIPE_WEBHOOK_SECRET') ?? '';
@@ -171,7 +172,10 @@ Deno.serve(async (req: Request) => {
 
       case 'customer.subscription.updated':
       case 'customer.subscription.deleted': {
-        const sub = event.data.object as Stripe.Subscription;
+        // The subscription as Stripe holds it now, not as this (possibly late)
+        // event saw it -- see current_subscription.mjs.
+        const sub = await currentSubscription(
+          stripe, event.type, event.data.object as Stripe.Subscription) as Stripe.Subscription;
         const fields = subStatusFields(sub);
         if (event.type === 'customer.subscription.deleted') {
           fields.status = 'canceled';
