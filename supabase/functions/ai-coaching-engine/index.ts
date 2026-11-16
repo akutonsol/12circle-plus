@@ -4,6 +4,7 @@
 //   type = daily_insight | weekly_review | goal_prediction
 // then persists to ai_insights / ai_reviews / ai_goal_predictions.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { checkPlan } from '../plan_gate.mjs';
 
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') ?? '';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
@@ -127,6 +128,10 @@ Deno.serve(async (req: Request) => {
       const { data: { user } } = await userDb.auth.getUser();
       if (!user) return json({ error: 'Unauthorized' }, 401);
       uid = user.id;
+      // Server side of the app's PaywallGate (plan_gate.mjs): a signed-in caller
+      // needs the AI Coach screen's tier. The service-role batch above is exempt.
+      const gate = await checkPlan(userDb, uid, 'ai_guided');
+      if (!gate.ok) return json(gate.body, gate.status);
     }
 
     const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
