@@ -815,6 +815,7 @@ class MyCoachSection extends ConsumerWidget {
   Future<void> _showCancelDialog(BuildContext context, WidgetRef ref, String coachId) async {
     // Captured before any await, so the outcome can be reported afterwards.
     final messenger = ScaffoldMessenger.maybeOf(context);
+    final container = ProviderScope.containerOf(context, listen: false);
     String? selectedReason;
     final customCtrl = TextEditingController();
 
@@ -928,6 +929,12 @@ class MyCoachSection extends ConsumerWidget {
           customCtrl.text.trim().isEmpty ? null : customCtrl.text.trim(),
         );
         message = end.describe();
+        // An active relationship is also a plan: `client_plan()` answers
+        // coach_guided for one. Coaching that ended now must not stay unlocked
+        // (Messages, Bookings, Action Items) on the cached plan -- re-read it,
+        // and the coach list. A scheduled end re-reads the same answer.
+        container.invalidate(clientPlanProvider);
+        container.invalidate(myCoachesProvider);
       } catch (e) {
         reportError('MyCoachSection.cancelCoach', e);
         message = 'Could not end coaching. Nothing was changed. Try again.';
