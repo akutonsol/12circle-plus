@@ -10,7 +10,7 @@ evidence. Nothing is marked complete without it.
 |---|---|
 | `origin/main` | `8f2c8a0` (PR #159), CI run `43792727007` **7/7 success** |
 | Live QA evidence on main | security **1173/1173**, AI **51/51**, ENV-3 L-1..L-5 PASS (ledger 188 rows; frontier 192; 182–186 declared excluded) |
-| Open PRs | #14 (owner's, untouched) · #160 · #161 · three more queued (see below) — **none of this mission's PRs are to be merged without explicit authorization** |
+| Open PRs | #14 (owner's, untouched) · #160 · #161 · #162 · #163 · #164, all CI 7/7 — **none of this mission's PRs are to be merged without explicit authorization** |
 | QA migrations | applied through **192** (182–186 excluded). **Pending, not applied:** 193, 194, 195, 196 |
 | QA Edge Functions | **1 of 19 deployed** (`ai-nutrition` v18, deployed ~2026-09-30 from the pre-rename path) |
 | QA function secrets | `ANTHROPIC_API_KEY` + Supabase defaults only. **No Stripe, no email provider, no `APP_URL`, no YouTube** |
@@ -25,7 +25,7 @@ evidence. Nothing is marked complete without it.
 | 1 — Database & authorization | #160 (AI plan gate), #161 (196 assignment self-grant); K-05/K-25 recorded (need decision 5 + migration) |
 | 2 — Payments, entitlements, AI | Payments **blocked** (no Stripe config on QA); AI entitlements → #160 |
 | 3 — Client & coach experience | Prior cycles #92–#159 merged; this mission: plan refresh after ending coaching, live coach dashboard; continuing |
-| 4 — Beta validation | Not started |
+| 4 — Beta validation | CI-level validation on every PR head; build/distribution readiness recorded below; manual QA and payments blocked |
 
 ## Module inventory
 
@@ -66,10 +66,10 @@ deployment/configuration · **MQA** needs manual QA.
 | PR / branch | What | Evidence | Status |
 |---|---|---|---|
 | #160 `fix/ai-functions-check-the-plan` | AI functions refuse callers the app's paywall refuses (K-03): `ai-coach`, `ai-coaching-engine` ≥ AI-Guided; `ai-nutrition`, `analyze-food-image` ≥ Self-Guided; coaches pass | node test 11/11; 4 of 11 fail on main's sources; CI 7/7 (`43794773571`) | open — **not deployed** |
-| #161 `fix/clients-cannot-self-assign-programs` | Migration 196: a client cannot assign itself another coach's program (that row unlocked reading the program) | replay 3 FAIL → 8/8, also on QA's shape | open — **not applied** |
-| `fix/ending-coaching-refreshes-the-plan` | Profile's Cancel Coach re-reads the plan — coaching features no longer stay unlocked | widget test fails on main; suite 2685 | PR queued |
-| `fix/coach-dashboard-follows-workouts-and-checkins` | Open coach dashboard shows a client's finished workout / new check-in (realtime) | 2 FAIL on main → 3/3; suite 2686 | PR queued |
-| `docs/beta-completion-ledger` | This ledger | — | PR queued |
+| #161 `fix/clients-cannot-self-assign-programs` | Migration 196: a client cannot assign itself another coach's program (that row unlocked reading the program) | replay 3 FAIL → 8/8, also on QA's shape; CI 7/7 (`43795976485`) | open — **not applied** |
+| #162 `fix/ending-coaching-refreshes-the-plan` | Profile's Cancel Coach re-reads the plan — coaching features no longer stay unlocked | widget test fails on main; suite 2685; CI 7/7 (`43798002991`) | open |
+| #163 `fix/coach-dashboard-follows-workouts-and-checkins` | Open coach dashboard shows a client's finished workout / new check-in (realtime) | 2 FAIL on main → 3/3; suite 2686; CI 7/7 (`43798857589`) | open |
+| #164 `docs/beta-completion-ledger` | This ledger | CI 7/7 (`43799601562`) | open |
 
 ## Migration readiness, 182–196
 
@@ -115,6 +115,21 @@ deployment. Validation script once those exist: checkout → webhook grant → r
 renewal → cancel at period end → expiry, each read back from `subscriptions` and
 `client_plan()`.
 
+## Build and distribution readiness
+
+| Item | State | Evidence |
+|---|---|---|
+| QA web build | **verified automatically** on every CI run: build, credential scan, "names no project other than QA" | CI `flutter` job |
+| Hosting / deployment pipeline | **none** — no deploy workflow, no Vercel/Netlify/Firebase/Cloudflare config; the QA web bundle exists only as a CI build | `.github/workflows` = `ci.yml`, `supabase-keepalive.yml` |
+| Android | `applicationId com.twelvecircle.circle_fitness`; **release is signed with the debug key** | `android/app/build.gradle.kts` |
+| iOS | bundle `com.twelvecircle.circleFitness`; **no development team set** | `project.pbxproj` |
+| Deep links | **none on iOS/Android** (no URL types, no intent-filter hosts); password-recovery redirect is web-only, so native recovery/confirmation links open the web app | `auth_service.dart:50`, `forgot_password_screen.dart:39` |
+| Push notifications | **not configured** (no Firebase/APNs packages or config) | `pubspec.yaml` |
+| Environments | `dart_defines/{dev,qa,prod}.json`; ENV-4/ENV-5 guards keep production out of defaults | static guards |
+
+**Which platforms the controlled beta runs on (web only, or TestFlight/Play internal) is a
+decision for Julia**; each native platform then needs signing, deep links and push.
+
 ## Decisions required (Julia)
 
 1. `ai-generate-workout` tier — the button is on the ungated `/workouts` (every plan) while `canGenerateProgram` says AI-Guided.
@@ -128,6 +143,7 @@ renewal → cancel at period end → expiry, each read back from `subscriptions`
 9. Scores/challenge progress are client-written — accept for beta, or move scoring server-side.
 10. Rollback strategy (PITR vs forward-only, PD-A26).
 11. Payment failure grace period, and whether a refund revokes access.
+12. Beta platforms (web only vs TestFlight / Play internal) and where the web app is hosted.
 
 ## Migration approvals required
 
