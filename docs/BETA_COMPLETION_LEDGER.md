@@ -71,6 +71,31 @@ deployment/configuration · **MQA** needs manual QA.
 | `fix/coach-dashboard-follows-workouts-and-checkins` | Open coach dashboard shows a client's finished workout / new check-in (realtime) | 2 FAIL on main → 3/3; suite 2686 | PR queued |
 | `docs/beta-completion-ledger` | This ledger | — | PR queued |
 
+## Migration readiness, 182–196
+
+Live ledger (ENV-3, run `43792727007`): QA applied through **192**; 182–186 **excluded**
+(declared, gated); 193–196 **pending**. Each was replay-verified locally; none is on QA.
+
+| # | Purpose | Objects | Security effect | Order / deps | Data impact | Reversible | Proof |
+|---|---|---|---|---|---|---|---|
+| 182 | Exercise-certification view stops showing another coach's private drafts | view `exercise_certifications`, RPC | closes a read leak (QAX-SEC-06) | route A: 182→183→184→185→186, one push | none | redefine view | local replay |
+| 183 | Restores the engine's empty-selection guard | `materialize_program_week_engine` | integrity | route A | none | redefine fn | local replay |
+| 184 | `assign_nutrition_plan` requires an active relationship | definer fn | closes any-user plan takeover (QAX-SEC-01, P0) | route A | none | redefine fn | `od_qax2_od14_replay` |
+| 185 | Coach write arms on 6 tables require an active relationship | 6 policies (ALTER) | closes coach→stranger writes (QAX-SEC-03) | route A | none; old rows stay readable | ALTER back | 47/47 replay; D24 live suite gated |
+| 186 | Engine produces complete canonical days or fails | engine fns | integrity | **last** of route A | none | redefine fns | local replay |
+| 187–192 | slots, seats, comms, PRs, realtime, price/source | — | — | — | — | — | **applied** 2026-11-15 |
+| 193 | Paid access is not self-granted (`activated_by`; `client_plan()` ignores client-activated rows) | column + trigger + fn | decision 1 | before 195 | pre-193 active rows keep access (flagged) | drop column/trigger, restore fn | `policy_193_194` 21/21 |
+| 194 | `accept_coach_invite(token)` + verified-email source | definer fn + trigger fn | decision 4; closes 0% commission spoof | after 193 | consumes invites when used | drop fn, restore trigger fn | same replay |
+| 195 | A client books a coach only with Coach-Guided access to them | fn + trigger | decision 1 at the bookings write | after 193 | none (inserts only) | drop trigger/fn | same replay; `integrity_187_192` 34/34 |
+| 196 | A client cannot assign itself another coach's program | 2 restrictive policies | closes program-content read | independent; composes with 185 | none | drop 2 policies | `assignment_196` 8/8 (also QA shape) |
+
+**Safe application plan (needs Julia's approval of the exact batch and window):**
+1. Window A — 193, 194, 195 in order, then 196 (or 196 alone first: it is independent).
+2. Per migration: dry-run in a rolled-back transaction, apply with its ledger row in the
+   same transaction, move `applied_through`/`pending` in `expected_applied.json` in the same
+   PR, then one CI run (live suites + ENV-3).
+3. Route A (182–186) stays separately gated and is applied only as its own ordered push.
+
 ## Decisions required (Julia)
 
 1. `ai-generate-workout` tier — the button is on the ungated `/workouts` (every plan) while `canGenerateProgram` says AI-Guided.
