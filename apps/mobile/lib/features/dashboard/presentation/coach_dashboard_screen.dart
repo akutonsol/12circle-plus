@@ -138,6 +138,9 @@ final coachAiSignalsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
 final clientCheckinsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
   ref.watch(currentUserProvider);
+  // Live: a client submitting this week's check-in shows without reopening
+  // the dashboard (weekly_checkins is published for realtime).
+  ref.watch(tableTickerProvider('weekly_checkins'));
   {
     final ids = await _coachClientIds();
     if (ids.isEmpty) return []; // no clients → no data (was showing ALL platform check-ins)
@@ -196,6 +199,9 @@ final clientCheckinsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
 final clientWorkoutLogsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
   ref.watch(currentUserProvider);
+  // Live: a client finishing a workout shows without reopening the dashboard
+  // (workout_sessions is published for realtime).
+  ref.watch(tableTickerProvider('workout_sessions'));
   {
     final ids = await _coachClientIds();
     if (ids.isEmpty) return []; // no clients → no data (was showing ALL platform workouts)

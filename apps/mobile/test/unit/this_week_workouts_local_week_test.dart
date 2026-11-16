@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:circle_fitness/core/realtime/realtime.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/dashboard/presentation/coach_dashboard_screen.dart';
 import 'package:circle_fitness/features/workout/data/workout_service.dart';
@@ -155,9 +156,14 @@ void main() {
 
   test("the coach's Workouts tab holds this week's sessions only", () async {
     final c = ProviderContainer(overrides: [
+      // The provider follows workout_sessions live; no realtime socket here.
+      tableTickerProvider.overrideWith((ref, table) => Stream.value(0)),
       currentUserProvider.overrideWithValue(Supabase.instance.client.auth.currentUser),
     ]);
     addTearDown(c.dispose);
+    // Kept alive, as the mounted dashboard keeps it: the ticker's first event
+    // re-runs it, and an unlistened provider would be read mid-rebuild.
+    c.listen(clientWorkoutLogsProvider, (_, __) {});
     final rows = await c.read(clientWorkoutLogsProvider.future);
     expect(rows.map((r) => r['workout_title']), ['monday-morning']);
   });
