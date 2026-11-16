@@ -10,7 +10,7 @@ evidence. Nothing is marked complete without it.
 |---|---|
 | `origin/main` | `8f2c8a0` (PR #159), CI run `43792727007` **7/7 success** |
 | Live QA evidence on main | security **1173/1173**, AI **51/51**, ENV-3 L-1..L-5 PASS (ledger 188 rows; frontier 192; 182–186 declared excluded) |
-| Open PRs | #14 (owner's, untouched) · #160 · #161 · #162 · #163 · #164, all CI 7/7 — **none of this mission's PRs are to be merged without explicit authorization** |
+| Open PRs | #14 (owner's, untouched) · #160–#164 CI 7/7 · webhook + brief PRs opening — **none of this mission's PRs are to be merged without explicit authorization** |
 | QA migrations | applied through **192** (182–186 excluded). **Pending, not applied:** 193, 194, 195, 196 |
 | QA Edge Functions | **1 of 19 deployed** (`ai-nutrition` v18, deployed ~2026-09-30 from the pre-rename path) |
 | QA function secrets | `ANTHROPIC_API_KEY` + Supabase defaults only. **No Stripe, no email provider, no `APP_URL`, no YouTube** |
@@ -27,39 +27,54 @@ evidence. Nothing is marked complete without it.
 | 3 — Client & coach experience | Prior cycles #92–#159 merged; this mission: plan refresh after ending coaching, live coach dashboard; continuing |
 | 4 — Beta validation | CI-level validation on every PR head; build/distribution readiness recorded below; manual QA and payments blocked |
 
-## Module inventory
+## Module inventory and integration coverage (2026-11-16)
 
-Statuses: **CV** complete & verified (live evidence) · **INT** implemented, not
-integration-tested · **PART** partially implemented · **MISS** missing · **DEC** blocked by
-Julia's decision · **MIG** blocked by migration approval · **EXT** blocked by external
-deployment/configuration · **MQA** needs manual QA.
+Columns: **Impl** implemented in code · **Unit** unit/widget tests · **Int** integration
+test against a real backend (local replay or live QA) · **Live** exercised live in CI
+against QA · **Man** manually verified · **Block** what stops it (EXT external config ·
+DEC Julia · MIG migration approval). "—" = none exists. Historical statuses from earlier
+reports are superseded by this table.
 
-| # | Module | Status | Evidence / what remains |
-|---|---|---|---|
-| 1 | Auth & account creation | INT · MQA | Email sign-up/login/reset routes exist; QA requires email confirmation (memory: client first-day audit). No live sign-up test in CI (fixtures are pre-made). |
-| 2 | Client onboarding (intake) | INT · MQA | EC-03 intake false-completion guard in CI negative control. |
-| 3 | Coach onboarding | INT · MQA | Coach profile/packages screens; no live coach-signup leg. |
-| 4 | Relationships | INT · MIG · DEC | Request/approve paths and decision 1 (data sharing only) in 193 — **pending**. Coach can reactivate a client-cancelled relationship via API (needs migration + decision). |
-| 5 | Membership & entitlements | INT · MIG | `client_plan()` + `PaywallGate`; decision 1 needs 193 applied. AI server enforcement → #160. |
-| 6 | Payments & subscriptions | **EXT** | Code: checkout, webhook (idempotent grant), cancel-at-period-end (#149). **QA has no Stripe keys, no webhook secret, no deployed Stripe functions.** Cannot be exercised. |
-| 7 | Coach dashboard | INT | Many truth/refresh fixes merged (#92–#152). |
-| 8 | Client dashboard (Home) | INT | Today card, weekly bars (#151). |
-| 9 | Program Builder & assignment | INT · MIG | Assignment self-grant hole → **196**; coach write arms need **185** (182–186 batch). |
-| 10 | Workout execution & history | **CV** (core path) | I-WRK-01 live leg on QA fixture every CI run. Units fixed (#157/#158). |
-| 11 | Exercise library | INT | A-Z + failed-read notice (#153). Content ~22/623 complete (beta-readiness §1) — **content gate**. |
-| 12 | Nutrition & meals | INT · EXT | Logging + targets; AI meal plan needs `ai-nutrition` (deployed, older build); food-photo analysis (`analyze-food-image`) **not deployed**. |
-| 13 | Habits | INT | Coach-assigned habits; live refresh fixed earlier. |
-| 14 | Check-ins | INT · DEC | Weekly loop works; resubmission after review (PD8/E-CHK-09) undecided. |
-| 15 | Progress measurements | INT | Ordering/latest fixes merged. |
-| 16 | Scoring & achievements | INT · risk | Leaderboards follow changes (#147). **`daily_scores` is client-writable (own rows)** — points can be self-set; server-side scoring is a design decision. |
-| 17 | Challenges & community | INT · risk | `challenge_participants` own rows client-writable (progress self-set). |
-| 18 | Booking & scheduling | **CV** (screen) · MIG · DEC | UIX-1 end-to-end leg live. Entitlement needs **195**. Credits never consumed (K-05) and coach can rewrite balance/owner (K-25) — needs migration + "which bookings consume a credit". |
-| 19 | Classes & events | INT | Seat integrity (188) applied; registration integrity trigger live. |
-| 20 | Messaging | INT · DEC | Coach-messaging server enforcement (B) and chat times/order undecided. |
-| 21 | Notifications | PART · EXT | In-app table + realtime; **push not configured** (no APNs/FCM); email reminders/invites need an email provider + deployed functions. |
-| 22 | AI coaching | **EXT** · #160 | Only `ai-nutrition` deployed on QA; `ai-coach`, `ai-coaching-engine`, `ai-generate-workout`, `analyze-food-image` not deployed; vault empty so cron skips. Server plan gate → #160. `ai-generate-workout` tier → DEC. |
-| 23 | Profile & settings | INT | Unit preference now drives load display (#157/#158). |
-| 24 | Admin & ops tools | INT | `/qa-center`, `/mie-debugger` excluded from release routes (release_route_gate_test). |
+| # | Module | Impl | Unit | Int | Live | Man | Block |
+|---|---|---|---|---|---|---|---|
+| 1 | Auth & account creation | yes | yes | — | fixtures only (pre-made identities) | — | EXT (email provider; native deep links) |
+| 2 | Client onboarding (intake) | yes | yes (EC-03 negative control) | — | — | — | — |
+| 3 | Coach onboarding | yes | partial | — | — | — | — |
+| 4 | Relationships | yes | yes | replay (193/194) | security suite (boundaries) | — | MIG 193/194; DEC 3, 4 |
+| 5 | Membership & entitlements | yes | yes | replay (193/195) | security suite | — | MIG 193/195; EXT deploy #160 |
+| 6 | Payments & subscriptions | yes | source-shape + node (#165) | — | — | — | EXT Stripe test mode + deploy |
+| 7 | Coach dashboard | yes | yes (#163) | — | — | — | — |
+| 8 | Client dashboard (Home) | yes | yes | — | — | — | — |
+| 9 | Program Builder & assignment | yes | yes | replay (196, 185) | — | — | MIG 196, 185 |
+| 10 | Workout execution & history | yes | yes | — | **I-WRK-01 every CI run** | — | — |
+| 11 | Exercise library | yes | yes | — | — | — | content (see below) |
+| 12 | Nutrition & meals | yes | yes | — | — | — | EXT (`analyze-food-image` not deployed) |
+| 13 | Habits | yes | yes | — | — | — | — |
+| 14 | Check-ins | yes | yes | — | — | — | DEC 6 |
+| 15 | Progress | yes | yes | — | — | — | — |
+| 16 | Scoring & achievements | yes | yes | — | — | — | DEC 9 (client-written points) |
+| 17 | Challenges & community | yes | yes | — | — | — | DEC 9 |
+| 18 | Booking & scheduling | yes | yes | replay (187/195) | **UIX-1 end-to-end leg** | — | MIG 195; DEC 5 (credits) |
+| 19 | Classes & events | yes | yes | replay (188) | security suite (registration integrity) | — | — |
+| 20 | Messaging | yes | yes | — | security suite (message text integrity) | — | DEC 2, 7 |
+| 21 | Notifications | partial (in-app) | yes | — | — | — | EXT push + email |
+| 22 | AI coaching | yes | node (#160) | — | AI suite (decision integrity, 51) | — | EXT deploy + vault; DEC 1 |
+| 23 | Profile & settings | yes | yes (#157/#158/#162) | — | — | — | — |
+| 24 | Admin & ops | yes | yes (release-route gate) | — | security suite (admin matrix) | — | — |
+
+**Not one module is manually verified**: Julia's week-1 walkthrough has not run. No module is
+beta-ready on this evidence alone.
+
+### Journey gaps found (2026-11-16)
+
+| Journey | Gap | Status |
+|---|---|---|
+| Program creation → assignment → execution | Assigned movements showed no form/steps: program rows carry no description, instructions or library id | **fixed** for library-covered names → #166 (`fix/workout-brief-uses-the-library`); linking programs to library ids is open |
+| Client activation → termination | Ending coaching from Profile left coaching features unlocked | **fixed** → #162 |
+| Workout completion / check-in → coach | Open coach dashboard did not update | **fixed** → #163 |
+| Coach invitation → acceptance | needs 194 applied + email provider + deployed `send-invite-email` | MIG + EXT |
+| Subscription purchase → cancellation | no Stripe on QA; functions not deployed | EXT |
+| AI coaching / AI workout | functions not deployed; AI workout tier undecided | EXT + DEC 1 |
 
 ## Completed in this mission
 
@@ -69,12 +84,18 @@ deployment/configuration · **MQA** needs manual QA.
 | #161 `fix/clients-cannot-self-assign-programs` | Migration 196: a client cannot assign itself another coach's program (that row unlocked reading the program) | replay 3 FAIL → 8/8, also on QA's shape; CI 7/7 (`43795976485`) | open — **not applied** |
 | #162 `fix/ending-coaching-refreshes-the-plan` | Profile's Cancel Coach re-reads the plan — coaching features no longer stay unlocked | widget test fails on main; suite 2685; CI 7/7 (`43798002991`) | open |
 | #163 `fix/coach-dashboard-follows-workouts-and-checkins` | Open coach dashboard shows a client's finished workout / new check-in (realtime) | 2 FAIL on main → 3/3; suite 2686; CI 7/7 (`43798857589`) | open |
-| #164 `docs/beta-completion-ledger` | This ledger | CI 7/7 (`43799601562`) | open |
+| #164 `docs/beta-completion-ledger` | This ledger | CI 7/7 (`43877270117` at `25acfc7`) | open |
+| #165 `fix/webhook-reads-current-subscription` @ `3fa490a` | Webhook writes the subscription as Stripe holds it now — a late `updated` event can no longer restore access after `past_due` | node test 4/4 (wiring case fails on main); Flutter webhook source tests 55 | open, CI pending |
+| (#166) `fix/workout-brief-uses-the-library` @ `6b172df` | An assigned movement's brief shows the built-in library's form and steps (exact normalised name match) | 2 FAIL on main → 7/7; suite 2690 | PR opening |
 
 ## Migration readiness, 182–196
 
 Live ledger (ENV-3, run `43792727007`): QA applied through **192**; 182–186 **excluded**
 (declared, gated); 193–196 **pending**. Each was replay-verified locally; none is on QA.
+**Production:** `expected_applied.json` declares no production environment, and production is
+off-limits to inspection under the standing rules — its state is **undeclared**. Earlier records
+say production never received the P0 security fixes; treat production as unpatched until
+someone with authority declares it.
 
 | # | Purpose | Objects | Security effect | Order / deps | Data impact | Reversible | Proof |
 |---|---|---|---|---|---|---|---|
@@ -96,24 +117,30 @@ Live ledger (ENV-3, run `43792727007`): QA applied through **192**; 182–186 **
    PR, then one CI run (live suites + ENV-3).
 3. Route A (182–186) stays separately gated and is applied only as its own ordered push.
 
-## Subscription lifecycle (code trace; nothing exercisable on QA)
+## Subscription lifecycle (code trace, 2026-11-16; nothing exercisable on QA)
 
-| Stage | Code path | State |
-|---|---|---|
-| New subscription / checkout | `create-checkout` (409 `already_subscribed` guard) → `checkout.session.completed` | implemented; idempotent grants (conflict targets); **not deployed on QA** |
-| Signature validation | `constructEventAsync` before any DB access; 400 on a bad signature | implemented |
-| Upgrade / downgrade | `update-subscription` → `customer.subscription.updated` | implemented |
-| Renewal | `customer.subscription.updated` moves the period | state follows; **`invoice.paid` not handled → renewals never reach `payments`** (coach revenue under-counts) |
-| Payment failure | Stripe sets `past_due` → `subscription.updated` | status stored; **`invoice.payment_failed` not handled** (Gate 4.9); grace period is a policy question |
-| Cancel at period end | `cancel-subscription` sets `cancel_at_period_end` (decision 2, #149) | implemented; **not deployed** |
-| Expiration | `customer.subscription.deleted` ends a coaching relationship (`cancelled_by 'billing'`) | implemented |
-| Refund | — | **not handled** (`charge.refunded`); whether a refund revokes access is a decision |
-| Duplicate prevention | 409 guard in checkout/update; webhook `.neq('status','canceled')` | implemented |
+**Correction to the 2026-11-15 entry:** subscriptions never write `payments` rows — not at
+checkout either. Coach revenue reads subscription income from `subscriptions.coach_payout`
+(active/trialing) and one-time income from `payments`; so unhandled renewals do **not**
+under-count revenue. What is missing is a per-charge history for subscriptions (Gate 4.9).
 
-Blocked on: a QA Stripe **test-mode** account, keys, webhook secret, price ids, and function
-deployment. Validation script once those exist: checkout → webhook grant → renewal → failed
-renewal → cancel at period end → expiry, each read back from `subscriptions` and
-`client_plan()`.
+| Stage | Implemented | Tested | Missing |
+|---|---|---|---|
+| Checkout initiation | `create-checkout`; 409 `already_subscribed` guard | source-shape | live test (EXT) |
+| Subscription creation | `checkout.session.completed` retrieves the subscription, upserts on `stripe_subscription_id` | source-shape | — |
+| Signature verification | `constructEventAsync` before any DB access; 400 otherwise | source-shape | — |
+| Initial payment | subscription row status from Stripe; one-time kinds mark `payments` paid | source-shape | — |
+| Renewal | `customer.subscription.updated` moves the period | node (#165) | per-charge record (`invoice.paid`) |
+| Failed renewal | Stripe sets `past_due` → `updated` stores it | node (#165) | `invoice.payment_failed` notice; **grace period = DEC 11** |
+| Cancellation | `cancel-subscription` → `cancel_at_period_end` (decision 2) | unit | live |
+| Refund | — | — | `charge.refunded` not handled; **revoke or not = DEC 11** |
+| Expiration | `deleted` → `canceled` + `canceled_at`; coaching relationship ends | source-shape | — |
+| Entitlement revocation | `client_plan()` reads live subscriptions; relationship ends on `deleted` | replay (193) | live |
+| Duplicate events | every grant has a conflict target; credits `ignoreDuplicates` | source-shape | — |
+| Out-of-order events | `canceled` terminal (K-23); **all other statuses now read current (#165)** | node (#165) | — |
+
+**Stripe test-mode validation: NOT performed** — QA has no Stripe configuration. No claim of
+test-mode evidence is made anywhere in this ledger.
 
 ## Build and distribution readiness
 
@@ -130,6 +157,70 @@ renewal → cancel at period end → expiry, each read back from `subscriptions`
 **Which platforms the controlled beta runs on (web only, or TestFlight/Play internal) is a
 decision for Julia**; each native platform then needs signing, deep links and push.
 
+## Exercise content readiness (measured on QA, read-only, 2026-11-16)
+
+Two libraries exist:
+
+| Library | Size | Complete content | Media | Notes |
+|---|---|---|---|---|
+| Database (`custom_exercises`, global, approved) | **621** | **20** have description + instructions + cues + mistakes (`content_status` published 20 / draft 601) | **0** images, **0** videos | all 621 have category, muscle group, equipment, difficulty, movement pattern; **0** human-reviewed; **no duplicate names** |
+| Built-in (bundled in the app) | **46** | description, instructions, cues, mistakes | image assets; video = YouTube *search* links, not videos | what the Exercise Library screen shows clients |
+
+The certification view (`exercise_certifications`) rates **20** ready for the workout builder
+and library, **0** for self-guided and **0** for AI coach (average completeness 1%). The old
+"~22/623" figure was close but stale.
+
+**What "complete" means here** (the certification view's own checks): instructions, cues,
+mistakes, alternatives, beginner and advanced variants, image, video, muscle, equipment.
+
+**Program ↔ library is not linked.** Program rows name movements in free text; of the 25
+most-used movement names in programs and logged sets, about half match no library name
+exactly ("Push Up", "Bench Press", "Bent-Over Row"). #166 bridges exact normalised matches to
+the built-in library; it does not invent matches.
+
+**Content plan (no content is fabricated — every item needs a human source):**
+1. Priority set: the movements programs actually use (top 25 by use above) plus the bundled 46.
+2. Reconcile names: map each program name to one library entry (a reviewed table, not fuzzy
+   matching); then programs can carry a library id.
+3. Complete text for the priority set from a reviewed source (coach-authored, or AI-drafted
+   then human-reviewed via the existing Knowledge Review queue), batch of 25 with
+   `human_reviewed` set only after review.
+4. Media: decide the source hierarchy (coach demo > licensed > none) — **DEC**; no automated
+   source is wired.
+5. Batches are safe as content-only updates (no schema change), but they are **QA writes** and
+   need approval; the existing enrichment pipeline needs `enrich-*` functions deployed.
+
+## Infrastructure setup checklist (nothing here was changed)
+
+| Item | Current state (QA) | To do (owner/admin) |
+|---|---|---|
+| Edge Functions | 1 of 19 deployed (`ai-nutrition`, older build) | deploy all 19 from `main` after the open PRs are decided; check `verify_jwt` per `config.toml` |
+| Stripe test configuration | none | test-mode account; `STRIPE_SECRET_KEY` (sk_test_…); five price ids |
+| Webhook | none | endpoint `https://<qa-ref>.supabase.co/functions/v1/stripe-webhook`, its own `STRIPE_WEBHOOK_SECRET`; events: checkout.session.completed, customer.subscription.updated, customer.subscription.deleted |
+| Email provider | none | provider key + verified sender domain; templates for invite, reminder, auth |
+| `APP_URL` | not set | the hosted QA web URL (invite and redirect links) |
+| QA vault | empty | `project_url` (QA ref) and `service_role_key` — then the three AI cron jobs run |
+| Web hosting | none | choose host; build `--dart-define-from-file=dart_defines/qa.json`; add the URL to Supabase Auth redirect allow-list |
+| Android signing | release uses the debug key | upload keystore + `key.properties` (kept out of git) |
+| iOS signing | no development team | Apple team id, bundle `com.twelvecircle.circleFitness`, provisioning |
+| Deep links | none on iOS/Android | URL scheme or universal/app links for auth recovery, confirmation and `?invite=` |
+| Push notifications | none | FCM/APNs keys + device-token storage — product scope decision |
+
+Secrets are never printed; names only.
+
+## Decision briefs (alternatives · consequences · recommendation)
+
+These are Julia's calls; the recommendation is engineering's view, not a decision.
+
+| # | Question | A | B | Recommended |
+|---|---|---|---|---|
+| 5 | Session credits: which bookings consume one? (K-05/K-25) | **Package clients only** — a booking with a coach the client holds an unexhausted credit block with consumes one, atomically, refused at zero; subscription clients book freely | **Every booking** consumes a credit; subscriptions grant a monthly block | **A** — matches how packages are sold (sessions) vs subscriptions (ongoing coaching); smallest change: one `book_coaching_session()` RPC + dropping the coach UPDATE policy on credits |
+| 9 | Points and challenge progress are client-written | **Accept for beta** (closed cohort; leaderboard is low stakes) and label scores as self-reported | **Server-side scoring**: triggers derive points from workout/check-in/nutrition rows; clients lose write access to `daily_scores`/`challenge_participants` progress | **A for the closed beta, B before any public leaderboard or prize** |
+| 1 | AI workout generation tier | Keep it open to **every plan** (the button is on the ungated list today) | Gate at **AI-Guided** as `canGenerateProgram` says | **B** if AI cost matters for the beta; it is one line in the app + one in `plan_gate` |
+| 4 | Coach reactivates a client-cancelled relationship | Allow (coach can win a client back) | Refuse: only the client may reactivate what the client cancelled | **B** — a cancelled client should not be re-billed or re-shared without consent |
+| 11 | Payment failure / refund | Grace: keep access while `past_due` (Stripe retries) | No grace: `past_due` loses paid features at once | **Grace** while Stripe retries; **refund revokes** the refunded period |
+| 3 | Relationships activated before 193 | Keep access (current flag) | Re-confirm each (coach approves again) | **Keep** — small QA population; production undecided anyway |
+
 ## Decisions required (Julia)
 
 1. `ai-generate-workout` tier — the button is on the ungated `/workouts` (every plan) while `canGenerateProgram` says AI-Guided.
@@ -144,6 +235,7 @@ decision for Julia**; each native platform then needs signing, deep links and pu
 10. Rollback strategy (PITR vs forward-only, PD-A26).
 11. Payment failure grace period, and whether a refund revokes access.
 12. Beta platforms (web only vs TestFlight / Play internal) and where the web app is hosted.
+13. Exercise media source hierarchy, and approval for content batches (QA writes).
 
 ## Migration approvals required
 
@@ -172,7 +264,7 @@ exists.
 - Points and challenge progress are client-writable (leaderboard gaming).
 - A coach can assign another coach's program to their client and read it (196 leaves open).
 - QA's only deployed function was built from an older tree; QA's AI nutrition is not main's.
-- Content: ~22 of 623 exercises complete — the beta-readiness "real gate".
+- Content: 20 of 621 database exercises complete, 0 with media; programs not linked to the library.
 
 ## Next autonomous action
 
