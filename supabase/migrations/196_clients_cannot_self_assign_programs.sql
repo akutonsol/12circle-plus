@@ -32,6 +32,8 @@
 --   * A coach can still assign a program owned by ANOTHER coach to their own
 --     client and so read it. Whether coaches may share programs (a coaching team)
 --     is a product question; this does not decide it.
+--   * A client also cannot UPDATE an assignment of a program it does not own
+--     (USING); the app never updates an assignment as the client.
 --   * DELETE by the client is not restricted (it reads nothing new).
 --
 -- Reversible: DROP POLICY on the two names below.
@@ -54,7 +56,13 @@ DROP POLICY IF EXISTS "client writes assignments only for own programs (update)"
 CREATE POLICY "client writes assignments only for own programs (update)"
   ON public.workout_program_assignments
   AS RESTRICTIVE FOR UPDATE TO authenticated
-  USING (true)
+  -- The same predicate on the row as it is and as it becomes: a client cannot
+  -- update an assignment for a program it does not own, nor turn one into it.
+  USING (
+    client_id IS DISTINCT FROM (SELECT auth.uid())
+    OR EXISTS (SELECT 1 FROM public.workout_programs p
+                WHERE p.id = program_id AND p.coach_id = (SELECT auth.uid()))
+  )
   WITH CHECK (
     client_id IS DISTINCT FROM (SELECT auth.uid())
     OR EXISTS (SELECT 1 FROM public.workout_programs p
