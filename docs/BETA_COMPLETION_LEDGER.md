@@ -10,7 +10,7 @@ evidence. Nothing is marked complete without it.
 |---|---|
 | `origin/main` | `8f2c8a0` (PR #159), CI run `43792727007` **7/7 success** |
 | Live QA evidence on main | security **1173/1173**, AI **51/51**, ENV-3 L-1..L-5 PASS (ledger 188 rows; frontier 192; 182–186 declared excluded) |
-| Open PRs | #14 (owner's, untouched) · #160 AI plan gate · 196 PR (opening) — **none of this mission's PRs are to be merged without explicit authorization** |
+| Open PRs | #14 (owner's, untouched) · #160 · #161 · three more queued (see below) — **none of this mission's PRs are to be merged without explicit authorization** |
 | QA migrations | applied through **192** (182–186 excluded). **Pending, not applied:** 193, 194, 195, 196 |
 | QA Edge Functions | **1 of 19 deployed** (`ai-nutrition` v18, deployed ~2026-09-30 from the pre-rename path) |
 | QA function secrets | `ANTHROPIC_API_KEY` + Supabase defaults only. **No Stripe, no email provider, no `APP_URL`, no YouTube** |
@@ -22,9 +22,9 @@ evidence. Nothing is marked complete without it.
 | Phase | Status |
 |---|---|
 | 0 — Reconciliation & audit | **Done** for repo/CI/infra; module inventory below |
-| 1 — Database & authorization | In progress — #160 (AI plan gate), 196 (assignment self-grant); K-05/K-25 recorded |
+| 1 — Database & authorization | #160 (AI plan gate), #161 (196 assignment self-grant); K-05/K-25 recorded (need decision 5 + migration) |
 | 2 — Payments, entitlements, AI | Payments **blocked** (no Stripe config on QA); AI entitlements → #160 |
-| 3 — Client & coach experience | Prior cycles: #92–#159 merged (see git log); continue |
+| 3 — Client & coach experience | Prior cycles #92–#159 merged; this mission: plan refresh after ending coaching, live coach dashboard; continuing |
 | 4 — Beta validation | Not started |
 
 ## Module inventory
@@ -63,10 +63,13 @@ deployment/configuration · **MQA** needs manual QA.
 
 ## Completed in this mission
 
-| PR | What | Status |
-|---|---|---|
-| #160 | AI functions refuse callers the app's paywall refuses (K-03) | open, CI pending — **not deployed** (needs function deploy approval) |
-| (196) | Client cannot assign itself another coach's program — migration 196 | opening; **not applied** |
+| PR / branch | What | Evidence | Status |
+|---|---|---|---|
+| #160 `fix/ai-functions-check-the-plan` | AI functions refuse callers the app's paywall refuses (K-03): `ai-coach`, `ai-coaching-engine` ≥ AI-Guided; `ai-nutrition`, `analyze-food-image` ≥ Self-Guided; coaches pass | node test 11/11; 4 of 11 fail on main's sources; CI 7/7 (`43794773571`) | open — **not deployed** |
+| #161 `fix/clients-cannot-self-assign-programs` | Migration 196: a client cannot assign itself another coach's program (that row unlocked reading the program) | replay 3 FAIL → 8/8, also on QA's shape | open — **not applied** |
+| `fix/ending-coaching-refreshes-the-plan` | Profile's Cancel Coach re-reads the plan — coaching features no longer stay unlocked | widget test fails on main; suite 2685 | PR queued |
+| `fix/coach-dashboard-follows-workouts-and-checkins` | Open coach dashboard shows a client's finished workout / new check-in (realtime) | 2 FAIL on main → 3/3; suite 2686 | PR queued |
+| `docs/beta-completion-ledger` | This ledger | — | PR queued |
 
 ## Decisions required (Julia)
 
