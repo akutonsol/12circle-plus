@@ -1,4 +1,6 @@
+import '../../exercise_database/data/models/exercise_detail_model.dart';
 import '../data/models/workout_model.dart';
+import 'library_match.dart';
 import 'load_format.dart';
 
 /// FIT-016 · what the session row's info control opens.
@@ -104,17 +106,30 @@ String prescriptionLine(WorkoutExercise exercise, {bool metric = true}) {
   return parts.join(' · ');
 }
 
-ExerciseBrief exerciseBrief(WorkoutExercise exercise, {bool metric = true}) {
+/// [library] answers the built-in library entry for a movement name; the
+/// default is [bundledLibraryEntry] (an exact, normalised name match). It is
+/// consulted only for what the prescription itself does not carry: a coach's
+/// own description or steps always win, and a movement the library does not
+/// cover keeps an empty brief.
+ExerciseBrief exerciseBrief(WorkoutExercise exercise,
+    {bool metric = true,
+    ExerciseDetail? Function(String name) library = bundledLibraryEntry}) {
   final e = exercise.exercise;
+  List<String> steps(List<String> raw) =>
+      raw.map((s) => s.trim()).where((s) => s.isNotEmpty).toList(growable: false);
+  var form = _clean(e.description);
+  var ownSteps = steps(e.instructions);
+  if (form == null || ownSteps.isEmpty) {
+    final entry = library(e.name);
+    form ??= _clean(entry?.description);
+    if (ownSteps.isEmpty && entry != null) ownSteps = steps(entry.instructions);
+  }
   return ExerciseBrief(
     name: e.name,
     prescription: prescriptionLine(exercise, metric: metric),
     coachNote: _clean(exercise.notes),
-    form: _clean(e.description),
-    steps: e.instructions
-        .map((s) => s.trim())
-        .where((s) => s.isNotEmpty)
-        .toList(growable: false),
+    form: form,
+    steps: ownSteps,
     equipment: _clean(e.equipment),
     muscleGroup: _clean(e.muscleGroup),
   );
