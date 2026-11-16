@@ -1,14 +1,14 @@
 {
   "summary": {
-    "authored": 199,
-    "range": "000–198",
+    "authored": 200,
+    "range": "000–199",
     "planAssignedRange": "123-131",
     "planFloor": 132,
     "qaRef": "eyqtldjqpgpljlqvpowh",
     "appliedThrough": 192,
     "preProgramme": 123,
     "preAssigned": 9,
-    "outsideByRule": 67,
+    "outsideByRule": 68,
     "unexplained": 0,
     "contiguous": true,
     "allDeclared": true
@@ -1404,6 +1404,13 @@
     {
       "migration": "198",
       "file": "supabase/migrations/198_session_credits_not_coach_writable.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "199",
+      "file": "supabase/migrations/199_storage_writes_need_ownership.sql",
       "inManifest": true,
       "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
       "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"

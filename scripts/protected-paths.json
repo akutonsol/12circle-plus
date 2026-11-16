@@ -24,8 +24,5 @@
     "docs/REMEDIATION_PROGRESS.md",
     "docs/adr"
   ],
-  "exceptions": [
-    "supabase/migrations/199_storage_writes_need_ownership.sql",
-    "supabase/expected_applied.json"
-  ]
+  "exceptions": []
 }

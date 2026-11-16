@@ -42,6 +42,6 @@ if grep -q 'ERROR' <<<"$out"; then grep 'ERROR' <<<"$out" | head -5 >&2; echo "P
 res=$(printf '%s\n' "$out" | grep -E '^(PASS|FAIL)\|' || true)
 printf '%s\n' "$res"
 n=$(printf '%s\n' "$res" | grep -c . || true)
-(( n >= ${MIN_RESULTS:-25} )) || { echo "TOO-FEW|$n results" >&2; exit 6; }
+(( n >= ${MIN_RESULTS:-29} )) || { echo "TOO-FEW|$n results" >&2; exit 6; }
 ! printf '%s\n' "$res" | grep -q '^FAIL|' || exit 1
 echo "ALL $n PASSED"

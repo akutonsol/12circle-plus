@@ -134,6 +134,22 @@ begin
     pg_temp.sees(D, format('storage.objects where bucket_id=''coach-media'' and name=%L', 'coach-transformations/'||A||'/1.jpg')) = 1, 'ok');
   r := pg_temp.run_as(A, format(del, 'coach-media', 'voice/'||A||'/ex-1.m4a'));
   insert into res values ('Q5 a coach deletes its own file', r = 'ok:1', r);
+
+  -- ── update_exercise_media (the RPC behind "attach media") ──────────────────
+  r := pg_temp.run_as(B, format('select public.update_exercise_media(%L::uuid, ''https://x/evil.jpg'', null)',
+         'a1990000-0000-0000-0000-00000000aaaa'));
+  insert into res select 'R1 a coach cannot set media on another coach''s PRIVATE exercise via the RPC',
+    coalesce(e.image_url,'') <> 'https://x/evil.jpg', 'rpc='||r||' image='||coalesce(e.image_url,'null')
+    from public.custom_exercises e where e.id='a1990000-0000-0000-0000-00000000aaaa';
+  r := pg_temp.run_as(C, format('select public.update_exercise_media(%L::uuid, ''https://x/c.jpg'', null)',
+         'f1990000-0000-0000-0000-00000000ffff'));
+  insert into res values ('R2 a client cannot set media via the RPC', r not like 'ok%', 'rpc='||r);
+  r := pg_temp.run_as(B, format('select public.update_exercise_media(%L::uuid, ''https://x/p.jpg'', null)',
+         'f1990000-0000-0000-0000-00000000ffff'));
+  insert into res values ('S1 a coach still sets media on a platform exercise via the RPC', r = 'ok:1', 'rpc='||r);
+  r := pg_temp.run_as(A, format('select public.update_exercise_media(%L::uuid, ''https://x/a.jpg'', null)',
+         'a1990000-0000-0000-0000-00000000aaaa'));
+  insert into res values ('S2 the owning coach still sets media on its private exercise', r = 'ok:1', 'rpc='||r);
 end $$;
 
 select case when ok then 'PASS' else 'FAIL' end || '|' || id || '|' || detail from res order by id;

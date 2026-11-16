@@ -80,6 +80,10 @@
         "198": {
           "reason": "Session credits are not writable by a coach, and a balance stays in range (K-25; Release Gate 4.8). client_session_credits' coach UPDATE policy (028) let a coach rewrite sessions_total, sessions_used and client_id -- mint sessions, reset a consumed block, or move a paid block to another client -- and nothing kept sessions_used within 0..sessions_total. Drops that policy (the app only reads credits; the Stripe webhook grants as service role) and adds a CHECK, NOT VALID so a historical row cannot block the apply. Consumption (K-05) is NOT implemented: it encodes owner decision 5. Locally replay-verified (credits_198_replay.sh: 4 FAIL before / 8 of 8 after). NOT applied to QA.",
           "gate": "An owner-approved QA apply window naming 198 (after 196-197 if they apply first), then the live QA suites and CI."
+        },
+        "199": {
+          "reason": "Storage writes need ownership. exercise-media (061, public): write/update/delete checked only bucket_id, so any signed-in user -- a client included -- could upload, overwrite or delete every exercise's media. coach-media (036, public): any signed-in user could upload, write into another coach's folder, and list/sign coach-videos/<coach>/<client>/... Replaces those policies with rules that mirror existing authority: exercise-media paths must name an existing exercise; writers are an admin, the private exercise's coach, or (platform exercise) a coach or admin as update_exercise_media (072) allows; delete is admin or the private exercise's coach. coach-media writes stay in the uploader's own folder (coach/admin), adding the missing own-folder UPDATE; videos read only by their coach and client. update_exercise_media now also requires the owner or an admin on a PRIVATE exercise. Buckets stay public (product/infra decision). Locally replay-verified: storage_199_replay.sh 14 FAIL before / 29 of 29 after, also on QA's shape. NOT applied to QA.",
+          "gate": "An owner-approved QA apply window naming 199, then the live QA suites and CI. Before any controlled-beta exercise media or coach media is introduced."
         }
       }
     }
