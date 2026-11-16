@@ -88,7 +88,7 @@ beta-ready on this evidence alone.
 | #165 `fix/webhook-reads-current-subscription` @ `3fa490a` | Webhook writes the subscription as Stripe holds it now — a late `updated` event can no longer restore access after `past_due` | node test 4/4 (wiring case fails on main); Flutter webhook source tests 55; CI 7/7 (`43880220835`) | open |
 | #166 `fix/workout-brief-uses-the-library` @ `6b172df` | An assigned movement's brief shows the built-in library's form and steps (exact normalised name match) | 2 FAIL on main → 7/7; suite 2690; CI 7/7 (`43881848146`) | open |
 
-## Migration readiness, 182–196
+## Migration readiness, 182–198
 
 Live ledger (ENV-3, run `43792727007`): QA applied through **192**; 182–186 **excluded**
 (declared, gated); 193–196 **pending**. Each was replay-verified locally; none is on QA.
@@ -109,6 +109,8 @@ someone with authority declares it.
 | 194 | `accept_coach_invite(token)` + verified-email source | definer fn + trigger fn | decision 4; closes 0% commission spoof | after 193 | consumes invites when used | drop fn, restore trigger fn | same replay |
 | 195 | A client books a coach only with Coach-Guided access to them | fn + trigger | decision 1 at the bookings write | after 193 | none (inserts only) | drop trigger/fn | same replay; `integrity_187_192` 34/34 |
 | 196 | A client cannot assign itself another coach's program | 2 restrictive policies | closes program-content read | independent; composes with 185 | none | drop 2 policies | `assignment_196` 8/8 (also QA shape) |
+| 197 | A coach assigns only a program it owns | 2 restrictive policies | closes coach→other coach's program read (O2) and unrelated-coach assignment (O6) | after 196; composes with 185 | none (existing rows untouched) | drop 2 policies | `assignment_196` 10/10 (also QA shape); ownership matrix |
+| 198 | Session credits not coach-writable; balance in range | drop 1 policy; CHECK NOT VALID | closes K-25 (Gate 4.8) | independent | none (QA has 0 credit rows) | recreate policy (028); drop constraint | `credits_198` 8/8 (4 FAIL before) |
 
 **Safe application plan (needs Julia's approval of the exact batch and window):**
 1. Window A — 193, 194, 195 in order, then 196 (or 196 alone first: it is independent).
@@ -164,7 +166,7 @@ Two libraries exist:
 | Library | Size | Complete content | Media | Notes |
 |---|---|---|---|---|
 | Database (`custom_exercises`, global, approved) | **621** | **20** have description + instructions + cues + mistakes (`content_status` published 20 / draft 601) | **0** images, **0** videos | all 621 have category, muscle group, equipment, difficulty, movement pattern; **0** human-reviewed; **no duplicate names** |
-| Built-in (bundled in the app) | **46** | description, instructions, cues, mistakes | image assets; video = YouTube *search* links, not videos | what the Exercise Library screen shows clients |
+| Built-in (bundled in the app) | **46** | description, instructions, cues, mistakes, alternatives, beginner/advanced variants | **6** image assets (corrected 2026-11-16; earlier said all 46); video = YouTube *search* links, not videos | what the Exercise Library screen shows clients |
 
 The certification view (`exercise_certifications`) rates **20** ready for the workout builder
 and library, **0** for self-guided and **0** for AI coach (average completeness 1%). The old
@@ -208,6 +210,82 @@ the built-in library; it does not invent matches.
 
 Secrets are never printed; names only.
 
+## Round 2 (2026-11-16): review, ownership, credits, Stripe, security
+
+### PR review findings
+
+| PR | Finding | Action |
+|---|---|---|
+| #160 | correct; refusals carry CORS; coach exemption cannot be self-granted (d02); cron path exempt | none — deploy dependency |
+| #161 | **did not close program ownership**: a coach could assign another coach's private program and read it (matrix O2) | **197 added to #161** (`029e613`) |
+| #162 | safe after the sheet closes (container captured before awaits) | none |
+| #163 | `workout_sessions` changes only at start/finish/abandon — no load concern | none |
+| #164 | docs | this update |
+| #165 | covers all subscription-object orderings (`updated` before checkout → harmless no-op, checkout retrieves; `deleted` before checkout → checkout writes canceled, no activation; `updated` after `deleted` → guard + retrieve). Invoice/refund events are not handled (below) | none |
+| #166 | exact normalised match only; coach text wins | none |
+
+### Program ownership matrix (`supabase/tests/local/program_ownership_matrix.sql`)
+
+| Case | QA today | + 196 | + 196 + 197 | + 185 |
+|---|---|---|---|---|
+| O1 coach → own program → own client | ok | ok | ok | ok |
+| O2 coach assigns another coach's private program, reads it | **leaks** | **leaks** | refused | refused |
+| O3 explicitly shared program | — no sharing mechanism exists — | | | |
+| O4 client self-assigns a coach's program | **leaks** | refused | refused | refused |
+| O5 client reads another client's program | no | no | no | no |
+| O6 unrelated coach assigns to someone's client | **leaks** | **leaks** | refused | refused |
+| O7 client's NEW coach reads a former coach's program | yes | yes | yes | yes — **DEC 14** |
+| O8 client keeps reading a former coach's program | yes | yes | yes | yes — **DEC 14** |
+
+### Session credits (K-05 / K-25) — trace and design
+
+Trace (QA, read-only): creation = Stripe webhook grant only (service role; `payment_id` unique,
+`ignoreDuplicates`); owner = `client_id`; **no consumption path exists**; `coaching_calls` has no
+credit link; no refunds; QA holds 0 credit rows. Clients: read own, no write. **Coaches: may
+UPDATE any column except `coach_id`** (mint, reset, move a block to another client). No range
+check.
+
+**Prepared (decision-free): migration 198** (`fix/session-credits-not-coach-writable`, stacked on
+#161): drops the coach UPDATE policy, adds `CHECK (0 <= used <= total, total >= 0)` NOT VALID.
+Replay `credits_198_replay.sh`: 4 FAIL before → 8/8 after (K1 balance, K2 owner move, K5/K6 range;
+client already blocked, server grant still works).
+
+**Designed, not implemented (needs DEC 5):** `book_coaching_session(p_slot uuid)` SECURITY
+DEFINER — caller = client with an active relationship to the slot's coach; `SELECT … FOR UPDATE`
+the oldest block with `sessions_used < sessions_total` for (client, coach); refuse at zero; increment
+`sessions_used`, insert the call with a new `coaching_calls.credit_id`, in one transaction (double
+consumption impossible under the row lock; the slot's own lock (187) prevents double booking);
+cancellation returns the credit only inside a refund window (**DEC 5b**); a credit block is never
+transferable (owner fixed by 198). Tests to add with it: concurrent book of the last credit → one
+succeeds; zero balance → refused; ineligible booking (no block with that coach) → refused or free
+per DEC 5.
+
+### Stripe lifecycle completeness
+
+| Event | Handled | Ordering / duplicates | Missing (and why) |
+|---|---|---|---|
+| `checkout.session.completed` | yes — retrieves the subscription; upserts on `stripe_subscription_id`; grants idempotent | safe in any order with `updated`/`deleted` | — |
+| `customer.subscription.created` | no (checkout covers it) | — | only needed if subscriptions are created outside Checkout (Portal/dashboard); not the case today |
+| `customer.subscription.updated` | yes — **current state read from Stripe (#165)**; never un-cancels | safe | — |
+| `customer.subscription.deleted` | yes — canceled + `canceled_at`; ends coaching | safe | — |
+| `invoice.paid` | no | — | per-charge history; **adding rows to `payments` would double-count coach revenue** unless revenue reads change — design with the revenue screen, not alone |
+| `invoice.payment_failed` | no (status arrives via `updated` → `past_due`) | — | user notice; grace period = DEC 11 |
+| `charge.refunded` | no | — | revoke or not = DEC 11 |
+
+No Stripe configuration exists on QA; no test-mode evidence is claimed.
+
+### Security and data-integrity audit (new this round)
+
+| Area | Finding | Severity | Path |
+|---|---|---|---|
+| Storage `exercise-media` (public) | **any signed-in user can UPDATE or DELETE any object** (policies check only the bucket) — a client could replace or wipe the images every user is served | P1 | recommended: DELETE owner-or-admin; INSERT/UPDATE coach-or-admin scoped to editable exercises; platform-exercise media ownership = **DEC 15** (coaches attach media to platform exercises via a privileged RPC) |
+| Storage `coach-media` (public) | any signed-in user can INSERT (no UPDATE policy; DELETE own) | P2 | restrict INSERT to coaches — DEC 15 |
+| Storage `progress-photos`, `chat-media`, `avatars` | owner / participant / own-folder scoped; coach reads active clients' photos | ok | — |
+| Edge Functions | 18 of 19 require a JWT; `stripe-webhook` verifies the Stripe signature | ok | plan checks → #160 |
+| Scores / challenge progress | client-writable own rows | DEC 9 | — |
+| Session credits | coach-writable | fixed in 198 | apply |
+| Program content | O2/O4/O6 | fixed in 196–197 | apply |
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
@@ -236,13 +314,17 @@ These are Julia's calls; the recommendation is engineering's view, not a decisio
 11. Payment failure grace period, and whether a refund revokes access.
 12. Beta platforms (web only vs TestFlight / Play internal) and where the web app is hosted.
 13. Exercise media source hierarchy, and approval for content batches (QA writes).
+14. Does program history follow the client (new coach reads a former coach's program; client keeps it) or stay private to its author?
+15. Who may change media on platform exercises (and who may upload to `coach-media`)?
+16. Credit refund window when a booked session is cancelled (5b).
 
 ## Migration approvals required
 
 | Batch | Contents | Gate |
 |---|---|---|
 | 193–195 | decisions 1 & 4; bookings need Coach-Guided | owner-approved QA window (193 before 195) |
-| 196 | assignment self-grant | owner-approved QA window naming 196 |
+| 196–197 | program ownership (PR #161) | owner-approved QA window naming 196, 197 |
+| 198 | session credits not coach-writable (PR stacked on #161) | owner-approved QA window naming 198 |
 | 182–186 | exercise cert scoping, engine guards, nutrition/coach write arms (185) | separate authorization; gates unchanged |
 
 ## External deployment / configuration required
