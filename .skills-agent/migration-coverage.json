@@ -1,14 +1,14 @@
 {
   "summary": {
-    "authored": 200,
-    "range": "000–199",
+    "authored": 201,
+    "range": "000–200",
     "planAssignedRange": "123-131",
     "planFloor": 132,
     "qaRef": "eyqtldjqpgpljlqvpowh",
     "appliedThrough": 192,
     "preProgramme": 123,
     "preAssigned": 9,
-    "outsideByRule": 68,
+    "outsideByRule": 69,
     "unexplained": 0,
     "contiguous": true,
     "allDeclared": true
@@ -1411,6 +1411,13 @@
     {
       "migration": "199",
       "file": "supabase/migrations/199_storage_writes_need_ownership.sql",
+      "inManifest": true,
+      "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
+      "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"
+    },
+    {
+      "migration": "200",
+      "file": "supabase/migrations/200_program_history_stays_with_its_author.sql",
       "inManifest": true,
       "planCoverage": "OUTSIDE pre-assignment by rule (>= 132+, \"assigned at wave entry\")",
       "appliedStatus": "NOT ESTABLISHED HERE — expected_applied.json declares intent, not outcome"

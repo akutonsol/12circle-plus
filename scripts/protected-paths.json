@@ -24,8 +24,5 @@
     "docs/REMEDIATION_PROGRESS.md",
     "docs/adr"
   ],
-  "exceptions": [
-    "supabase/migrations/200_program_history_stays_with_its_author.sql",
-    "supabase/expected_applied.json"
-  ]
+  "exceptions": []
 }
