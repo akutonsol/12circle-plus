@@ -24,8 +24,5 @@
     "docs/REMEDIATION_PROGRESS.md",
     "docs/adr"
   ],
-  "exceptions": [
-    "supabase/migrations/198_session_credits_not_coach_writable.sql",
-    "supabase/expected_applied.json"
-  ]
+  "exceptions": []
 }
