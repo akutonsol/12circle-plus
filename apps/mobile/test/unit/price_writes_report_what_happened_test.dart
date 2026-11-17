@@ -107,8 +107,10 @@ void main() {
     server.patchRows = [];
   });
 
-  final nothingChanged = throwsA(isA<StateError>()
-      .having((e) => e.message, 'message', contains('nothing was changed')));
+  final nothingChanged = throwsA(isA<StateError>().having(
+      (e) => e.message.toLowerCase(),
+      'message',
+      contains('nothing was changed')));
 
   group('setGlobalPrice', () {
     test('a 0-row update throws', () async {

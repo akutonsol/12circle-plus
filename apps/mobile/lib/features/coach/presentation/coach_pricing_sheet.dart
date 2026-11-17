@@ -8,6 +8,7 @@ const _border = Color(0xFF1A1020);
 const _brand  = Color(0xFFA855F7);
 const _white  = Colors.white;
 const _muted  = Color(0xFFCFC2D6);
+const _errRed = Color(0xFFFFB4AB);
 
 /// Coach sets their global monthly coaching price (applies to all clients
 /// unless a per-client custom price is set from that client's profile).
@@ -30,6 +31,10 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
   final _price = TextEditingController();
   bool _loading = true;
   bool _saving = false;
+  /// Why the last save did not happen, shown inside the sheet. A SnackBar
+  /// went to the page's messenger, under this modal, so the coach saw only
+  /// the spinner stop.
+  String? _error;
 
   @override
   void initState() {
@@ -63,19 +68,29 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
 
   Future<void> _save() async {
     final value = double.tryParse(_price.text.trim());
-    if (value == null || value <= 0) return;
-    setState(() => _saving = true);
+    if (value == null || value <= 0) {
+      // Same rule as before (whether $0 is valid is undecided) — but say it.
+      setState(() => _error = r'Enter a monthly price above $0.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
     try {
       await CoachRelationshipService().setGlobalPrice(value);
     } catch (e) {
       // A failed or 0-row save said "Pricing updated." or, thrown, left the
-      // spinner running with nothing said (P0-FL-3). Keep the sheet open.
+      // spinner running with nothing said (P0-FL-3). Keep the sheet open and
+      // say why inside it. A generic failure (e.g. a timeout) may still have
+      // committed, so it does not claim nothing changed.
       if (!mounted) return;
-      setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e is StateError
-              ? e.message
-              : "Couldn't save your price — try again.")));
+      setState(() {
+        _saving = false;
+        _error = e is StateError
+            ? e.message
+            : "Couldn't save your price — check your connection and try again.";
+      });
       return;
     }
     if (!mounted) return;
@@ -124,6 +139,9 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
               TextField(
                 controller: _price,
                 keyboardType: TextInputType.number,
+                onChanged: (_) {
+                  if (_error != null) setState(() => _error = null);
+                },
                 style: const TextStyle(color: _white, fontSize: 18, fontWeight: FontWeight.w700),
                 decoration: InputDecoration(
                   prefixText: '\$ ',
@@ -141,6 +159,15 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
                     borderSide: const BorderSide(color: _brand)),
                 ),
               ),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Semantics(
+                    liveRegion: true,
+                    child: Text(_error!,
+                        style: const TextStyle(color: _errRed, fontSize: 13, height: 1.4)),
+                  ),
+                ),
               const SizedBox(height: 18),
               SizedBox(
                 width: double.infinity,

@@ -240,7 +240,8 @@ class CoachRelationshipService {
         .eq('id', coachId)
         .select('id');
     if ((rows as List).isEmpty) {
-      throw StateError('Your price could not be saved — nothing was changed.');
+      throw StateError(
+          "Your price couldn't be saved. Nothing was changed — try again.");
     }
   }
 
