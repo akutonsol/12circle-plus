@@ -80,5 +80,28 @@ assert inside the sheet/dialog.
 2. **P0-FL-5** raw `e.toString()` on the coach leaderboard tab, `community_screen`, `create_exercise_screen`
    — `cplus-flutter-engineer` (same pattern as FL-2).
 3. **P0-SB-2** let a coach set `monthly_price` on an active coach-initiated relationship without reopening
-   self-activation (113 UPDATE check vs 192) — `cplus-supabase-engineer`, migration + replay; **apply needs
-   approval**.
+   self-activation (113 UPDATE check vs 192) — `cplus-supabase-engineer`, migration + replay. **Held: no migration is
+   created or applied until Julia resolves Decisions 17 and 18 and explicitly authorizes the work.**
+
+## Cycle 3 log (2026-11-16) — P0-FL-4 and P0-FL-5
+
+Same mechanism. New this cycle: the lead's static-guard run caught a regression the agents could not see
+(contract guard 32 > 31 unseen write sites, from a helper passing an update payload by variable); and the QA
+verifier's temporary product-code mutations were blocked by its session's auto-mode classifier, so the **lead ran the
+code mutants** (the lead wrote none of this code) and the verifier did everything else.
+
+| Package | Agent | Responsibility | Branch / commits | Files changed | Tests | Independent review | Remaining |
+|---|---|---|---|---|---|---|---|
+| P0-FL-4 Business Profile reports what happened | `cplus-flutter-engineer` | implement + 3 follow-ups | `fix/business-profile-reports-what-happened` 97321b1, dd9a333, d0a2722, 06ca1af → **PR #176** (CI 7/7 on 06ca1af, run `44014296382`) | `coach_business_screen.dart`; `business_profile_reports_what_happened_test.dart` (new, 50 tests) | full suite 2733 pass; analyze 287; contract 31 ≤ 31; coordinator 268/268; 20 tests fail on main | security **APPROVE-WITH-NOTES** (local replay); UX **PASS-WITH-NOTES** ×2; QA **REJECTED** → **VERIFIED** ×2; lead mutants 7/7 caught | Decision 18 (clear price/years, $0); SR-2/3/4; photo orphan (15b); 4 sibling unchecked updates |
+| P0-FL-5 no raw exception text (leaderboard, community feed, create exercise) | `cplus-flutter-engineer` | implement + 1 follow-up | `fix/no-raw-errors-leaderboard-community-exercise` (stacked on #173) a9e69be, 87cda02 → **PR #175** (CI 7/7 on 87cda02, run `44012398498`) | `coach_dashboard_screen.dart` (leaderboard), `community_screen.dart`, `create_exercise_screen.dart`, `custom_exercise_service.dart` (lastError only); 3 new widget + 1 new unit test files | full suite 2725 pass; analyze 291; 10 fail on 918c8dc, 13 on a9e69be | security **APPROVE-WITH-NOTES**; UX **PASS-WITH-NOTES** ×2; QA **REJECTED** → **INCONCLUSIVE** (mutants blocked); lead mutants 5/5 caught | media failures shown as success (F4); members list failure shown as empty; PD-A24 redaction; resubmit-for-review control (decision) |
+
+Runtime (device/simulator/live QA): **not performed**; journey completion unchanged (2 of 14).
+
+### Backlog after cycle 3 (next decision-free packages)
+
+1. **P0-FL-6** pricing sheet `_load` failed read (`catch (_) {}` → indistinguishable from "no price") and the Requests
+   tab badge (`pendingRequestsProvider.valueOrNull` → a failed read shows as no requests).
+2. **P0-FL-7** create exercise: media upload/attach/sync failures after a save reported as success.
+3. **P0-FL-8** community members list: every error becomes "No members yet".
+4. **P0-FL-9** unchecked updates: `settings_screen.dart:69`, `home_screen.dart:1329`,
+   `coach_relationship_service.dart:218`, `intake_flow_screen.dart:163`.
