@@ -504,6 +504,54 @@ Backlog recorded this cycle (decision-free unless marked):
 
 **P0 acceptance after cycle 3: unchanged — 2 of 14 journeys (14%), 0 of 4 beta-ready conditions.**
 
+### Cycle 4 — P0-FL-6 to P0-FL-9 and the SR-4 investigation (2026-11-17)
+
+| PR | Package | Commits (author) | Files changed | Automated evidence | Independent verdicts | CI (exact head) |
+|---|---|---|---|---|---|---|
+| #177 | **P0-FL-6** (stacked on #174) Coach Pricing sheet: a failed read shows "Couldn't load your current price" + Try again in place of the field and Save (was an empty field = "no price set"); signed-out message; Save copy network/other split; scrolls at 2x. Requests tab label: failed read shows an error icon + "Requests — couldn't load" (was "no requests"); no dot flicker on reload | flutter-engineer: af83748, 739996f, 7844f17 (tests) | `coach_pricing_sheet.dart`, `coach_dashboard_screen.dart` (tab label only); `pricing_sheet_load_failure_test.dart`, `requests_tab_label_failed_read_test.dart` (new), `price_writes_report_outcome_test.dart` | 12 tests fail on 4d1d992; full suite **2744 / 7 skip**; analyze 291; `.valueOrNull` −1; contract 31 ≤ 31 | security **APPROVE-WITH-NOTES**; UX **PASS-WITH-NOTES**; QA **VERIFIED**; lead mutants 4 survived → test-only round → **4/4 caught** | 7/7 on 7844f17 (`44029419873`) |
+| #178 | **P0-FL-7** (stacked on #175) create exercise: every media/relations step after a save is checked (incl. the media RPC's `found=false`); any failure → no "Exercise Saved!", one message naming what failed + "Save again"; media-only failure → "nothing was changed"; after a create the screen edits that row (a retry no longer creates a second exercise) | flutter-engineer: 255fc35, 098f758, ca3ca97 (tests) | `create_exercise_screen.dart`, `custom_exercise_service.dart` (`updateExerciseMedia` only); `create_exercise_media_failures_test.dart` (new) | 16 fail on 87cda02 (+ test seam), 4 on 255fc35; full suite **2746**; analyze 291 | security **APPROVE-WITH-NOTES**; UX **FAIL** (retry duplicated) → **PASS-WITH-NOTES**; QA **VERIFIED**; lead mutants 2 survived → **2/2 caught** | 7/7 on ca3ca97 (`44030338977`) |
+| #179 | **P0-FL-8** (stacked on #175) Community Members: a failed read is an error state (copy split, busy-aware Try again, live region, 2x), not "No members yet."; `addPost` no longer fakes a feed of one; feed error follows the same rule | flutter-engineer: 53af301, 0ca4425, 8d2eb09 (tests) | `community_provider.dart`, `community_screen.dart`; `community_members_failure_test.dart` (new), `community_feed_no_raw_error_test.dart` | 11 fail on 87cda02; full suite **2744**; analyze 291 | security **APPROVE-WITH-NOTES**; UX **PASS-WITH-NOTES**; QA **VERIFIED**; lead mutant (ClientException) survived → **caught** | 7/7 on 8d2eb09 (`44031390664`) |
+| #180 | **P0-FL-9** (stacked on #174) settings unit toggle, client "Rate Your Coach" upsert and intake progress saves request their row back and report failure; the client's no-op write of the coach's `rating_avg` removed; `setGlobalPrice` already fixed by #174 (verified) | flutter-engineer: 3cb4e4e, 2585107, 12b098d, e8ef987 (tests) | `settings_screen.dart`, `home_screen.dart` (review dialog), `intake_flow_screen.dart` (`_saveProgress`); `test/support/row_checking_postgrest.dart` + 3 new widget tests | settings +1 −5 and intake +1 −3 on 4d1d992; Home 0/5 on 4d1d992 + hook (lead); full suite **2733**; analyze 291; contract write sites 172 → 171 | security **APPROVE-WITH-NOTES** (local replay 000–192); UX **PASS-WITH-NOTES**; QA **INCONCLUSIVE** (Home hook) → resolved by the lead's baseline; lead mutants 6 survived → **6/6 caught** | 7/7 on e8ef987 (`44032450976`) |
+
+**Evidence is automated only** (widget/unit tests on fakes, mutants, guards, CI, two local database replays and two
+read-only QA reads by the lead: a schema dump and one aggregate count). **No device, simulator or live-QA write.**
+**Journey completion is not increased by this cycle.**
+
+**New backend defect (P2, not fixed — needs a migration and Julia's approval): coach ratings stop updating after 115.**
+045's `recalc_coach_rating()` runs from the `coach_review_rollup` trigger while `auth.uid()` is the reviewing client,
+so 115's `enforce_profile_privilege()` pins `rating_avg`/`review_count` to OLD. Proven by local replay (R2/R4 FAIL;
+controls R8 no-uid and R9 trigger-off pass). **QA, read-only count: 3 coaches have reviews, 1 has a stale stored
+rating.** Fix options: A pin only for `authenticated`/`anon` (recommended), B transaction-local flag, C compute on
+read — each with a backfill. Prerequisite decision: who may review a coach (today any signed-in user, with or without a
+relationship — `001` "clients manage own reviews").
+
+**SR-4 investigation — active coach writing a client's profile (read-only; no permission changed).**
+- Live QA (read-only schema dump by the lead) and a local replay of migrations 000–181 + 187–192 agree: policy
+  "coaches can update client profiles" (015) — `FOR UPDATE TO authenticated USING/WITH CHECK id IN (client_id of an
+  ACTIVE relationship with coach_id = auth.uid())`; `GRANT ALL ON user_profiles TO authenticated`; no column grants.
+  193–200 do not change it. The only enforcement is 115's trigger.
+- Of 78 columns, an active coach: **REFUSED 9** (`role`, `membership_tier`, `marketplace_commission_rate`, five
+  `stripe_*`, `is_demo`); **silently kept 7** (`id`, `email`, `created_at`, `rating_avg`, `review_count`,
+  `ai_client_summary`, `assigned_coach_id`); **recomputed 3** (`risk_score`, `risk_level`, `risk_flags`);
+  **WRITABLE 59** — incl. all 32 health/intake columns (`parq_answers`, `medical_conditions`, injuries, body metrics,
+  `date_of_birth`, `consent_agreed`/`consent_date`, goals…), identity (names, `phone`, `avatar_url`), onboarding and
+  notification flags, coach-only fields, `updated_at`.
+- Consequences proven: the coach can clear the PAR-Q and drop the client from high to low risk; can set consent;
+  injury edits become permanent AI memories in the client's name that the coach cannot delete.
+- Pending/ended/no-relationship coaches change nothing (0 rows). **No app screen writes a client's profile as the
+  coach** — nothing in the app depends on this policy.
+- Recorded already as registry R-05 (P3, linked to the wrong question Q-H1). **Decision for Julia (Decision 19 below):
+  A remove the policy; B an explicit allow-list (today empty); B′ keep it but block safety/consent/coach-only fields;
+  C status quo.** No migration until approved.
+
+Backlog added this cycle: `groupNotifierProvider` failure shown as "no groups" (Community + Activity); dead
+`postListProvider`; shared `isNetworkFailure` helper after the stacked PRs merge; Set Custom Price dialog copy split;
+postgrest-dart ~7 s retry before a network failure shows; 46 other `catch (_) {}` in `lib/` (~20 files);
+`public_profiles` member listing is unscoped (decision); auto-review of newly created coach exercises (decision).
+P0-SB-2 **remains blocked** on Decisions 17 and 18 and explicit authorization.
+
+**P0 acceptance after cycle 4: unchanged — 2 of 14 journeys (14%), 0 of 4 beta-ready conditions.**
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
@@ -537,6 +585,8 @@ These are Julia's calls; the recommendation is engineering's view, not a decisio
 16. Credit refund window when a booked session is cancelled (5b).
 17. May a coach write `pricing_monthly` on an active client's profile (015 "coaches can update client profiles"; matters when the client is also a coach)? (security F2, #174)
 18. Is $0 a valid coaching price? The Custom Price dialog accepts 0; the Pricing sheet refuses it (UX U4, #174); may a coach clear a saved price or years of experience? (#176 keeps a blank field's saved value and says so)
+19. SR-4: may an active coach edit a client's profile fields at all, and which? (A none — remove the 015 policy; B an explicit allow-list; B′ block safety, consent and coach-only fields; C status quo.) No app screen uses it today.
+20. Who may review a coach (any signed-in user today, with or without a relationship) — decide before the rating-rollup fix lands.
 
 ## Migration approvals required
 
