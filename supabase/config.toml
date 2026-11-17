@@ -32,11 +32,17 @@ sql_paths = ["./seeds/test_accounts.sql", "./seeds/full_test_data.sql"]
 #      establishes "someone on the internet", never "this specific user".
 #      Authorization is the function's own `getUser()` + policy check.
 #
-#      This distinction is the whole of EDGE-1 (`notify-coach-email`) and EDGE-2
-#      (`send-checkin-reminder`): both are declared `true` below and both are
-#      still callable by any anon-key holder, because neither reads the
-#      Authorization header. Declaring `verify_jwt` here does NOT close them.
-#      They are Wave 5, decisions D-4 and D-5.
+#      This distinction is the whole of EDGE-1 (`notify-coach-email`): it is
+#      callable by any anon-key holder because it does not read the
+#      Authorization header. Declaring `verify_jwt` here does NOT close it.
+#      Wave 5, decision D-4.
+#
+#      EDGE-2 (`send-checkin-reminder`, declared `true` below) shows why: the
+#      setting alone admitted any signed-in user and the anon key. Since
+#      P0-SEC-1 the function itself checks the bearer and refuses every caller
+#      except the service role (401/403, 500 if the key is unset) before it
+#      builds a client, reads, writes or emails. Its idempotency gap remains
+#      open — see the block below (Wave 5, decision D-5).
 #
 # Every function is listed explicitly. An undeclared function inherits a default
 # nobody chose, which is the defect this block exists to remove.
@@ -120,7 +126,9 @@ verify_jwt = true
 
 [functions.send-checkin-reminder]
 verify_jwt = true
-# EDGE-2 (P0, Wave 5, D-5): reads no Authorization header despite its own header
-# claiming pg_cron + service-role invocation, and has no idempotency guard, so N
-# invocations produce N notifications and N emails per client.
-# `verify_jwt = true` does not mitigate this either.
+# EDGE-2 (P0, Wave 5, D-5): caller — P0-SEC-1: the function refuses every
+# caller except the service role (the pg_cron job); `verify_jwt = true` alone
+# admitted any signed-in user's JWT and the anon key, so the check lives in
+# index.ts (service_caller.mjs). Idempotency — still open (D-5): there is no
+# idempotency guard, so N service-role invocations produce N notifications and
+# N emails per client. `verify_jwt = true` does not mitigate this either.

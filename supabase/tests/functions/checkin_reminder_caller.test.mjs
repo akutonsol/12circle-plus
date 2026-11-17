@@ -95,8 +95,73 @@ test('refusal response carries the status and never echoes either token', async 
   assert.deepEqual(JSON.parse(body), { error: 'Forbidden' });
 });
 
+// Removes // and /* */ comments so a commented-out check cannot satisfy the
+// wiring test. String and template literals are copied verbatim, so a `//`
+// inside a URL is not mistaken for a comment. (index.ts has no regex literals.)
+// Each comment becomes one space, so tokens either side of it stay separate.
+function stripComments(src) {
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (c === '/' && n === '/') {
+      while (i < src.length && src[i] !== '\n') i++;
+      out += ' ';
+    } else if (c === '/' && n === '*') {
+      const end = src.indexOf('*/', i + 2);
+      assert.ok(end >= 0, 'unterminated /* comment in index.ts');
+      i = end + 2;
+      out += ' ';
+    } else if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1;
+      while (j < src.length && src[j] !== c) j += src[j] === '\\' ? 2 : 1;
+      out += src.slice(i, j + 1);
+      i = j + 1;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+// Brace depth at `pos`, ignoring braces inside string/template literals.
+function braceDepthAt(code, pos) {
+  let depth = 0;
+  for (let i = 0; i < pos; i++) {
+    const c = code[i];
+    if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1;
+      while (j < code.length && code[j] !== c) j += code[j] === '\\' ? 2 : 1;
+      i = j;
+    } else if (c === '{') depth++;
+    else if (c === '}') depth--;
+  }
+  return depth;
+}
+
 test('wiring: index.ts checks the caller and returns on refusal before any client, read, write or email', () => {
-  const src = readFileSync(INDEX, 'utf8');
+  const src = stripComments(readFileSync(INDEX, 'utf8'));
+
+  // The handler must be one top-level serve(async (req) => { ... }), and its
+  // first two statements must be exactly the check and the early return —
+  // nothing before them, and not nested in any block (if (false) { … }, etc.).
+  const serveRe = /\bserve\s*\(\s*async\s*\(\s*req\s*\)\s*=>\s*\{/g;
+  const serves = [...src.matchAll(serveRe)];
+  assert.equal(serves.length, 1, 'index.ts must have exactly one serve(async (req) => { … }) handler');
+  const serveAt = serves[0].index;
+  assert.equal(braceDepthAt(src, serveAt), 0, 'serve(...) must be called at top level, not inside a block');
+  const body = src.slice(serveAt + serves[0][0].length);
+  const firstTwo =
+    /^\s*const\s+caller\s*=\s*await\s+authorizeServiceCaller\s*\(\s*req\s*,\s*SUPABASE_SERVICE_KEY\s*\)\s*;\s*if\s*\(\s*!\s*caller\.ok\s*\)\s*return\s+refusalResponse\s*\(\s*caller\s*\)\s*;/;
+  assert.match(
+    body,
+    firstTwo,
+    'the first two statements of the serve handler must be exactly ' +
+      '`const caller = await authorizeServiceCaller(req, SUPABASE_SERVICE_KEY);` and ' +
+      '`if (!caller.ok) return refusalResponse(caller);`',
+  );
 
   assert.match(
     src,
@@ -107,8 +172,7 @@ test('wiring: index.ts checks the caller and returns on refusal before any clien
   const call = src.search(/await\s+authorizeServiceCaller\s*\(\s*req\s*,\s*SUPABASE_SERVICE_KEY\s*\)/);
   assert.ok(call >= 0, 'index.ts must call authorizeServiceCaller(req, SUPABASE_SERVICE_KEY)');
 
-  const serveAt = src.indexOf('serve(');
-  assert.ok(serveAt >= 0 && serveAt < call, 'the check must run inside the request handler');
+  assert.ok(serveAt < call, 'the check must run inside the request handler');
 
   // The refusal must actually stop the handler, right after the check.
   const guard = /const\s+caller\s*=\s*await\s+authorizeServiceCaller\s*\(\s*req\s*,\s*SUPABASE_SERVICE_KEY\s*\)\s*;\s*if\s*\(\s*!\s*caller\.ok\s*\)\s*return\s+refusalResponse\s*\(\s*caller\s*\)\s*;/;
