@@ -594,6 +594,12 @@ class _ClientTimeline extends StatelessWidget {
   return (price: v, error: null);
 }
 
+/// Opens the custom-price dialog without building the whole client screen,
+/// whose many providers a dialog test does not need.
+@visibleForTesting
+void showCustomPriceDialogForTest(BuildContext context, String clientId) =>
+    _showCustomPriceDialog(context, clientId);
+
 /// Coach sets a custom monthly price for THIS client (overrides their global
 /// rate). Leaving it blank and saving clears the override.
 void _showCustomPriceDialog(BuildContext context, String clientId) {
@@ -637,11 +643,15 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
             final value = parsed.price;
             try {
               await CoachRelationshipService().setClientPrice(clientId, value);
-            } catch (_) {
+            } catch (e) {
               // A write that failed escaped here unhandled, with nothing said.
+              // setClientPrice's StateError says what happened (signed out, no
+              // relationship with this client — P0-FL-3).
               if (!dctx.mounted) return;
-              ScaffoldMessenger.of(dctx).showSnackBar(const SnackBar(
-                  content: Text("Couldn't save the price — try again.")));
+              ScaffoldMessenger.of(dctx).showSnackBar(SnackBar(
+                  content: Text(e is StateError
+                      ? e.message
+                      : "Couldn't save the price — try again.")));
               return;
             }
             if (!dctx.mounted) return;

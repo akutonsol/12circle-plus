@@ -228,21 +228,39 @@ class CoachRelationshipService {
 
   // ── Coach pricing ─────────────────────────────────────────
   /// Global monthly price shown in the marketplace and used by default.
+  ///
+  /// Throws if no one is signed in or the update changed no row (P0-FL-3):
+  /// both returned normally and the sheet said "Pricing updated." for a price
+  /// that was never saved.
   Future<void> setGlobalPrice(double price) async {
-    final coachId = _db.auth.currentUser?.id;
-    if (coachId == null) return;
-    await _db.from('user_profiles').update({'pricing_monthly': price}).eq('id', coachId);
+    final coachId = _requireSignedIn();
+    final rows = await _db
+        .from('user_profiles')
+        .update({'pricing_monthly': price})
+        .eq('id', coachId)
+        .select('id');
+    if ((rows as List).isEmpty) {
+      throw StateError('Your price could not be saved — nothing was changed.');
+    }
   }
 
   /// Per-client custom price (null clears the override → falls back to global).
+  ///
+  /// Throws if no one is signed in or the update changed no row (P0-FL-3): a
+  /// 0-row update (no relationship with this client, RLS refusal) was reported
+  /// as "Custom price set", while checkout kept charging the standard rate.
   Future<void> setClientPrice(String clientId, double? price) async {
-    final coachId = _db.auth.currentUser?.id;
-    if (coachId == null) return;
-    await _db
+    final coachId = _requireSignedIn();
+    final rows = await _db
         .from('coach_client_relationships')
         .update({'monthly_price': price})
         .eq('coach_id', coachId)
-        .eq('client_id', clientId);
+        .eq('client_id', clientId)
+        .select('id');
+    if ((rows as List).isEmpty) {
+      throw StateError(
+          'No coaching relationship with this client — nothing was changed.');
+    }
   }
 
   /// All of the client's active coaches (supports working with several at once).

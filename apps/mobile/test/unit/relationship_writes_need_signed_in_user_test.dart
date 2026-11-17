@@ -90,4 +90,23 @@ void main() {
             'THE defect: it returned normally and the marketplace said "Request sent!"');
     expect(server.calls, isEmpty);
   });
+
+  // P0-FL-3: both price writes returned normally when signed out, and the
+  // screens said "Pricing updated." / "Custom price set".
+  test('setGlobalPrice without a signed-in user throws, and writes nothing',
+      () async {
+    await expectLater(CoachRelationshipService().setGlobalPrice(150),
+        throwsA(isA<StateError>()),
+        reason: 'THE defect: it returned normally -- "Pricing updated."');
+    expect(server.calls, isEmpty);
+  });
+
+  test('setClientPrice without a signed-in user throws, and writes nothing',
+      () async {
+    await expectLater(
+        CoachRelationshipService().setClientPrice('client-1', 150),
+        throwsA(isA<StateError>()),
+        reason: 'THE defect: it returned normally -- "Custom price set"');
+    expect(server.calls, isEmpty);
+  });
 }

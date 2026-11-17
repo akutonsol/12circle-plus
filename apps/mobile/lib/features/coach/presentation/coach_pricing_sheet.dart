@@ -65,7 +65,19 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
     final value = double.tryParse(_price.text.trim());
     if (value == null || value <= 0) return;
     setState(() => _saving = true);
-    await CoachRelationshipService().setGlobalPrice(value);
+    try {
+      await CoachRelationshipService().setGlobalPrice(value);
+    } catch (e) {
+      // A failed or 0-row save said "Pricing updated." or, thrown, left the
+      // spinner running with nothing said (P0-FL-3). Keep the sheet open.
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e is StateError
+              ? e.message
+              : "Couldn't save your price — try again.")));
+      return;
+    }
     if (!mounted) return;
     setState(() => _saving = false);
     Navigator.pop(context);
