@@ -28,6 +28,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 const _uid = '00000000-0000-4000-8000-00000000057c';
 const _ended = 'Coaching ended. Your coach has been notified.';
 const _failed = 'Could not end coaching. Nothing was changed. Try again.';
+/// cancelCoach's own StateError for a 0-row update, shown verbatim.
+const _noActive = 'No active coaching with this coach — nothing was changed.';
 /// Owner decision 2: a paid coach continues to the end of the paid period.
 const _continues = 'continues until';
 
@@ -82,6 +84,7 @@ class _MemoryStore extends GotrueAsyncStorage {
 /// insert each succeed or fail on request.
 class _Server extends http.BaseClient {
   bool relationshipFails = false;
+  bool relationshipMatches = true;
   bool notificationFails = false;
   bool paid = false;
   bool cancelFails = false;
@@ -103,9 +106,10 @@ class _Server extends http.BaseClient {
           : _json({'ok': true, 'endsAt': '2026-12-01T00:00:00Z'}, 200, request);
     }
     if (request.method == 'PATCH' && path.endsWith('/coach_client_relationships')) {
+      // cancelCoach checks the update matched a row (P0-FL-1).
       return relationshipFails
           ? _json({'message': 'offline'}, 503, request)
-          : _json([], 200, request);
+          : _json(relationshipMatches ? [{'id': 'rel-a'}] : [], 200, request);
     }
     if (path.endsWith('/notifications')) {
       return notificationFails
@@ -176,6 +180,7 @@ void main() {
   setUp(() {
     server
       ..relationshipFails = false
+      ..relationshipMatches = true
       ..notificationFails = false
       ..paid = false
       ..cancelFails = false
@@ -245,7 +250,22 @@ void main() {
       await stop(tester, paid: false);
 
       expect(find.text(_ended), findsNothing);
+      // Not a StateError (a 503): the generic text.
       expect(find.text(_failed), findsOneWidget);
+      expect(find.text(_noActive), findsNothing);
+    });
+
+    testWidgets('an update that matched no row says nothing was changed', (tester) async {
+      // RLS refusal / already ended: PostgREST answers 200 with no rows.
+      server.relationshipMatches = false;
+      await stop(tester, paid: false);
+
+      expect(find.text(_ended), findsNothing);
+      // F2: the specific reason, not the generic text that discarded it.
+      expect(find.text(_noActive), findsOneWidget);
+      expect(find.text(_failed), findsNothing);
+      expect(server.writes, isNot(contains('POST /rest/v1/notifications')),
+          reason: 'the coach must not be told a client ended coaching');
     });
 
     testWidgets('an update that worked says so', (tester) async {

@@ -4171,6 +4171,10 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
     // "Meet Coach …" only for a coach who IS linked. One `catch (_) {}` around
     // the whole chain welcomed a client to a coach whose link had failed.
     var linked = false;
+    // Set once the link is saved: ending the client's previous coach is a
+    // separate step, and its failure must not read as a failed link -- the new
+    // coach IS linked (P0-FL-1 follow-up F1).
+    String? previousNotEnded;
     try {
       final uid = Supabase.instance.client.auth.currentUser?.id;
       if (uid != null) {
@@ -4183,6 +4187,8 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
               'initiated_by':  'client',
               'activated_at':  DateTime.now().toUtc().toIso8601String(),
             }, onConflict: 'coach_id,client_id');
+        linked = true;
+        ref.invalidate(assignedCoachProvider);
         // Intake yields a single coach: cancel any other active relationship
         // (e.g. a coach picked earlier then changed) so re-selecting replaces
         // rather than accumulates. Multi-coach is added later via marketplace.
@@ -4190,18 +4196,32 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
         // Each through the one end-coaching policy (owner decision 2): a coach
         // the client was PAYING is cancelled at the end of the paid period and
         // coaching with them lasts until then; an unpaid one ends now.
-        final others = await Supabase.instance.client
-            .from('coach_client_relationships')
-            .select('coach_id')
-            .eq('client_id', uid)
-            .eq('status', 'active')
-            .neq('coach_id', coach['id'] as String);
-        for (final o in (others as List)) {
-          await CoachRelationshipService()
-              .cancelCoach(o['coach_id'] as String, 'switched_during_intake', null);
+        //
+        // Reported, not swallowed: a coach that could not be ended is still
+        // the client's coach, and they are told to end it from Profile.
+        try {
+          final others = await Supabase.instance.client
+              .from('coach_client_relationships')
+              .select('coach_id')
+              .eq('client_id', uid)
+              .eq('status', 'active')
+              .neq('coach_id', coach['id'] as String);
+          for (final o in (others as List)) {
+            try {
+              await CoachRelationshipService()
+                  .cancelCoach(o['coach_id'] as String, 'switched_during_intake', null);
+            } catch (e) {
+              reportError('IntakeFlow.selectCoach.endPrevious', e);
+              previousNotEnded =
+                  "Your previous coaching couldn't be ended — end it from Profile.";
+            }
+          }
+        } catch (e) {
+          // The read of other coaches failed: whether there is one is unknown.
+          reportError('IntakeFlow.selectCoach.endPrevious', e);
+          previousNotEnded = "We couldn't check for a previous coach — "
+              'if you had one, end it from Profile.';
         }
-        linked = true;
-        ref.invalidate(assignedCoachProvider);
         // Notify coach. Best-effort, and reported: the link above is saved, and
         // a failed notification must not read as a failed link (N3).
         try {
@@ -4228,6 +4248,11 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
     if (!linked) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text("Couldn't select this coach — check your connection and try again.")));
+    } else if (previousNotEnded != null) {
+      final name = '${coach['first_name'] ?? ''} ${coach['last_name'] ?? ''}'.trim();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text("You're set with ${name.isEmpty ? 'your new coach' : name}. "
+              '$previousNotEnded')));
     }
   }
 
