@@ -97,7 +97,37 @@ code mutants** (the lead wrote none of this code) and the verifier did everythin
 
 Runtime (device/simulator/live QA): **not performed**; journey completion unchanged (2 of 14).
 
-### Backlog after cycle 3 (next decision-free packages)
+## Cycle 4 log (2026-11-17) — P0-FL-6 to P0-FL-9 + SR-4 investigation
+
+Four implementers ran in parallel (one worktree each), then 8 read-only UX/security reviews in parallel, then 4 QA
+verifications in each package's worktree. New this cycle: the QA verifier's candidate code mutants were run by the
+lead (verifier sessions cannot edit product code); **13 survived** across the four packages — all test gaps, none a
+product defect — and a **test-only** engineer round per package closed them (lead re-run: **13/13 caught**; runner
+validated with a control mutant). FL-9's Home baseline needed a test hook on the base file, so the lead built it
+(4d1d992 + hook only → 0/5 pass). Two read-only QA reads by the lead (schema dump; one aggregate count).
+
+| Package | Agent | Responsibility | Branch / commits | Files changed | Tests | Independent review | Remaining |
+|---|---|---|---|---|---|---|---|
+| P0-FL-6 pricing-sheet failed read + Requests label | `cplus-flutter-engineer` | implement + review fixes + test-only | `fix/pricing-load-and-requests-badge-report-failures` (on #174) af83748, 739996f, 7844f17 → **PR #177** (CI 7/7 on 7844f17, `44029419873`) | `coach_pricing_sheet.dart`, `coach_dashboard_screen.dart` (label); 2 new + 1 updated tests | 2744 pass; analyze 291; 12 fail on 4d1d992 | security APPROVE-WITH-NOTES; UX PASS-WITH-NOTES; QA VERIFIED; mutants 4/4 caught | Custom Price dialog copy split; ~7 s postgrest retry |
+| P0-FL-7 exercise media failures | `cplus-flutter-engineer` | implement + review fixes + test-only | `fix/exercise-media-failures-are-not-success` (on #175) 255fc35, 098f758, ca3ca97 → **PR #178** (CI 7/7 on ca3ca97, `44030338977`) | `create_exercise_screen.dart`, `custom_exercise_service.dart` (`updateExerciseMedia`); 1 new test file | 2746 pass; analyze 291; 16 fail on 87cda02 | security APPROVE-WITH-NOTES; UX **FAIL → PASS-WITH-NOTES** (retry duplicate fixed); QA VERIFIED; mutants 2/2 caught | 072 media authz until 199; auto-review of new coach exercises (decision) |
+| P0-FL-8 community members failure | `cplus-flutter-engineer` | implement + feed rule + test-only | `fix/community-members-failure-is-not-empty` (on #175) 53af301, 0ca4425, 8d2eb09 → **PR #179** (CI 7/7 on 8d2eb09, `44031390664`) | `community_provider.dart`, `community_screen.dart`; 1 new + 1 updated test | 2744 pass; analyze 291; 11 fail on 87cda02 | security APPROVE-WITH-NOTES; UX PASS-WITH-NOTES; QA VERIFIED; mutant caught | groups failure shown as "no groups" (Community + Activity); dead `postListProvider`; member listing unscoped (decision) |
+| P0-FL-9 updates verify a changed row | `cplus-flutter-engineer` | implement + review fixes + test-only | `fix/updates-verify-changed-row` (on #174) 3cb4e4e, 2585107, 12b098d, e8ef987 → **PR #180** (CI 7/7 on e8ef987, `44032450976`) | `settings_screen.dart`, `home_screen.dart` (review dialog), `intake_flow_screen.dart` (`_saveProgress`); test support + 3 new tests | 2733 pass; analyze 291; contract sites 172 → 171 | security APPROVE-WITH-NOTES (replay; **proved the rating defect**); UX PASS-WITH-NOTES; QA INCONCLUSIVE → lead baseline 0/5; mutants 6/6 caught | **rating rollup defect (migration)**; who may review a coach (decision) |
+| SR-4 coach writes client profile (investigation) | `cplus-security-reviewer` | read-only investigation + local replay | — | none | replay: 78 columns classified; 24 non-active rows unchanged; client control | lead confirmed against live QA schema (read-only dump) | **Decision 19** (A/B/B′/C); no migration until approved |
+
+Runtime (device/simulator/live QA): **not performed**; journey completion unchanged (2 of 14).
+
+### Backlog after cycle 4
+
+1. **P0-SB-3 (migration, needs approval)** coach rating rollup blocked by 115's pin — fix option A + backfill; after
+   Decision 20 (who may review a coach).
+2. **SR-4 (decision 19)** — no work until Julia picks A/B/B′/C.
+3. **P0-SB-2** — still blocked on Decisions 17 and 18 and explicit authorization.
+4. **P0-FL-10** `groupNotifierProvider` failure shown as "no groups" (Community Groups tab + Activity).
+5. **P0-FL-11** move `isNetworkFailure` to one shared helper (after #175/#176/#177/#179/#180 merge); delete
+   `postListProvider`; Set Custom Price dialog copy split.
+6. Remaining silent `catch (_) {}` in `lib/` (46 sites, ~20 files) — triage into packages.
+
+### Backlog after cycle 3 (FL-6..FL-9 done in cycle 4)
 
 1. **P0-FL-6** pricing sheet `_load` failed read (`catch (_) {}` → indistinguishable from "no price") and the Requests
    tab badge (`pendingRequestsProvider.valueOrNull` → a failed read shows as no requests).
