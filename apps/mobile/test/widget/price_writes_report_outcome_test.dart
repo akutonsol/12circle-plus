@@ -327,6 +327,8 @@ void main() {
               of: find.byType(AlertDialog),
               matching: find.byType(CircularProgressIndicator)),
           findsOneWidget);
+      expect(find.bySemanticsLabel('Saving'), findsOneWidget,
+          reason: 'the in-flight spinner is announced, not a nameless button');
       server.gate!.complete();
       await settle(tester);
       expect(find.text(_dialogSaved), findsOneWidget);
