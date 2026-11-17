@@ -85,7 +85,14 @@ class PostNotifier extends StateNotifier<AsyncValue<List<CommunityPost>>> {
   Future<void> addPost(String content, {String postType = 'general'}) async {
     final post = await _svc.createPost(content, postType: postType);
     ScoreEngine().communityPost(); // +5, once/day
-    state = AsyncValue.data([post, ...(state.valueOrNull ?? [])]);
+    if (state.hasError && !state.hasValue) {
+      // P0-FL-8 · the feed never arrived: `valueOrNull ?? []` made that failure
+      // a feed holding only the new post. Read it again instead — the post is
+      // in it, or the failure is still shown as one.
+      await _load();
+    } else {
+      state = AsyncValue.data([post, ...(state.valueOrNull ?? [])]);
+    }
     // Award community points for posting
     await _score.addCommunityPoints();
   }
@@ -105,24 +112,23 @@ final postNotifierProvider = StateNotifierProvider<PostNotifier, AsyncValue<List
 });
 
 // ── Live members from Supabase ────────────────────────────────────────────────
+// P0-FL-8 · a failed read PROPAGATES. It was caught and answered `[]`, so the
+// Members tab said "No members yet." for a read that never arrived and its own
+// error state could not be reached.
 final liveMembersProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
-  try {
-    final db = Supabase.instance.client;
-    // public_profiles, not user_profiles: migration 102 restricts the base table
-    // to the owner and their coach, and member discovery needs nothing beyond a
-    // display name. Demo fixtures are excluded via the explicit is_demo flag
-    // (migration 110) — email is never selected or filtered on, and is not in
-    // the view at all.
-    final data = await db
-        .from('public_profiles')
-        .select('id, first_name, last_name, role, avatar_url, created_at')
-        .eq('is_demo', false)
-        .order('created_at', ascending: false)
-        .limit(100);
-    return List<Map<String, dynamic>>.from(data as List);
-  } catch (_) {
-    return [];
-  }
+  final db = Supabase.instance.client;
+  // public_profiles, not user_profiles: migration 102 restricts the base table
+  // to the owner and their coach, and member discovery needs nothing beyond a
+  // display name. Demo fixtures are excluded via the explicit is_demo flag
+  // (migration 110) — email is never selected or filtered on, and is not in
+  // the view at all.
+  final data = await db
+      .from('public_profiles')
+      .select('id, first_name, last_name, role, avatar_url, created_at')
+      .eq('is_demo', false)
+      .order('created_at', ascending: false)
+      .limit(100);
+  return List<Map<String, dynamic>>.from(data as List);
 });
 
 // Shim for screens that watch old provider

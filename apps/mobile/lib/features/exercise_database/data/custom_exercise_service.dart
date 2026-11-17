@@ -126,9 +126,11 @@ class CustomExerciseService {
     String visibility = 'private',
     Map<String, dynamic>? extra, // additional columns (metadata)
   }) async {
+    // S3: cleared before the signed-out return, so a caller never reads an
+    // earlier call's error as this one's.
+    lastError = null;
     final uid = _uid;
     if (uid == null) return null;
-    lastError = null;
     final data = <String, dynamic>{
       'coach_id': uid,
       'name': name,
@@ -350,6 +352,7 @@ class CustomExerciseService {
 
   /// Move an exercise through the editorial lifecycle (approve/publish/revise…).
   Future<bool> reviewExercise(String id, String status) async {
+    lastError = null; // S3: never report an earlier call's error
     try {
       await _db.rpc('review_exercise_content', params: {'p_id': id, 'p_status': status});
       return true;
@@ -857,6 +860,7 @@ class CustomExerciseService {
   // ── Update ────────────────────────────────────────────────────────────────
 
   Future<bool> updateExercise(String id, Map<String, dynamic> updates) async {
+    lastError = null; // S3: never report an earlier call's error
     try {
       // .select() so an RLS-filtered update (0 rows, no error) is detectable.
       final res = await _db.from('custom_exercises').update(updates).eq('id', id).select('id');
