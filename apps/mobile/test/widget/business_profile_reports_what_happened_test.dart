@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -23,10 +24,26 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 //
 // HOW TO SEE IT FAIL: check out 8f2c8a0's coach_business_screen.dart and run
 // this file. The positive controls pass there too.
+//
+// Follow-up review (QA/UX on dd9a333), groups F–M below:
+//   Q. The fake used to answer EVERY user_profiles PATCH with a row, so
+//      dropping `.select('id')` went unnoticed. postgrest only asks for rows
+//      back (select= / Prefer: return=representation) when `.select()` is
+//      called; the fake now answers 204 with an empty body otherwise, and the
+//      controls assert select=id on each PATCH.
+//   N1–N9: see each group. Check out dd9a333's coach_business_screen.dart to
+//   see them fail (regression guards are marked as such).
 
 const _uid = '00000000-0000-4000-8000-0000000b5f04';
 const _signedOut = "You're signed out — sign in again to save.";
 const _priceError = 'Enter a monthly price in dollars, e.g. 150.';
+const _yearsError = 'Enter years of experience as a whole number, e.g. 5.';
+const _checkConnection = 'Check your connection and try again.';
+const _tryLater =
+    'Try again in a moment. If it keeps happening, contact support.';
+const _blankKept =
+    'Profile updated. A blank price or years field keeps its saved value.';
+const _errorRed = Color(0xFFFFB4AB);
 
 final _realProfile = <String, Object?>{
   'id': _uid,
@@ -95,16 +112,22 @@ class _MemoryStore extends GotrueAsyncStorage {
   Future<void> removeItem({required String key}) async => _m.remove(key);
 }
 
-enum _Read { ok, fails, missing }
+enum _Read { ok, fails, missing, network }
 
-enum _Patch { oneRow, zeroRows, fails }
+enum _Patch { oneRow, zeroRows, fails, network }
 
 class _Server extends http.BaseClient {
   _Read readMode = _Read.ok;
   _Patch patchMode = _Patch.oneRow;
   bool insertFails = false;
+  bool storageFails = false;
+  Completer<void>? readGate;
+  Completer<void>? patchGate;
   final calls = <String>[];
   final patches = <Map<String, Object?>>[];
+
+  /// The `select=` each user_profiles PATCH asked for (null = none).
+  final patchSelects = <String?>[];
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
@@ -112,7 +135,10 @@ class _Server extends http.BaseClient {
     calls.add('${request.method} $path');
     if (path.startsWith('/auth/v1/')) return _json({}, 200, request);
     if (path.startsWith('/storage/v1/')) {
-      return _json({'Key': 'coach-media/x.jpg'}, 200, request);
+      return storageFails
+          ? _json({'statusCode': '500', 'error': 'x', 'message': 'boom'}, 500,
+              request)
+          : _json({'Key': 'coach-media/x.jpg'}, 200, request);
     }
     if (path == '/functions/v1/send-invite-email') {
       return _json({'sent': true}, 200, request);
@@ -120,20 +146,30 @@ class _Server extends http.BaseClient {
     if (path == '/rest/v1/user_profiles' && request.method == 'PATCH') {
       final body = await request.finalize().bytesToString();
       patches.add(Map<String, Object?>.from(jsonDecode(body) as Map));
+      patchSelects.add(request.url.queryParameters['select']);
+      if (patchGate != null) await patchGate!.future;
+      // Like PostgREST: rows come back only when the request asked for them.
+      final wantsRows = request.url.queryParameters.containsKey('select') ||
+          (request.headers['Prefer'] ?? '').contains('return=representation');
       return switch (patchMode) {
-        _Patch.oneRow => _json([
+        _Patch.oneRow when wantsRows => _json([
             {'id': _uid}
           ], 200, request),
-        _Patch.zeroRows => _json([], 200, request),
-        _Patch.fails => _json({'message': 'offline'}, 500, request),
+        _Patch.zeroRows when wantsRows => _json([], 200, request),
+        _Patch.oneRow || _Patch.zeroRows => _empty204(request),
+        _Patch.fails => _json({'message': 'boom'}, 500, request),
+        _Patch.network => throw http.ClientException('offline', request.url),
       };
     }
     if (path == '/rest/v1/user_profiles' && request.method == 'GET') {
+      if (readGate != null) await readGate!.future;
       final single =
           request.headers['Accept']?.contains('vnd.pgrst.object') ?? false;
       switch (readMode) {
         case _Read.fails:
-          return _json({'message': 'offline'}, 500, request);
+          return _json({'message': 'boom'}, 500, request);
+        case _Read.network:
+          throw const SocketException('offline');
         case _Read.missing:
           return single
               ? _json({
@@ -157,6 +193,9 @@ class _Server extends http.BaseClient {
     }
     return _json([], 200, request);
   }
+
+  http.StreamedResponse _empty204(http.BaseRequest r) =>
+      http.StreamedResponse(Stream.value(const <int>[]), 204, request: r);
 
   http.StreamedResponse _json(Object? body, int status, http.BaseRequest r) =>
       http.StreamedResponse(Stream.value(utf8.encode(jsonEncode(body))), status,
@@ -199,8 +238,12 @@ void main() {
       ..readMode = _Read.ok
       ..patchMode = _Patch.oneRow
       ..insertFails = false
+      ..storageFails = false
+      ..readGate = null
+      ..patchGate = null
       ..calls.clear()
-      ..patches.clear();
+      ..patches.clear()
+      ..patchSelects.clear();
     failures.clear();
     setFailureSink(failures.add);
     if (Supabase.instance.client.auth.currentUser == null) {
@@ -218,13 +261,25 @@ void main() {
     }
   }
 
-  Future<void> open(WidgetTester tester) async {
-    tester.view.physicalSize = const Size(1000, 2400);
+  Future<void> open(WidgetTester tester,
+      {Size size = const Size(1000, 2400), bool wait = true}) async {
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const MaterialApp(home: CoachBusinessScreen()));
-    await settle(tester);
+    if (wait) await settle(tester);
   }
+
+  /// Every user_profiles PATCH asked for the changed row back.
+  void expectSelectIdOnEveryPatch() {
+    expect(server.patchSelects, isNotEmpty, reason: 'premise');
+    expect(server.patchSelects, everyElement('id'),
+        reason: 'without .select(\'id\') a 0-row (RLS-refused) update '
+            'cannot be told apart from a saved one');
+  }
+
+  Color? snackColor(WidgetTester tester) =>
+      tester.widget<SnackBar>(find.byType(SnackBar)).backgroundColor;
 
   Future<void> signOut(WidgetTester tester) async {
     await tester.runAsync(() => Supabase.instance.client.auth.signOut());
@@ -301,12 +356,28 @@ void main() {
       expect(patchCount(), 1, reason: 'premise');
       expect(find.text('Profile updated!'), findsNothing,
           reason: 'THE defect: RLS filtered the update and it said saved');
-      expect(find.text("Your profile couldn't be saved — nothing was changed."),
+      expect(
+          find.text("Couldn't save your profile — nothing was changed. "
+              '$_tryLater'),
           findsOneWidget);
     });
 
-    testWidgets('a failed update says so', (tester) async {
+    testWidgets('a server error says so, and does not blame the connection',
+        (tester) async {
       server.patchMode = _Patch.fails;
+      await open(tester);
+      await tapSave(tester);
+      expect(find.text('Profile updated!'), findsNothing);
+      expect(
+          find.text("Couldn't save your profile — try again in a moment. "
+              'If it keeps happening, contact support.'),
+          findsOneWidget,
+          reason: 'N4: a PostgrestException is not a connection problem');
+    });
+
+    testWidgets('a network failure on Save says check your connection',
+        (tester) async {
+      server.patchMode = _Patch.network;
       await open(tester);
       await tapSave(tester);
       expect(find.text('Profile updated!'), findsNothing);
@@ -321,6 +392,7 @@ void main() {
       await open(tester);
       await tapSave(tester);
       expect(find.text('Profile updated!'), findsOneWidget);
+      expectSelectIdOnEveryPatch();
       final body = server.patches.single;
       expect(body['bio'], 'Real bio');
       expect(body['pricing_monthly'], 149);
@@ -341,7 +413,44 @@ void main() {
           reason: 'THE defect: an empty field wrote pricing_monthly = 0');
       expect(body.containsKey('years_experience'), isFalse);
       expect(body['bio'], 'Real bio');
+      expectSelectIdOnEveryPatch();
+      // N1: it does not say a bare "updated" over two blank fields; the saved
+      // values come back and the message says why.
+      expect(find.text('Profile updated!'), findsNothing);
+      expect(find.text(_blankKept), findsOneWidget);
+      expect(tester.widget<TextField>(priceField()).controller!.text, '149');
+      expect(tester.widget<TextField>(yearsField()).controller!.text, '5');
+    });
+
+    testWidgets('N1: a blank field gets back the value saved most recently',
+        (tester) async {
+      await open(tester);
+      await tester.enterText(priceField(), '200');
+      await tapSave(tester);
       expect(find.text('Profile updated!'), findsOneWidget);
+      // SnackBars queue; clear the first so the second is the one on screen.
+      tester
+          .state<ScaffoldMessengerState>(find.byType(ScaffoldMessenger))
+          .removeCurrentSnackBar();
+      await tester.pump();
+      await tester.enterText(priceField(), '');
+      await tapSave(tester);
+      expect(server.patches.last.containsKey('pricing_monthly'), isFalse);
+      expect(tester.widget<TextField>(priceField()).controller!.text, '200',
+          reason: '200 is what the server holds now, not the 149 first read');
+      expect(tester.widget<TextField>(yearsField()).controller!.text, '5');
+      expect(find.text(_blankKept), findsOneWidget);
+    });
+
+    testWidgets('N1: a blank field on a 0-row save is NOT refilled',
+        (tester) async {
+      server.patchMode = _Patch.zeroRows;
+      await open(tester);
+      await tester.enterText(priceField(), '');
+      await tapSave(tester);
+      expect(find.text(_blankKept), findsNothing);
+      expect(tester.widget<TextField>(priceField()).controller!.text, '',
+          reason: 'nothing was confirmed, so nothing is claimed');
     });
 
     for (final bad in ['abc', '-5']) {
@@ -412,6 +521,7 @@ void main() {
           find.descendant(
               of: find.byType(AlertDialog), matching: find.byType(TextField)),
           name);
+      await tester.pump(); // the dialog enables Add on the next frame
       await tester.tap(find.text('Add'));
       await settle(tester);
     }
@@ -450,6 +560,7 @@ void main() {
       await open(tester);
       await addCert(tester, 'ACE-CPT');
       expect(server.patches.single['certifications'], ['NASM-CPT', 'ACE-CPT']);
+      expectSelectIdOnEveryPatch();
       expect(find.widgetWithText(Chip, 'ACE-CPT'), findsOneWidget);
       expect(find.textContaining('nothing was changed'), findsNothing);
     });
@@ -470,7 +581,8 @@ void main() {
       expect(patchCount(), 1, reason: 'premise');
       expect(find.text('Photo added'), findsNothing,
           reason: 'THE defect: 0 rows and it said added');
-      expect(find.text("Couldn't add the photo — nothing was changed."),
+      expect(
+          find.text("Couldn't add the photo — nothing was changed. $_tryLater"),
           findsOneWidget);
     });
 
@@ -491,6 +603,7 @@ void main() {
           isTrue,
           reason: 'bucket and path unchanged');
       expect(server.patches.single['transformation_photo_urls'], hasLength(1));
+      expectSelectIdOnEveryPatch();
       expect(find.text('Photo added'), findsOneWidget);
     });
   });
@@ -527,7 +640,8 @@ void main() {
           findsNothing);
       expect(
           find.text(
-              "Couldn't save the invite — check your connection and try again."),
+              "Couldn't save the invite — try again in a moment. "
+              'If it keeps happening, contact support.'),
           findsOneWidget);
     });
 
@@ -547,6 +661,323 @@ void main() {
       expect(emailed(), isTrue);
       expect(find.text('Invite email sent to assistant@example.com'),
           findsOneWidget);
+    });
+  });
+
+  // ── F. N2 — an inline error clears when its field changes ─────────────────
+  group('F. inline errors follow the field', () {
+    testWidgets('editing the price clears the price error only',
+        (tester) async {
+      await open(tester);
+      await tester.enterText(priceField(), 'abc');
+      await tester.enterText(yearsField(), 'x');
+      await tapSave(tester);
+      expect(errorOf(tester, priceField()), _priceError, reason: 'premise');
+      expect(errorOf(tester, yearsField()), _yearsError, reason: 'premise');
+      await tester.enterText(priceField(), '150');
+      await tester.pump();
+      expect(errorOf(tester, priceField()), isNull,
+          reason: 'the stale error stayed under a valid price');
+      expect(errorOf(tester, yearsField()), _yearsError);
+      await tester.enterText(yearsField(), '6');
+      await tester.pump();
+      expect(errorOf(tester, yearsField()), isNull);
+    });
+  });
+
+  // ── G. N3 — focus the first invalid field; name both when both are bad ─────
+  group('G. validation focus and message', () {
+    bool focused(WidgetTester tester, Finder field) => tester
+        .widget<EditableText>(
+            find.descendant(of: field, matching: find.byType(EditableText)))
+        .focusNode
+        .hasFocus;
+
+    testWidgets('both bad: price (first) is focused, the SnackBar names both',
+        (tester) async {
+      await open(tester);
+      await tester.enterText(priceField(), 'abc');
+      await tester.enterText(yearsField(), 'x');
+      // Move focus away so the assertion is about Save, not about typing.
+      await tester.enterText(find.byType(TextField).at(1), 'Real bio');
+      await tapSave(tester);
+      await tester.pumpAndSettle();
+      expect(patchCount(), 0);
+      expect(focused(tester, priceField()), isTrue);
+      expect(
+          find.textContaining(RegExp(
+              r'monthly price.*years of experience.*Nothing was saved\.$')),
+          findsOneWidget);
+    });
+
+    testWidgets('only years bad, from another tab: Profile tab, years focused',
+        (tester) async {
+      await open(tester);
+      await tester.enterText(yearsField(), 'x');
+      // Focus elsewhere: a focused field keeps its page alive (and its focus)
+      // across the tab switch, which would prove nothing about Save.
+      await tester.enterText(find.byType(TextField).at(1), 'Real bio');
+      await tester.tap(find.text('Specialties'));
+      await tester.pumpAndSettle();
+      expect(find.byType(TextField), findsNothing, reason: 'premise');
+      await tapSave(tester);
+      await tester.pumpAndSettle();
+      expect(patchCount(), 0);
+      expect(focused(tester, yearsField()), isTrue);
+      expect(find.text('$_yearsError Nothing was saved.'), findsOneWidget);
+    });
+  });
+
+  // ── H. N4 — load failure copy matches what failed ──────────────────────────
+  group('H. load failure copy', () {
+    testWidgets('a network failure says check your connection',
+        (tester) async {
+      // Regression guard: dd9a333 said this for every failure.
+      server.readMode = _Read.network;
+      await open(tester);
+      // postgrest retries a GET that never reached the server (measured: 4
+      // attempts over ~16 s of real time); wait it out.
+      final sw = Stopwatch()..start();
+      while (find.text("Couldn't load your business profile").evaluate().isEmpty &&
+          sw.elapsed < const Duration(seconds: 40)) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 250)));
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(find.text("Couldn't load your business profile"), findsOneWidget);
+      expect(find.text(_checkConnection), findsOneWidget);
+      expect(find.text(_tryLater), findsNothing);
+    });
+
+    testWidgets('a server error says try later / contact support',
+        (tester) async {
+      server.readMode = _Read.fails;
+      await open(tester);
+      expect(find.text(_tryLater), findsOneWidget);
+      expect(find.text(_checkConnection), findsNothing,
+          reason: 'a PostgrestException is not a connection problem');
+    });
+
+    testWidgets('no profile row says try later / contact support',
+        (tester) async {
+      server.readMode = _Read.missing;
+      await open(tester);
+      expect(find.text(_tryLater), findsOneWidget);
+      expect(find.text(_checkConnection), findsNothing);
+    });
+  });
+
+  // ── I. N5 — the load states are readable and announced ─────────────────────
+  group('I. load states, accessibility', () {
+    testWidgets('the spinner is labelled', (tester) async {
+      final gate = Completer<void>();
+      server.readGate = gate;
+      final handle = tester.ensureSemantics();
+      await open(tester, wait: false);
+      await tester.pump();
+      expect(find.bySemanticsLabel('Loading your business profile'),
+          findsOneWidget);
+      gate.complete();
+      await settle(tester);
+      handle.dispose();
+    });
+
+    testWidgets('the failure is a live region', (tester) async {
+      server.readMode = _Read.fails;
+      await open(tester);
+      expect(
+          find.ancestor(
+              of: find.text("Couldn't load your business profile"),
+              matching: find.byWidgetPredicate(
+                  (w) => w is Semantics && w.properties.liveRegion == true)),
+          findsOneWidget);
+    });
+
+    testWidgets('no overflow at text scale 2.0 on a 320-wide phone',
+        (tester) async {
+      server.readMode = _Read.fails;
+      tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await open(tester, size: const Size(320, 480));
+      expect(tester.takeException(), isNull);
+      await tester.scrollUntilVisible(find.text('Try again'), 50,
+          scrollable: find.byType(Scrollable).last);
+      expect(find.text('Try again').hitTestable(), findsOneWidget);
+    });
+  });
+
+  // ── J. N6 — one voice: "Couldn't …" plus what to do next ───────────────────
+  group('J. failure messages', () {
+    Future<void> addCert(WidgetTester tester, String name) async {
+      await tester.tap(find.text('+ Add').first);
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.descendant(
+              of: find.byType(AlertDialog), matching: find.byType(TextField)),
+          name);
+      await tester.pump(); // the dialog enables Add on the next frame
+      await tester.tap(find.text('Add'));
+      await settle(tester);
+    }
+
+    testWidgets('a failed photo upload', (tester) async {
+      server.storageFails = true;
+      await open(tester);
+      await tester.tap(find.text('Add Photo'));
+      await settle(tester);
+      expect(
+          find.text("Couldn't add the photo — try again in a moment. "
+              'If it keeps happening, contact support.'),
+          findsOneWidget);
+      expect(snackColor(tester), _errorRed);
+    });
+
+    testWidgets('a failed certification add (server error)', (tester) async {
+      server.patchMode = _Patch.fails;
+      await open(tester);
+      await addCert(tester, 'ACE-CPT');
+      expect(
+          find.text("Couldn't add the certification — try again in a moment. "
+              'If it keeps happening, contact support.'),
+          findsOneWidget);
+      expect(find.widgetWithText(Chip, 'ACE-CPT'), findsNothing);
+    });
+
+    testWidgets('a failed certification remove (network)', (tester) async {
+      server.patchMode = _Patch.network;
+      await open(tester);
+      await tester.tap(find.byIcon(Icons.close));
+      await settle(tester);
+      expect(
+          find.text("Couldn't remove the certification — check your "
+              'connection and try again.'),
+          findsOneWidget);
+      expect(find.widgetWithText(Chip, 'NASM-CPT'), findsOneWidget);
+    });
+
+    testWidgets('a 0-row certification add', (tester) async {
+      server.patchMode = _Patch.zeroRows;
+      await open(tester);
+      await addCert(tester, 'ACE-CPT');
+      expect(
+          find.text("Couldn't add the certification — nothing was changed. "
+              '$_tryLater'),
+          findsOneWidget);
+    });
+  });
+
+  // ── K. N7 — invite failures use the error style ────────────────────────────
+  group('K. invite SnackBars', () {
+    Future<void> invite(WidgetTester tester) async {
+      await tester.tap(find.text('Team'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Invite Assistant Coach'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.descendant(
+              of: find.byType(AlertDialog), matching: find.byType(TextField)),
+          'assistant@example.com');
+      await tester.tap(find.text('Invite'));
+      await settle(tester);
+    }
+
+    testWidgets('a failed insert is shown in the error style',
+        (tester) async {
+      server.insertFails = true;
+      await open(tester);
+      await invite(tester);
+      expect(find.textContaining("Couldn't save the invite"), findsOneWidget);
+      expect(snackColor(tester), _errorRed);
+    });
+
+    testWidgets('signed out is shown in the error style', (tester) async {
+      await open(tester);
+      await signOut(tester);
+      await invite(tester);
+      expect(find.text(_signedOut), findsOneWidget);
+      expect(snackColor(tester), _errorRed);
+    });
+  });
+
+  // ── L. N8 — the Add Certification dialog ───────────────────────────────────
+  group('L. add-certification dialog', () {
+    Finder dialogField() => find.descendant(
+        of: find.byType(AlertDialog), matching: find.byType(TextField));
+    TextButton addButton(WidgetTester tester) =>
+        tester.widget<TextButton>(find.widgetWithText(TextButton, 'Add'));
+
+    Future<void> openDialog(WidgetTester tester) async {
+      await tester.tap(find.text('+ Add').first);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('Add is disabled while the text is empty or blank',
+        (tester) async {
+      await open(tester);
+      await openDialog(tester);
+      expect(addButton(tester).onPressed, isNull);
+      await tester.enterText(dialogField(), '   ');
+      await tester.pump();
+      expect(addButton(tester).onPressed, isNull);
+      await tester.enterText(dialogField(), 'ACE-CPT');
+      await tester.pump();
+      expect(addButton(tester).onPressed, isNotNull);
+    });
+
+    testWidgets('keyboard Done submits', (tester) async {
+      await open(tester);
+      await openDialog(tester);
+      await tester.enterText(dialogField(), 'ACE-CPT');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await settle(tester);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(server.patches.single['certifications'], ['NASM-CPT', 'ACE-CPT']);
+      expect(find.widgetWithText(Chip, 'ACE-CPT'), findsOneWidget);
+    });
+
+    testWidgets('a duplicate says "Already added" and cannot be added',
+        (tester) async {
+      await open(tester);
+      await openDialog(tester);
+      await tester.enterText(dialogField(), 'NASM-CPT');
+      await tester.pump();
+      expect(find.text('Already added'), findsOneWidget);
+      expect(addButton(tester).onPressed, isNull);
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await settle(tester);
+      expect(find.byType(AlertDialog), findsOneWidget,
+          reason: 'Done does not close it silently either');
+      expect(patchCount(), 0);
+    });
+  });
+
+  // ── M. N9 — one certification write at a time ──────────────────────────────
+  group('M. certification writes do not overlap', () {
+    testWidgets('an add while a remove is in flight is ignored',
+        (tester) async {
+      final gate = Completer<void>();
+      await open(tester);
+      server.patchGate = gate;
+      await tester.tap(find.byIcon(Icons.close)); // remove NASM-CPT
+      await settle(tester);
+      expect(patchCount(), 1, reason: 'premise: the remove is in flight');
+      await tester.tap(find.text('+ Add').first);
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.descendant(
+              of: find.byType(AlertDialog), matching: find.byType(TextField)),
+          'ACE-CPT');
+      await tester.pump(); // the dialog enables Add on the next frame
+      await tester.tap(find.text('Add'));
+      await settle(tester);
+      expect(patchCount(), 1,
+          reason: 'a second optimistic write raced the first');
+      gate.complete();
+      server.patchGate = null;
+      await settle(tester);
+      expect(server.patches.single['certifications'], isEmpty);
+      expect(find.widgetWithText(Chip, 'ACE-CPT'), findsNothing);
+      expect(find.widgetWithText(Chip, 'NASM-CPT'), findsNothing);
     });
   });
 }
