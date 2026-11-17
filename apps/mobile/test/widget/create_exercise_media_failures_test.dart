@@ -113,6 +113,9 @@ class _Svc extends CustomExerciseService {
   Object? syncFails;
   bool syncFailsSilently = false;
 
+  /// When set, syncRelations waits on it — holds a save mid-flight.
+  Completer<void>? syncGate;
+
   /// Library exercise owner for edits (null = a platform exercise).
   String? ownerId;
 
@@ -245,6 +248,7 @@ class _Svc extends CustomExerciseService {
   @override
   Future<bool> syncRelations(String exerciseId, Map<String, dynamic> j) async {
     calls.add('syncRelations');
+    if (syncGate != null) await syncGate!.future;
     if (syncFailsSilently) return false;
     if (syncFails != null) {
       lastError = syncFails;
@@ -523,6 +527,59 @@ void main() {
     expect(find.text(_saved), findsOneWidget);
     expect(find.textContaining("couldn't"), findsNothing);
     expect(reported, isEmpty);
+  });
+
+  // Mutant M1 (P0-FL-7 review): the video_variants write keyed on
+  // `_editingId != null` instead of the editingExisting fixed at the start of
+  // the Save. A create sets _editingId, so every create with no videos made an
+  // extra, empty video_variants write. The control above has videos, so it
+  // could not tell.
+  testWidgets(
+      'a create with no videos makes exactly the expected calls (no '
+      'video_variants write)', (tester) async {
+    final svc = _Svc();
+    await _open(tester, svc);
+    await _save(tester);
+
+    expect(svc.calls, ['create', 'syncRelations']);
+    expect(svc.writes, isEmpty);
+    expect(find.text(_saved), findsOneWidget);
+  });
+
+  // Mutant M2: without the `_saving` guard at the top of _save, the SnackBar's
+  // "Save again" (still on screen while a later save runs — only the Save
+  // button is disabled) starts a second, concurrent save.
+  testWidgets(
+      '"Save again" tapped while a save is running does not start a second '
+      'save', (tester) async {
+    final svc = _Svc()..syncFails = _rls;
+    await _open(tester, svc);
+    await _save(tester);
+    _notSaved();
+    expect(find.text('Save again'), findsOneWidget);
+
+    svc
+      ..syncFails = null
+      ..syncGate = Completer<void>();
+    final before = svc.calls.length;
+    // Save 2 starts and is held at syncRelations.
+    await tester.tap(find.text('Save'));
+    await _settle(tester);
+    expect(svc.calls.sublist(before),
+        ['update:text', 'update:video_variants', 'syncRelations']);
+
+    // The earlier SnackBar is still up: tap its retry mid-save.
+    await tester.tap(find.text('Save again'));
+    await _settle(tester);
+    expect(svc.calls.sublist(before),
+        ['update:text', 'update:video_variants', 'syncRelations'],
+        reason: 'a save is already running; Save again must not start another');
+
+    svc.syncGate!.complete();
+    await _settle(tester);
+    expect(svc.calls.sublist(before),
+        ['update:text', 'update:video_variants', 'syncRelations']);
+    expect(find.text(_saved), findsOneWidget);
   });
 
   testWidgets(
