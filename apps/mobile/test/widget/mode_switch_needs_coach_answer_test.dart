@@ -97,7 +97,8 @@ class _Server extends http.BaseClient {
         ], 200, request);
       }
       if (cancelFails) return _json({'message': 'offline'}, 500, request);
-      return _json([], 200, request);
+      // The update matched the active row (cancelCoach checks rows, P0-FL-1).
+      return _json([{'id': 'rel-1'}], 200, request);
     }
     if (path.endsWith('/public_profiles')) {
       return _json([
