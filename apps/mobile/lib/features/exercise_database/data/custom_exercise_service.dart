@@ -216,12 +216,19 @@ class CustomExerciseService {
   /// touching the admin-managed text content. Privileged via the RPC.
   Future<bool> updateExerciseMedia(String id,
       {String? imageUrl, required List<Map<String, dynamic>> videoVariants}) async {
+    lastError = null; // never report an earlier call's error
     try {
-      await _db.rpc('update_exercise_media', params: {
+      final res = await _db.rpc('update_exercise_media', params: {
         'p_id': id,
         'p_image_url': imageUrl,
         'p_video_variants': videoVariants,
       });
+      // P0-FL-7 · the RPC returns `found` (migration 072): false = no row was
+      // updated. That was discarded and the media counted as saved.
+      if (res == false) {
+        lastError = 'No exercise was updated';
+        return false;
+      }
       return true;
     } catch (e) { lastError = e; return false; }
   }

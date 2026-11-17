@@ -93,6 +93,9 @@ Widget _chipMulti(String label, List<String> options, List<String> selected,
   ]);
 }
 
+/// The gallery picker the Media tab uses (P0-FL-7: a test seam only).
+final exerciseMediaPickerProvider = Provider<ImagePicker>((ref) => ImagePicker());
+
 class CreateExerciseScreen extends ConsumerStatefulWidget {
   const CreateExerciseScreen({super.key});
   @override
@@ -148,7 +151,9 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   Uint8List? _imageBytes;
   String _imageExt = 'jpg';
   final List<_VideoEntry> _videoEntries = [];
-  final _picker = ImagePicker();
+  // Read through a provider so a test can hand in picked files; the picker,
+  // its options and what it returns are unchanged.
+  late final ImagePicker _picker = ref.read(exerciseMediaPickerProvider);
 
   @override
   void initState() {
@@ -650,34 +655,74 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
       }
     }
 
+    // P0-FL-7 · every media/relations step after the row is saved is checked.
+    // These results were ignored and "Exercise Saved!" followed regardless —
+    // for a media-only edit, when nothing at all had been written.
+    final mediaFailures = <String>[]; // what the coach is told wasn't saved
+    final mediaErrors = <Object?>[];
+    var mediaWriteFailed = false; // media-only: the RPC wrote nothing
+    void mediaStepFailed(String origin, String what) {
+      // lastError is cleared before each step below, so this is never an
+      // earlier call's error.
+      final err = svc.lastError;
+      if (err != null) reportError('CreateExerciseScreen.$origin', err);
+      mediaFailures.add(what);
+      mediaErrors.add(err);
+    }
+
     if (id != null) {
       // Upload picked image + video files.
       String? imageUrl;
-      if (_imageBytes != null) imageUrl = await svc.uploadImage(_imageBytes!, _imageExt, id);
+      if (_imageBytes != null) {
+        svc.lastError = null;
+        imageUrl = await svc.uploadImage(_imageBytes!, _imageExt, id);
+        if (imageUrl == null) {
+          mediaStepFailed('uploadImage', "the image couldn't be uploaded");
+        }
+      }
       final uploadedVariants = List<VideoVariant>.from(variants);
       for (int i = 0; i < _videoEntries.length; i++) {
         final entry = _videoEntries[i];
         if (entry.bytes != null) {
+          svc.lastError = null;
           final url = await svc.uploadVideo(entry.bytes!, entry.ext, id, entry.label);
           if (url != null) {
             uploadedVariants.add(VideoVariant(url: url, label: entry.label, type: 'upload'));
+          } else {
+            mediaStepFailed('uploadVideo',
+                "the ${entry.label} video couldn't be uploaded");
           }
         }
       }
 
       if (mediaOnly) {
         // Coach attaching media to an admin/platform exercise (privileged RPC).
-        await svc.updateExerciseMedia(id,
+        svc.lastError = null;
+        final ok = await svc.updateExerciseMedia(id,
           imageUrl: imageUrl,
           videoVariants: uploadedVariants.map((v) => v.toJson()).toList());
-      } else {
-        if (imageUrl != null) await svc.updateExercise(id, {'image_url': imageUrl});
-        if (uploadedVariants.length != variants.length || _editingId != null) {
-          await svc.updateExercise(id, {
-            'video_variants': uploadedVariants.map((v) => v.toJson()).toList(),
-          });
+        if (!ok) {
+          mediaWriteFailed = true;
+          mediaStepFailed('updateExerciseMedia', "the media couldn't be saved");
         }
-        await svc.syncRelations(id, _relationsJson());
+      } else {
+        if (imageUrl != null) {
+          if (!await svc.updateExercise(id, {'image_url': imageUrl})) {
+            mediaStepFailed('saveImageUrl', "the image couldn't be attached");
+          }
+        }
+        if (uploadedVariants.length != variants.length || _editingId != null) {
+          if (!await svc.updateExercise(id, {
+            'video_variants': uploadedVariants.map((v) => v.toJson()).toList(),
+          })) {
+            mediaStepFailed('saveVideoVariants', "the videos couldn't be attached");
+          }
+        }
+        svc.lastError = null;
+        if (!await svc.syncRelations(id, _relationsJson())) {
+          mediaStepFailed('syncRelations',
+              "the muscle and equipment details couldn't be saved");
+        }
       }
       _savedId = id;
     }
@@ -687,6 +732,19 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     if (!mounted) return;
     if (id != null) {
       refreshExerciseLists(ref.invalidate);
+      if (mediaFailures.isNotEmpty) {
+        // Not "Exercise Saved!": say what was and wasn't saved, and stay on
+        // the screen so Save can be tapped again (it re-saves the details and
+        // re-uploads every picked file; the picks are kept).
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            duration: const Duration(seconds: 10),
+            content: Text(exerciseMediaFailureMessage(
+              mediaOnly: mediaOnly,
+              mediaWriteFailed: mediaWriteFailed,
+              failures: mediaFailures,
+              errors: mediaErrors,
+            ))));
+      }
       if (reviewSubmitFailed) {
         // Saved, but not queued: say so rather than leave it invisible to reviewers.
         if (reviewSubmitError != null) {
@@ -705,7 +763,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
                     : 'Saved, but not sent for review yet — it still needs to be '
                         'submitted for review.')));
       }
-      _showSuccess();
+      if (mediaFailures.isEmpty) _showSuccess();
     } else {
       final err = svc.lastError;
       if (err != null) reportError('CreateExerciseScreen.save', err);
@@ -1223,6 +1281,40 @@ Widget _row(String label, List<String> options, String value, ValueChanged<Strin
           onChanged: onChanged,
         ))),
   ]);
+}
+
+/// P0-FL-7 · the one message for a save whose media/relations steps failed.
+///
+/// [failures] are the parts that weren't saved, worded as clauses
+/// ("the image couldn't be uploaded"). A media-only edit has no text save to
+/// report, so a failed media write there means nothing was saved. The
+/// connection hint appears only when every recorded error is a network one.
+/// Retrying = tapping Save again, which re-uploads the picked files.
+@visibleForTesting
+String exerciseMediaFailureMessage({
+  required bool mediaOnly,
+  required bool mediaWriteFailed,
+  required List<String> failures,
+  required List<Object?> errors,
+}) {
+  final network = errors.isNotEmpty && errors.every(isNetworkFailure);
+  final next = network
+      ? 'Check your connection, then tap Save to try again.'
+      : 'Tap Save to try again in a moment. If it keeps happening, contact '
+          'support.';
+  if (mediaOnly && mediaWriteFailed) {
+    return "Couldn't save the media — nothing was changed. $next";
+  }
+  final String parts;
+  if (failures.length == 1) {
+    parts = failures.single;
+  } else {
+    parts = '${failures.sublist(0, failures.length - 1).join(', ')} and '
+        '${failures.last}';
+  }
+  return mediaOnly
+      ? "Couldn't save all the media — $parts. $next"
+      : 'Exercise saved, but $parts. $next';
 }
 
 /// P0-FL-5 · U1 · true only when [err] is the request not reaching the server:
