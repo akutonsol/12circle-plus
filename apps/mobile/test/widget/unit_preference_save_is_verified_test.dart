@@ -1,0 +1,128 @@
+import 'package:circle_fitness/core/observability/app_failure.dart';
+import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
+import 'package:circle_fitness/features/payments/domain/entitlements.dart';
+import 'package:circle_fitness/features/settings/presentation/settings_screen.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../support/row_checking_postgrest.dart';
+
+// P0-FL-9 · Settings › Default Units.
+//
+// `_persistUnit` (CORR-2) said it "returns whether the preference was actually
+// stored", but its update never asked for the row back. A 0-row update (RLS
+// filtered it) comes back from PostgREST exactly like a successful one, so the
+// toggle stayed on the new unit and nothing said the preference was not saved.
+//
+// HOW TO SEE IT FAIL: with the base commit's settings_screen.dart the 0-row
+// test keeps "LB" selected and shows no message, and the PATCH has no
+// `select=id`.
+
+const _uid = '00000000-0000-4000-8000-0000000f1009';
+const _offline =
+    "Couldn't save your unit preference — check your connection and try again.";
+const _failed = "Couldn't save your unit preference — try again in a moment. "
+    'If it keeps happening, contact support.';
+
+void main() {
+  late RowCheckingPostgrest server;
+  final reported = <AppFailure>[];
+
+  setUpAll(() async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    server = RowCheckingPostgrest(_uid);
+    await initSignedInSupabase(server);
+  });
+
+  setUp(() {
+    server.reset();
+    reported.clear();
+    setFailureSink(reported.add);
+  });
+  tearDown(resetFailureSink);
+
+  /// Opens Settings with a metric member (KG selected) and taps LB.
+  Future<void> tapLb(WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(500, 3000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        currentUserProvider
+            .overrideWithValue(Supabase.instance.client.auth.currentUser),
+        currentUserProfileProvider.overrideWith((ref) async => {
+              'role': 'client',
+              'first_name': 'Ana',
+              'last_name': 'Lee',
+              'unit_preference': 'metric',
+            }),
+        clientPlanProvider.overrideWith((ref) async => ClientPlan.selfGuided),
+      ],
+      child: const MaterialApp(home: SettingsScreen()),
+    ));
+    await tester.pumpAndSettle();
+    expect(selected(tester), 'KG', reason: 'premise: a metric member');
+    await tester.tap(find.text('LB').first);
+    await tester.pumpAndSettle();
+  }
+
+  List<String> unitWrites() =>
+      server.writes.where((w) => w.contains('unit_preference')).toList();
+
+  testWidgets('a 0-row save reverts the toggle and says it was not saved',
+      (tester) async {
+    server.mode = WriteMode.zeroRows;
+    await tapLb(tester);
+
+    expect(unitWrites(), hasLength(1), reason: 'premise: the save was tried');
+    expect(unitWrites().single, contains('select=id'),
+        reason: 'the update must ask for its row back to know it changed one');
+    expect(selected(tester), 'KG',
+        reason: 'THE defect: the toggle stayed on LB over an unchanged row');
+    expect(find.text(_failed), findsOneWidget,
+        reason: 'not the connection — the server answered');
+    expect(reported, isNotEmpty, reason: 'the failure is reported');
+  });
+
+  testWidgets(
+      'a server error reverts and uses the support wording, not '
+      '"check your connection"', (tester) async {
+    server.mode = WriteMode.serverError;
+    await tapLb(tester);
+    expect(selected(tester), 'KG');
+    expect(find.text(_failed), findsOneWidget);
+    expect(find.text(_offline), findsNothing);
+  });
+
+  testWidgets('a network failure reverts and says check your connection',
+      (tester) async {
+    server.mode = WriteMode.network;
+    await tapLb(tester);
+    expect(selected(tester), 'KG');
+    expect(find.text(_offline), findsOneWidget);
+  });
+
+  testWidgets('control: a 1-row save keeps LB and says nothing',
+      (tester) async {
+    await tapLb(tester);
+    expect(unitWrites().single, contains('"unit_preference":"imperial"'),
+        reason: 'what is written is unchanged');
+    expect(selected(tester), 'LB');
+    expect(find.byType(SnackBar), findsNothing);
+    expect(reported, isEmpty);
+  });
+}
+
+/// The highlighted unit: the one whose pill has a non-transparent fill.
+String selected(WidgetTester tester) {
+  for (final u in ['KG', 'LB']) {
+    final box = tester.widget<AnimatedContainer>(find
+        .ancestor(
+            of: find.text(u).first, matching: find.byType(AnimatedContainer))
+        .first);
+    final color = (box.decoration as BoxDecoration?)?.color;
+    if (color != null && color != Colors.transparent) return u;
+  }
+  return 'none';
+}

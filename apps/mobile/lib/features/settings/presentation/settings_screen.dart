@@ -1,4 +1,8 @@
+import 'dart:async' show TimeoutException;
+import 'dart:io' show SocketException;
+
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:http/http.dart' as http;
 
 import '../../../core/router/app_router.dart' show kQaToolingEnabled;
 import 'package:flutter/material.dart';
@@ -26,6 +30,23 @@ class _C {
   static const onSurfaceMuted      = Color(0xFFCFC2D6);
   static const error               = Color(0xFFFFB4AB);
 }
+
+/// Shown when the unit preference could not be stored and the toggle reverts.
+const kUnitSaveOfflineMessage =
+    "Couldn't save your unit preference — check your connection and try again.";
+const kUnitSaveFailedMessage =
+    "Couldn't save your unit preference — try again in a moment. "
+    'If it keeps happening, contact support.';
+
+enum _UnitSaveOutcome { saved, offline, failed }
+
+/// Connection wording is only for failures that ARE the connection; a
+/// PostgrestException (the server answered) never is.
+bool _isNetworkFailure(Object e) =>
+    e is SocketException ||
+    e is TimeoutException ||
+    e is http.ClientException ||
+    e is AuthRetryableFetchException;
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -62,17 +83,30 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// `_saveToggle` in `notification_preferences_screen` and
   /// `WeeklyCheckinService.submitWeeklyCheckin` already report failure; this
   /// matches them rather than inventing a convention.
-  Future<bool> _persistUnit(String unit) async {
+  ///
+  /// P0-FL-9: the update did not ask for the row back, so an update RLS
+  /// filtered to 0 rows also returned true and the toggle "persisted" over an
+  /// unchanged row. It now selects `id` and treats an empty result as failure.
+  /// The returned [_UnitSaveOutcome] lets the caller say WHY it failed.
+  Future<_UnitSaveOutcome> _persistUnit(String unit) async {
     final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (uid == null) return false;
+    if (uid == null) return _UnitSaveOutcome.failed;
     try {
-      await Supabase.instance.client.from('user_profiles').update({
+      final rows = await Supabase.instance.client.from('user_profiles').update({
         'unit_preference': unit == 'KG' ? 'metric' : 'imperial',
-      }).eq('id', uid);
+      }).eq('id', uid).select('id');
+      if (rows.isEmpty) {
+        reportError('settings.persistUnit',
+            StateError('unit_preference update changed 0 rows'));
+        return _UnitSaveOutcome.failed;
+      }
       ref.invalidate(currentUserProfileProvider);
-      return true;
-    } catch (_) {
-      return false;
+      return _UnitSaveOutcome.saved;
+    } catch (e, st) {
+      reportError('settings.persistUnit', e, st);
+      return _isNetworkFailure(e)
+          ? _UnitSaveOutcome.offline
+          : _UnitSaveOutcome.failed;
     }
   }
 
@@ -230,11 +264,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               // never stored.
                               final previous = _selectedUnit;
                               setState(() => _selectedUnit = u);
-                              final ok = await _persistUnit(u);
-                              if (!ok && context.mounted) {
+                              final outcome = await _persistUnit(u);
+                              if (outcome != _UnitSaveOutcome.saved &&
+                                  context.mounted) {
                                 setState(() => _selectedUnit = previous);
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Failed to save.')),
+                                  SnackBar(content: Text(
+                                    outcome == _UnitSaveOutcome.offline
+                                        ? kUnitSaveOfflineMessage
+                                        : kUnitSaveFailedMessage)),
                                 );
                               }
                             },

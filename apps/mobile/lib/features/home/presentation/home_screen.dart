@@ -1,6 +1,10 @@
+import 'dart:async' show TimeoutException;
+import 'dart:io' show SocketException;
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import '../../../core/observability/app_failure.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -1254,10 +1258,34 @@ class _CoachCard extends ConsumerWidget {
   }
 }
 
+/// Shown inside the Rate Your Coach dialog when the review was not stored.
+const kReviewOfflineMessage =
+    "Couldn't submit your review — check your connection and try again.";
+const kReviewFailedMessage =
+    "Couldn't submit your review — try again in a moment. "
+    'If it keeps happening, contact support.';
+const kReviewSignedOutMessage =
+    "Couldn't submit your review — you're signed out. Sign in and try again.";
+
+/// Connection wording is only for failures that ARE the connection; a
+/// PostgrestException (the server answered) never is.
+bool _isNetworkFailure(Object e) =>
+    e is SocketException ||
+    e is TimeoutException ||
+    e is http.ClientException ||
+    e is AuthRetryableFetchException;
+
+/// The dialog is private and opened from deep in the home screen; tests open
+/// it directly rather than standing up the whole dashboard.
+@visibleForTesting
+void showRateCoachDialogForTest(BuildContext context, String coachId) =>
+    _showRateCoachDialog(context, coachId);
+
 void _showRateCoachDialog(BuildContext context, String coachId) {
   int selectedStars = 5;
   final textCtrl = TextEditingController();
   bool saving = false;
+  String? error;
   showDialog(
     context: context,
     useRootNavigator: true,
@@ -1298,6 +1326,13 @@ void _showRateCoachDialog(BuildContext context, String coachId) {
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: const BorderSide(color: Color(0xFF2A2A3D))))),
+          if (error != null) ...[
+            const SizedBox(height: 12),
+            Semantics(
+              liveRegion: true,
+              child: Text(error!,
+                style: const TextStyle(color: Color(0xFFFFB4AB), fontSize: 12.5))),
+          ],
         ]),
         actions: [
           TextButton(
@@ -1306,36 +1341,55 @@ void _showRateCoachDialog(BuildContext context, String coachId) {
             child: const Text('Cancel',
               style: TextStyle(color: Color(0xFF666666)))),
           TextButton(
+            // P0-FL-9. The upsert did not ask for its row back and every
+            // failure was `catch (_) { saving = false; }` — the dialog just
+            // stopped spinning with nothing said. It now requests the row,
+            // treats none as a failure, and says so inside the dialog.
+            //
+            // THE CLIENT-SIDE RATING RECOMPUTE IS GONE. It re-read every
+            // review and wrote the coach's user_profiles.rating_avg /
+            // review_count. That write could never take effect: a client has
+            // no UPDATE right on another user's profile row, and migration
+            // 115's enforce_profile_privilege() pins both columns to OLD for
+            // every authenticated caller. The aggregate is maintained
+            // server-side by migration 045's coach_review_rollup trigger.
             onPressed: saving ? null : () async {
-              setSt(() => saving = true);
+              setSt(() { saving = true; error = null; });
+              final uid = Supabase.instance.client.auth.currentUser?.id;
+              if (uid == null) {
+                setSt(() { saving = false; error = kReviewSignedOutMessage; });
+                return;
+              }
               try {
-                final uid =
-                    Supabase.instance.client.auth.currentUser?.id;
-                if (uid == null) return;
-                await Supabase.instance.client.from('coach_reviews').upsert({
+                final rows = await Supabase.instance.client
+                    .from('coach_reviews').upsert({
                   'coach_id': coachId, 'client_id': uid,
                   'rating': selectedStars,
                   'review_text': textCtrl.text.trim().isEmpty
                     ? null : textCtrl.text.trim(),
                   'created_at': DateTime.now().toUtc().toIso8601String(),
-                }, onConflict: 'coach_id,client_id');
-                final reviews = await Supabase.instance.client
-                    .from('coach_reviews').select('rating')
-                    .eq('coach_id', coachId);
-                final ratings = (reviews as List)
-                    .map((r) => (r['rating'] as int)).toList();
-                final avg = ratings.isEmpty ? 0.0
-                    : ratings.reduce((a, b) => a + b) / ratings.length;
-                await Supabase.instance.client.from('user_profiles').update({
-                  'rating_avg': avg, 'review_count': ratings.length,
-                }).eq('id', coachId);
-                if (dialogCtx.mounted) {
-                  Navigator.of(dialogCtx, rootNavigator: true).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                    content: Text('Review submitted! Thank you.'),
-                    backgroundColor: Color(0xFFA855F7)));
+                }, onConflict: 'coach_id,client_id').select('id');
+                if (rows.isEmpty) {
+                  reportError('home.rateCoach',
+                      StateError('coach_reviews upsert returned no row'));
+                  setSt(() { saving = false; error = kReviewFailedMessage; });
+                  return;
                 }
-              } catch (_) { setSt(() => saving = false); }
+              } catch (e, st) {
+                reportError('home.rateCoach', e, st);
+                setSt(() {
+                  saving = false;
+                  error = _isNetworkFailure(e)
+                      ? kReviewOfflineMessage : kReviewFailedMessage;
+                });
+                return;
+              }
+              if (dialogCtx.mounted) {
+                Navigator.of(dialogCtx, rootNavigator: true).pop();
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text('Review submitted! Thank you.'),
+                  backgroundColor: Color(0xFFA855F7)));
+              }
             },
             child: saving
               ? const SizedBox(width: 16, height: 16,

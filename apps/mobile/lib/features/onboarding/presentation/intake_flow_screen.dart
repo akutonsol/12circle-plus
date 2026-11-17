@@ -30,6 +30,11 @@ const _outlineV = Color(0xFF4D4354);
 const _btnPurple = Color(0xFF7C3AED);
 // ignore_for_file: unused_element, unused_element_parameter
 
+/// Non-blocking notice when a step's progress could not be stored.
+const kIntakeProgressNotSavedMessage =
+    "Your progress couldn't be saved — you may need to redo this step if you "
+    'leave.';
+
 // ── Main flow controller ──────────────────────────────────────────────────────
 class IntakeFlowScreen extends StatefulWidget {
   const IntakeFlowScreen({super.key});
@@ -156,25 +161,62 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     if (uid == null) return;
     final db = Supabase.instance.client;
 
+    // P0-FL-9. Both phases used to be `catch (_) {}` with no row check, so a
+    // refused or 0-row write lost the person's resume point in silence. Each
+    // now asks for its row back; a throw or an empty result is a failure that
+    // is reported and — once, until a save succeeds again — told to the user.
+    // Moving on is never blocked, and what is written is unchanged.
+    var saved = true;
+
     // Phase 1: ALWAYS persist the step + incomplete flag on their own. These two
     // columns can't fail on data-type drift, so resume works even if a data
     // field below is rejected by the (hand-built) schema.
     try {
-      await db.from('user_profiles').update({
+      final rows = await db.from('user_profiles').update({
         'onboarding_step': _step,
         'onboarding_complete': false,
-      }).eq('id', uid);
-    } catch (_) {}
+      }).eq('id', uid).select('id');
+      if (rows.isEmpty) {
+        saved = false;
+        reportError('intake.saveProgress.step',
+            StateError('onboarding_step update changed 0 rows'));
+      }
+    } catch (e, st) {
+      saved = false;
+      reportError('intake.saveProgress.step', e, st);
+    }
 
-    // Phase 2: best-effort persist the collected intake data.
+    // Phase 2: persist the collected intake data.
     try {
       _data.biggestChallenges = _challenges.toList();
-      await db
+      final rows = await db
           .from('user_profiles')
           .update(_data.toSupabasePartial(_step))
-          .eq('id', uid);
-    } catch (_) {}
+          .eq('id', uid)
+          .select('id');
+      if (rows.isEmpty) {
+        saved = false;
+        reportError('intake.saveProgress.data',
+            StateError('intake data update changed 0 rows'));
+      }
+    } catch (e, st) {
+      saved = false;
+      reportError('intake.saveProgress.data', e, st);
+    }
+
+    if (saved) {
+      _progressNoticeShown = false;
+    } else if (!_progressNoticeShown && mounted) {
+      _progressNoticeShown = true;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text(kIntakeProgressNotSavedMessage)),
+      );
+    }
   }
+
+  /// Set once the "progress isn't being saved" notice has been shown; cleared
+  /// by the next save that succeeds, so a fresh failure is told again.
+  bool _progressNoticeShown = false;
 
   void _next() {
     if (_step < _totalSteps) {
