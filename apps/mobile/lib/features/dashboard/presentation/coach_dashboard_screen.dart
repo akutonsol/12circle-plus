@@ -1295,9 +1295,25 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
 
   Widget _buildLeaderboardTab() {
     final leaderAsync = ref.watch(coachLeaderboardProvider);
+    // P0-FL-5: a failed read used to print the raw exception under "Error
+    // loading leaderboard", with no way to read it again. The exception is
+    // recorded once when the read settles into a failure; the screen says it
+    // in plain words and offers a retry.
+    ref.listen(coachLeaderboardProvider, (previous, next) {
+      if (_settledFailure(previous, next)) {
+        reportError('CoachDashboardScreen.leaderboard', next.error!, next.stackTrace);
+      }
+    });
     return leaderAsync.when(
       loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
-      error: (e, _) => _EmptyState(icon: Icons.leaderboard_outlined, message: 'Error loading leaderboard', sub: e.toString()),
+      error: (_, __) => Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: _RetryableFailure(
+            message: "Couldn't load the leaderboard",
+            sub: 'Check your connection and try again.',
+            busy: leaderAsync.isLoading,
+            onRetry: () => ref.invalidate(coachLeaderboardProvider)))),
       data: (entries) {
         if (entries.isEmpty) return _EmptyState(
           icon: Icons.leaderboard_outlined,

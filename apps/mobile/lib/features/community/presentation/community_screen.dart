@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/theme/app_background.dart';
 import '../../../core/animations/app_animations.dart';
@@ -83,6 +84,15 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
   Widget build(BuildContext context) {
     final postsAsync = ref.watch(postNotifierProvider);
     final groups = ref.watch(groupNotifierProvider);
+    // P0-FL-5: each failed feed read is recorded once, when it settles into
+    // an error — not on every rebuild that shows it.
+    ref.listen(postNotifierProvider, (previous, next) {
+      if (next.hasError &&
+          !next.isLoading &&
+          (previous == null || previous.isLoading || !previous.hasError)) {
+        reportError('CommunityScreen.posts', next.error!, next.stackTrace);
+      }
+    });
 
     return AppGradientBackground(
       child: Scaffold(
@@ -166,13 +176,16 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
               postsAsync.when(
                 loading: () => const Center(
                   child: CircularProgressIndicator(color: AppColors.purple)),
-                error: (e, _) => Center(
+                // P0-FL-5: the raw exception used to be printed under the
+                // heading. It is recorded (once per failure, see build) and
+                // never shown.
+                error: (_, __) => Center(
                   child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
                     const Icon(Icons.error_outline, color: AppColors.textTertiary, size: 48),
                     const SizedBox(height: 12),
-                    Text('Could not load posts', style: const TextStyle(color: AppColors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+                    const Text("Couldn't load posts", style: TextStyle(color: AppColors.white, fontSize: 16, fontWeight: FontWeight.w600)),
                     const SizedBox(height: 6),
-                    Text(e.toString(), style: const TextStyle(color: AppColors.textTertiary, fontSize: 12), textAlign: TextAlign.center),
+                    const Text('Check your connection and try again.', style: TextStyle(color: AppColors.textTertiary, fontSize: 12), textAlign: TextAlign.center),
                     const SizedBox(height: 16),
                     ElevatedButton(
                       onPressed: () => ref.read(postNotifierProvider.notifier).reload(),

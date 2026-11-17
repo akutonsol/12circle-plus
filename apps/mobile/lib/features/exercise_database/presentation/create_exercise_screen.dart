@@ -9,6 +9,7 @@ import '../domain/content_review_submission.dart';
 import '../domain/custom_exercise_provider.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../workout/data/models/video_variant_model.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/widgets/named_icon_button.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -627,7 +628,8 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
 
     // A hand-written library draft goes to the editorial review queue
     // (draft → under_review); a human still approves it there.
-    String? reviewSubmitError;
+    var reviewSubmitFailed = false;
+    Object? reviewSubmitError;
     if (id != null &&
         shouldSubmitForReview(
           role: role as String?,
@@ -640,7 +642,8 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
       if (await svc.reviewExercise(id, 'under_review')) {
         _editingContentStatus = 'under_review';
       } else {
-        reviewSubmitError = svc.lastError?.toString() ?? 'unknown error';
+        reviewSubmitFailed = true;
+        reviewSubmitError = svc.lastError;
       }
     }
 
@@ -681,28 +684,43 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     if (!mounted) return;
     if (id != null) {
       refreshExerciseLists(ref.invalidate);
-      if (reviewSubmitError != null) {
+      if (reviewSubmitFailed) {
         // Saved, but not queued: say so rather than leave it invisible to reviewers.
+        if (reviewSubmitError != null) {
+          reportError('CreateExerciseScreen.submitForReview', reviewSubmitError);
+        }
+        final msg = _appMessage(reviewSubmitError);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             duration: const Duration(seconds: 8),
-            content: Text('Saved, but not sent for review: ${_friendlyError(reviewSubmitError)}')));
+            content: Text(msg != null
+                ? 'Saved, but not sent for review: $msg'
+                : 'Saved, but not sent for review — try submitting again from the exercise.')));
       }
       _showSuccess();
     } else {
       final err = svc.lastError;
+      if (err != null) reportError('CreateExerciseScreen.save', err);
+      final msg = _appMessage(err);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         duration: const Duration(seconds: 8),
-        content: Text(err != null
-            ? 'Save failed: ${_friendlyError(err)}'
-            : 'Failed to save exercise. Try again.')));
+        content: Text(msg != null
+            ? 'Save failed: $msg'
+            : "Couldn't save the exercise — check your connection and try again.")));
     }
   }
 
-  /// Pull a readable message out of a Postgrest/Storage exception.
-  String _friendlyError(Object err) {
-    final s = err.toString();
-    final msg = RegExp(r'message: ([^,)]+)').firstMatch(s)?.group(1);
-    return (msg ?? s).trim();
+  /// P0-FL-5 · the text of an error this app wrote on purpose, or null.
+  ///
+  /// This used to pull the `message:` out of any Postgrest/Storage exception
+  /// and show it — "new row violates row-level security policy for table …"
+  /// reached coaches. Only messages written for people pass now: a
+  /// [StateError]'s message, and the plain [String] the service stores as
+  /// `lastError` on purpose (`updateExercise`'s "You don't have permission to
+  /// edit this exercise"). Anything else is recorded, never shown.
+  String? _appMessage(Object? err) {
+    if (err is StateError) return err.message;
+    if (err is String && err.trim().isNotEmpty) return err.trim();
+    return null;
   }
 
   void _showSuccess() {
