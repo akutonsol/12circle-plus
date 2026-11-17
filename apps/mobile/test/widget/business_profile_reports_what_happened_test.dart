@@ -33,6 +33,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 //      controls assert select=id on each PATCH.
 //   N1–N9: see each group. Check out dd9a333's coach_business_screen.dart to
 //   see them fail (regression guards are marked as such).
+//
+// Final follow-up (QA/UX on d0a2722), groups R1–R3 at the end. Check out
+// d0a2722's coach_business_screen.dart to see them fail.
 
 const _uid = '00000000-0000-4000-8000-0000000b5f04';
 const _signedOut = "You're signed out — sign in again to save.";
@@ -44,6 +47,9 @@ const _tryLater =
 const _blankKept =
     'Profile updated. A blank price or years field keeps its saved value.';
 const _errorRed = Color(0xFFFFB4AB);
+const _inviteEmailNotSent =
+    "Invite saved, but the email couldn't be sent — ask them to check back, "
+    'or send the invite again later.';
 
 final _realProfile = <String, Object?>{
   'id': _uid,
@@ -121,6 +127,10 @@ class _Server extends http.BaseClient {
   _Patch patchMode = _Patch.oneRow;
   bool insertFails = false;
   bool storageFails = false;
+  bool emailSent = true;
+
+  /// Overrides fields of the profile the GET returns (null = the real one).
+  Map<String, Object?>? profileOverride;
   Completer<void>? readGate;
   Completer<void>? patchGate;
   final calls = <String>[];
@@ -141,7 +151,7 @@ class _Server extends http.BaseClient {
           : _json({'Key': 'coach-media/x.jpg'}, 200, request);
     }
     if (path == '/functions/v1/send-invite-email') {
-      return _json({'sent': true}, 200, request);
+      return _json({'sent': emailSent}, 200, request);
     }
     if (path == '/rest/v1/user_profiles' && request.method == 'PATCH') {
       final body = await request.finalize().bytesToString();
@@ -165,6 +175,7 @@ class _Server extends http.BaseClient {
       if (readGate != null) await readGate!.future;
       final single =
           request.headers['Accept']?.contains('vnd.pgrst.object') ?? false;
+      final profile = {..._realProfile, ...?profileOverride};
       switch (readMode) {
         case _Read.fails:
           return _json({'message': 'boom'}, 500, request);
@@ -182,8 +193,8 @@ class _Server extends http.BaseClient {
               : _json([], 200, request);
         case _Read.ok:
           return single
-              ? _json(_realProfile, 200, request)
-              : _json([_realProfile], 200, request);
+              ? _json(profile, 200, request)
+              : _json([profile], 200, request);
       }
     }
     if (path == '/rest/v1/coach_team_invites' && request.method == 'POST') {
@@ -239,6 +250,8 @@ void main() {
       ..patchMode = _Patch.oneRow
       ..insertFails = false
       ..storageFails = false
+      ..emailSent = true
+      ..profileOverride = null
       ..readGate = null
       ..patchGate = null
       ..calls.clear()
@@ -636,8 +649,7 @@ void main() {
       expect(emailed(), isFalse,
           reason: 'THE defect: an invite that does not exist was emailed');
       expect(find.textContaining('Invite email sent'), findsNothing);
-      expect(find.text('Invite saved, but email could not be sent.'),
-          findsNothing);
+      expect(find.text(_inviteEmailNotSent), findsNothing);
       expect(
           find.text(
               "Couldn't save the invite — try again in a moment. "
@@ -978,6 +990,149 @@ void main() {
       expect(server.patches.single['certifications'], isEmpty);
       expect(find.widgetWithText(Chip, 'ACE-CPT'), findsNothing);
       expect(find.widgetWithText(Chip, 'NASM-CPT'), findsNothing);
+    });
+  });
+
+  // ── R1. Save and certification writes are mutually exclusive ──────────────
+  // Save writes the whole certifications list. Sent during a cert write it
+  // carried the optimistic list; when that cert write then failed and rolled
+  // back, the database kept a list the screen no longer showed.
+  group('R1. Save and certification writes never overlap', () {
+    TextButton saveButton(WidgetTester tester) =>
+        tester.widget<TextButton>(find.widgetWithText(TextButton, 'Save'));
+
+    // Bounded pumps, not pumpAndSettle: the Save spinner animates for as long
+    // as Save is in flight, so the tree never settles.
+    Future<void> addCert(WidgetTester tester, String name) async {
+      await tester.tap(find.text('+ Add').first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.enterText(
+          find.descendant(
+              of: find.byType(AlertDialog), matching: find.byType(TextField)),
+          name);
+      await tester.pump(); // the dialog enables Add on the next frame
+      await tester.tap(find.text('Add'));
+      await tester.pump(const Duration(milliseconds: 500));
+      await settle(tester);
+    }
+
+    testWidgets(
+        'while a cert write is in flight, Save is disabled and sends nothing; '
+        'a failed cert write leaves no stale list in the database',
+        (tester) async {
+      final gate = Completer<void>();
+      await open(tester);
+      server
+        ..patchGate = gate
+        ..patchMode = _Patch.fails;
+      await tester.tap(find.byIcon(Icons.close)); // remove NASM-CPT
+      await settle(tester);
+      expect(patchCount(), 1, reason: 'premise: the remove is in flight');
+      expect(saveButton(tester).onPressed, isNull,
+          reason: 'Save would send the optimistic (empty) list');
+      await tester.tap(find.text('Save'));
+      await settle(tester);
+      expect(patchCount(), 1, reason: 'no Save PATCH during a cert write');
+
+      gate.complete();
+      server.patchGate = null;
+      await settle(tester);
+      expect(find.widgetWithText(Chip, 'NASM-CPT'), findsOneWidget,
+          reason: 'the failed remove rolled back');
+      expect(server.patches.single['certifications'], isEmpty);
+      expect(saveButton(tester).onPressed, isNotNull,
+          reason: 'Save comes back once the cert write is done');
+
+      // Afterwards Save sends what the screen shows.
+      server.patchMode = _Patch.oneRow;
+      tester
+          .state<ScaffoldMessengerState>(find.byType(ScaffoldMessenger))
+          .removeCurrentSnackBar();
+      await tester.pump();
+      await tapSave(tester);
+      expect(server.patches.last['certifications'], ['NASM-CPT']);
+      expect(find.text('Profile updated!'), findsOneWidget);
+    });
+
+    testWidgets('while Save is in flight, cert add and remove are ignored',
+        (tester) async {
+      final gate = Completer<void>();
+      await open(tester);
+      server.patchGate = gate;
+      await tester.tap(find.text('Save'));
+      await settle(tester);
+      expect(patchCount(), 1, reason: 'premise: Save is in flight');
+
+      await tester.tap(find.byIcon(Icons.close)); // remove NASM-CPT
+      await settle(tester);
+      await addCert(tester, 'ACE-CPT');
+      expect(patchCount(), 1, reason: 'a cert write raced the Save');
+      expect(find.widgetWithText(Chip, 'NASM-CPT'), findsOneWidget,
+          reason: 'an ignored remove leaves the chip');
+      expect(find.widgetWithText(Chip, 'ACE-CPT'), findsNothing,
+          reason: 'an ignored add shows no chip');
+
+      gate.complete();
+      server.patchGate = null;
+      await settle(tester);
+      expect(server.patches.single['certifications'], ['NASM-CPT']);
+      expect(find.text('Profile updated!'), findsOneWidget);
+    });
+  });
+
+  // ── R2. UX N1a — the "keeps its saved value" note only when it is true ────
+  group('R2. blank-field note', () {
+    testWidgets('nothing saved before: blank fields stay blank, plain updated',
+        (tester) async {
+      server.profileOverride = {
+        'pricing_monthly': null,
+        'years_experience': null,
+      };
+      await open(tester);
+      expect(tester.widget<TextField>(priceField()).controller!.text, '',
+          reason: 'premise: no saved price');
+      await tapSave(tester);
+      expect(server.patches.single.containsKey('pricing_monthly'), isFalse);
+      expect(tester.widget<TextField>(priceField()).controller!.text, '');
+      expect(tester.widget<TextField>(yearsField()).controller!.text, '');
+      expect(find.text(_blankKept), findsNothing,
+          reason: 'no field was refilled, so there is nothing to explain');
+      expect(find.text('Profile updated!'), findsOneWidget);
+    });
+
+    testWidgets('one field refilled with a saved value: the note is shown',
+        (tester) async {
+      server.profileOverride = {'years_experience': null};
+      await open(tester);
+      await tester.enterText(priceField(), '');
+      await tapSave(tester);
+      expect(tester.widget<TextField>(priceField()).controller!.text, '149');
+      expect(tester.widget<TextField>(yearsField()).controller!.text, '');
+      expect(find.text(_blankKept), findsOneWidget);
+    });
+  });
+
+  // ── R3. UX N10b — an unsent invite email is an error with a next step ─────
+  group('R3. invite email not sent', () {
+    testWidgets('error style and what to do next', (tester) async {
+      server.emailSent = false;
+      await open(tester);
+      await tester.tap(find.text('Team'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Invite Assistant Coach'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.descendant(
+              of: find.byType(AlertDialog), matching: find.byType(TextField)),
+          'assistant@example.com');
+      await tester.tap(find.text('Invite'));
+      await settle(tester);
+      expect(server.calls, contains('POST /functions/v1/send-invite-email'),
+          reason: 'premise');
+      expect(find.text(_inviteEmailNotSent), findsOneWidget);
+      expect(snackColor(tester), _errorRed);
+      expect(find.textContaining('Invite email sent'), findsNothing);
     });
   });
 }

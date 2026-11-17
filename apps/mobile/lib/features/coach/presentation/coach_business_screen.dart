@@ -69,7 +69,12 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
   final _yearsFocus = FocusNode(debugLabel: 'business years');
 
   /// True while a certification write is on its way: a second add/remove is
-  /// ignored so two optimistic updates never race each other.
+  /// ignored so two optimistic updates never race each other, and Save is
+  /// disabled — Save writes the whole certifications list, so a Save sent
+  /// during a cert write would carry the optimistic list, and if that cert
+  /// write then failed and rolled back, the database would keep a list the
+  /// screen no longer shows. The other direction: while Save is in flight,
+  /// cert add/remove are ignored.
   bool _certWriteInFlight = false;
 
   // ── What happened, said plainly ───────────────────────────────────────────
@@ -88,6 +93,9 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       'Try again in a moment. If it keeps happening, contact support.';
   static const _blankKept =
       'Profile updated. A blank price or years field keeps its saved value.';
+  static const _inviteEmailNotSent =
+      "Invite saved, but the email couldn't be sent — ask them to check back, "
+      'or send the invite again later.';
 
   /// Only a failure to reach the server is a connection problem. A server
   /// answer (PostgrestException, StorageException, a missing row) is not —
@@ -252,7 +260,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
   }
 
   Future<void> _save() async {
-    if (_loadError != null || _loading) return;
+    if (_loadError != null || _loading || _saving || _certWriteInFlight) return;
     // Validate before anything is written. An empty field is left out of the
     // update (the stored value stays); a non-empty one must be a number >= 0.
     // An explicit 0 price is still written as 0 (Decision 18 is open).
@@ -310,19 +318,29 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
         'certifications': certifications,
       };
       // A blank price/years was left out of the update, so the stored value
-      // stands. Show it again instead of a blank field under "updated".
-      final keptBlank = price == null || years == null;
-      if (mounted && keptBlank) {
+      // stands. Show it again instead of a blank field under "updated" — and
+      // explain only when a field was actually refilled: with nothing saved
+      // the field stays blank and there is nothing to explain.
+      var refilled = false;
+      if (mounted) {
         setState(() {
           if (price == null && _priceCtrl.text.trim().isEmpty) {
-            _priceCtrl.text = _numText(_profile?['pricing_monthly']);
+            final kept = _numText(_profile?['pricing_monthly']);
+            if (kept.isNotEmpty) {
+              _priceCtrl.text = kept;
+              refilled = true;
+            }
           }
           if (years == null && _yearsCtrl.text.trim().isEmpty) {
-            _yearsCtrl.text = _numText(_profile?['years_experience']);
+            final kept = _numText(_profile?['years_experience']);
+            if (kept.isNotEmpty) {
+              _yearsCtrl.text = kept;
+              refilled = true;
+            }
           }
         });
       }
-      _say(keptBlank ? _blankKept : 'Profile updated!');
+      _say(refilled ? _blankKept : 'Profile updated!');
     } catch (e, s) {
       reportError('CoachBusinessScreen._save', e, s);
       _say(_couldnt('save your profile', e), error: true);
@@ -370,12 +388,14 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
   // Certifications persist immediately (no dependence on the Save button, and
   // safe against a reload re-reading the list from the DB).
   Future<void> _persistCerts(List<String> next, {required String what}) async {
-    if (_certWriteInFlight) return;
+    if (_certWriteInFlight || _saving) return;
     final uid = _requireSignedIn();
     if (uid == null) return;
     final prev = List<String>.from(_certifications);
-    _certWriteInFlight = true;
-    setState(() => _certifications = next);
+    setState(() {
+      _certWriteInFlight = true;
+      _certifications = next;
+    });
     String? failure;
     try {
       final saved = _changedRow(await _db
@@ -388,7 +408,11 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       reportError('CoachBusinessScreen._persistCerts', e, s);
       failure = _couldnt(what, e);
     } finally {
-      _certWriteInFlight = false;
+      if (mounted) {
+        setState(() => _certWriteInFlight = false);
+      } else {
+        _certWriteInFlight = false;
+      }
     }
     if (failure != null && mounted) {
       setState(() => _certifications = prev);
@@ -418,7 +442,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
         title: const Text('Business Profile', style: TextStyle(color: _wht, fontSize: 17, fontWeight: FontWeight.w700)),
         actions: [
           if (!_loading && _loadError == null) TextButton(
-            onPressed: _saving ? null : _save,
+            onPressed: _saving || _certWriteInFlight ? null : _save,
             child: _saving
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: _brand, strokeWidth: 2))
                 : const Text('Save', style: TextStyle(color: _brand, fontWeight: FontWeight.w700))),
@@ -501,8 +525,9 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
                 body: {'email': email, 'type': 'team'});
             ok = (res.data is Map) && res.data['sent'] == true;
           } catch (_) { ok = false; }
-          messenger.showSnackBar(SnackBar(
-              content: Text(ok ? 'Invite email sent to $email' : 'Invite saved, but email could not be sent.')));
+          messenger.showSnackBar(ok
+              ? SnackBar(content: Text('Invite email sent to $email'))
+              : _snack(_inviteEmailNotSent, error: true));
         }, child: const Text('Invite', style: TextStyle(color: _brand))),
       ],
     );
