@@ -680,8 +680,10 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
                     : 'Custom price set to \$${value.toStringAsFixed(0)}/mo.')));
           },
           child: saving
-              ? const SizedBox(width: 16, height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: _pri))
+              ? Semantics(
+                  label: 'Saving',
+                  child: const SizedBox(width: 16, height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: _pri)))
               : const Text('Save', style: TextStyle(color: _pri, fontWeight: FontWeight.w700)),
         ),
       ],
