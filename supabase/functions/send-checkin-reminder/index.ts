@@ -7,12 +7,20 @@
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { authorizeServiceCaller, refusalResponse } from './service_caller.mjs';
 
 const RESEND_API_KEY       = Deno.env.get('RESEND_API_KEY') ?? '';
 const SUPABASE_URL         = Deno.env.get('SUPABASE_URL') ?? '';
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
 serve(async (req) => {
+  // P0-SEC-1 / EDGE-2: only the service role (the pg_cron job above) may run
+  // the sweep. verify_jwt = true admits any signed-in user's JWT and the
+  // legacy anon key, so the bearer is checked here, before any client is
+  // built, any row is read or written, or any email is sent.
+  const caller = await authorizeServiceCaller(req, SUPABASE_SERVICE_KEY);
+  if (!caller.ok) return refusalResponse(caller);
+
   const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
   // Get the start of the current week (Monday)

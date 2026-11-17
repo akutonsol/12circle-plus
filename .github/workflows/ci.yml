@@ -131,6 +131,15 @@ jobs:
           # schema_migrations to make a check green.
           node supabase/scripts/check-migration-manifest.mjs
 
+      - name: send-checkin-reminder refuses non-service callers (P0-SEC-1 / EDGE-2)
+        run: |
+          set -euo pipefail
+          # verify_jwt = true admits any signed-in user's JWT and the legacy anon
+          # key. The function must refuse every bearer except the service-role
+          # key, before any read, notification insert or email. Fake requests and
+          # fake keys only: no network, no credential, runner-preinstalled node.
+          node --test supabase/tests/functions/checkin_reminder_caller.test.mjs
+
       - name: Admin capability matrix + non-operational register
         run: |
           set -euo pipefail
