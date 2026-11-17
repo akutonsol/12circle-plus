@@ -471,6 +471,39 @@ removed defects in journeys 5 and 12 and a deployment blocker; it did not add in
 Cycle 2 (#173, #174) removed further defects in journeys 5 and 9 and in coach pricing; it added no
 integration evidence either. **P0 acceptance unchanged: 2 of 14 journeys (14%), 0 of 4 beta-ready conditions.**
 
+### Cycle 3 — P0-FL-4 and P0-FL-5 (2026-11-16)
+
+| PR | Package | Commits (author) | Files changed | Tests (automated) | Independent verdicts | CI (exact head) |
+|---|---|---|---|---|---|---|
+| #176 | **P0-FL-4** coach Business Profile reports what happened: a failed/empty load no longer shows an editable blank form (one Save used to overwrite the real profile with blanks); every `user_profiles` update row-checked; signed-out writes refused with a message; a blank price/years is no longer written as `0`, a non-empty unparseable/negative one is refused inline (explicit 0 unchanged — Decision 18); certification add/remove restores on failure; photo 0-row reported; a failed invite insert sends no email; Add Certification no longer crashes (disposed controller) | flutter-engineer: 97321b1, dd9a333, d0a2722, 06ca1af | `apps/mobile/lib/features/coach/presentation/coach_business_screen.dart`; `apps/mobile/test/widget/business_profile_reports_what_happened_test.dart` (new, 50 tests) | 20 fail on main's screen; full suite **2733 pass / 7 skip**; analyze **287** (baseline 291); contract guard PASS 31 ≤ 31; coordinator 268/268; static guards 0 failures (lead, after dd9a333 fixed a contract-guard regression 32 > 31 found by the lead) | security **APPROVE-WITH-NOTES** (local replay 000–195: own row 1, other coach 0, no 115 refusal); UX **PASS-WITH-NOTES** ×2 (N1–N9, N1a, N10b fixed); QA **REJECTED** (dd9a333: `.select('id')` drop undetected) → **VERIFIED** ×2 (d0a2722, 06ca1af); lead-run code mutants 7/7 caught | 7/7 on 06ca1af (`44014296382`) |
+| #175 | **P0-FL-5** (stacked on #173) no raw exception text: coach Leaderboard (busy-aware retry, recorded once), Community feed (announced, scrolls), Create exercise (PostgREST/Storage text never shown; connection hint only for network failures; signed-out says so; review-submission copy no longer points at a missing control; stale `lastError` cleared) | flutter-engineer: a9e69be, 87cda02 | `coach_dashboard_screen.dart` (leaderboard tab), `community_screen.dart`, `create_exercise_screen.dart`, `custom_exercise_service.dart` (lastError clearing only); tests `coach_leaderboard_no_raw_error_test.dart`, `community_feed_no_raw_error_test.dart`, `create_exercise_no_raw_error_test.dart` (new), `unit/custom_exercise_last_error_test.dart` (new) | 10 fail on 918c8dc, 13 more on a9e69be; full suite **2725 pass / 7 skip**; analyze **291**; contract PASS; static guards 0 failures | security **APPROVE-WITH-NOTES**; UX **PASS-WITH-NOTES** ×2; QA **REJECTED** (a9e69be: per-rebuild recording undetected) → **INCONCLUSIVE** (87cda02: its code mutants were blocked by the session classifier); lead-run mutants 5/5 caught (M4 + 4 controls) | 7/7 on 87cda02 (`44012398498`) |
+
+**Acceptance evidence is automated only** — widget and fake-PostgREST unit tests, negative-control mutants,
+static/contract guards, CI. **No device, simulator or live-QA run** (the failure paths need failing or 0-row QA
+reads/writes, which are not authorized). The security replay ran on a local database copy, not QA.
+**Journey completion is not increased by this cycle.**
+
+Backlog recorded this cycle (decision-free unless marked):
+- **Pricing sheet `_load` failed read** — `coach_pricing_sheet.dart` `catch (_) {}` shows an empty price field after a
+  failed read, so the coach cannot tell "no price set" from "could not read". Next Flutter package.
+- **Requests badge** — the coach dashboard Requests tab badge reads `pendingRequestsProvider` with `valueOrNull`, so a
+  failed read shows no badge (a failure shown as zero). Next Flutter package.
+- Create exercise: media upload/attach/sync failures after a save are ignored and the success dialog still shows
+  (security F4 on #175).
+- Community: `liveMembersProvider` turns every error into `[]` ("No members yet") — error-contract breach.
+- Same unchecked-update pattern (QA on #176): `settings_screen.dart:69`, `home_screen.dart:1329`,
+  `coach_relationship_service.dart:218`, `intake_flow_screen.dart:163`.
+- `reportError` sink must redact PostgREST details before any vendor sink is chosen (**decision PD-A24**).
+- No "submit for review" control for a saved draft whose submission failed (**decision**); PostgREST 502/503 copy
+  (support vs connection hint) (**decision**).
+- SR-4: 015 "coaches can update client profiles" lets an active coach write a client's bio etc. (**ties to
+  Decision 17**); SR-2 `send-invite-email` does not require a saved invite (E-15, D-7(D)); SR-3 any signed-in user can
+  insert a team invite for themselves (Wave 2).
+- **P0-SB-2** (custom price impossible for invited clients — 113 UPDATE check vs 192) stays separate: **no migration
+  is created or applied until Julia resolves Decisions 17 and 18 and authorizes the work.**
+
+**P0 acceptance after cycle 3: unchanged — 2 of 14 journeys (14%), 0 of 4 beta-ready conditions.**
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
@@ -503,7 +536,7 @@ These are Julia's calls; the recommendation is engineering's view, not a decisio
 15. Who may change media on platform exercises (today any coach; content_manager excluded)? 15b. Make coach-media private (breaks public transformation images unless they move)?
 16. Credit refund window when a booked session is cancelled (5b).
 17. May a coach write `pricing_monthly` on an active client's profile (015 "coaches can update client profiles"; matters when the client is also a coach)? (security F2, #174)
-18. Is $0 a valid coaching price? The Custom Price dialog accepts 0; the Pricing sheet refuses it (UX U4, #174).
+18. Is $0 a valid coaching price? The Custom Price dialog accepts 0; the Pricing sheet refuses it (UX U4, #174); may a coach clear a saved price or years of experience? (#176 keeps a blank field's saved value and says so)
 
 ## Migration approvals required
 
