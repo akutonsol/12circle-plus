@@ -61,6 +61,10 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
   static const _checkConnection = 'Check your connection and try again.';
   static const _tryLater =
       'Try again in a moment. If it keeps happening, contact support.';
+  static const _saveFailedMsg =
+      "Couldn't confirm your price was saved — it may still have saved. "
+      'Reopen this to check, or try again in a moment. If it keeps happening, '
+      'contact support.';
 
   /// Only a failure to reach the server is a connection problem; a server
   /// answer (PostgrestException) is not.
@@ -134,12 +138,17 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
       // spinner running with nothing said (P0-FL-3). Keep the sheet open and
       // say why inside it. A generic failure (e.g. a timeout) may still have
       // committed, so it does not claim nothing changed.
+      // Like _load: the connection hint only for a failure to reach the
+      // server; any other failure gets the try-later step — never the
+      // server's own text.
       if (!mounted) return;
       setState(() {
         _saving = false;
         _error = e is StateError
             ? e.message
-            : "Couldn't save your price — check your connection and try again.";
+            : _isNetworkFailure(e)
+                ? "Couldn't save your price — check your connection and try again."
+                : _saveFailedMsg;
       });
       return;
     }
@@ -154,7 +163,8 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
   Widget build(BuildContext context) {
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: Container(
+      // Scrolls rather than overflows at large text on a short screen.
+      child: SingleChildScrollView(child: Container(
         decoration: const BoxDecoration(
           color: _card,
           borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -184,7 +194,8 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
             if (_loading)
               const Center(child: Padding(
                 padding: EdgeInsets.all(16),
-                child: CircularProgressIndicator(color: _brand))),
+                child: CircularProgressIndicator(
+                    color: _brand, semanticsLabel: 'Loading your price'))),
             if (!_loading && _signedOut)
               Semantics(
                 liveRegion: true,
@@ -265,7 +276,7 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
             ],
           ],
         ),
-      ),
+      )),
     );
   }
 }

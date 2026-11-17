@@ -29,7 +29,15 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 const _uid = '00000000-0000-4000-8000-0000000b1ce2';
 const _sheetSaved = 'Pricing updated. Clients will see your new rate.';
+// A 500 is a server answer, not a network failure: the try-later copy with
+// the may-have-saved caution (P0-FL-6 follow-up U2). The network case is
+// covered in pricing_sheet_load_failure_test.dart.
 const _generic =
+    "Couldn't confirm your price was saved — it may still have saved. "
+    'Reopen this to check, or try again in a moment. If it keeps happening, '
+    'contact support.';
+// The Set Custom Price dialog's copy is unchanged by U2.
+const _dialogGeneric =
     "Couldn't save your price — check your connection and try again.";
 const _sheetZeroRows =
     "Your price couldn't be saved. Nothing was changed — try again.";
@@ -293,7 +301,7 @@ void main() {
       server.mode = _Patch.fails;
       await saveDialog(tester);
       expect(find.text(_dialogSaved), findsNothing);
-      expect(_inDialog(_generic), findsOneWidget);
+      expect(_inDialog(_dialogGeneric), findsOneWidget);
       expect(_fieldText(tester), '150', reason: 'the entered price is kept');
       expect(saveButton(tester).onPressed, isNotNull,
           reason: 'U3: Save is usable again after a failure');

@@ -86,6 +86,83 @@ void main() {
     expect(find.byIcon(Icons.error_outline), findsNothing);
   });
 
+  // U6: the error icon is ~16 and follows the text scaler, so it does not
+  // shrink beside large text. HOW TO SEE IT FAIL: on af83748 it is a fixed 14.
+  testWidgets('the error icon is 16 and scales with the text', (tester) async {
+    tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await tester.pumpWidget(_dashboard(() => throw Exception('offline')));
+    await _settle(tester);
+
+    final icon = tester.widget<Icon>(find.descendant(
+        of: _requestsTab(), matching: find.byIcon(Icons.error_outline)));
+    expect(icon.size, 32, reason: '16 at text scale 2.0');
+  });
+
+  // U7: accept/decline and live changes re-run the read. A reload must keep
+  // the last answer, not flicker the dot off while loading. HOW TO SEE IT
+  // FAIL: on af83748 the label drops to "Requests" until the reload ends.
+  testWidgets('a reload keeps the dot until the new answer arrives',
+      (tester) async {
+    final bump = StateProvider<int>((ref) => 0);
+    final gate = Completer<_Rows>();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        coachClientsProvider.overrideWith((ref) async => const []),
+        clientCheckinsProvider.overrideWith((ref) async => const []),
+        clientWorkoutLogsProvider.overrideWith((ref) async => const []),
+        coachNotificationsProvider
+            .overrideWith((ref) => Stream.value(const [])),
+        currentUserProfileProvider.overrideWith((ref) async => null),
+        currentUserDisplayNameProvider.overrideWithValue('Coach'),
+        // Stands in for the live ticker the real provider watches.
+        pendingRequestsProvider.overrideWith((ref) async {
+          if (ref.watch(bump) == 0) return const [{'id': 'r1'}];
+          return gate.future;
+        }),
+        coachSubmittedCheckinsProvider.overrideWith((ref) async => const []),
+        coachLeaderboardProvider.overrideWith((ref) async => const []),
+        coachTriageSignalsProvider.overrideWith((ref) async => const []),
+      ],
+      child: const MaterialApp(home: CoachDashboardScreen()),
+    ));
+    await _settle(tester);
+    expect(find.text('Requests ●'), findsOneWidget, reason: 'premise');
+
+    final container = ProviderScope.containerOf(
+        tester.element(find.byType(CoachDashboardScreen)));
+    container.read(bump.notifier).state++;
+    await _settle(tester);
+    expect(find.text('Requests ●'), findsOneWidget,
+        reason: 'the dot stays while the reload is in flight');
+
+    container.invalidate(pendingRequestsProvider);
+    await _settle(tester);
+    expect(find.text('Requests ●'), findsOneWidget,
+        reason: 'and while an invalidate (accept/decline) re-reads');
+
+    gate.complete(const []);
+    await _settle(tester);
+    expect(find.text('Requests ●'), findsNothing,
+        reason: 'the new answer (no requests) replaces it');
+    expect(find.text('Requests'), findsOneWidget);
+  });
+
+  // U8: a screen reader announces the dot as words, not "black circle".
+  // HOW TO SEE IT FAIL: on af83748 the label is the raw "Requests ●".
+  testWidgets('the dot is announced as "Requests — new"', (tester) async {
+    final handle = tester.ensureSemantics();
+    await tester.pumpWidget(_dashboard(() => const [
+          {'id': 'r1'}
+        ]));
+    await _settle(tester);
+
+    expect(find.bySemanticsLabel(RegExp('Requests — new')), findsOneWidget);
+    expect(find.bySemanticsLabel(RegExp('●')), findsNothing,
+        reason: 'the black-circle character is not read out');
+    handle.dispose();
+  });
+
   testWidgets('control: no pending requests show the plain label',
       (tester) async {
     await tester.pumpWidget(_dashboard(() => const []));
