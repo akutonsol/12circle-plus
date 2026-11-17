@@ -56,3 +56,29 @@ predates them and cannot load them through its Agent tool). Lead = main session.
 Runtime (device/simulator) verification: **not performed** — the fixed paths need QA data states
 (ended or refused relationships) that would require unauthorized QA writes; covered by widget and
 unit tests against fake backends.
+
+## Cycle 2 log (2026-11-16) — P0-FL-2 and P0-FL-3
+
+Same mechanism as cycle 1 (`claude -p --agent cplus-…`, one worktree per agent, explicit tool lists, no
+push/gh/supabase for agents). Reviews ran in parallel; every material finding was fixed and re-verified
+before the PR opened. The lead ran the static guards (headless agents cannot) and made two small,
+disclosed changes on #174.
+
+| Package | Agent | Responsibility | Branch / commits | Files changed | Tests | Independent review | Remaining |
+|---|---|---|---|---|---|---|---|
+| P0-FL-2 requests tab + check-in history recover from errors (R-0 findings 3, 4) | `cplus-flutter-engineer` | implement + 1 follow-up | `fix/requests-and-history-recover-from-errors` 913a0d9, 918c8dc → **PR #173** (CI 7/7 on 918c8dc, run `44001635796`) | `coach_dashboard_screen.dart`, `checkin_hub_sections.dart`, `coach_requests_recover_test.dart` (new), `checkin_hub_sections_test.dart` | full suite 2696 pass; analyze 291; 6 tests fail on main, 6 more on 913a0d9 | security **APPROVE-WITH-NOTES** (F2 fixed); UX **PASS-WITH-NOTES** (U1/U4/U5 fixed); QA **VERIFIED** ×2 (negative controls caught) | raw `e.toString()` on leaderboard / community / create-exercise; Requests badge `valueOrNull` |
+| P0-FL-3 price writes report what happened (backlog inspection of signed-out pricing writes) | `cplus-flutter-engineer` + lead | implement + 1 follow-up; lead: spinner label + its test | `fix/price-writes-report-what-happened` (stacked on #172) e239eed, 44483d0, 0b89742, 4d1d992 → **PR #174** (CI 7/7 on 4d1d992, run `44002583036`) | `coach_relationship_service.dart` (two price methods), `coach_pricing_sheet.dart`, `client_detail_screen.dart` (custom-price dialog), 2 new + 1 updated test files | full suite 2714 pass; analyze 291; tests fail on a39435d (11) and on e239eed's screens (10) | security **APPROVE-WITH-NOTES** (local replay of 113/192); UX **PASS-WITH-NOTES** (U1–U3, U5 fixed); QA **VERIFIED** ×2 (16 negative controls caught) | F1 custom price impossible for invited clients (migration); F2 + $0 price (decisions); `coach_business_screen` same bug |
+
+Runtime (device/simulator/live QA) verification: **not performed** — the failure paths need failing or
+0-row QA reads and writes, which are not authorized; covered by widget and fake-PostgREST unit tests that
+assert inside the sheet/dialog.
+
+### Next decision-free packages found this cycle
+
+1. **P0-FL-4** `coach_business_screen` `_save`: 0-row update says "Profile updated!", an unparseable
+   price is saved as `0`, signed-out is silent — `cplus-flutter-engineer` (same pattern as FL-3).
+2. **P0-FL-5** raw `e.toString()` on the coach leaderboard tab, `community_screen`, `create_exercise_screen`
+   — `cplus-flutter-engineer` (same pattern as FL-2).
+3. **P0-SB-2** let a coach set `monthly_price` on an active coach-initiated relationship without reopening
+   self-activation (113 UPDATE check vs 192) — `cplus-supabase-engineer`, migration + replay; **apply needs
+   approval**.
