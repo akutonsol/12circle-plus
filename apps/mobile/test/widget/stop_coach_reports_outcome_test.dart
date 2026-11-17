@@ -82,6 +82,7 @@ class _MemoryStore extends GotrueAsyncStorage {
 /// insert each succeed or fail on request.
 class _Server extends http.BaseClient {
   bool relationshipFails = false;
+  bool relationshipMatches = true;
   bool notificationFails = false;
   bool paid = false;
   bool cancelFails = false;
@@ -103,9 +104,10 @@ class _Server extends http.BaseClient {
           : _json({'ok': true, 'endsAt': '2026-12-01T00:00:00Z'}, 200, request);
     }
     if (request.method == 'PATCH' && path.endsWith('/coach_client_relationships')) {
+      // cancelCoach checks the update matched a row (P0-FL-1).
       return relationshipFails
           ? _json({'message': 'offline'}, 503, request)
-          : _json([], 200, request);
+          : _json(relationshipMatches ? [{'id': 'rel-a'}] : [], 200, request);
     }
     if (path.endsWith('/notifications')) {
       return notificationFails
@@ -176,6 +178,7 @@ void main() {
   setUp(() {
     server
       ..relationshipFails = false
+      ..relationshipMatches = true
       ..notificationFails = false
       ..paid = false
       ..cancelFails = false
@@ -246,6 +249,17 @@ void main() {
 
       expect(find.text(_ended), findsNothing);
       expect(find.text(_failed), findsOneWidget);
+    });
+
+    testWidgets('an update that matched no row says nothing was changed', (tester) async {
+      // RLS refusal / already ended: PostgREST answers 200 with no rows.
+      server.relationshipMatches = false;
+      await stop(tester, paid: false);
+
+      expect(find.text(_ended), findsNothing);
+      expect(find.text(_failed), findsOneWidget);
+      expect(server.writes, isNot(contains('POST /rest/v1/notifications')),
+          reason: 'the coach must not be told a client ended coaching');
     });
 
     testWidgets('an update that worked says so', (tester) async {
