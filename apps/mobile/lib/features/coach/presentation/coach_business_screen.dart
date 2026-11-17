@@ -90,16 +90,11 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
             error ? const Color(0xFFFFB4AB) : const Color(0xFF6FFBBE)));
   }
 
-  /// Updates the coach's own `user_profiles` row and returns true only when
-  /// the server returned the changed row.
-  Future<bool> _updateOwnProfile(String uid, Map<String, dynamic> values) async {
-    final rows = await _db
-        .from('user_profiles')
-        .update(values)
-        .eq('id', uid)
-        .select('id');
-    return (rows as List).isNotEmpty;
-  }
+  /// True only when an update's `.select('id')` returned the changed row (RLS
+  /// filters a refused update to 0 rows without an error). Each update keeps
+  /// its column keys literal at the call site so the schema contract guard
+  /// can read which `user_profiles` columns this screen writes.
+  bool _changedRow(Object? rows) => (rows as List).isNotEmpty;
 
   Future<void> _load() async {
     final uid = _db.auth.currentUser?.id;
@@ -211,14 +206,14 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     if (uid == null) return;
     setState(() => _saving = true);
     try {
-      final saved = await _updateOwnProfile(uid, {
+      final saved = _changedRow(await _db.from('user_profiles').update({
         'bio': _bioCtrl.text.trim(),
         if (price != null) 'pricing_monthly': price,
         if (years != null) 'years_experience': years,
         'tagline': _taglineCtrl.text.trim(),
         'specialties': _specialties,
         'certifications': _certifications,
-      });
+      }).eq('id', uid).select('id'));
       _say(
           saved
               ? 'Profile updated!'
@@ -249,8 +244,11 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       final url = _db.storage.from('coach-media').getPublicUrl(path);
       final current = List<String>.from(_profile?['transformation_photo_urls'] as List? ?? []);
       current.add(url);
-      final saved = await _updateOwnProfile(
-          uid, {'transformation_photo_urls': current});
+      final saved = _changedRow(await _db
+          .from('user_profiles')
+          .update({'transformation_photo_urls': current})
+          .eq('id', uid)
+          .select('id'));
       if (!saved) {
         _say("Couldn't add the photo — nothing was changed.", error: true);
         return;
@@ -275,7 +273,11 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     setState(() => _certifications = next);
     String? failure;
     try {
-      final saved = await _updateOwnProfile(uid, {'certifications': next});
+      final saved = _changedRow(await _db
+          .from('user_profiles')
+          .update({'certifications': next})
+          .eq('id', uid)
+          .select('id'));
       if (!saved) failure = '$failMsg — nothing was changed.';
     } catch (e, s) {
       reportError('CoachBusinessScreen._persistCerts', e, s);
