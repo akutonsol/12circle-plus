@@ -148,6 +148,50 @@ void main() {
     expect(find.text('Requests'), findsOneWidget);
   });
 
+  // M3 (mutation round): keeping the last answer during a reload must not
+  // also hide a reload that FAILS. Once the re-read errors, the label says it
+  // couldn't load — the stale dot is not kept as if it were current.
+  testWidgets('a reload that fails after the dot was shown shows the error',
+      (tester) async {
+    final handle = tester.ensureSemantics();
+    final bump = StateProvider<int>((ref) => 0);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        coachClientsProvider.overrideWith((ref) async => const []),
+        clientCheckinsProvider.overrideWith((ref) async => const []),
+        clientWorkoutLogsProvider.overrideWith((ref) async => const []),
+        coachNotificationsProvider
+            .overrideWith((ref) => Stream.value(const [])),
+        currentUserProfileProvider.overrideWith((ref) async => null),
+        currentUserDisplayNameProvider.overrideWithValue('Coach'),
+        pendingRequestsProvider.overrideWith((ref) async {
+          if (ref.watch(bump) == 0) return const [{'id': 'r1'}];
+          throw Exception('offline');
+        }),
+        coachSubmittedCheckinsProvider.overrideWith((ref) async => const []),
+        coachLeaderboardProvider.overrideWith((ref) async => const []),
+        coachTriageSignalsProvider.overrideWith((ref) async => const []),
+      ],
+      child: const MaterialApp(home: CoachDashboardScreen()),
+    ));
+    await _settle(tester);
+    expect(find.text('Requests ●'), findsOneWidget, reason: 'premise');
+
+    final container = ProviderScope.containerOf(
+        tester.element(find.byType(CoachDashboardScreen)));
+    container.read(bump.notifier).state++;
+    await _settle(tester);
+
+    expect(find.text('Requests ●'), findsNothing,
+        reason: 'a failed reload does not keep the stale dot');
+    expect(find.bySemanticsLabel(_failedLabel), findsOneWidget);
+    expect(
+        find.descendant(
+            of: _requestsTab(), matching: find.byIcon(Icons.error_outline)),
+        findsOneWidget);
+    handle.dispose();
+  });
+
   // U8: a screen reader announces the dot as words, not "black circle".
   // HOW TO SEE IT FAIL: on af83748 the label is the raw "Requests ●".
   testWidgets('the dot is announced as "Requests — new"', (tester) async {

@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/coach/presentation/coach_pricing_sheet.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show SemanticsNode;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -31,6 +33,16 @@ const _signedOut = "You're signed out — sign in again to set your price.";
 
 Finder _inSheet(String text) =>
     find.descendant(of: find.byType(BottomSheet), matching: find.text(text));
+/// Whether [f]'s semantics node, or one it sits in, is a live region.
+bool _inLiveRegion(WidgetTester tester, Finder f) {
+  SemanticsNode? n = tester.getSemantics(f);
+  while (n != null) {
+    if (n.getSemanticsData().flagsCollection.isLiveRegion) return true;
+    n = n.parent;
+  }
+  return false;
+}
+
 String _fieldText(WidgetTester tester) =>
     tester.widget<TextField>(find.byType(TextField)).controller!.text;
 
@@ -102,12 +114,18 @@ class _Server extends http.BaseClient {
   /// While set, the opening read waits on it (the sheet stays loading).
   Completer<void>? hold;
 
+  /// While set, the read / the save throws this instead of answering — one
+  /// per kind of failure to reach the server (SocketException, ...).
+  Object Function(http.BaseRequest)? readThrows;
+  Object Function(http.BaseRequest)? saveThrows;
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     if (request.method == 'GET' &&
         request.url.path == '/rest/v1/user_profiles') {
       reads.add(request.url.query);
       if (hold != null) await hold!.future;
+      if (readThrows != null) throw readThrows!(request);
       switch (answer) {
         case _Read.price120:
           return _json({'pricing_monthly': 120}, 200, request);
@@ -122,6 +140,7 @@ class _Server extends http.BaseClient {
     if (request.method == 'PATCH' &&
         request.url.path == '/rest/v1/user_profiles') {
       saves.add(request.url.query);
+      if (saveThrows != null) throw saveThrows!(request);
       switch (saveAnswer) {
         case _Save.ok:
           return _json([
@@ -167,6 +186,8 @@ void main() {
       ..answer = _Read.price120
       ..saveAnswer = _Save.ok
       ..hold = null
+      ..readThrows = null
+      ..saveThrows = null
       ..reads.clear()
       ..saves.clear();
     reported.clear();
@@ -356,8 +377,123 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  // M1 (mutation round): Try again goes back to the spinner, so a second tap
+  // while the re-read is in flight cannot start a second read, and the empty
+  // price form never flashes up in between.
+  testWidgets(
+      'Try again tapped twice during the re-read starts exactly one read',
+      (tester) async {
+    server.answer = _Read.serverError;
+    await openSheet(tester);
+    expect(_inSheet(_couldntLoad), findsOneWidget, reason: 'premise');
+    final before = server.reads.length;
+
+    server
+      ..answer = _Read.price120
+      ..hold = Completer<void>();
+    await tester.tap(_inSheet('Try again'));
+    await tester.pump();
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 30)));
+    await tester.pump();
+
+    expect(find.byType(CircularProgressIndicator), findsOneWidget,
+        reason: 'the re-read shows the spinner');
+    expect(find.byType(TextField), findsNothing,
+        reason: 'the empty price form does not flash up during the re-read');
+    expect(_inSheet('Try again'), findsNothing,
+        reason: 'no second Try again while the re-read is in flight');
+    // A quick second tap: only possible if the button is still there.
+    if (_inSheet('Try again').evaluate().isNotEmpty) {
+      await tester.tap(_inSheet('Try again'));
+      await tester.pump();
+    }
+
+    server.hold!.complete();
+    await settle(tester);
+    expect(server.reads.length, before + 1, reason: 'exactly one re-read');
+    expect(_fieldText(tester), '120');
+  });
+
+  // M2 (mutation round): every kind of failure to reach the server gets the
+  // connection copy, on the opening read and on Save — not only
+  // http.ClientException.
+  final networkFailures = <String, Object Function(http.BaseRequest)>{
+    'SocketException': (r) => const SocketException('Network is unreachable'),
+    'TimeoutException': (r) =>
+        TimeoutException('read timed out', const Duration(seconds: 10)),
+    'http.ClientException': (r) =>
+        http.ClientException('Connection refused', r.url),
+    'AuthRetryableFetchException': (r) =>
+        AuthRetryableFetchException(message: 'fetch failed'),
+  };
+  for (final entry in networkFailures.entries) {
+    testWidgets('a ${entry.key} on the opening read says check your connection',
+        (tester) async {
+      server.readThrows = entry.value;
+      await openSheet(tester);
+      // postgrest-dart may retry a GET that throws (1 s + 2 s + 4 s on the
+      // fake clock); advance past it.
+      for (var i = 0; i < 10; i++) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)));
+        await tester.pump(const Duration(seconds: 1));
+      }
+      expect(server.reads, isNotEmpty, reason: 'premise: the read was made');
+      expect(_inSheet(_couldntLoad), findsOneWidget);
+      expect(_inSheet(_checkConnection), findsOneWidget,
+          reason: '${entry.key} is a failure to reach the server');
+      expect(find.text(_tryLater), findsNothing);
+      expectNoPriceForm();
+    });
+
+    testWidgets('a ${entry.key} on Save says check your connection',
+        (tester) async {
+      server.saveThrows = entry.value;
+      await openSheet(tester);
+      await tapSave(tester);
+      expect(server.saves, isNotEmpty, reason: 'premise: the save was sent');
+      expect(_inSheet(_saveNetwork), findsOneWidget,
+          reason: '${entry.key} is a failure to reach the server');
+      expect(find.text(_saveFailed), findsNothing);
+    });
+  }
+
+  // M4 (mutation round): the failure messages that replace the form are live
+  // regions, so a screen reader announces them when they appear.
+  testWidgets('the load-failure block is announced as a live region',
+      (tester) async {
+    final handle = tester.ensureSemantics();
+    server.answer = _Read.serverError;
+    await openSheet(tester);
+    expect(_inSheet(_couldntLoad), findsOneWidget, reason: 'premise');
+    expect(_inLiveRegion(tester, _inSheet(_couldntLoad)), isTrue);
+    expect(_inLiveRegion(tester, _inSheet(_tryLater)), isTrue);
+    handle.dispose();
+  });
+
+  testWidgets('a failed Save message is announced as a live region',
+      (tester) async {
+    final handle = tester.ensureSemantics();
+    server.saveAnswer = _Save.serverError;
+    await openSheet(tester);
+    await tapSave(tester);
+    expect(_inSheet(_saveFailed), findsOneWidget, reason: 'premise');
+    expect(_inLiveRegion(tester, _inSheet(_saveFailed)), isTrue);
+    handle.dispose();
+  });
+
+  testWidgets('control: the price form is not a live region', (tester) async {
+    final handle = tester.ensureSemantics();
+    await openSheet(tester);
+    expect(_inLiveRegion(tester, find.text('Save price')), isFalse,
+        reason: 'the live-region check can say no');
+    handle.dispose();
+  });
+
   // Runs last: it signs the shared client out.
   testWidgets('signed out says so instead of an empty field', (tester) async {
+    final handle = tester.ensureSemantics();
     await tester.runAsync(
         () => Supabase.instance.client.auth.signOut(scope: SignOutScope.local));
     expect(Supabase.instance.client.auth.currentUser, isNull,
@@ -367,5 +503,9 @@ void main() {
     expect(_inSheet(_signedOut), findsOneWidget);
     expectNoPriceForm();
     expect(server.reads, isEmpty, reason: 'nothing to read signed out');
+    // M4: announced when it appears.
+    expect(_inLiveRegion(tester, _inSheet(_signedOut)), isTrue,
+        reason: 'the signed-out message is a live region');
+    handle.dispose();
   });
 }
