@@ -103,6 +103,10 @@ class _Server extends http.BaseClient {
       cancelled.add(jsonDecode(await request.finalize().bytesToString())['subscriptionId'] as String);
       return _json({'ok': true, 'endsAt': '2026-12-01T00:00:00Z'}, 200, request);
     }
+    if (request.method == 'PATCH' && path.endsWith('/coach_client_relationships')) {
+      // The update matched the active row (cancelCoach checks rows, P0-FL-1).
+      return _json([{'id': 'rel-a'}], 200, request);
+    }
     if (path.endsWith('/notifications')) return _json([], 201, request);
     final single =
         request.headers['Accept']?.contains('vnd.pgrst.object') ?? false;

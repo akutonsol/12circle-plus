@@ -6,8 +6,7 @@ class CoachRelationshipService {
 
   // ── Client sends coach request (pending) ──────────────────
   Future<void> requestCoach(String coachId, {String? message}) async {
-    final clientId = _db.auth.currentUser?.id;
-    if (clientId == null) return;
+    final clientId = _requireSignedIn();
     // The upsert below rewrites `status` on an existing row. Over an ACTIVE row
     // that demotes the client's own coach to pending — off the coach's roster,
     // and the client off coach-guided access — and RLS allows it: 113 lets a
@@ -45,6 +44,17 @@ class CoachRelationshipService {
     }
   }
 
+
+  /// The signed-in user's id. Signed out, a relationship write writes nothing,
+  /// and returning normally read as success: "Request sent!" / "Coaching
+  /// ended." (P0-FL-1).
+  String _requireSignedIn() {
+    final id = _db.auth.currentUser?.id;
+    if (id == null) {
+      throw StateError('You are signed out — nothing was changed. Sign in and try again.');
+    }
+    return id;
+  }
 
   /// A request answer that matched no row is not an answer (QAX-ERR-02): RLS
   /// filters out a relationship that is not this coach's, or one already
@@ -154,10 +164,10 @@ class CoachRelationshipService {
   /// the subscription billing -- and the one that cancelled missed monthly
   /// packages, the coaching subscription the app actually sells.
   ///
-  /// Throws if a cancellation fails; nothing is then changed locally.
+  /// Throws if a cancellation fails, if no active relationship was ended, or
+  /// if no one is signed in; nothing is then changed locally.
   Future<CoachingEnd> cancelCoach(String coachId, String? reason, String? customReason) async {
-    final clientId = _db.auth.currentUser?.id;
-    if (clientId == null) return const CoachingEnd.now();
+    final clientId = _requireSignedIn();
     final paid = await _db
         .from('subscriptions')
         .select('id, current_period_end')
@@ -179,13 +189,19 @@ class CoachRelationshipService {
       }
       return CoachingEnd.at((endsAt ?? DateTime.now()).toLocal());
     }
-    await _db.from('coach_client_relationships').update({
+    final ended = await _db.from('coach_client_relationships').update({
       'status': 'cancelled',
       'cancelled_by': 'client',
       'cancel_reason': reason,
       'cancel_reason_custom': customReason,
       'cancelled_at': DateTime.now().toUtc().toIso8601String(),
-    }).eq('client_id', clientId).eq('coach_id', coachId).eq('status', 'active');
+    }).eq('client_id', clientId).eq('coach_id', coachId).eq('status', 'active').select('id');
+    // A 0-row update ended nothing (RLS refusal, already ended, wrong coach):
+    // it was reported as "Coaching ended." and the coach was told so (P0-FL-1).
+    // Refuse it before the notification, as approve/decline do (QAX-ERR-02).
+    if ((ended as List).isEmpty) {
+      throw StateError('No active coaching with this coach — nothing was changed.');
+    }
     // Notify the coach that the client has ended the relationship.
     // Best-effort, and reported: the change above is saved, and a failed
     // notification thrown from here read as a failed save (N3).

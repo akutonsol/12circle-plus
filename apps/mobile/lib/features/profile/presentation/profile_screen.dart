@@ -930,7 +930,12 @@ class MyCoachSection extends ConsumerWidget {
         message = end.describe();
       } catch (e) {
         reportError('MyCoachSection.cancelCoach', e);
-        message = 'Could not end coaching. Nothing was changed. Try again.';
+        // cancelCoach's StateError says what happened ("No active coaching
+        // with this coach", "You are signed out"); say it, as the marketplace
+        // does. Anything else is the generic failure.
+        message = e is StateError
+            ? e.message
+            : 'Could not end coaching. Nothing was changed. Try again.';
       }
       messenger?.showSnackBar(SnackBar(content: Text(message)));
       onCoachCancelled();
