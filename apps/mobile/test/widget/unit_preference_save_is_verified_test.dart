@@ -7,6 +7,7 @@ import 'package:circle_fitness/features/settings/presentation/settings_screen.da
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../support/row_checking_postgrest.dart';
@@ -101,6 +102,9 @@ void main() {
     expect(selected(tester), 'KG');
     expect(find.text(_failed), findsOneWidget);
     expect(find.text(_offline), findsNothing);
+    expect(reported.map((f) => f.origin), ['settings.persistUnit'],
+        reason: 'a thrown (refused) save must be recorded, not just shown');
+    expect(reported.single.error, isA<PostgrestException>());
   });
 
   testWidgets('a network failure reverts and says check your connection',
@@ -109,6 +113,47 @@ void main() {
     await tapLb(tester);
     expect(selected(tester), 'KG');
     expect(find.text(_offline), findsOneWidget);
+    expect(reported.map((f) => f.origin), ['settings.persistUnit'],
+        reason: 'a thrown (network) save must be recorded, not just shown');
+    expect(reported.single.error, isA<http.ClientException>());
+  });
+
+  // The wording flags belong to ONE save. On the same screen, a network
+  // failure followed by a server failure must not keep the first one's
+  // "check your connection" wording (and the reverse).
+  testWidgets(
+      'same screen: network failure, then 0-row failure, then network '
+      'again — each shows its own copy', (tester) async {
+    Future<void> clearSnackBars() async {
+      tester
+          .state<ScaffoldMessengerState>(find.byType(ScaffoldMessenger))
+          .clearSnackBars();
+      await tester.pumpAndSettle();
+      expect(find.byType(SnackBar), findsNothing, reason: 'premise: cleared');
+    }
+
+    server.mode = WriteMode.network;
+    await tapLb(tester);
+    expect(selected(tester), 'KG');
+    expect(find.text(_offline), findsOneWidget, reason: 'premise');
+    await clearSnackBars();
+
+    server.mode = WriteMode.zeroRows;
+    await tester.tap(find.text('LB').first);
+    await tester.pumpAndSettle();
+    expect(unitWrites(), hasLength(2), reason: 'premise: a second save');
+    expect(selected(tester), 'KG');
+    expect(find.text(_failed), findsOneWidget,
+        reason: 'the server answered this time');
+    expect(find.text(_offline), findsNothing,
+        reason: "the earlier network failure's wording leaked into this one");
+    await clearSnackBars();
+
+    server.mode = WriteMode.network;
+    await tester.tap(find.text('LB').first);
+    await tester.pumpAndSettle();
+    expect(find.text(_offline), findsOneWidget);
+    expect(find.text(_failed), findsNothing);
   });
 
   testWidgets('control: a 1-row save keeps LB and says nothing',

@@ -2,6 +2,8 @@ import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/home/presentation/home_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../support/row_checking_postgrest.dart';
 
@@ -128,6 +130,9 @@ void main() {
     expect(find.text(_offline), findsNothing);
     expect(find.text('Submit'), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(reported.map((f) => f.origin), ['home.rateCoach'],
+        reason: 'a thrown (refused) submit must be recorded, not just shown');
+    expect(reported.single.error, isA<PostgrestException>());
   });
 
   testWidgets('a network failure says check your connection', (tester) async {
@@ -135,6 +140,9 @@ void main() {
     await submit(tester);
     expect(_inDialog(_offline), findsOneWidget);
     expect(find.text('Rate Your Coach'), findsOneWidget);
+    expect(reported.map((f) => f.origin), ['home.rateCoach'],
+        reason: 'a thrown (network) submit must be recorded, not just shown');
+    expect(reported.single.error, isA<http.ClientException>());
   });
 
   testWidgets(
@@ -148,9 +156,35 @@ void main() {
         allOf(contains('"coach_id":"coach-1"'), contains('"rating":5'),
             contains('"review_text":"Great sessions"')),
         reason: 'what is written is unchanged');
+    expect(
+        Uri.splitQueryString(
+            reviewWrites().single.split(' ')[1].split('?').last),
+        containsPair('on_conflict', 'coach_id,client_id'),
+        reason: 'a second review must UPDATE the member\'s one row for this '
+            'coach, not insert a duplicate or fail on the unique key');
     expect(profileWrites(), isEmpty,
         reason: 'the client-side rating_avg recompute could never take effect '
             '(RLS + migration 115) — the 045 trigger owns the aggregate');
     expect(reported, isEmpty);
+  });
+
+  // H1. LAST in this file: it signs the shared session out. Signed out there
+  // is nobody to write as — the dialog must say so and stop spinning, not
+  // return silently with the spinner stuck.
+  testWidgets('signed out: says so in the dialog and stops spinning',
+      (tester) async {
+    await tester.runAsync(() => Supabase.instance.client.auth.signOut());
+    expect(Supabase.instance.client.auth.currentUser, isNull,
+        reason: 'premise: signed out');
+    server.writes.clear();
+    await submit(tester);
+    expect(reviewWrites(), isEmpty, reason: 'nothing to write as nobody');
+    expect(_inDialog(kReviewSignedOutMessage), findsOneWidget,
+        reason: 'signed out was silent');
+    expect(find.byType(CircularProgressIndicator), findsNothing,
+        reason: 'the spinner is stuck');
+    expect(find.text('Submit'), findsOneWidget, reason: 'saving was reset');
+    expect(find.text(_failed), findsNothing);
+    expect(find.text(_offline), findsNothing);
   });
 }

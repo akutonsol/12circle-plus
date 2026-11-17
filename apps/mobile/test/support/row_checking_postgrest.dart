@@ -44,8 +44,15 @@ class RowCheckingPostgrest extends http.BaseClient {
   /// completes — a save "in flight".
   Completer<void>? gate;
 
+  /// When set, [mode] applies only to writes this accepts (it is given the
+  /// recorded `METHOD /path?query body` line); every other write behaves as
+  /// [WriteMode.oneRow]. Lets a test fail ONE of several writes — e.g. one
+  /// phase of a two-phase save — so each one's own check is exercised.
+  bool Function(String write)? modeAppliesTo;
+
   void reset() {
     gate = null;
+    modeAppliesTo = null;
     mode = WriteMode.oneRow;
     reads.clear();
     writes.clear();
@@ -59,10 +66,12 @@ class RowCheckingPostgrest extends http.BaseClient {
       return http.StreamedResponse(const Stream.empty(), 204, request: request);
     }
     if (request.method == 'PATCH' || request.method == 'POST') {
-      writes.add('${request.method} $path?${request.url.query} $body');
+      final line = '${request.method} $path?${request.url.query} $body';
+      writes.add(line);
       if (gate != null) await gate!.future;
       final asksForRows = request.url.queryParameters.containsKey('select');
-      switch (mode) {
+      final applies = modeAppliesTo?.call(line) ?? true;
+      switch (applies ? mode : WriteMode.oneRow) {
         case WriteMode.network:
           throw http.ClientException('Connection refused', request.url);
         case WriteMode.serverError:

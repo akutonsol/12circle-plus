@@ -138,6 +138,35 @@ void main() {
     await outlastSnackBar(tester);
   });
 
+  // Each phase's row check must stand on its own. With both writes failing
+  // together, losing either check is hidden by the other; here only ONE phase
+  // stores nothing while the other stores its row.
+  // Phase 1 is the only write carrying `"onboarding_complete":false`.
+  bool isPhase1(String w) => w.contains('"onboarding_complete":false');
+
+  for (final phase in [1, 2]) {
+    testWidgets(
+        'phase $phase alone storing no row is told and reported (the other '
+        'phase stored its row)', (tester) async {
+      await open(tester);
+      server.mode = WriteMode.zeroRows;
+      server.modeAppliesTo = phase == 1 ? isPhase1 : (w) => !isPhase1(w);
+      await background(tester);
+
+      final patches = stepWrites();
+      expect(patches.where(isPhase1), isNotEmpty, reason: 'premise: phase 1');
+      expect(patches.where((w) => !isPhase1(w)), isNotEmpty,
+          reason: 'premise: phase 2');
+      expect(find.text(_notice), findsOneWidget,
+          reason: 'phase $phase changed 0 rows but nothing was said');
+      final origin =
+          phase == 1 ? 'intake.saveProgress.step' : 'intake.saveProgress.data';
+      expect(reported.map((f) => f.origin), [origin],
+          reason: 'exactly the failing phase is reported');
+      await outlastSnackBar(tester);
+    });
+  }
+
   // U5. The notice was a fixed SnackBar along the bottom edge — exactly where
   // every step's Continue sits — so the tap meant to move on landed on the
   // notice. It now floats clear of the bottom bar.
