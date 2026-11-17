@@ -28,6 +28,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 const _uid = '00000000-0000-4000-8000-00000000057c';
 const _ended = 'Coaching ended. Your coach has been notified.';
 const _failed = 'Could not end coaching. Nothing was changed. Try again.';
+/// cancelCoach's own StateError for a 0-row update, shown verbatim.
+const _noActive = 'No active coaching with this coach — nothing was changed.';
 /// Owner decision 2: a paid coach continues to the end of the paid period.
 const _continues = 'continues until';
 
@@ -248,7 +250,9 @@ void main() {
       await stop(tester, paid: false);
 
       expect(find.text(_ended), findsNothing);
+      // Not a StateError (a 503): the generic text.
       expect(find.text(_failed), findsOneWidget);
+      expect(find.text(_noActive), findsNothing);
     });
 
     testWidgets('an update that matched no row says nothing was changed', (tester) async {
@@ -257,7 +261,9 @@ void main() {
       await stop(tester, paid: false);
 
       expect(find.text(_ended), findsNothing);
-      expect(find.text(_failed), findsOneWidget);
+      // F2: the specific reason, not the generic text that discarded it.
+      expect(find.text(_noActive), findsOneWidget);
+      expect(find.text(_failed), findsNothing);
       expect(server.writes, isNot(contains('POST /rest/v1/notifications')),
           reason: 'the coach must not be told a client ended coaching');
     });
