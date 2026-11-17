@@ -25,7 +25,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 // Also: `PostNotifier.addPost` merged into `state.valueOrNull ?? []`, so a
 // post written while the feed had failed turned the failure into a feed of one.
 
-enum _Mode { serverError, noNetwork, rows, empty, hang }
+enum _Mode { serverError, noNetwork, throws, rows, empty, hang }
 
 const _rows = [
   {
@@ -51,6 +51,7 @@ class _Rest extends http.BaseClient {
   _Mode mode = _Mode.serverError;
   final requests = <Uri>[];
   Completer<void>? gate;
+  Object thrown = const SocketException('unset');
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
@@ -59,6 +60,8 @@ class _Rest extends http.BaseClient {
       switch (mode) {
         case _Mode.noNetwork:
           throw const SocketException('Connection refused');
+        case _Mode.throws:
+          throw thrown;
         case _Mode.serverError:
           return _json(request, 500, {
             'code': 'XX000',
@@ -178,7 +181,8 @@ void main() {
     _rest
       ..mode = _Mode.serverError
       ..requests.clear()
-      ..gate = null;
+      ..gate = null
+      ..thrown = const SocketException('unset');
   });
 
   group('liveMembersProvider', () {
@@ -290,6 +294,35 @@ void main() {
     expect(find.text('No members yet.'), findsNothing);
     expect(reported.single.origin, 'CommunityScreen.members');
   });
+
+  // P0-FL-8 M2 · on a device package:http's IOClient wraps a dropped
+  // connection as http.ClientException, not SocketException; a slow network
+  // surfaces as TimeoutException and a dropped auth refresh as
+  // AuthRetryableFetchException. Each is a connection problem, not a server
+  // answer, and must get the connection copy.
+  final networkErrors = <String, Object>{
+    'http.ClientException': http.ClientException(
+        'Connection closed before full header was received'),
+    'TimeoutException': TimeoutException('read timed out'),
+    'AuthRetryableFetchException': AuthRetryableFetchException(),
+  };
+  for (final e in networkErrors.entries) {
+    testWidgets('M2 a members read that fails with ${e.key} says check your '
+        'connection', (tester) async {
+      _rest
+        ..mode = _Mode.throws
+        ..thrown = e.value;
+      await _openMembers(tester);
+      for (var i = 0; i < 4; i++) {
+        await tester.pump(const Duration(seconds: 10));
+      }
+      expect(find.text("Couldn't load members"), findsOneWidget);
+      expect(find.text(_net), findsOneWidget,
+          reason: '${e.key} is a connection failure');
+      expect(find.text(_other), findsNothing);
+      expect(find.text('No members yet.'), findsNothing);
+    });
+  }
 
   testWidgets(
       'the members failure scrolls at 2x text, 320 wide, and is '

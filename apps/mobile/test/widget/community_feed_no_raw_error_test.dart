@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show SocketException;
 
@@ -234,4 +235,29 @@ void main() {
     expect(find.text('Try again'), findsOneWidget);
     expect(find.text('Retry'), findsNothing);
   });
+
+  // P0-FL-8 M2 · the production network failures, not only SocketException:
+  // on a device package:http's IOClient throws http.ClientException, a slow
+  // network is a TimeoutException, and a dropped auth refresh is an
+  // AuthRetryableFetchException. Each keeps the connection hint.
+  final networkErrors = <String, Object>{
+    'http.ClientException': http.ClientException(
+        'Connection closed before full header was received'),
+    'TimeoutException': TimeoutException('read timed out'),
+    'AuthRetryableFetchException': AuthRetryableFetchException(),
+  };
+  for (final e in networkErrors.entries) {
+    testWidgets('M2 a feed read that fails with ${e.key} keeps the connection '
+        'hint', (tester) async {
+      final feed = _Feed()..error = e.value;
+      await tester.pumpWidget(_screen(feed));
+      await _settle(tester);
+
+      expect(find.text("Couldn't load posts"), findsOneWidget);
+      expect(find.text(_connection), findsOneWidget,
+          reason: '${e.key} is a connection failure');
+      expect(find.text(_later), findsNothing);
+      expect(find.text('Try again'), findsOneWidget);
+    });
+  }
 }
