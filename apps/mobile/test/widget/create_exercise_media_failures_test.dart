@@ -116,6 +116,17 @@ class _Svc extends CustomExerciseService {
   /// Library exercise owner for edits (null = a platform exercise).
   String? ownerId;
 
+  /// The edited row's content_status / visibility (getRawById).
+  String rawStatus = 'approved';
+  String rawVisibility = 'private';
+
+  /// What reviewExercise leaves in lastError when it fails (null = succeeds).
+  Object? reviewFails;
+
+  /// Names passed to createExercise, and the id each update targeted.
+  final createdNames = <String>[];
+  final updateIds = <String>[];
+
   final calls = <String>[];
   final writes = <Map<String, dynamic>>[];
   int _videoUploads = 0;
@@ -146,7 +157,8 @@ class _Svc extends CustomExerciseService {
   }) async {
     lastError = null;
     calls.add('create');
-    return 'new-1';
+    createdNames.add(name);
+    return 'new-${createdNames.length}';
   }
 
   @override
@@ -154,8 +166,8 @@ class _Svc extends CustomExerciseService {
         'id': id,
         'name': 'Goblet Squat',
         'coach_id': ownerId,
-        'content_status': 'approved',
-        'visibility': 'private',
+        'content_status': rawStatus,
+        'visibility': rawVisibility,
         'instructions': ['Brace and sit down between the heels'],
       };
 
@@ -201,6 +213,7 @@ class _Svc extends CustomExerciseService {
   Future<bool> updateExercise(String id, Map<String, dynamic> updates) async {
     lastError = null;
     writes.add(updates);
+    updateIds.add(id);
     Object? fails;
     if (updates.containsKey('image_url')) {
       calls.add('update:image_url');
@@ -219,7 +232,15 @@ class _Svc extends CustomExerciseService {
   }
 
   @override
-  Future<bool> reviewExercise(String id, String status) async => true;
+  Future<bool> reviewExercise(String id, String status) async {
+    lastError = null;
+    calls.add('review:$status');
+    if (reviewFails != null) {
+      lastError = reviewFails;
+      return false;
+    }
+    return true;
+  }
 
   @override
   Future<bool> syncRelations(String exerciseId, Map<String, dynamic> j) async {
@@ -519,6 +540,123 @@ void main() {
     expect(svc.calls.last, 'syncRelations');
     expect(svc.calls, contains('update:image_url'));
     expect(find.text(_saved), findsOneWidget);
+  });
+
+  // B1 · after a successful CREATE the screen stayed in create mode, so "tap
+  // Save to try again" ran create again: createExercise upserts on
+  // (coach_id, slug), so the same name updated the row, but a rename between
+  // taps inserted a SECOND exercise.
+  group('retry after a create', () {
+    testWidgets('creates ONCE, then updates the row it created',
+        (tester) async {
+      final svc = _Svc()..syncFails = _rls;
+      await _open(tester, svc);
+      await _save(tester);
+      _notSaved();
+
+      svc.syncFails = null;
+      final before = svc.calls.length;
+      await _save(tester);
+
+      expect(svc.calls.where((c) => c == 'create'), hasLength(1));
+      // A full edit by the owner — never the media-only RPC.
+      expect(svc.calls.sublist(before),
+          ['update:text', 'update:video_variants', 'syncRelations']);
+      expect(svc.updateIds.toSet(), {'new-1'});
+      expect(find.text(_saved), findsOneWidget);
+      expect(find.text('Edit Exercise'), findsOneWidget,
+          reason: 'the screen now edits the row it created');
+    });
+
+    testWidgets('a rename between taps does not create a second row',
+        (tester) async {
+      final svc = _Svc()..imageUploadFails = _storageDown;
+      await _open(tester, svc);
+      await _pickImage(tester);
+      await _save(tester);
+      _notSaved();
+
+      await tester.tap(find.text('BASICS'));
+      await _settle(tester);
+      await tester.enterText(
+          find.widgetWithText(TextFormField, 'Goblet Squat'), 'Heel-Raised Squat');
+      svc.imageUploadFails = null;
+      await _save(tester);
+
+      expect(svc.createdNames, ['Goblet Squat'],
+          reason: 'the second Save must not run create with the new name');
+      final text = svc.writes.singleWhere((w) => w.containsKey('name'));
+      expect(text['name'], 'Heel-Raised Squat');
+      expect(svc.updateIds.toSet(), {'new-1'});
+      expect(svc.calls, contains('update:image_url'));
+      expect(find.text(_saved), findsOneWidget);
+    });
+
+    testWidgets(
+        'control: a created exercise is still never submitted for review on '
+        'the retry (review rules unchanged)', (tester) async {
+      final svc = _Svc()..syncFails = _rls;
+      await _open(tester, svc, role: 'admin');
+      await _save(tester);
+      svc.syncFails = null;
+      await _save(tester);
+      expect(svc.calls.where((c) => c.startsWith('review:')), isEmpty);
+    });
+  });
+
+  // U3 / U4 · the media-failure SnackBar retries in place, and a failed review
+  // submission is folded into it instead of a second queued SnackBar.
+  group('review submission alongside a media failure', () {
+    _Svc draftSvc() => _Svc()
+      ..ownerId = _user.id
+      ..rawStatus = 'draft'
+      ..rawVisibility = 'global'
+      ..syncFails = _rls
+      ..reviewFails = _rls;
+
+    testWidgets('both failing make ONE message', (tester) async {
+      final svc = draftSvc();
+      await _open(tester, svc, editing: 'ex-1', role: 'admin');
+      await _save(tester);
+
+      _notSaved();
+      expect(svc.calls, contains('review:under_review'));
+      expect(
+          find.text('Exercise saved, but the muscle and equipment details '
+              "couldn't be saved and it wasn't sent for review. $_support"),
+          findsOneWidget);
+      // Nothing queued behind it.
+      tester
+          .state<ScaffoldMessengerState>(find.byType(ScaffoldMessenger))
+          .hideCurrentSnackBar();
+      await _settle(tester);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(find.textContaining('sent for review'), findsNothing);
+      expect(reported.map((f) => f.origin).toSet(), {
+        'CreateExerciseScreen.submitForReview',
+        'CreateExerciseScreen.syncRelations',
+      });
+    });
+
+    testWidgets(
+        '"Save again" on the SnackBar retries the save, and the draft whose '
+        'review submission failed is submitted again', (tester) async {
+      final svc = draftSvc();
+      await _open(tester, svc, editing: 'ex-1', role: 'admin');
+      await _save(tester);
+      _notSaved();
+
+      svc
+        ..syncFails = null
+        ..reviewFails = null;
+      await tester.tap(find.text('Save again'));
+      await _settle(tester);
+
+      expect(svc.calls.where((c) => c == 'review:under_review'), hasLength(2));
+      expect(svc.calls.where((c) => c == 'syncRelations'), hasLength(2));
+      expect(svc.updateIds.toSet(), {'ex-1'});
+      expect(find.text(_saved), findsOneWidget);
+    });
   });
 
   group('CustomExerciseService.updateExerciseMedia (real service)', () {

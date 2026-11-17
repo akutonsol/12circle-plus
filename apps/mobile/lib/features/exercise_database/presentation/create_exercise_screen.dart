@@ -219,10 +219,14 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   bool _isCoachMediaOnly() {
     if (_editingId == null) return false;
     final role = ref.read(currentUserProfileProvider).valueOrNull?['role'];
-    final myUid = Supabase.instance.client.auth.currentUser?.id;
+    final myUid = _myUid();
     return role != 'admin' &&
         !(_editingCoachId != null && _editingCoachId == myUid);
   }
+
+  /// The signed-in user's id. [currentUserProvider] falls back to
+  /// `auth.currentUser`, so this is the same id the screen always compared.
+  String? _myUid() => ref.read(currentUserProvider)?.id;
 
   List<String> _listFrom(List<TextEditingController> ctrls) =>
       ctrls.map((c) => c.text.trim()).where((s) => s.isNotEmpty).toList();
@@ -563,6 +567,9 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   }
 
   Future<void> _save() async {
+    // The SnackBar's "Save again" can be tapped while a save is running; the
+    // Save button is disabled then, and so is this.
+    if (_saving) return;
     if (!_formKey.currentState!.validate()) {
       _tabs.animateTo(0);
       return;
@@ -615,13 +622,28 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     // Coaches can edit their OWN exercises fully; on platform/other exercises
     // they may only add media (the AI text content is admin-managed).
     final role = ref.read(currentUserProfileProvider).valueOrNull?['role'];
-    final myUid = Supabase.instance.client.auth.currentUser?.id;
+    final myUid = _myUid();
     final mediaOnly = _editingId != null && role != 'admin' &&
         !(_editingCoachId != null && _editingCoachId == myUid);
 
+    // Whether THIS Save edits an existing row (fixed before a create below
+    // switches the screen into editing the row it made).
+    final editingExisting = _editingId != null;
     String? id;
-    if (_editingId == null) {
+    if (!editingExisting) {
       id = await ref.read(myExercisesNotifierProvider.notifier).create(fields: fields);
+      if (id != null) {
+        // B1 · the row exists now: from here on this screen edits it. A later
+        // Save (after a media/relations failure) updates THIS row instead of
+        // creating again — create upserts on (coach_id, slug), so a rename
+        // between taps used to make a second exercise. The creator owns the
+        // row (createExercise writes coach_id = uid), so it is a full edit,
+        // never media-only. Its content_status is not known here and stays
+        // null, so — exactly as on the create itself — this Save path never
+        // submits it for review (shouldSubmitForReview needs 'draft').
+        _editingId = id;
+        _editingCoachId = myUid;
+      }
     } else if (mediaOnly) {
       id = _editingId; // skip text update — media handled below
     } else {
@@ -641,7 +663,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     if (id != null &&
         shouldSubmitForReview(
           role: role as String?,
-          editingExisting: _editingId != null,
+          editingExisting: editingExisting,
           mediaOnly: mediaOnly,
           visibility: _visibility,
           contentStatus: _editingContentStatus,
@@ -711,7 +733,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
             mediaStepFailed('saveImageUrl', "the image couldn't be attached");
           }
         }
-        if (uploadedVariants.length != variants.length || _editingId != null) {
+        if (uploadedVariants.length != variants.length || editingExisting) {
           if (!await svc.updateExercise(id, {
             'video_variants': uploadedVariants.map((v) => v.toJson()).toList(),
           })) {
@@ -732,24 +754,29 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     if (!mounted) return;
     if (id != null) {
       refreshExerciseLists(ref.invalidate);
+      if (reviewSubmitFailed && reviewSubmitError != null) {
+        reportError('CreateExerciseScreen.submitForReview', reviewSubmitError);
+      }
       if (mediaFailures.isNotEmpty) {
         // Not "Exercise Saved!": say what was and wasn't saved, and stay on
         // the screen so Save can be tapped again (it re-saves the details and
         // re-uploads every picked file; the picks are kept).
+        // U4: a failed review submission is folded into this ONE message —
+        // Save again retries it too — rather than a second queued SnackBar.
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             duration: const Duration(seconds: 10),
+            // U3: retry from the message itself.
+            action: SnackBarAction(label: 'Save again', onPressed: _save),
             content: Text(exerciseMediaFailureMessage(
               mediaOnly: mediaOnly,
               mediaWriteFailed: mediaWriteFailed,
               failures: mediaFailures,
               errors: mediaErrors,
+              reviewSubmitFailed: reviewSubmitFailed,
+              reviewSubmitError: reviewSubmitError,
             ))));
-      }
-      if (reviewSubmitFailed) {
+      } else if (reviewSubmitFailed) {
         // Saved, but not queued: say so rather than leave it invisible to reviewers.
-        if (reviewSubmitError != null) {
-          reportError('CreateExerciseScreen.submitForReview', reviewSubmitError);
-        }
         // U2: there is no "submit for review" control for a saved draft, so
         // the copy states what is still owed rather than pointing at one.
         final msg = _appMessage(reviewSubmitError);
@@ -1296,7 +1323,15 @@ String exerciseMediaFailureMessage({
   required bool mediaWriteFailed,
   required List<String> failures,
   required List<Object?> errors,
+  bool reviewSubmitFailed = false,
+  Object? reviewSubmitError,
 }) {
+  // U4 · a review submission that also failed joins this message (a media-only
+  // edit is never submitted for review, so this only reaches a full save).
+  if (reviewSubmitFailed && !mediaOnly) {
+    failures = [...failures, "it wasn't sent for review"];
+    errors = [...errors, reviewSubmitError];
+  }
   final network = errors.isNotEmpty && errors.every(isNetworkFailure);
   final next = network
       ? 'Check your connection, then tap Save to try again.'
