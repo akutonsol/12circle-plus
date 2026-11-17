@@ -439,7 +439,28 @@ log with commits in `docs/P0_IMPLEMENTATION_PACKAGES.md` on that branch).
 | PR | What | Agents | Independent verdicts | CI |
 |---|---|---|---|---|
 | #171 | `send-checkin-reminder` refuses every caller but the service role (EDGE-2; was a deploy blocker) | supabase-engineer | security APPROVE-WITH-NOTES · QA VERIFIED ×2 | 7/7 (`43987746265`) |
-| #172 | ending coaching / requesting a coach report what actually happened; intake keeps a saved link linked | ux-reviewer (found it) · flutter-engineer | security APPROVE-WITH-NOTES · UX PASS-WITH-NOTES · QA VERIFIED ×2 | pending at writing |
+| #172 | ending coaching / requesting a coach report what actually happened; intake keeps a saved link linked | ux-reviewer (found it) · flutter-engineer | security APPROVE-WITH-NOTES · UX PASS-WITH-NOTES · QA VERIFIED ×2 | 7/7 (`43991115899`) |
+
+### Cycle 2 — P0-FL-2 and P0-FL-3 (2026-11-16)
+
+| PR | What | Agents | Independent verdicts | CI (exact head) |
+|---|---|---|---|---|
+| #173 | **P0-FL-2** coach Requests tab and check-in History: no raw exception text; "Couldn't load …" + Try again (disabled with progress while in flight); sent invites no longer show a failure as empty; History has a loading state and an announced failure; no overflow at 2× text; each failure recorded once (`reportError`) | flutter-engineer (913a0d9, 918c8dc) | security APPROVE-WITH-NOTES · UX PASS-WITH-NOTES (U1/U4/U5 fixed) · QA VERIFIED ×2 | 7/7 on 918c8dc (`44001635796`) |
+| #174 | **P0-FL-3** (stacked on #172) coach price writes: signed-out and 0-row saves throw; the Pricing sheet and Custom Price dialog show the reason **inside** the modal instead of "Pricing updated." / "Custom price set to $X/mo." (a 0-row custom price had told the coach a price checkout would not charge) | flutter-engineer (e239eed, 44483d0) · lead (0b89742 label, 4d1d992 test) | security APPROVE-WITH-NOTES · UX PASS-WITH-NOTES (U1–U3, U5 fixed) · QA VERIFIED ×2 | 7/7 on 4d1d992 (`44002583036`) |
+
+Evidence is automated only (widget + fake-PostgREST unit tests; full suite 2696 / 2714 pass; analyze 291;
+new tests fail on the previous heads; QA negative controls caught). **No device, simulator or live-QA run:**
+the failure paths need failing or 0-row QA reads/writes, which are not authorized.
+
+Found by these reviews, not fixed (recorded):
+- **Custom price impossible for invited clients** (security F1, pre-existing): 113's coach UPDATE check
+  refuses a `monthly_price` write on an active relationship with `initiated_by='coach'` — the normal
+  invite path (194) — contradicting 192 (coach sets the price). Fails safe (standard rate charged, the
+  dialog now says it failed). Needs a migration → `cplus-supabase-engineer`, then an apply approval.
+- `coach_business_screen` `_save`: "Profile updated!" on a 0-row update; saves `pricing_monthly = 0`
+  when the price field does not parse; silent when signed out. Decision-free → next Flutter package.
+- Raw `e.toString()` still shown on the coach leaderboard tab, `community_screen`, `create_exercise_screen`.
+- Pricing sheet `_load` swallows read errors (`catch (_) {}`); Requests badge reads `valueOrNull`.
 
 **P0 acceptance status (from `docs/CONTROLLED_BETA_SCOPE.md`, not from PR counts):** of the 14
 journeys, **2** have integration evidence (7 workout execution, 8 completion — I-WRK-01 live);
@@ -447,6 +468,8 @@ journeys, **2** have integration evidence (7 workout execution, 8 completion —
 193–200 unapplied, functions undeployed, email/APP_URL/vault unset, walkthrough not run). This cycle
 removed defects in journeys 5 and 12 and a deployment blocker; it did not add integration evidence
 (that needs QA writes or a manual run). **P0 acceptance: 2 of 14 journeys (14%).**
+Cycle 2 (#173, #174) removed further defects in journeys 5 and 9 and in coach pricing; it added no
+integration evidence either. **P0 acceptance unchanged: 2 of 14 journeys (14%), 0 of 4 beta-ready conditions.**
 
 ## Decision briefs (alternatives · consequences · recommendation)
 
@@ -479,6 +502,8 @@ These are Julia's calls; the recommendation is engineering's view, not a decisio
 14. Does program history follow the client (new coach reads a former coach's program; client keeps it) or stay private to its author?
 15. Who may change media on platform exercises (today any coach; content_manager excluded)? 15b. Make coach-media private (breaks public transformation images unless they move)?
 16. Credit refund window when a booked session is cancelled (5b).
+17. May a coach write `pricing_monthly` on an active client's profile (015 "coaches can update client profiles"; matters when the client is also a coach)? (security F2, #174)
+18. Is $0 a valid coaching price? The Custom Price dialog accepts 0; the Pricing sheet refuses it (UX U4, #174).
 
 ## Migration approvals required
 
