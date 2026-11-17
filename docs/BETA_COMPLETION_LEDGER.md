@@ -426,10 +426,27 @@ checklist) and **`docs/WEEK1_ACCEPTANCE_WALKTHROUGH.md`** (the 14 journeys, P1 f
 
 | Finding | Severity | Path |
 |---|---|---|
-| `send-checkin-reminder` has **no caller check**: any valid project JWT can make it notify and email every active client, repeatedly | P1 (not deployed) | **deployment blocker** — require the service-role caller before deploying; small decision-free fix, not made in this preparation round |
+| `send-checkin-reminder` has **no caller check**: any valid project JWT can make it notify and email every active client, repeatedly | P1 (not deployed) | **fixed in PR #171** (service-role caller only); idempotency remains D-5 |
 | `send-invite-email` falls back to `APP_URL = https://12circle.app` when unset — QA invites would link to a production-looking domain | P2 | set `APP_URL` to the hosted QA URL before any invite |
 | Native OAuth redirects to `io.circle12.app://login-callback`, which neither iOS nor Android registers | P2 (web unaffected) | register the scheme + add it to Supabase Auth redirects before native beta |
 | Sign-up may self-select `client`, `coach` or `vendor` (staff roles cannot be chosen) | info | recorded in the walkthrough |
+
+## Agent-led cycle 1 (2026-11-16)
+
+Specialists ran as real Claude Code sessions started as each `cplus-*` agent (definitions in PR #170;
+log with commits in `docs/P0_IMPLEMENTATION_PACKAGES.md` on that branch).
+
+| PR | What | Agents | Independent verdicts | CI |
+|---|---|---|---|---|
+| #171 | `send-checkin-reminder` refuses every caller but the service role (EDGE-2; was a deploy blocker) | supabase-engineer | security APPROVE-WITH-NOTES · QA VERIFIED ×2 | 7/7 (`43987746265`) |
+| #172 | ending coaching / requesting a coach report what actually happened; intake keeps a saved link linked | ux-reviewer (found it) · flutter-engineer | security APPROVE-WITH-NOTES · UX PASS-WITH-NOTES · QA VERIFIED ×2 | pending at writing |
+
+**P0 acceptance status (from `docs/CONTROLLED_BETA_SCOPE.md`, not from PR counts):** of the 14
+journeys, **2** have integration evidence (7 workout execution, 8 completion — I-WRK-01 live);
+**0** have a recorded manual run; the four "beta-ready" conditions are **0 of 4** met (migrations
+193–200 unapplied, functions undeployed, email/APP_URL/vault unset, walkthrough not run). This cycle
+removed defects in journeys 5 and 12 and a deployment blocker; it did not add integration evidence
+(that needs QA writes or a manual run). **P0 acceptance: 2 of 14 journeys (14%).**
 
 ## Decision briefs (alternatives · consequences · recommendation)
 
