@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../../core/observability/app_failure.dart';
+
 // ── Palette ───────────────────────────────────────────────────────────────────
 const _bg    = Color(0xFF030303);
 const _card  = Color(0xFF0E0B16);
@@ -58,11 +60,71 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     super.dispose();
   }
 
+  // ── What happened, said plainly ───────────────────────────────────────────
+  // A failed read is never an editable blank form (one Save would overwrite
+  // the coach's real profile with blanks), and nothing says "updated/added"
+  // unless the server returned the row it changed — RLS filters a refused
+  // update to 0 rows without an error.
+  static const _signedOutMsg = "You're signed out — sign in again to save.";
+  static const _priceError = 'Enter a monthly price in dollars, e.g. 150.';
+  static const _yearsError = 'Enter years of experience as a whole number, e.g. 5.';
+
+  /// Set when the last load did not produce the coach's profile. While set,
+  /// the form and Save are not shown.
+  String? _loadError;
+  String? _priceErrorText;
+  String? _yearsErrorText;
+
+  /// The signed-in coach's id, or null after telling them they are signed out.
+  String? _requireSignedIn() {
+    final uid = _db.auth.currentUser?.id;
+    if (uid == null) _say(_signedOutMsg, error: true);
+    return uid;
+  }
+
+  void _say(String msg, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(msg),
+        backgroundColor:
+            error ? const Color(0xFFFFB4AB) : const Color(0xFF6FFBBE)));
+  }
+
+  /// Updates the coach's own `user_profiles` row and returns true only when
+  /// the server returned the changed row.
+  Future<bool> _updateOwnProfile(String uid, Map<String, dynamic> values) async {
+    final rows = await _db
+        .from('user_profiles')
+        .update(values)
+        .eq('id', uid)
+        .select('id');
+    return (rows as List).isNotEmpty;
+  }
+
   Future<void> _load() async {
     final uid = _db.auth.currentUser?.id;
-    if (uid == null) return;
+    if (uid == null) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _loadError = _signedOutMsg;
+        });
+      }
+      return;
+    }
+    if (_loadError != null && mounted) {
+      setState(() {
+        _loading = true;
+        _loadError = null;
+      });
+    }
     try {
       final profileData = await _db.from('user_profiles').select('*').eq('id', uid).maybeSingle();
+      if (profileData == null) {
+        // No row came back: the profile was not read, so there is nothing
+        // the form may show or save over.
+        throw StateError('user_profiles: no row for the signed-in coach');
+      }
       // Wave 1 (migration 132): a team lead no longer reads `user_profiles`, so
       // the embedded resource above this line used to return nothing. D1(iii)
       // limits a lead to the minimum-necessary columns, which are served by
@@ -96,53 +158,83 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
           .order('created_at', ascending: false);
       final team = teamData;
       final p = profileData;
-      if (p != null) {
-        _bioCtrl.text = p['bio'] as String? ?? '';
-        _priceCtrl.text = (p['pricing_monthly'] ?? '').toString();
-        _yearsCtrl.text = (p['years_experience'] ?? '').toString();
-        _taglineCtrl.text = p['tagline'] as String? ?? '';
-        _specialties = List<String>.from(p['specialties'] as List? ?? []);
-        _certifications = List<String>.from(p['certifications'] as List? ?? []);
-      }
+      _bioCtrl.text = p['bio'] as String? ?? '';
+      _priceCtrl.text = (p['pricing_monthly'] ?? '').toString();
+      _yearsCtrl.text = (p['years_experience'] ?? '').toString();
+      _taglineCtrl.text = p['tagline'] as String? ?? '';
+      _specialties = List<String>.from(p['specialties'] as List? ?? []);
+      _certifications = List<String>.from(p['certifications'] as List? ?? []);
       if (!mounted) return;
       setState(() {
         _profile = p;
         _team = List<Map<String, dynamic>>.from(team as List);
         _reviews = List<Map<String, dynamic>>.from(reviewData as List);
         _loading = false;
+        _loadError = null;
       });
-    } catch (_) {
+    } catch (e, s) {
+      reportError('CoachBusinessScreen._load', e, s);
       if (!mounted) return;
-      setState(() => _loading = false);
+      setState(() {
+        _loading = false;
+        _loadError = 'Check your connection and try again.';
+      });
     }
   }
 
   Future<void> _save() async {
-    final uid = _db.auth.currentUser?.id;
+    if (_loadError != null || _loading) return;
+    // Validate before anything is written. An empty field is left out of the
+    // update (the stored value stays); a non-empty one must be a number >= 0.
+    // An explicit 0 price is still written as 0 (Decision 18 is open).
+    final priceText = _priceCtrl.text.trim();
+    final yearsText = _yearsCtrl.text.trim();
+    final price = priceText.isEmpty ? null : double.tryParse(priceText);
+    final years = yearsText.isEmpty ? null : int.tryParse(yearsText);
+    final priceBad =
+        priceText.isNotEmpty && (price == null || !price.isFinite || price < 0);
+    final yearsBad = yearsText.isNotEmpty && (years == null || years < 0);
+    setState(() {
+      _priceErrorText = priceBad ? _priceError : null;
+      _yearsErrorText = yearsBad ? _yearsError : null;
+    });
+    if (priceBad || yearsBad) {
+      if (_tab.index != 0) _tab.animateTo(0);
+      _say(
+          priceBad
+              ? '$_priceError Nothing was saved.'
+              : '$_yearsError Nothing was saved.',
+          error: true);
+      return;
+    }
+    final uid = _requireSignedIn();
     if (uid == null) return;
     setState(() => _saving = true);
     try {
-      await _db.from('user_profiles').update({
+      final saved = await _updateOwnProfile(uid, {
         'bio': _bioCtrl.text.trim(),
-        'pricing_monthly': double.tryParse(_priceCtrl.text) ?? 0,
-        'years_experience': int.tryParse(_yearsCtrl.text) ?? 0,
+        if (price != null) 'pricing_monthly': price,
+        if (years != null) 'years_experience': years,
         'tagline': _taglineCtrl.text.trim(),
         'specialties': _specialties,
         'certifications': _certifications,
-      }).eq('id', uid);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Profile updated!'), backgroundColor: Color(0xFF6FFBBE)));
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Could not save profile.'),
-        backgroundColor: const Color(0xFFFFB4AB)));
+      });
+      _say(
+          saved
+              ? 'Profile updated!'
+              : "Your profile couldn't be saved — nothing was changed.",
+          error: !saved);
+    } catch (e, s) {
+      reportError('CoachBusinessScreen._save', e, s);
+      _say("Couldn't save your profile — check your connection and try again.",
+          error: true);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
   Future<void> _uploadTransformationPhoto() async {
-    final uid = _db.auth.currentUser?.id;
+    final uid = _requireSignedIn();
     if (uid == null) return;
     final picker = ImagePicker();
     final img = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
@@ -157,14 +249,17 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       final url = _db.storage.from('coach-media').getPublicUrl(path);
       final current = List<String>.from(_profile?['transformation_photo_urls'] as List? ?? []);
       current.add(url);
-      await _db.from('user_profiles').update({'transformation_photo_urls': current}).eq('id', uid);
+      final saved = await _updateOwnProfile(
+          uid, {'transformation_photo_urls': current});
+      if (!saved) {
+        _say("Couldn't add the photo — nothing was changed.", error: true);
+        return;
+      }
       await _load();
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Photo added'), backgroundColor: Color(0xFF6FFBBE)));
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Could not upload photo.'),
-        backgroundColor: const Color(0xFFFFB4AB)));
+      _say('Photo added');
+    } catch (e, s) {
+      reportError('CoachBusinessScreen._uploadTransformationPhoto', e, s);
+      _say('Could not upload photo.', error: true);
     }
   }
 
@@ -174,18 +269,21 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
   // Certifications persist immediately (no dependence on the Save button, and
   // safe against a reload re-reading the list from the DB).
   Future<void> _persistCerts(List<String> next, {required String failMsg}) async {
-    final uid = _db.auth.currentUser?.id;
+    final uid = _requireSignedIn();
     if (uid == null) return;
     final prev = List<String>.from(_certifications);
     setState(() => _certifications = next);
+    String? failure;
     try {
-      await _db.from('user_profiles').update({'certifications': next}).eq('id', uid);
-    } catch (e) {
-      if (mounted) {
-        setState(() => _certifications = prev);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(failMsg), backgroundColor: const Color(0xFFFFB4AB)));
-      }
+      final saved = await _updateOwnProfile(uid, {'certifications': next});
+      if (!saved) failure = '$failMsg — nothing was changed.';
+    } catch (e, s) {
+      reportError('CoachBusinessScreen._persistCerts', e, s);
+      failure = failMsg;
+    }
+    if (failure != null && mounted) {
+      setState(() => _certifications = prev);
+      _say(failure, error: true);
     }
   }
 
@@ -210,8 +308,8 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
           onPressed: () => Navigator.pop(context)),
         title: const Text('Business Profile', style: TextStyle(color: _wht, fontSize: 17, fontWeight: FontWeight.w700)),
         actions: [
-          if (!_loading) TextButton(
-            onPressed: _save,
+          if (!_loading && _loadError == null) TextButton(
+            onPressed: _saving ? null : _save,
             child: _saving
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: _brand, strokeWidth: 2))
                 : const Text('Save', style: TextStyle(color: _brand, fontWeight: FontWeight.w700))),
@@ -225,10 +323,13 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: _brand))
+          : _loadError != null
+          ? _LoadFailed(message: _loadError!, onRetry: _load)
           : TabBarView(controller: _tab, children: [
               _ProfileTab(
                 bioCtrl: _bioCtrl, priceCtrl: _priceCtrl,
                 yearsCtrl: _yearsCtrl, taglineCtrl: _taglineCtrl,
+                priceError: _priceErrorText, yearsError: _yearsErrorText,
                 certifications: _certifications,
                 transformationUrls: List<String>.from(_profile?['transformation_photo_urls'] as List? ?? []),
                 onAddCert: () => _showAddCert(),
@@ -242,23 +343,12 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     );
   }
 
-  void _showAddCert() {
-    final ctrl = TextEditingController();
-    showDialog(context: context, builder: (dctx) => AlertDialog(
-      backgroundColor: _card,
-      title: const Text('Add Certification', style: TextStyle(color: _wht)),
-      content: TextField(controller: ctrl, autofocus: true, style: const TextStyle(color: _wht),
-        decoration: const InputDecoration(hintText: 'e.g. NASM-CPT', hintStyle: TextStyle(color: _mut))),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(dctx),
-          child: const Text('Cancel', style: TextStyle(color: _mut))),
-        TextButton(onPressed: () {
-          final text = ctrl.text.trim();
-          Navigator.pop(dctx);
-          if (text.isNotEmpty) _addCertification(text);
-        }, child: const Text('Add', style: TextStyle(color: _brand))),
-      ],
-    )).then((_) => ctrl.dispose());
+  Future<void> _showAddCert() async {
+    // The dialog owns its controller: disposing it here as soon as the route
+    // popped left the closing animation rendering a disposed controller.
+    final text = await showDialog<String>(
+        context: context, builder: (_) => const _AddCertDialog());
+    if (text != null && text.isNotEmpty) await _addCertification(text);
   }
 
   void _showInviteTeam() => showDialog(context: context, builder: (dctx) {
@@ -276,9 +366,20 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
           Navigator.pop(dctx);
           if (email.isEmpty) return;
           final uid = _db.auth.currentUser?.id;
-          await _db.from('coach_team_invites')
-              .insert({'coach_id': uid, 'email': email, 'role': 'assistant_coach'})
-              .catchError((_) {});
+          if (uid == null) {
+            messenger.showSnackBar(const SnackBar(content: Text(_signedOutMsg)));
+            return;
+          }
+          try {
+            await _db.from('coach_team_invites')
+                .insert({'coach_id': uid, 'email': email, 'role': 'assistant_coach'});
+          } catch (e, s) {
+            // The invite was not saved, so no email goes out claiming one.
+            reportError('CoachBusinessScreen._showInviteTeam', e, s);
+            messenger.showSnackBar(const SnackBar(content: Text(
+                "Couldn't save the invite — check your connection and try again.")));
+            return;
+          }
           var ok = true;
           try {
             final res = await _db.functions.invoke('send-invite-email',
@@ -293,8 +394,69 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
   });
 }
 
+class _AddCertDialog extends StatefulWidget {
+  const _AddCertDialog();
+  @override
+  State<_AddCertDialog> createState() => _AddCertDialogState();
+}
+
+class _AddCertDialogState extends State<_AddCertDialog> {
+  final _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    backgroundColor: _card,
+    title: const Text('Add Certification', style: TextStyle(color: _wht)),
+    content: TextField(controller: _ctrl, autofocus: true, style: const TextStyle(color: _wht),
+      decoration: const InputDecoration(hintText: 'e.g. NASM-CPT', hintStyle: TextStyle(color: _mut))),
+    actions: [
+      TextButton(onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel', style: TextStyle(color: _mut))),
+      TextButton(onPressed: () => Navigator.pop(context, _ctrl.text.trim()),
+        child: const Text('Add', style: TextStyle(color: _brand))),
+    ],
+  );
+}
+
+// A failed load is not an empty profile: no form, no Save, a way to retry.
+class _LoadFailed extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+  const _LoadFailed({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.cloud_off_rounded, color: _mut, size: 40),
+        const SizedBox(height: 12),
+        const Text("Couldn't load your business profile",
+          textAlign: TextAlign.center,
+          style: TextStyle(color: _wht, fontSize: 16, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 6),
+        Text(message, textAlign: TextAlign.center,
+          style: const TextStyle(color: _mut, fontSize: 13)),
+        const SizedBox(height: 16),
+        OutlinedButton(
+          onPressed: onRetry,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: _brand, side: const BorderSide(color: _brand)),
+          child: const Text('Try again', style: TextStyle(fontWeight: FontWeight.w700))),
+      ]),
+    ),
+  );
+}
+
 class _ProfileTab extends StatelessWidget {
   final TextEditingController bioCtrl, priceCtrl, yearsCtrl, taglineCtrl;
+  final String? priceError, yearsError;
   final List<String> certifications, transformationUrls;
   final VoidCallback onAddCert, onAddPhoto;
   final void Function(String) onRemoveCert;
@@ -303,6 +465,7 @@ class _ProfileTab extends StatelessWidget {
     required this.taglineCtrl, required this.certifications,
     required this.transformationUrls, required this.onAddCert,
     required this.onRemoveCert, required this.onAddPhoto,
+    this.priceError, this.yearsError,
   });
 
   @override
@@ -311,8 +474,8 @@ class _ProfileTab extends StatelessWidget {
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _Field('Tagline', taglineCtrl, 'Your one-line pitch to clients'),
       _Field('Bio', bioCtrl, 'Tell clients about your coaching style and background', maxLines: 5),
-      _Field('Monthly Price (\$)', priceCtrl, '149', inputType: TextInputType.number),
-      _Field('Years Experience', yearsCtrl, '5', inputType: TextInputType.number),
+      _Field('Monthly Price (\$)', priceCtrl, '149', inputType: TextInputType.number, errorText: priceError),
+      _Field('Years Experience', yearsCtrl, '5', inputType: TextInputType.number, errorText: yearsError),
       const SizedBox(height: 20),
       _SectionHeader('Certifications', onAdd: onAddCert),
       const SizedBox(height: 8),
@@ -452,7 +615,8 @@ class _Field extends StatelessWidget {
   final TextEditingController ctrl;
   final int maxLines;
   final TextInputType inputType;
-  const _Field(this.label, this.ctrl, this.hint, {this.maxLines = 1, this.inputType = TextInputType.text});
+  final String? errorText;
+  const _Field(this.label, this.ctrl, this.hint, {this.maxLines = 1, this.inputType = TextInputType.text, this.errorText});
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -465,6 +629,7 @@ class _Field extends StatelessWidget {
         style: const TextStyle(color: _wht, fontSize: 14),
         decoration: InputDecoration(
           hintText: hint, hintStyle: const TextStyle(color: _mut),
+          errorText: errorText,
           filled: true, fillColor: _card,
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: _brd)),
