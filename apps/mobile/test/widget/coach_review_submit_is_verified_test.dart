@@ -102,6 +102,24 @@ void main() {
     expect(reported, isNotEmpty);
   });
 
+  // U3. The error appears inside a dialog after Submit; a screen-reader user
+  // only learns of it if it is in the semantics tree AND announced on change
+  // (a live region). Pins the `Semantics(liveRegion: true)` wrapper.
+  testWidgets('the error is exposed to semantics as a live region',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    server.mode = WriteMode.zeroRows;
+    await submit(tester);
+    expect(_inDialog(_failed), findsOneWidget, reason: 'premise');
+
+    final node = tester.getSemantics(_inDialog(_failed));
+    expect(node.label, contains(_failed),
+        reason: 'the error text is not in the semantics tree');
+    expect(node.getSemanticsData().flagsCollection.isLiveRegion, isTrue,
+        reason: 'the error is not announced when it appears');
+    semantics.dispose();
+  });
+
   testWidgets('a refused review shows the support wording, not the connection',
       (tester) async {
     server.mode = WriteMode.serverError;

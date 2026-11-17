@@ -37,6 +37,9 @@ const kUnitSaveOfflineMessage =
 const kUnitSaveFailedMessage =
     "Couldn't save your unit preference — try again in a moment. "
     'If it keeps happening, contact support.';
+const kUnitSaveSignedOutMessage =
+    "Couldn't save your unit preference — you're signed out. Sign in and try "
+    'again.';
 
 /// Connection wording is only for failures that ARE the connection; a
 /// PostgrestException (the server answered) never is.
@@ -87,11 +90,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// unchanged row. It now selects `id` and treats an empty result as failure.
   /// On failure [_unitSaveWasOffline] says whether it was the connection, so
   /// the caller can pick the wording (the bool shape is held by the CORR-2
-  /// guard in correction_rights_guard_test).
+  /// guard in correction_rights_guard_test). Signed out is not a server
+  /// failure either: [_unitSaveSignedOut] picks the signed-out wording, as
+  /// Home's Rate Your Coach does.
   Future<bool> _persistUnit(String unit) async {
     _unitSaveWasOffline = false;
+    _unitSaveSignedOut = false;
     final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (uid == null) return false;
+    if (uid == null) {
+      _unitSaveSignedOut = true;
+      return false;
+    }
     try {
       final rows = await Supabase.instance.client.from('user_profiles').update({
         'unit_preference': unit == 'KG' ? 'metric' : 'imperial',
@@ -112,6 +121,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   /// Set by a failed [_persistUnit]: true only for a network failure.
   bool _unitSaveWasOffline = false;
+
+  /// Set by a failed [_persistUnit]: true when there was no signed-in user.
+  bool _unitSaveSignedOut = false;
+
+  /// True while a unit save is in flight. Taps are ignored meanwhile: two
+  /// overlapping saves each captured their own "previous", so a late failure
+  /// of the first reverted over the second and showed a unit never stored.
+  bool _unitSaving = false;
 
   @override
   Widget build(BuildContext context) {
@@ -264,16 +281,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             onTap: () async {
                               // Optimistic, but REVERTED on failure: an
                               // un-reverted toggle shows a preference that was
-                              // never stored.
+                              // never stored. One save at a time (U4).
+                              if (_unitSaving) return;
+                              _unitSaving = true;
                               final previous = _selectedUnit;
                               setState(() => _selectedUnit = u);
                               final ok = await _persistUnit(u);
+                              _unitSaving = false;
                               if (!ok && context.mounted) {
                                 setState(() => _selectedUnit = previous);
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text(_unitSaveWasOffline
-                                      ? kUnitSaveOfflineMessage
-                                      : kUnitSaveFailedMessage)),
+                                  SnackBar(content: Text(_unitSaveSignedOut
+                                      ? kUnitSaveSignedOutMessage
+                                      : _unitSaveWasOffline
+                                          ? kUnitSaveOfflineMessage
+                                          : kUnitSaveFailedMessage)),
                                 );
                               }
                             },

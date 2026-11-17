@@ -138,6 +138,51 @@ void main() {
     await outlastSnackBar(tester);
   });
 
+  // U5. The notice was a fixed SnackBar along the bottom edge — exactly where
+  // every step's Continue sits — so the tap meant to move on landed on the
+  // notice. It now floats clear of the bottom bar.
+  testWidgets(
+      'the step\'s forward control stays visible and tappable while the '
+      'notice shows', (tester) async {
+    await open(tester);
+    // Step 0's "Get Started" is the forward control that is always enabled
+    // (step 1's Continue needs a date of birth from a picker). Every step's
+    // forward control sits in the same bottom band.
+    server.mode = WriteMode.zeroRows;
+    await background(tester);
+    expect(find.text(_notice), findsOneWidget, reason: 'premise: it shows');
+    expect(page(tester), 0.0, reason: 'premise: still on step 0');
+
+    final next = find.text('Get Started').first;
+    // The visible card, not the SnackBar widget (whose rect includes its
+    // transparent margin, which taps pass through — checked below).
+    final notice = tester.getRect(find
+        .descendant(of: find.byType(SnackBar), matching: find.byType(Material))
+        .first);
+    final button = tester.getRect(next);
+    expect(notice.overlaps(button), isFalse,
+        reason: 'the notice covers the control: notice=$notice '
+            'control=$button');
+    expect(notice.bottom, lessThanOrEqualTo(1200 - 110),
+        reason: 'clear of the tallest bottom bar (~110 px)');
+
+    final hits = tester
+        .hitTestOnBinding(tester.getCenter(next))
+        .path
+        .map((e) => e.target)
+        .toList();
+    expect(hits.contains(tester.renderObject(next)), isTrue,
+        reason: 'the control is not hit-testable under the notice');
+
+    await tester.tap(next);
+    await settle(tester);
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text(_notice), findsOneWidget,
+        reason: 'premise: tapped while the notice was still up');
+    expect(page(tester), 1.0, reason: 'the tap moved on');
+    await outlastSnackBar(tester);
+  });
+
   testWidgets('control: saves that store their row say nothing',
       (tester) async {
     await open(tester);

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/payments/domain/entitlements.dart';
@@ -25,6 +27,8 @@ const _offline =
     "Couldn't save your unit preference — check your connection and try again.";
 const _failed = "Couldn't save your unit preference — try again in a moment. "
     'If it keeps happening, contact support.';
+const _signedOut = "Couldn't save your unit preference — you're signed out. "
+    'Sign in and try again.';
 
 void main() {
   late RowCheckingPostgrest server;
@@ -43,8 +47,7 @@ void main() {
   });
   tearDown(resetFailureSink);
 
-  /// Opens Settings with a metric member (KG selected) and taps LB.
-  Future<void> tapLb(WidgetTester tester) async {
+  Future<void> openSettings(WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(500, 3000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(ProviderScope(
@@ -63,6 +66,11 @@ void main() {
     ));
     await tester.pumpAndSettle();
     expect(selected(tester), 'KG', reason: 'premise: a metric member');
+  }
+
+  /// Opens Settings with a metric member (KG selected) and taps LB.
+  Future<void> tapLb(WidgetTester tester) async {
+    await openSettings(tester);
     await tester.tap(find.text('LB').first);
     await tester.pumpAndSettle();
   }
@@ -111,6 +119,55 @@ void main() {
     expect(selected(tester), 'LB');
     expect(find.byType(SnackBar), findsNothing);
     expect(reported, isEmpty);
+  });
+
+  // U4. Two overlapping saves each captured their own "previous": tap LB
+  // (previous KG), tap KG while LB is in flight (previous LB). If the LB save
+  // then failed it reverted to KG over the KG save, or vice versa — the toggle
+  // could end on a unit that was never stored. Taps are now ignored while a
+  // save is in flight.
+  testWidgets('a tap while a unit save is in flight is ignored',
+      (tester) async {
+    await openSettings(tester);
+    server.gate = Completer<void>();
+    await tester.tap(find.text('LB').first);
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(selected(tester), 'LB', reason: 'premise: optimistic');
+    await tester.tap(find.text('KG').first);
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(unitWrites(), hasLength(1),
+        reason: 'THE race: a second save started while the first was in '
+            'flight:\n${unitWrites().join('\n')}');
+    expect(selected(tester), 'LB', reason: 'the second tap did nothing');
+
+    server.gate!.complete();
+    await tester.pumpAndSettle();
+    expect(selected(tester), 'LB');
+    expect(find.byType(SnackBar), findsNothing);
+
+    // Once it lands, the toggle answers again.
+    await tester.tap(find.text('KG').first);
+    await tester.pumpAndSettle();
+    expect(unitWrites(), hasLength(2));
+    expect(selected(tester), 'KG');
+  });
+
+  // U1. LAST in this file: it signs the shared session out.
+  testWidgets(
+      'signed out: reverts with the signed-out wording, not the server '
+      'failure copy', (tester) async {
+    await tester.runAsync(() => Supabase.instance.client.auth.signOut());
+    expect(Supabase.instance.client.auth.currentUser, isNull,
+        reason: 'premise: signed out');
+    server.writes.clear();
+    await tapLb(tester);
+    expect(unitWrites(), isEmpty, reason: 'nothing to write as nobody');
+    expect(selected(tester), 'KG');
+    expect(find.text(_signedOut), findsOneWidget,
+        reason: 'the server never answered, so not "try again in a moment"');
+    expect(find.text(_failed), findsNothing);
+    expect(find.text(_offline), findsNothing);
   });
 }
 

@@ -35,6 +35,10 @@ const kIntakeProgressNotSavedMessage =
     "Your progress couldn't be saved — you may need to redo this step if you "
     'leave.';
 
+/// How far the progress notice floats above the bottom inset — clear of every
+/// step's bottom bar so Continue stays tappable while it shows.
+const double kIntakeNoticeBottomClearance = 124;
+
 // ── Main flow controller ──────────────────────────────────────────────────────
 class IntakeFlowScreen extends StatefulWidget {
   const IntakeFlowScreen({super.key});
@@ -208,8 +212,17 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
       _progressNoticeShown = false;
     } else if (!_progressNoticeShown && mounted) {
       _progressNoticeShown = true;
+      // Floating, lifted clear of the step's bottom bar (U5): a fixed
+      // SnackBar sat over Continue and swallowed the tap that moves on. The
+      // tallest bar (button 54 + note + padding) is ~110 px above the inset.
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(content: Text(kIntakeProgressNotSavedMessage)),
+        SnackBar(
+          content: const Text(kIntakeProgressNotSavedMessage),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.fromLTRB(
+              16, 0, 16, kIntakeNoticeBottomClearance +
+                  MediaQuery.of(context).padding.bottom),
+        ),
       );
     }
   }

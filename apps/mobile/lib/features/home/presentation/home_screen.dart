@@ -1351,8 +1351,11 @@ void _showRateCoachDialog(BuildContext context, String coachId) {
             // review_count. That write could never take effect: a client has
             // no UPDATE right on another user's profile row, and migration
             // 115's enforce_profile_privilege() pins both columns to OLD for
-            // every authenticated caller. The aggregate is maintained
-            // server-side by migration 045's coach_review_rollup trigger.
+            // every authenticated caller. The owner of the aggregate is
+            // migration 045's coach_review_rollup trigger — but that rollup is
+            // currently BLOCKED by the same 115 pin (open backend defect,
+            // recorded in the ledger: ratings stop updating after 115). The
+            // client must still not write it; the fix belongs server-side.
             onPressed: saving ? null : () async {
               setSt(() { saving = true; error = null; });
               final uid = Supabase.instance.client.auth.currentUser?.id;

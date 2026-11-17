@@ -40,7 +40,12 @@ class RowCheckingPostgrest extends http.BaseClient {
   /// Every non-GET request: `METHOD /path?query body`.
   final writes = <String>[];
 
+  /// When set, every write is recorded at once but not answered until this
+  /// completes — a save "in flight".
+  Completer<void>? gate;
+
   void reset() {
+    gate = null;
     mode = WriteMode.oneRow;
     reads.clear();
     writes.clear();
@@ -55,6 +60,7 @@ class RowCheckingPostgrest extends http.BaseClient {
     }
     if (request.method == 'PATCH' || request.method == 'POST') {
       writes.add('${request.method} $path?${request.url.query} $body');
+      if (gate != null) await gate!.future;
       final asksForRows = request.url.queryParameters.containsKey('select');
       switch (mode) {
         case WriteMode.network:
