@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
@@ -23,6 +25,32 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 //
 // The exercise service is faked; Supabase is initialised signed out only
 // because the save path reads `auth.currentUser`. Nothing is sent.
+//
+// Follow-up (review U1/U2/S3): the connection hint is kept for network
+// failures only; anything else gets the plain "contact support" copy; a save
+// with nobody signed in says so; a failed review submission says it is still
+// owed (there is no separate "submit for review" control to point at).
+
+const _network =
+    "Couldn't save the exercise — check your connection and try again.";
+const _generic =
+    "Couldn't save the exercise. Try again — if it keeps happening, contact "
+    'support.';
+const _signedOut = "You're signed out — sign in again to save.";
+const _reviewGeneric =
+    'Saved, but not sent for review yet — it still needs to be submitted for '
+    'review.';
+const _reviewNetwork =
+    'Saved, but not sent for review yet — check your connection. It still '
+    'needs to be submitted for review.';
+
+final _user = User(
+  id: '00000000-0000-0000-0000-0000000000c1',
+  appMetadata: const {},
+  userMetadata: const {},
+  aud: 'authenticated',
+  createdAt: '2026-11-16T00:00:00Z',
+);
 
 const _secretMsg =
     'new row violates row-level security policy for table SECRET_TABLE_X';
@@ -123,9 +151,15 @@ class _Svc extends CustomExerciseService {
       true;
 }
 
-Widget _screen(_Svc svc, {String? editing, String role = 'coach'}) =>
+Widget _screen(
+  _Svc svc, {
+  String? editing,
+  String role = 'coach',
+  bool signedIn = true,
+}) =>
     ProviderScope(
       overrides: [
+        currentUserProvider.overrideWithValue(signedIn ? _user : null),
         customExerciseSvcProvider.overrideWithValue(svc),
         currentUserProfileProvider.overrideWith((ref) async => {'role': role}),
         editingExerciseProvider.overrideWith((ref) => editing),
@@ -139,8 +173,12 @@ Future<void> _settle(WidgetTester tester) async {
   }
 }
 
-Future<void> _createAndSave(WidgetTester tester, _Svc svc) async {
-  await tester.pumpWidget(_screen(svc));
+Future<void> _createAndSave(
+  WidgetTester tester,
+  _Svc svc, {
+  bool signedIn = true,
+}) async {
+  await tester.pumpWidget(_screen(svc, signedIn: signedIn));
   await _settle(tester);
   await tester.enterText(
     find.widgetWithText(TextFormField, 'Exercise Name *'),
@@ -193,12 +231,9 @@ void main() {
     await _createAndSave(tester, svc);
 
     _noRawText(); // the defect first: the RLS message was on screen
-    expect(
-      find.text(
-        "Couldn't save the exercise — check your connection and try again.",
-      ),
-      findsOneWidget,
-    );
+    // U1: a refusal is not a connection problem.
+    expect(find.text(_generic), findsOneWidget);
+    expect(find.text(_network), findsNothing);
     expect(find.text('Exercise Saved!'), findsNothing);
     expect(reported.map((f) => f.origin), ['CreateExerciseScreen.save']);
     expect(reported.single.error, same(_secret));
@@ -209,13 +244,53 @@ void main() {
   ) async {
     final svc = _Svc()..createFailsSilently = true;
     await _createAndSave(tester, svc);
-    expect(
-      find.text(
-        "Couldn't save the exercise — check your connection and try again.",
-      ),
-      findsOneWidget,
-    );
+    expect(find.text(_generic), findsOneWidget);
+    expect(find.text(_network), findsNothing);
     expect(reported, isEmpty, reason: 'nothing to record');
+  });
+
+  for (final c in <(String, Object)>[
+    ('SocketException', const SocketException('Failed host lookup')),
+    ('TimeoutException', TimeoutException('no answer')),
+    ('http ClientException', http.ClientException('Connection closed')),
+    ('AuthRetryableFetchException', AuthRetryableFetchException()),
+  ]) {
+    testWidgets('U1 a network failure (${c.$1}) keeps the connection hint', (
+      tester,
+    ) async {
+      final svc = _Svc()..createFails = c.$2;
+      await _createAndSave(tester, svc);
+      expect(find.text(_network), findsOneWidget);
+      expect(find.text(_generic), findsNothing);
+      expect(reported.map((f) => f.origin), ['CreateExerciseScreen.save']);
+    });
+  }
+
+  for (final c in <(String, Object)>[
+    ('unique violation', const PostgrestException(
+        message: 'duplicate key value violates unique constraint', code: '23505')),
+    ('a gateway status', const PostgrestException(message: 'Bad gateway', code: '502')),
+    ('a FormatException', const FormatException('bad json')),
+  ]) {
+    testWidgets('U1 a non-network failure (${c.$1}) gets the support copy', (
+      tester,
+    ) async {
+      final svc = _Svc()..createFails = c.$2;
+      await _createAndSave(tester, svc);
+      expect(find.text(_generic), findsOneWidget);
+      expect(find.text(_network), findsNothing);
+      expect(find.textContaining('duplicate key'), findsNothing);
+    });
+  }
+
+  testWidgets('S3 a save with nobody signed in says so', (tester) async {
+    // The real service returns null with lastError cleared when signed out.
+    final svc = _Svc()..createFailsSilently = true;
+    await _createAndSave(tester, svc, signedIn: false);
+    expect(find.text(_signedOut), findsOneWidget);
+    expect(find.text(_network), findsNothing);
+    expect(find.text(_generic), findsNothing);
+    expect(find.text('Exercise Saved!'), findsNothing);
   });
 
   testWidgets('control: a StateError the app wrote is still shown as-is', (
@@ -250,13 +325,9 @@ void main() {
 
     expect(svc.reviewed, ['under_review']);
     _noRawText(); // the defect first: the RLS message was on screen
-    expect(
-      find.text(
-        'Saved, but not sent for review — try submitting again from the '
-        'exercise.',
-      ),
-      findsOneWidget,
-    );
+    // U2: no resubmit control exists, so the copy names what is still owed.
+    expect(find.text(_reviewGeneric), findsOneWidget);
+    expect(find.textContaining('check your connection'), findsNothing);
     expect(find.text('Exercise Saved!'), findsOneWidget,
         reason: 'the save itself succeeded and still says so');
     expect(reported.map((f) => f.origin),
@@ -268,14 +339,21 @@ void main() {
       'longer says "unknown error"', (tester) async {
     final svc = _Svc()..reviewFailsSilently = true;
     await _editAsAdminAndSave(tester, svc);
-    expect(
-      find.text(
-        'Saved, but not sent for review — try submitting again from the '
-        'exercise.',
-      ),
-      findsOneWidget,
-    );
+    expect(find.text(_reviewGeneric), findsOneWidget);
     expect(find.textContaining('unknown error'), findsNothing);
+  });
+
+  testWidgets('U1 a review submission lost to the network keeps the hint', (
+    tester,
+  ) async {
+    final svc = _Svc()
+      ..reviewFails = http.ClientException('Connection reset by peer');
+    await _editAsAdminAndSave(tester, svc);
+    expect(find.text(_reviewNetwork), findsOneWidget);
+    expect(find.text(_reviewGeneric), findsNothing);
+    expect(find.text('Exercise Saved!'), findsOneWidget);
+    expect(reported.map((f) => f.origin),
+        ['CreateExerciseScreen.submitForReview']);
   });
 
   testWidgets('control: a StateError on review submission is shown as-is', (

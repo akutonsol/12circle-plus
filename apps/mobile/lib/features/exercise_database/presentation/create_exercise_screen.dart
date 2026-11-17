@@ -1,8 +1,11 @@
+import 'dart:async' show TimeoutException;
 import 'dart:convert';
+import 'dart:io' show SocketException;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http show ClientException;
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/content_review_submission.dart';
@@ -689,23 +692,43 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
         if (reviewSubmitError != null) {
           reportError('CreateExerciseScreen.submitForReview', reviewSubmitError);
         }
+        // U2: there is no "submit for review" control for a saved draft, so
+        // the copy states what is still owed rather than pointing at one.
         final msg = _appMessage(reviewSubmitError);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             duration: const Duration(seconds: 8),
             content: Text(msg != null
                 ? 'Saved, but not sent for review: $msg'
-                : 'Saved, but not sent for review — try submitting again from the exercise.')));
+                : isNetworkFailure(reviewSubmitError)
+                    ? 'Saved, but not sent for review yet — check your connection. '
+                        'It still needs to be submitted for review.'
+                    : 'Saved, but not sent for review yet — it still needs to be '
+                        'submitted for review.')));
       }
       _showSuccess();
     } else {
       final err = svc.lastError;
       if (err != null) reportError('CreateExerciseScreen.save', err);
+      // S3: createExercise returns null with no error when nobody is signed
+      // in; say that, not "check your connection".
+      final signedOut = ref.read(currentUserProvider) == null;
       final msg = _appMessage(err);
+      // U1: the connection hint only for a failure that is one; anything else
+      // (a refusal, a conflict) is not fixed by checking the connection.
+      final String text;
+      if (signedOut) {
+        text = "You're signed out — sign in again to save.";
+      } else if (msg != null) {
+        text = 'Save failed: $msg';
+      } else if (isNetworkFailure(err)) {
+        text = "Couldn't save the exercise — check your connection and try again.";
+      } else {
+        text = "Couldn't save the exercise. Try again — if it keeps happening, "
+            'contact support.';
+      }
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         duration: const Duration(seconds: 8),
-        content: Text(msg != null
-            ? 'Save failed: $msg'
-            : "Couldn't save the exercise — check your connection and try again.")));
+        content: Text(text)));
     }
   }
 
@@ -1201,3 +1224,15 @@ Widget _row(String label, List<String> options, String value, ValueChanged<Strin
         ))),
   ]);
 }
+
+/// P0-FL-5 · U1 · true only when [err] is the request not reaching the server:
+/// no socket, a timeout, or the http client giving up (postgrest-dart lets the
+/// http client's exception through untouched; gotrue wraps it as
+/// [AuthRetryableFetchException]). A [PostgrestException] always carries the
+/// server's status code, so it is never treated as a network failure here.
+@visibleForTesting
+bool isNetworkFailure(Object? err) =>
+    err is SocketException ||
+    err is TimeoutException ||
+    err is http.ClientException ||
+    err is AuthRetryableFetchException;

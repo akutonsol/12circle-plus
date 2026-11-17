@@ -118,6 +118,51 @@ void main() {
     expect(find.text('Ana Lee'), findsOneWidget);
   });
 
+  // Review Q1: one record per failed read, none per rebuild (mirrors #173's
+  // F2 test). A record made from the error builder would add one per rebuild.
+  testWidgets(
+      'Q1 a failure is recorded exactly once however often the error '
+      'rebuilds; a failed retry is recorded once more', (tester) async {
+    final reported = <AppFailure>[];
+    setFailureSink(reported.add);
+    addTearDown(resetFailureSink);
+    var calls = 0;
+    Future<_Rows> leaderboard() async {
+      calls++;
+      _fail();
+    }
+
+    await tester.pumpWidget(_dashboard(leaderboard));
+    await _openLeaderboard(tester);
+    expect(find.text("Couldn't load the leaderboard"), findsOneWidget);
+    expect(reported.map((f) => f.origin), ['CoachDashboardScreen.leaderboard']);
+
+    // Force the screen (and so the leaderboard tab) to rebuild while the
+    // failure is on screen.
+    final screen = tester.element(find.byType(CoachDashboardScreen));
+    for (var i = 0; i < 5; i++) {
+      screen.markNeedsBuild();
+      await tester.pump();
+    }
+    expect(find.text("Couldn't load the leaderboard"), findsOneWidget);
+    expect(reported.length, 1, reason: 'a rebuild is not a second failure');
+
+    final before = calls;
+    await tester.tap(find.text('Try again'));
+    await tester.pump();
+    await tester.pump();
+    expect(calls, greaterThan(before), reason: 'the tap re-read the board');
+    expect(find.text("Couldn't load the leaderboard"), findsOneWidget);
+    expect(
+      reported.map((f) => f.origin),
+      [
+        'CoachDashboardScreen.leaderboard',
+        'CoachDashboardScreen.leaderboard',
+      ],
+      reason: 'one record per failed read, none per rebuild',
+    );
+  });
+
   testWidgets('arrived data is unchanged: the empty copy', (tester) async {
     await tester.pumpWidget(_dashboard(() => const []));
     await _openLeaderboard(tester);

@@ -156,6 +156,42 @@ void main() {
     expect(find.textContaining('Leg day done'), findsOneWidget);
   });
 
+  // Review U3: the failure block scrolls rather than overflowing at large
+  // text on a narrow phone, and is a live region so it is announced.
+  testWidgets('U3 the feed failure does not overflow at 2x text, 320 wide, '
+      'and is announced', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(320, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(MediaQuery(
+      data: const MediaQueryData(
+        size: Size(320, 900),
+        textScaler: TextScaler.linear(2.0),
+      ),
+      child: _screen(_Feed()),
+    ));
+    await _settle(tester);
+
+    expect(find.text("Couldn't load posts"), findsOneWidget);
+    expect(tester.takeException(), isNull, reason: 'no overflow');
+    final live = find.ancestor(
+      of: find.text("Couldn't load posts"),
+      matching: find.byWidgetPredicate((w) =>
+          w is Semantics &&
+          w.properties.liveRegion == true &&
+          w.container),
+    );
+    expect(live, findsOneWidget);
+    expect(
+      find.ancestor(of: live, matching: find.byType(SingleChildScrollView)),
+      findsWidgets,
+    );
+    final helper =
+        tester.widget<Text>(find.text('Check your connection and try again.'));
+    expect(helper.style?.fontSize, 13);
+    semantics.dispose();
+  });
+
   testWidgets('arrived data is unchanged: the empty copy', (tester) async {
     final feed = _Feed()..fails = false;
     await tester.pumpWidget(_screen(feed));

@@ -109,8 +109,12 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text('Community', style: TextStyle(color: AppColors.white, fontSize: 28, fontWeight: FontWeight.bold))
-                            .fadeSlideIn(),
+                        // U3: Flexible so 2x text on a narrow phone wraps
+                        // instead of overflowing past the Post button.
+                        Flexible(
+                          child: const Text('Community', style: TextStyle(color: AppColors.white, fontSize: 28, fontWeight: FontWeight.bold))
+                              .fadeSlideIn(),
+                        ),
                         ElevatedButton.icon(
                           onPressed: _showCreatePost,
                           icon: const Icon(Icons.add, size: 18),
@@ -140,8 +144,9 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                               child: Icon(Icons.person, color: AppColors.white, size: 14),
                             ),
                             const SizedBox(width: 12),
-                            const Text('Share your progress or motivation...', style: TextStyle(color: AppColors.textTertiary, fontSize: 14)),
-                            const Spacer(),
+                            const Expanded(
+                              child: Text('Share your progress or motivation...', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppColors.textTertiary, fontSize: 14)),
+                            ),
                             const Icon(Icons.photo_camera_outlined, color: AppColors.purple, size: 20),
                           ],
                         ),
@@ -179,19 +184,28 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                 // P0-FL-5: the raw exception used to be printed under the
                 // heading. It is recorded (once per failure, see build) and
                 // never shown.
+                // U3: scrolls instead of overflowing at large text, and is
+                // announced when it appears.
                 error: (_, __) => Center(
-                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    const Icon(Icons.error_outline, color: AppColors.textTertiary, size: 48),
-                    const SizedBox(height: 12),
-                    const Text("Couldn't load posts", style: TextStyle(color: AppColors.white, fontSize: 16, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 6),
-                    const Text('Check your connection and try again.', style: TextStyle(color: AppColors.textTertiary, fontSize: 12), textAlign: TextAlign.center),
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed: () => ref.read(postNotifierProvider.notifier).reload(),
-                      child: const Text('Retry'),
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(24),
+                    child: Semantics(
+                      liveRegion: true,
+                      container: true,
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        const Icon(Icons.error_outline, color: AppColors.textTertiary, size: 48),
+                        const SizedBox(height: 12),
+                        const Text("Couldn't load posts", textAlign: TextAlign.center, style: TextStyle(color: AppColors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 6),
+                        const Text('Check your connection and try again.', style: TextStyle(color: AppColors.textTertiary, fontSize: 13), textAlign: TextAlign.center),
+                        const SizedBox(height: 16),
+                        ElevatedButton(
+                          onPressed: () => ref.read(postNotifierProvider.notifier).reload(),
+                          child: const Text('Retry'),
+                        ),
+                      ]),
                     ),
-                  ])),
+                  )),
                 data: (posts) => posts.isEmpty
                   ? const Center(child: Text('No posts yet. Be the first to share!',
                       style: TextStyle(color: AppColors.textTertiary, fontSize: 14)))
