@@ -190,26 +190,15 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                 // never shown.
                 // U3: scrolls instead of overflowing at large text, and is
                 // announced when it appears.
-                error: (_, __) => Center(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(24),
-                    child: Semantics(
-                      liveRegion: true,
-                      container: true,
-                      child: Column(mainAxisSize: MainAxisSize.min, children: [
-                        const Icon(Icons.error_outline, color: AppColors.textTertiary, size: 48),
-                        const SizedBox(height: 12),
-                        const Text("Couldn't load posts", textAlign: TextAlign.center, style: TextStyle(color: AppColors.white, fontSize: 16, fontWeight: FontWeight.w600)),
-                        const SizedBox(height: 6),
-                        const Text('Check your connection and try again.', style: TextStyle(color: AppColors.textTertiary, fontSize: 13), textAlign: TextAlign.center),
-                        const SizedBox(height: 16),
-                        ElevatedButton(
-                          onPressed: () => ref.read(postNotifierProvider.notifier).reload(),
-                          child: const Text('Retry'),
-                        ),
-                      ]),
-                    ),
-                  )),
+                // F1 (P0-FL-8 follow-up): same rule as the Members state —
+                // the connection hint only for a network failure, otherwise
+                // try-again-later; "Try again", busy-aware.
+                error: (err, _) => _LoadFailure(
+                  title: "Couldn't load posts",
+                  network: _isNetworkFailure(err),
+                  busy: postsAsync.isLoading,
+                  onRetry: () => ref.read(postNotifierProvider.notifier).reload(),
+                ),
                 data: (posts) => posts.isEmpty
                   ? const Center(child: Text('No posts yet. Be the first to share!',
                       style: TextStyle(color: AppColors.textTertiary, fontSize: 14)))
@@ -346,7 +335,8 @@ class _MembersTab extends ConsumerWidget {
       // P0-FL-8: reachable now that a failed read is an error, not `[]`.
       // While a Try again is in flight the previous error stays on screen
       // (a refresh), so the button shows it is busy instead of a dead tap.
-      error: (err, _) => _MembersFailure(
+      error: (err, _) => _LoadFailure(
+        title: "Couldn't load members",
         network: _isNetworkFailure(err),
         busy: membersAsync.isLoading,
         onRetry: () => ref.invalidate(liveMembersProvider),
@@ -433,14 +423,16 @@ bool _isNetworkFailure(Object? err) =>
     err is http.ClientException ||
     err is AuthRetryableFetchException;
 
-/// P0-FL-8 · the members read failed: said in plain words with the next step
-/// and a way to read it again. Announced when it appears, and scrolls rather
-/// than overflowing at large text.
-class _MembersFailure extends StatelessWidget {
+/// P0-FL-8 · a read (members, or the feed — F1) failed: said in plain words
+/// with the next step and a way to read it again. Announced when it appears,
+/// and scrolls rather than overflowing at large text.
+class _LoadFailure extends StatelessWidget {
+  final String title;
   final bool network;
   final bool busy;
   final VoidCallback onRetry;
-  const _MembersFailure({
+  const _LoadFailure({
+    required this.title,
     required this.network,
     required this.busy,
     required this.onRetry,
@@ -456,9 +448,9 @@ class _MembersFailure extends StatelessWidget {
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               const Icon(Icons.error_outline, color: AppColors.textTertiary, size: 48),
               const SizedBox(height: 12),
-              const Text("Couldn't load members",
+              Text(title,
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: AppColors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+                  style: const TextStyle(color: AppColors.white, fontSize: 16, fontWeight: FontWeight.w600)),
               const SizedBox(height: 6),
               Text(
                 network
