@@ -967,6 +967,18 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
       ref.invalidate(pendingRequestsProvider);
       ref.invalidate(sentInvitesProvider);
     }
+    // F2: each failed read is recorded once, when it settles into an error —
+    // not on every rebuild that shows it. Nothing new reaches the screen.
+    ref.listen(pendingRequestsProvider, (previous, next) {
+      if (_settledFailure(previous, next)) {
+        reportError('CoachDashboardScreen.pendingRequests', next.error!, next.stackTrace);
+      }
+    });
+    ref.listen(sentInvitesProvider, (previous, next) {
+      if (_settledFailure(previous, next)) {
+        reportError('CoachDashboardScreen.sentInvites', next.error!, next.stackTrace);
+      }
+    });
     return requestsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
       error: (_, __) => ListView(
@@ -977,6 +989,9 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
           _RetryableFailure(
             message: "Couldn't load requests",
             sub: 'Check your connection and try again.',
+            // U1: `when` keeps the error rendered during a refresh, so the
+            // in-flight retry is read off the provider and shown on the button.
+            busy: requestsAsync.isLoading,
             onRetry: retry),
         ],
       ),
@@ -1086,6 +1101,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                 const SizedBox(height: 8),
                 _RetryableFailure(
                   message: "Couldn't load sent invites",
+                  busy: invitesAsync.isLoading,
                   onRetry: () => ref.invalidate(sentInvitesProvider)),
               ],
               data: (invites) => _sentInviteRows(invites),
@@ -1104,11 +1120,13 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
         color: _brand.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: _brand.withValues(alpha: 0.3))),
+      // U4: the label is Expanded (was Text + Spacer), so at a large text
+      // scale it wraps instead of overflowing the row above the failure.
       child: const Row(children: [
         Icon(Icons.person_add_outlined, color: _brand, size: 18),
         SizedBox(width: 10),
-        Text('Invite Client by Email', style: TextStyle(color: _white, fontSize: 14, fontWeight: FontWeight.w600)),
-        Spacer(),
+        Expanded(child: Text('Invite Client by Email', style: TextStyle(color: _white, fontSize: 14, fontWeight: FontWeight.w600))),
+        SizedBox(width: 8),
         Icon(Icons.arrow_forward_ios, color: _muted, size: 14),
       ]),
     ),
@@ -1739,7 +1757,10 @@ class _RetryableFailure extends StatelessWidget {
   final String message;
   final String? sub;
   final VoidCallback onRetry;
-  const _RetryableFailure({required this.message, this.sub, required this.onRetry});
+  /// A retry is in flight: the button is disabled and shows progress in place
+  /// of its icon (U1), so a second failure reads as an answer, not a dead tap.
+  final bool busy;
+  const _RetryableFailure({required this.message, this.sub, required this.onRetry, this.busy = false});
 
   @override
   Widget build(BuildContext context) => Semantics(
@@ -1755,16 +1776,32 @@ class _RetryableFailure extends StatelessWidget {
         if (sub != null) ...[
           const SizedBox(height: 6),
           Text(sub!, textAlign: TextAlign.center,
-            style: TextStyle(color: _muted.withValues(alpha: 0.6), fontSize: 13)),
+            // U5: 0.8 keeps the helper copy above 4.5:1 on the dark ground.
+            style: TextStyle(color: _muted.withValues(alpha: 0.8), fontSize: 13)),
         ],
         const SizedBox(height: 8),
         TextButton.icon(
-          onPressed: onRetry,
-          icon: const Icon(Icons.refresh_rounded, color: _primary, size: 18),
-          label: const Text('Try again',
-            style: TextStyle(color: _primary, fontSize: 14, fontWeight: FontWeight.w600))),
+          onPressed: busy ? null : onRetry,
+          icon: busy
+              ? Semantics(
+                  label: 'Retrying',
+                  child: const SizedBox(width: 16, height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: _primary)))
+              : const Icon(Icons.refresh_rounded, color: _primary, size: 18),
+          label: Text('Try again',
+            style: TextStyle(
+              color: busy ? _primary.withValues(alpha: 0.6) : _primary,
+              fontSize: 14, fontWeight: FontWeight.w600))),
       ])));
 }
+
+/// F2 · a read has just settled into a failure: an error that is no longer
+/// loading, arriving from a state that was loading or held no error. A
+/// rebuild that merely re-shows the same failure does not qualify.
+bool _settledFailure(AsyncValue<Object?>? previous, AsyncValue<Object?> next) =>
+    next.hasError &&
+    !next.isLoading &&
+    (previous == null || previous.isLoading || !previous.hasError);
 
 // ── Notifications Sheet ───────────────────────────────────────────────────────
 class _NotificationsSheet extends ConsumerWidget {

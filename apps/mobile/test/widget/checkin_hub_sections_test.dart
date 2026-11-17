@@ -5,6 +5,7 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/checkins/data/models/checkin_model.dart';
 import 'package:circle_fitness/features/checkins/presentation/checkin_hub_sections.dart';
 
@@ -184,6 +185,96 @@ void main() {
     expect(find.text('Could not load check-ins'), findsNothing);
     expect(find.text('Week 9 · Energy 3 of 5 · Awaiting reply'), findsOneWidget);
     handle.dispose();
+  });
+
+  // P0-FL-2 follow-up · U1 + F2: a retry in flight is visible, a second
+  // failure is shown again, and each failure is recorded once.
+  testWidgets('P0-FL-2 U1 "Try again" shows progress and is disabled while '
+      'the retry is in flight; a second failure is stated again', (t) async {
+    final reported = <AppFailure>[];
+    setFailureSink(reported.add);
+    addTearDown(resetFailureSink);
+    var calls = 0;
+    final second = Completer<List<WeeklyCheckin>>();
+    await t.binding.setSurfaceSize(const Size(420, 1200));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await t.pumpWidget(ProviderScope(
+      overrides: [
+        checkinHistoryProvider.overrideWith((ref) async {
+          calls++;
+          if (calls == 1) throw Exception('offline');
+          return second.future;
+        }),
+      ],
+      child: const MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(child: CheckinHubSections()),
+        ),
+      ),
+    ));
+    await t.pump();
+    await t.pump();
+    expect(find.text('Could not load check-ins'), findsOneWidget);
+
+    TextButton retryButton() => t.widget<TextButton>(find.ancestor(
+        of: find.text('Try again'), matching: find.byType(TextButton)));
+    expect(retryButton().onPressed, isNotNull);
+
+    await t.tap(find.text('Try again'));
+    await t.pump();
+
+    // In flight: disabled, a progress indicator in place of the icon.
+    expect(calls, 2);
+    expect(retryButton().onPressed, isNull,
+        reason: 'a second tap during the retry must not look like a dead tap');
+    expect(
+        find.descendant(
+            of: find.byType(TextButton),
+            matching: find.byType(CircularProgressIndicator)),
+        findsOneWidget);
+    expect(find.byIcon(Icons.refresh_rounded), findsNothing);
+
+    second.completeError(Exception('offline again'));
+    await t.pump();
+    await t.pump();
+
+    expect(find.text('Could not load check-ins'), findsOneWidget);
+    expect(retryButton().onPressed, isNotNull);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
+    // F2, checked last so the U1 assertions above prove U1 on their own.
+    expect(reported.map((f) => f.origin),
+        ['CheckinHubSections.history', 'CheckinHubSections.history'],
+        reason: 'one record per failed read, none per rebuild');
+    // Nothing new reaches the screen: no exception text.
+    expect(find.textContaining('Exception'), findsNothing);
+  });
+
+  testWidgets('P0-FL-2 U4 the failure row does not overflow at 2x text on a '
+      'narrow screen', (t) async {
+    await t.binding.setSurfaceSize(const Size(320, 1200));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await t.pumpWidget(ProviderScope(
+      overrides: [
+        checkinHistoryProvider.overrideWith(
+            (ref) => Future<List<WeeklyCheckin>>.error(Exception('offline'))),
+      ],
+      child: MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: const TextScaler.linear(2.0)),
+          child: child!,
+        ),
+        home: const Scaffold(
+          body: SingleChildScrollView(child: CheckinHubSections()),
+        ),
+      ),
+    ));
+    await t.pump();
+    await t.pump();
+    expect(find.text('Could not load check-ins'), findsOneWidget);
+    expect(find.text('Try again'), findsOneWidget);
+    expect(t.takeException(), isNull, reason: 'no RenderFlex overflow');
   });
 
   testWidgets('FIT-023 History is announced as a heading', (t) async {

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../data/models/checkin_model.dart';
 import '../data/weekly_checkin_service.dart';
@@ -38,7 +39,19 @@ class CheckinHubSections extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final history = historyFrom(ref.watch(checkinHistoryProvider));
+    final historyAsync = ref.watch(checkinHistoryProvider);
+    final history = historyFrom(historyAsync);
+    // P0-FL-2 follow-up (U1): Riverpod's `when`/state mapping keeps the error
+    // on screen while a retry is in flight, so the in-flight read is read off
+    // the provider itself — `historyFrom` maps by type and cannot see it.
+    final retrying = historyAsync.isLoading;
+    // F2: the failure is recorded once per failed read — on the transition
+    // into a settled error, not on every rebuild that shows it.
+    ref.listen(checkinHistoryProvider, (previous, next) {
+      if (_settledFailure(previous, next)) {
+        reportError('CheckinHubSections.history', next.error!, next.stackTrace);
+      }
+    });
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
@@ -104,12 +117,33 @@ class CheckinHubSections extends ConsumerWidget {
                 child: Text(checkinHistoryFailure,
                   style: const TextStyle(color: _error, fontSize: 13)),
               ),
-              TextButton.icon(
-                onPressed: () => ref.invalidate(checkinHistoryProvider),
-                icon: const Icon(Icons.refresh_rounded, color: _brand, size: 18),
-                label: const Text('Try again',
-                  style: TextStyle(
-                    color: _brand, fontSize: 14, fontWeight: FontWeight.w600)),
+              // U4: Flexible, so at a large text scale the button shares the
+              // row (its label wraps) instead of overflowing it.
+              Flexible(
+                child: TextButton.icon(
+                  // U1: disabled while the retry is in flight, so a second
+                  // failure is visibly a new answer, not a dead tap.
+                  onPressed: retrying
+                      ? null
+                      : () => ref.invalidate(checkinHistoryProvider),
+                  icon: retrying
+                      ? Semantics(
+                          label: 'Retrying',
+                          child: const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: _brand),
+                          ),
+                        )
+                      : const Icon(Icons.refresh_rounded,
+                          color: _brand, size: 18),
+                  label: Text('Try again',
+                    style: TextStyle(
+                      color: retrying ? _brand.withValues(alpha: 0.6) : _brand,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600)),
+                ),
               ),
             ]),
           ),
@@ -190,6 +224,14 @@ class _HubAction extends StatelessWidget {
         ),
       );
 }
+
+/// F2 · a read has just settled into a failure: an error that is no longer
+/// loading, arriving from a state that was loading or held no error. A
+/// rebuild that merely re-shows the same failure does not qualify.
+bool _settledFailure(AsyncValue<Object?>? previous, AsyncValue<Object?> next) =>
+    next.hasError &&
+    !next.isLoading &&
+    (previous == null || previous.isLoading || !previous.hasError);
 
 const _card   = Color(0xFF0E0B16);
 const _border = Color(0xFF1A1020);
