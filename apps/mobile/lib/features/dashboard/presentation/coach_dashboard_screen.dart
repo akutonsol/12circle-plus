@@ -959,32 +959,32 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
   Widget _buildRequestsTab() {
     final requestsAsync = ref.watch(pendingRequestsProvider);
     final invitesAsync = ref.watch(sentInvitesProvider);
+    // P0-FL-2: a failed requests read used to replace the whole tab with the
+    // raw exception string — no retry, and the Invite button gone with it. It
+    // now keeps the tab's frame (Invite stays reachable) and states the
+    // failure in place of the list, with a way to read it again.
+    void retry() {
+      ref.invalidate(pendingRequestsProvider);
+      ref.invalidate(sentInvitesProvider);
+    }
     return requestsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
-      error: (e, _) => _EmptyState(icon: Icons.inbox_outlined, message: 'Error loading requests', sub: e.toString()),
+      error: (_, __) => ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
+        children: [
+          _inviteButton(),
+          const SizedBox(height: 20),
+          _RetryableFailure(
+            message: "Couldn't load requests",
+            sub: 'Check your connection and try again.',
+            onRetry: retry),
+        ],
+      ),
       data: (requests) {
-        final invites = invitesAsync.valueOrNull ?? [];
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
           children: [
-            // Invite button
-            GestureDetector(
-              onTap: () => _showInviteSheet(context),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: _brand.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: _brand.withValues(alpha: 0.3))),
-                child: Row(children: [
-                  const Icon(Icons.person_add_outlined, color: _brand, size: 18),
-                  const SizedBox(width: 10),
-                  const Text('Invite Client by Email', style: TextStyle(color: _white, fontSize: 14, fontWeight: FontWeight.w600)),
-                  const Spacer(),
-                  const Icon(Icons.arrow_forward_ios, color: _muted, size: 14),
-                ]),
-              ),
-            ),
+            _inviteButton(),
             const SizedBox(height: 20),
 
             // Pending requests section
@@ -1071,7 +1071,50 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
               ),
             ],
 
-            // Sent invites section
+            // Sent invites section. P0-FL-2: read through `.when` — a failed
+            // or in-flight read was `valueOrNull ?? []`, i.e. "none sent".
+            ...invitesAsync.when(
+              loading: () => [
+                Semantics(
+                  label: 'Loading sent invites',
+                  child: const Center(child: SizedBox(width: 20, height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: _brand)))),
+              ],
+              error: (_, __) => [
+                const Text('SENT INVITES', style: TextStyle(color: _muted, fontSize: 11,
+                  fontWeight: FontWeight.w700, letterSpacing: 1.2)),
+                const SizedBox(height: 8),
+                _RetryableFailure(
+                  message: "Couldn't load sent invites",
+                  onRetry: () => ref.invalidate(sentInvitesProvider)),
+              ],
+              data: (invites) => _sentInviteRows(invites),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _inviteButton() => GestureDetector(
+    onTap: () => _showInviteSheet(context),
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: _brand.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _brand.withValues(alpha: 0.3))),
+      child: const Row(children: [
+        Icon(Icons.person_add_outlined, color: _brand, size: 18),
+        SizedBox(width: 10),
+        Text('Invite Client by Email', style: TextStyle(color: _white, fontSize: 14, fontWeight: FontWeight.w600)),
+        Spacer(),
+        Icon(Icons.arrow_forward_ios, color: _muted, size: 14),
+      ]),
+    ),
+  );
+
+  List<Widget> _sentInviteRows(List<Map<String, dynamic>> invites) => [
             if (invites.isNotEmpty) ...[
               const Text('SENT INVITES', style: TextStyle(color: _muted, fontSize: 11,
                 fontWeight: FontWeight.w700, letterSpacing: 1.2)),
@@ -1116,11 +1159,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                 );
               }),
             ],
-          ],
-        );
-      },
-    );
-  }
+          ];
 
   // N4: neither had a handler, so a failure escaped the button — no message,
   // no refresh, the request still showing as pending. The service now refuses
@@ -1690,6 +1729,41 @@ class _EmptyState extends StatelessWidget {
       const SizedBox(height: 6),
       Text(sub, style: TextStyle(color: _muted.withValues(alpha: 0.4), fontSize: 13)),
     ]));
+}
+
+/// P0-FL-2 · a failed read stated in plain words with a way to read it again.
+/// The "Couldn't load … / Try again" pattern from the booking screen; the
+/// exception itself goes nowhere near the screen. A live region so a screen
+/// reader announces the failure when it appears.
+class _RetryableFailure extends StatelessWidget {
+  final String message;
+  final String? sub;
+  final VoidCallback onRetry;
+  const _RetryableFailure({required this.message, this.sub, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    liveRegion: true,
+    container: true,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.cloud_off_rounded, color: _brand.withValues(alpha: 0.3), size: 36),
+        const SizedBox(height: 10),
+        Text(message, textAlign: TextAlign.center,
+          style: const TextStyle(color: _white, fontSize: 15, fontWeight: FontWeight.w600)),
+        if (sub != null) ...[
+          const SizedBox(height: 6),
+          Text(sub!, textAlign: TextAlign.center,
+            style: TextStyle(color: _muted.withValues(alpha: 0.6), fontSize: 13)),
+        ],
+        const SizedBox(height: 8),
+        TextButton.icon(
+          onPressed: onRetry,
+          icon: const Icon(Icons.refresh_rounded, color: _primary, size: 18),
+          label: const Text('Try again',
+            style: TextStyle(color: _primary, fontSize: 14, fontWeight: FontWeight.w600))),
+      ])));
 }
 
 // ── Notifications Sheet ───────────────────────────────────────────────────────

@@ -132,6 +132,60 @@ void main() {
     expect(find.textContaining('Week'), findsNothing);
   });
 
+  // P0-FL-2 · journey 9 · the history recovers from errors and shows loading.
+  testWidgets('P0-FL-2 a loading history shows an announced indicator, not blank',
+      (t) async {
+    final handle = t.ensureSemantics();
+    await mount(t, const AsyncLoading());
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.bySemanticsLabel('Loading check-in history'), findsOneWidget);
+    handle.dispose();
+  });
+
+  testWidgets('P0-FL-2 a failed history offers "Try again" that re-reads',
+      (t) async {
+    final handle = t.ensureSemantics();
+    var calls = 0;
+    var online = false;
+    await t.binding.setSurfaceSize(const Size(420, 1200));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await t.pumpWidget(ProviderScope(
+      overrides: [
+        checkinHistoryProvider.overrideWith((ref) async {
+          calls++;
+          if (!online) throw Exception('offline');
+          return [week(number: 9)];
+        }),
+      ],
+      child: const MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(child: CheckinHubSections()),
+        ),
+      ),
+    ));
+    await t.pump();
+    await t.pump();
+
+    expect(find.text('Could not load check-ins'), findsOneWidget);
+    expect(find.text('Try again'), findsOneWidget);
+    // Screen readers hear the failure when it appears.
+    final region = find.ancestor(
+        of: find.text('Could not load check-ins'),
+        matching: find.byWidgetPredicate(
+            (w) => w is Semantics && w.properties.liveRegion == true));
+    expect(region, findsWidgets);
+
+    final before = calls;
+    online = true;
+    await t.tap(find.text('Try again'));
+    await t.pumpAndSettle();
+
+    expect(calls, greaterThan(before));
+    expect(find.text('Could not load check-ins'), findsNothing);
+    expect(find.text('Week 9 · Energy 3 of 5 · Awaiting reply'), findsOneWidget);
+    handle.dispose();
+  });
+
   testWidgets('FIT-023 History is announced as a heading', (t) async {
     final handle = t.ensureSemantics();
     await mount(t, const AsyncData([]));

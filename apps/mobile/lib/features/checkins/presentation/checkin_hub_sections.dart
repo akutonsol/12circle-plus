@@ -75,17 +75,44 @@ class CheckinHubSections extends ConsumerWidget {
               color: _white, fontSize: 16, fontWeight: FontWeight.w700)),
         ),
       ),
-      if (history.state == CheckinHistoryState.failed)
+      // P0-FL-2: loading was rendered as the (silent) empty state, so the
+      // History header sat over nothing while the read was in flight.
+      if (history.state == CheckinHistoryState.loading)
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Row(children: [
-            const Icon(Icons.cloud_off_rounded, color: _error, size: 16),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(checkinHistoryFailure,
-                style: const TextStyle(color: _error, fontSize: 13)),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          child: Semantics(
+            label: 'Loading check-in history',
+            child: const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2, color: _brand),
             ),
-          ]),
+          ),
+        )
+      else if (history.state == CheckinHistoryState.failed)
+        // P0-FL-2: the failure had no way back short of leaving the screen.
+        // A live region so a screen reader hears the failure when it lands.
+        Semantics(
+          liveRegion: true,
+          container: true,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(children: [
+              const Icon(Icons.cloud_off_rounded, color: _error, size: 16),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(checkinHistoryFailure,
+                  style: const TextStyle(color: _error, fontSize: 13)),
+              ),
+              TextButton.icon(
+                onPressed: () => ref.invalidate(checkinHistoryProvider),
+                icon: const Icon(Icons.refresh_rounded, color: _brand, size: 18),
+                label: const Text('Try again',
+                  style: TextStyle(
+                    color: _brand, fontSize: 14, fontWeight: FontWeight.w600)),
+              ),
+            ]),
+          ),
         )
       else if (history.state == CheckinHistoryState.empty)
         // FIT-023 declares no empty copy, so the screen states nothing and
