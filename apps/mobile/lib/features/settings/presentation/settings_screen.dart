@@ -38,8 +38,6 @@ const kUnitSaveFailedMessage =
     "Couldn't save your unit preference — try again in a moment. "
     'If it keeps happening, contact support.';
 
-enum _UnitSaveOutcome { saved, offline, failed }
-
 /// Connection wording is only for failures that ARE the connection; a
 /// PostgrestException (the server answered) never is.
 bool _isNetworkFailure(Object e) =>
@@ -87,10 +85,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// P0-FL-9: the update did not ask for the row back, so an update RLS
   /// filtered to 0 rows also returned true and the toggle "persisted" over an
   /// unchanged row. It now selects `id` and treats an empty result as failure.
-  /// The returned [_UnitSaveOutcome] lets the caller say WHY it failed.
-  Future<_UnitSaveOutcome> _persistUnit(String unit) async {
+  /// On failure [_unitSaveWasOffline] says whether it was the connection, so
+  /// the caller can pick the wording (the bool shape is held by the CORR-2
+  /// guard in correction_rights_guard_test).
+  Future<bool> _persistUnit(String unit) async {
+    _unitSaveWasOffline = false;
     final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (uid == null) return _UnitSaveOutcome.failed;
+    if (uid == null) return false;
     try {
       final rows = await Supabase.instance.client.from('user_profiles').update({
         'unit_preference': unit == 'KG' ? 'metric' : 'imperial',
@@ -98,17 +99,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       if (rows.isEmpty) {
         reportError('settings.persistUnit',
             StateError('unit_preference update changed 0 rows'));
-        return _UnitSaveOutcome.failed;
+        return false;
       }
       ref.invalidate(currentUserProfileProvider);
-      return _UnitSaveOutcome.saved;
+      return true;
     } catch (e, st) {
       reportError('settings.persistUnit', e, st);
-      return _isNetworkFailure(e)
-          ? _UnitSaveOutcome.offline
-          : _UnitSaveOutcome.failed;
+      _unitSaveWasOffline = _isNetworkFailure(e);
+      return false;
     }
   }
+
+  /// Set by a failed [_persistUnit]: true only for a network failure.
+  bool _unitSaveWasOffline = false;
 
   @override
   Widget build(BuildContext context) {
@@ -264,15 +267,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               // never stored.
                               final previous = _selectedUnit;
                               setState(() => _selectedUnit = u);
-                              final outcome = await _persistUnit(u);
-                              if (outcome != _UnitSaveOutcome.saved &&
-                                  context.mounted) {
+                              final ok = await _persistUnit(u);
+                              if (!ok && context.mounted) {
                                 setState(() => _selectedUnit = previous);
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text(
-                                    outcome == _UnitSaveOutcome.offline
-                                        ? kUnitSaveOfflineMessage
-                                        : kUnitSaveFailedMessage)),
+                                  SnackBar(content: Text(_unitSaveWasOffline
+                                      ? kUnitSaveOfflineMessage
+                                      : kUnitSaveFailedMessage)),
                                 );
                               }
                             },
