@@ -1,5 +1,10 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import '../data/coach_relationship_service.dart';
 
 const _bg     = Color(0xFF030303);
@@ -42,20 +47,65 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
     _load();
   }
 
+  /// Why the opening read did not produce the coach's current price. While
+  /// set, the failure stands IN PLACE of the price field and Save (P0-FL-6):
+  /// an empty field reads as "no price set", and the coach could save over a
+  /// price they never saw. A disabled empty field would still say that.
+  String? _loadError;
+
+  /// Signed out there is no price to read or write; say so, not an empty field.
+  bool _signedOut = false;
+
+  static const _signedOutMsg =
+      "You're signed out — sign in again to set your price.";
+  static const _checkConnection = 'Check your connection and try again.';
+  static const _tryLater =
+      'Try again in a moment. If it keeps happening, contact support.';
+
+  /// Only a failure to reach the server is a connection problem; a server
+  /// answer (PostgrestException) is not.
+  static bool _isNetworkFailure(Object e) =>
+      e is SocketException ||
+      e is TimeoutException ||
+      e is http.ClientException ||
+      e is AuthRetryableFetchException;
+
+  /// Try again: back to the opening spinner (so a second tap cannot start a
+  /// second read), then the same read.
+  void _retry() {
+    setState(() {
+      _loading = true;
+      _loadError = null;
+      _signedOut = false;
+    });
+    _load();
+  }
+
   Future<void> _load() async {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) {
+      setState(() {
+        _signedOut = true;
+        _loading = false;
+      });
+      return;
+    }
     try {
-      final uid = Supabase.instance.client.auth.currentUser?.id;
-      if (uid != null) {
-        final row = await Supabase.instance.client
-            .from('user_profiles')
-            .select('pricing_monthly')
-            .eq('id', uid)
-            .maybeSingle();
-        final p = (row?['pricing_monthly'] as num?)?.toDouble();
-        if (p != null && p > 0) _price.text = p.toStringAsFixed(0);
-      }
-    } catch (_) {
-      // Ignore — still show the input so the coach can set a price.
+      final row = await Supabase.instance.client
+          .from('user_profiles')
+          .select('pricing_monthly')
+          .eq('id', uid)
+          .maybeSingle();
+      final p = (row?['pricing_monthly'] as num?)?.toDouble();
+      if (p != null && p > 0) _price.text = p.toStringAsFixed(0);
+    } catch (e, s) {
+      reportError('CoachPricingSheet._load', e, s);
+      if (!mounted) return;
+      setState(() {
+        _loadError = _isNetworkFailure(e) ? _checkConnection : _tryLater;
+        _loading = false;
+      });
+      return;
     }
     if (mounted) setState(() => _loading = false);
   }
@@ -135,7 +185,35 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
               const Center(child: Padding(
                 padding: EdgeInsets.all(16),
                 child: CircularProgressIndicator(color: _brand))),
-            if (!_loading) ...[
+            if (!_loading && _signedOut)
+              Semantics(
+                liveRegion: true,
+                child: Text(_signedOutMsg,
+                    style: const TextStyle(color: _errRed, fontSize: 13, height: 1.4)),
+              ),
+            if (!_loading && _loadError != null)
+              Semantics(
+                liveRegion: true,
+                container: true,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text("Couldn't load your current price",
+                        style: TextStyle(color: _white, fontSize: 15, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 6),
+                    Text(_loadError!,
+                        style: const TextStyle(color: _errRed, fontSize: 13, height: 1.4)),
+                    const SizedBox(height: 8),
+                    TextButton.icon(
+                      onPressed: _retry,
+                      icon: const Icon(Icons.refresh_rounded, color: _brand, size: 18),
+                      label: const Text('Try again',
+                          style: TextStyle(color: _brand, fontWeight: FontWeight.w600)),
+                    ),
+                  ],
+                ),
+              ),
+            if (!_loading && !_signedOut && _loadError == null) ...[
               TextField(
                 controller: _price,
                 keyboardType: TextInputType.number,

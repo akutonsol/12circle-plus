@@ -414,8 +414,20 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
               unselectedLabelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
               tabs: [
                 const Tab(text: "Clients"),
-                Tab(text: ref.watch(pendingRequestsProvider).valueOrNull?.isNotEmpty == true
-                  ? "Requests ●" : "Requests"),
+                // P0-FL-6: a failed read is not "no pending requests". The
+                // label says it could not load; loading claims no count.
+                ref.watch(pendingRequestsProvider).when(
+                  data: (r) => Tab(text: r.isNotEmpty ? "Requests ●" : "Requests"),
+                  loading: () => const Tab(text: "Requests"),
+                  error: (_, __) => Tab(
+                    child: Semantics(
+                      label: "Requests — couldn't load",
+                      excludeSemantics: true,
+                      child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                        Text("Requests"),
+                        SizedBox(width: 4),
+                        Icon(Icons.error_outline, color: _error, size: 14),
+                      ])))),
                 const Tab(text: "Check-Ins"),
                 const Tab(text: "Workouts"),
                 const Tab(text: "Leaderboard"),
