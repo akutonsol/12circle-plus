@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../data/community_service.dart';
 import '../data/live_community_service.dart';
@@ -144,61 +145,111 @@ final liveGroupsProvider = FutureProvider<List<CommunityGroup>>((ref) async {
   return svc.getGroups();
 });
 
-class GroupNotifier extends StateNotifier<List<CommunityGroup>> {
+/// P0-FL-10 · the groups as one of three states — loading, failed, loaded.
+/// It was a bare `List` that started `const []` and took only the DATA of
+/// [liveGroupsProvider] (`whenData`), so a failed read stayed `[]`: Community's
+/// Groups tab showed no groups and Activity said "No communities joined yet"
+/// for a read that never arrived.
+class GroupNotifier extends StateNotifier<AsyncValue<List<CommunityGroup>>> {
   final LiveCommunityService _svc;
-  GroupNotifier(super.state, this._svc);
 
-  void initialize(List<CommunityGroup> groups) {
-    state = groups;
+  /// Re-reads the groups. Called when a leave removed no row: the list on
+  /// screen is stale (already left elsewhere), so it corrects itself instead
+  /// of offering a Leave that can never succeed.
+  final void Function() _reread;
+
+  GroupNotifier(this._svc, {void Function()? reread})
+      : _reread = reread ?? _noop,
+        super(const AsyncValue.loading());
+
+  static void _noop() {}
+
+  /// Follows [liveGroupsProvider]: its loading, its failure and its groups.
+  void sync(AsyncValue<List<CommunityGroup>> next) {
+    state = next;
+  }
+
+  /// Marks [groupId] joined/left in the loaded list. A failed or loading list
+  /// is left as it is — a join never turns a failure into a list.
+  void _mark(String groupId, {required bool joined}) {
+    state = state.whenData((groups) => groups.map((g) {
+          if (g.id != groupId) return g;
+          return CommunityGroup(
+            id: g.id, name: g.name, description: g.description, emoji: g.emoji,
+            memberCount: joined
+                ? g.memberCount + 1
+                : (g.memberCount - 1).clamp(0, 99999),
+            isJoined: joined,
+          );
+        }).toList());
   }
 
   Future<bool> joinGroup(String groupId) async {
     final ok = await _svc.joinGroup(groupId);
-    if (ok) {
-      state = state.map((g) {
-        if (g.id != groupId) return g;
-        return CommunityGroup(
-          id: g.id, name: g.name, description: g.description,
-          emoji: g.emoji, memberCount: g.memberCount + 1, isJoined: true,
-        );
-      }).toList();
-    }
+    if (ok) _mark(groupId, joined: true);
     return ok;
   }
 
+  /// True only when a membership row was removed. A leave that removed none
+  /// is still reported as a failure, and the groups are re-read so the list
+  /// stops showing a membership that is not there (P0-FL-10 U2).
   Future<bool> leaveGroup(String groupId) async {
-    final ok = await _svc.leaveGroup(groupId);
-    if (ok) {
-      state = state.map((g) {
-        if (g.id != groupId) return g;
-        return CommunityGroup(
-          id: g.id, name: g.name, description: g.description,
-          emoji: g.emoji, memberCount: (g.memberCount - 1).clamp(0, 99999), isJoined: false,
-        );
-      }).toList();
+    final outcome = await _svc.leaveGroupOutcome(groupId);
+    switch (outcome) {
+      case GroupLeave.left:
+        _mark(groupId, joined: false);
+        return true;
+      case GroupLeave.noRow:
+        _reread();
+        return false;
+      case GroupLeave.failed:
+        return false;
     }
-    return ok;
   }
 
-  // Legacy toggle kept for compatibility with community_screen.dart
-  void toggleJoin(String groupId) {
-    final g = state.firstWhere((g) => g.id == groupId, orElse: () => state.first);
-    if (g.isJoined) {
-      leaveGroup(groupId);
-    } else {
-      joinGroup(groupId);
+  /// Groups whose join/leave is on the wire right now.
+  final _inFlight = <String>{};
+
+  /// Joins [group] if it is not joined, leaves it if it is. True only when the
+  /// service reports the write taken; on false the list is unchanged and the
+  /// caller says so (P0-FL-10: the result was dropped, so a failed join or
+  /// leave was a silent dead tap).
+  ///
+  /// Null when the tap was ignored because this group's join/leave is still in
+  /// flight (P0-FL-10 L3: a quick double-tap on Join sent two inserts). The
+  /// first tap's result is the one the caller reports.
+  Future<bool?> toggleJoin(CommunityGroup group) async {
+    if (!_inFlight.add(group.id)) return null;
+    try {
+      return group.isJoined
+          ? await leaveGroup(group.id)
+          : await joinGroup(group.id);
+    } finally {
+      _inFlight.remove(group.id);
     }
   }
 }
 
-final groupNotifierProvider = StateNotifierProvider<GroupNotifier, List<CommunityGroup>>((ref) {
+final groupNotifierProvider = StateNotifierProvider<GroupNotifier,
+    AsyncValue<List<CommunityGroup>>>((ref) {
   final svc = ref.watch(liveCommunityServiceProvider);
-  // Starts with nothing until the real groups arrive; it started with the
-  // five sample groups, shown on Community and Activity while loading.
-  final notifier = GroupNotifier(const [], svc);
+  // Starts loading — nothing is claimed until the real groups arrive (it
+  // started with the five sample groups, then with a `[]` no failure left).
+  final notifier =
+      GroupNotifier(svc, reread: () => ref.invalidate(liveGroupsProvider));
   ref.listen<AsyncValue<List<CommunityGroup>>>(
     liveGroupsProvider,
-    (_, next) => next.whenData(notifier.initialize),
+    (previous, next) {
+      notifier.sync(next);
+      // P0-FL-10 · each failed groups read is recorded once, here, when it
+      // settles into an error — not once per screen that shows it (Community
+      // and Activity both do) and not on every rebuild.
+      if (next.hasError &&
+          !next.isLoading &&
+          (previous == null || previous.isLoading || !previous.hasError)) {
+        reportError('community.groups', next.error!, next.stackTrace);
+      }
+    },
     fireImmediately: true,
   );
   return notifier;

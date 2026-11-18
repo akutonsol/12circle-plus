@@ -1,9 +1,13 @@
+import 'dart:async' show TimeoutException;
+import 'dart:io' show SocketException;
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http show ClientException;
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthRetryableFetchException;
 import '../../auth/domain/auth_provider.dart';
 import '../../nutrition/domain/nutrition_provider.dart';
 import '../../coach/domain/coach_ecosystem_provider.dart';
@@ -856,8 +860,13 @@ class _CommunitySection extends ConsumerWidget {
     if (profile != null && profile['notif_community'] == false) {
       return const SizedBox.shrink();
     }
-    final groups  = ref.watch(groupNotifierProvider);
-    final joined  = groups.where((g) => g.isJoined).toList();
+    // P0-FL-10 · a failed groups read was `[]` here, shown as "No communities
+    // joined yet". Loading claims nothing; a failure says so with a retry
+    // (recorded once by the provider, not here).
+    final groupsAsync = ref.watch(groupNotifierProvider);
+    // Null until the groups are loaded (and while a failure is shown).
+    final joined = groupsAsync.whenOrNull(
+        data: (groups) => groups.where((g) => g.isJoined).toList());
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
@@ -870,7 +879,23 @@ class _CommunitySection extends ConsumerWidget {
       ]),
       const SizedBox(height: 12),
 
-      if (joined.isEmpty)
+      if (groupsAsync.hasError)
+        _GroupsFailureCard(
+          network: _isNetworkFailure(groupsAsync.error),
+          busy: groupsAsync.isLoading,
+          onRetry: () => ref.invalidate(liveGroupsProvider),
+        )
+      else if (joined == null)
+        // Loading: no claim either way about which groups are joined.
+        Semantics(
+          label: 'Loading your groups',
+          child: const SizedBox(
+            height: 44,
+            child: Center(
+              child: SizedBox(width: 20, height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2, color: _C.tertiary)))),
+        )
+      else if (joined.isEmpty)
         _GlassCard(
           padding: const EdgeInsets.all(18),
           child: Row(children: [
@@ -942,6 +967,79 @@ class _CommunitySection extends ConsumerWidget {
           }),
         ),
     ]);
+  }
+}
+
+/// P0-FL-10 · true only when [err] is the request not reaching the server —
+/// the rule of `_isNetworkFailure` in community_screen.dart (P0-FL-8), which is
+/// private to that screen.
+bool _isNetworkFailure(Object? err) =>
+    err is SocketException ||
+    err is TimeoutException ||
+    err is http.ClientException ||
+    err is AuthRetryableFetchException;
+
+/// P0-FL-10 · the groups read failed: a compact card in the place of the
+/// groups, with the next step and a busy-aware Try again. Announced when it
+/// appears; wraps at large text.
+class _GroupsFailureCard extends StatelessWidget {
+  final bool network;
+  final bool busy;
+  final VoidCallback onRetry;
+  const _GroupsFailureCard({
+    required this.network,
+    required this.busy,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final retry = TextButton(
+      onPressed: busy ? null : onRetry,
+      style: TextButton.styleFrom(
+        foregroundColor: _C.tertiary,
+        backgroundColor: _C.tertiary.withValues(alpha: 0.12),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        minimumSize: const Size(48, 44), // U5 · 44px tap target
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+      child: busy
+          ? Semantics(
+              label: 'Retrying',
+              child: const SizedBox(width: 14, height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2, color: _C.tertiary)))
+          : const Text('Try again',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+    );
+    // At large text a trailing Try again is wider than the room beside the
+    // icon: the text column was squeezed to nothing and the row overflowed
+    // (2x, 320 wide). There it goes under the message instead.
+    final stacked = MediaQuery.textScalerOf(context).scale(12) > 12 * 1.3;
+    return _GlassCard(
+        padding: const EdgeInsets.all(18),
+        child: Semantics(
+          liveRegion: true,
+          container: true,
+          child: Row(children: [
+            Container(width: 44, height: 44,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle, color: _C.tertiary.withValues(alpha: 0.12)),
+              child: const Icon(Icons.error_outline, color: _C.tertiary, size: 22)),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text("Couldn't load your groups",
+                style: TextStyle(color: _C.onSurface, fontSize: 13, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 3),
+              Text(
+                network
+                    ? 'Check your connection and try again.'
+                    : 'Try again in a moment. If it keeps happening, contact support.',
+                style: const TextStyle(color: _C.onSurfVar, fontSize: 11, height: 1.4)),
+              if (stacked) ...[const SizedBox(height: 10), retry],
+            ])),
+            if (!stacked) ...[const SizedBox(width: 8), retry],
+          ]),
+        ),
+      );
   }
 }
 
