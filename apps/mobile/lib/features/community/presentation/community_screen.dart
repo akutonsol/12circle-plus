@@ -87,7 +87,7 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
   @override
   Widget build(BuildContext context) {
     final postsAsync = ref.watch(postNotifierProvider);
-    final groups = ref.watch(groupNotifierProvider);
+    final groupsAsync = ref.watch(groupNotifierProvider);
     // P0-FL-5: each failed feed read is recorded once, when it settles into
     // an error — not on every rebuild that shows it.
     ref.listen(postNotifierProvider, (previous, next) {
@@ -247,7 +247,26 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                       ]),
                     ),
                   ),
-                  ...groups.map((group) => Container(
+                  // P0-FL-10 · the groups' own three states. A failed read was
+                  // `[]` here: the tab showed only the Pods card, as if there
+                  // were no groups. The failure is recorded by the provider.
+                  ...groupsAsync.when<Iterable<Widget>>(
+                    loading: () => const [
+                      Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24),
+                        child: Center(
+                            child: CircularProgressIndicator(color: AppColors.purple)),
+                      ),
+                    ],
+                    error: (err, _) => [
+                      _LoadFailure(
+                        title: "Couldn't load groups",
+                        network: _isNetworkFailure(err),
+                        busy: groupsAsync.isLoading,
+                        onRetry: () => ref.invalidate(liveGroupsProvider),
+                      ),
+                    ],
+                    data: (groups) => groups.map((group) => Container(
                     margin: const EdgeInsets.only(bottom: 12),
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -279,9 +298,22 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                           ),
                         ),
                         GestureDetector(
-                          onTap: () {
-                            ref.read(groupNotifierProvider.notifier).toggleJoin(group.id);
+                          onTap: () async {
                             AppAnimations.hapticLight();
+                            final messenger = ScaffoldMessenger.of(context);
+                            final ok = await ref
+                                .read(groupNotifierProvider.notifier)
+                                .toggleJoin(group);
+                            // P0-FL-10 · the result was dropped: a failed
+                            // join or leave left the button as it was and said
+                            // nothing. The list is unchanged on failure.
+                            if (!ok) {
+                              messenger.showSnackBar(SnackBar(
+                                content: Text(group.isJoined
+                                    ? "Couldn't leave ${group.name}. Try again."
+                                    : "Couldn't join ${group.name}. Try again."),
+                              ));
+                            }
                           },
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 200),
@@ -304,6 +336,7 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                   ).animate(delay: Duration(milliseconds: groups.indexOf(group) * 80))
                       .fadeIn(duration: 400.ms)
                       .slideX(begin: -0.2, end: 0, duration: 400.ms)),
+                  ),
                 ],
               ),
               _MembersTab(),
@@ -423,7 +456,7 @@ bool _isNetworkFailure(Object? err) =>
     err is http.ClientException ||
     err is AuthRetryableFetchException;
 
-/// P0-FL-8 · a read (members, or the feed — F1) failed: said in plain words
+/// P0-FL-8 · a read (members, the feed — F1, or groups — P0-FL-10) failed: said in plain words
 /// with the next step and a way to read it again. Announced when it appears,
 /// and scrolls rather than overflowing at large text.
 class _LoadFailure extends StatelessWidget {
