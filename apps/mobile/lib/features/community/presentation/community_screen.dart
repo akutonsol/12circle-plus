@@ -307,7 +307,9 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                             // P0-FL-10 · the result was dropped: a failed
                             // join or leave left the button as it was and said
                             // nothing. The list is unchanged on failure.
-                            if (!ok) {
+                            // Null = a repeat tap while this group's request
+                            // was in flight; it was ignored, not failed.
+                            if (ok == false) {
                               messenger.showSnackBar(SnackBar(
                                 content: Text(group.isJoined
                                     ? "Couldn't leave ${group.name}. Try again."

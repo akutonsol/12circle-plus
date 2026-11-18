@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import 'models/post_model.dart';
 import '../domain/post_type_choice.dart';
 import '../domain/reaction_choice.dart';
@@ -198,22 +199,31 @@ class LiveCommunityService {
         rethrow;
       }
       return true;
-    } catch (_) {
+    } catch (e, st) {
+      // P0-FL-10 L2 · the caller still says "Couldn't join"; the cause is
+      // recorded instead of dropped.
+      reportError('community.joinGroup', e, st, {'group_id': groupId});
       return false;
     }
   }
 
+  /// True only when a membership row was actually removed. The delete asks
+  /// for the removed rows back: RLS filters a delete it does not allow to
+  /// zero rows with no error, so "no error" alone reported "left" while the
+  /// member was still in the group (P0-FL-10 L1).
   Future<bool> leaveGroup(String groupId) async {
     try {
       final uid = _db.auth.currentUser?.id;
       if (uid == null) return false;
-      await _db
+      final removed = await _db
           .from('community_group_members')
           .delete()
           .eq('group_id', groupId)
-          .eq('user_id', uid);
-      return true;
-    } catch (_) {
+          .eq('user_id', uid)
+          .select('id');
+      return (removed as List).isNotEmpty;
+    } catch (e, st) {
+      reportError('community.leaveGroup', e, st, {'group_id': groupId});
       return false;
     }
   }

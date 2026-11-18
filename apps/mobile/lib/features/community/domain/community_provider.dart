@@ -186,12 +186,27 @@ class GroupNotifier extends StateNotifier<AsyncValue<List<CommunityGroup>>> {
     return ok;
   }
 
+  /// Groups whose join/leave is on the wire right now.
+  final _inFlight = <String>{};
+
   /// Joins [group] if it is not joined, leaves it if it is. True only when the
   /// service reports the write taken; on false the list is unchanged and the
   /// caller says so (P0-FL-10: the result was dropped, so a failed join or
   /// leave was a silent dead tap).
-  Future<bool> toggleJoin(CommunityGroup group) =>
-      group.isJoined ? leaveGroup(group.id) : joinGroup(group.id);
+  ///
+  /// Null when the tap was ignored because this group's join/leave is still in
+  /// flight (P0-FL-10 L3: a quick double-tap on Join sent two inserts). The
+  /// first tap's result is the one the caller reports.
+  Future<bool?> toggleJoin(CommunityGroup group) async {
+    if (!_inFlight.add(group.id)) return null;
+    try {
+      return group.isJoined
+          ? await leaveGroup(group.id)
+          : await joinGroup(group.id);
+    } finally {
+      _inFlight.remove(group.id);
+    }
+  }
 }
 
 final groupNotifierProvider = StateNotifierProvider<GroupNotifier,
