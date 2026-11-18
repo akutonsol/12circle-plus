@@ -214,8 +214,9 @@ class LiveCommunityService {
   /// for the removed rows back: RLS filters a delete it does not allow to
   /// zero rows with no error, so "no error" alone reported "left" while the
   /// member was still in the group (P0-FL-10 L1).
-  Future<bool> leaveGroup(String groupId) async =>
-      await leaveGroupOutcome(groupId) == GroupLeave.left;
+  Future<bool> leaveGroup(String groupId) async {
+    return await leaveGroupOutcome(groupId) == GroupLeave.left;
+  }
 
   /// [leaveGroup] with the reason a leave did not happen:
   /// [GroupLeave.noRow] — the request went through and removed nothing (no
