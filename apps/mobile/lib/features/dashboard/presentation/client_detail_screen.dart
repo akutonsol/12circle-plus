@@ -239,6 +239,15 @@ class _OverviewTab extends ConsumerWidget {
     final bool? paidPlan = paidAsync.hasValue && !paidAsync.hasError
         ? paidAsync.requireValue
         : null;
+    final paidCheckFailed = paidPlan == null && paidAsync.hasError && !paidAsync.isLoading;
+    // Consecutive failed checks, so a Try again that fails again reads
+    // differently from the first failure instead of looking like nothing happened.
+    ref.listen<AsyncValue<bool>>(clientHasPaidPlanProvider(clientId), (_, next) {
+      if (next.isLoading) return;
+      final failures = ref.read(_paidCheckFailuresProvider(clientId).notifier);
+      failures.state = next.hasError ? failures.state + 1 : 0;
+    });
+    final paidFailures = ref.watch(_paidCheckFailuresProvider(clientId));
 
     final goalLabel = {
       'lose_fat': 'Lose Fat', 'build_muscle': 'Build Muscle',
@@ -329,7 +338,8 @@ class _OverviewTab extends ConsumerWidget {
         const SizedBox(height: 12),
 
         // ── Coach Action Center ──
-        _CoachActionCenter(actions: actions, clientId: clientId, paidPlan: paidPlan),
+        _CoachActionCenter(actions: actions, clientId: clientId, paidPlan: paidPlan,
+          paidCheckFailed: paidCheckFailed),
         const SizedBox(height: 12),
 
         // ── Assigned Program ──
@@ -352,9 +362,12 @@ class _OverviewTab extends ConsumerWidget {
           // ── Coaching services — gated behind a paid plan ──
           if (paidPlan == null && paidAsync.hasError && !paidAsync.isLoading)
             _LoadFailedNotice(
-              title: "Couldn't check this client's plan.",
+              title: paidFailures > 1
+                  ? "Still couldn't check this client's plan."
+                  : "Couldn't check this client's plan.",
               error: paidAsync.error!,
               detail: 'Coaching services stay hidden until it loads.',
+              retryLabel: "Try again, check this client's plan",
               onRetry: () => ref.invalidate(clientHasPaidPlanProvider(clientId)),
             )
           else if (paidPlan == null)
@@ -1514,7 +1527,11 @@ class _CoachActionCenter extends ConsumerStatefulWidget {
   final String clientId;
   /// Null while the paid-plan check has not answered (loading or failed).
   final bool? paidPlan;
-  const _CoachActionCenter({required this.actions, required this.clientId, required this.paidPlan});
+  /// The check FAILED (as opposed to still running) — only meaningful while
+  /// [paidPlan] is null.
+  final bool paidCheckFailed;
+  const _CoachActionCenter({required this.actions, required this.clientId,
+    required this.paidPlan, required this.paidCheckFailed});
 
   @override
   ConsumerState<_CoachActionCenter> createState() => _CoachActionCenterState();
@@ -1549,9 +1566,10 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
     // Services stay locked until the client is on a paid plan with this coach.
     // An unanswered check is not "not subscribed" (P0-FL-12).
     if (opensService && widget.paidPlan == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("This client's plan hasn't been confirmed yet — "
-            'use Try again under Assigned Program.'),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(widget.paidCheckFailed
+            ? "Couldn't check this client's plan. Use Try again in Coaching services."
+            : "Still checking this client's plan — try again in a moment."),
         behavior: SnackBarBehavior.floating));
       return;
     }
@@ -1764,20 +1782,31 @@ bool _isNetworkFailure(Object e) =>
 
 /// A read this screen needs before it can act failed: say so, say what is
 /// held back because of it, and offer Try again (P0-FL-12).
+///
+/// A live region, so a screen reader announces the failure (and a repeat
+/// failure, whose [title] the caller changes) without the coach hunting for it.
 class _LoadFailedNotice extends StatelessWidget {
   final String title;
   final Object error;
   final String detail;
+  /// What Try again does, for a screen reader ("Try again, load current plan").
+  final String retryLabel;
   final VoidCallback onRetry;
   const _LoadFailedNotice({
-    required this.title, required this.error, required this.detail, required this.onRetry});
+    required this.title, required this.error, required this.detail,
+    required this.retryLabel, required this.onRetry});
 
   @override
   Widget build(BuildContext context) {
+    // The Try again button sits right beside this, so the non-network next
+    // step is the escalation, not a second "try again".
     final nextStep = _isNetworkFailure(error)
         ? 'Check your connection, then try again.'
-        : 'Try again. If it keeps happening, contact support.';
-    return Container(
+        : 'If it keeps happening, contact support.';
+    return Semantics(
+      liveRegion: true,
+      container: true,
+      child: Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: _red.withValues(alpha: 0.08),
@@ -1797,9 +1826,10 @@ class _LoadFailedNotice extends StatelessWidget {
           alignment: Alignment.centerRight,
           child: TextButton(
             onPressed: onRetry,
-            child: const Text('Try again',
-              style: TextStyle(color: _brand, fontWeight: FontWeight.w700)))),
-      ]));
+            child: Text('Try again',
+              semanticsLabel: retryLabel,
+              style: const TextStyle(color: _brand, fontWeight: FontWeight.w700)))),
+      ])));
   }
 }
 
@@ -1807,13 +1837,21 @@ class _CheckingNotice extends StatelessWidget {
   final String label;
   const _CheckingNotice({required this.label});
   @override
-  Widget build(BuildContext context) => Row(children: [
-    const SizedBox(width: 14, height: 14,
-      child: CircularProgressIndicator(strokeWidth: 2, color: _brand)),
-    const SizedBox(width: 10),
-    Expanded(child: Text(label, style: const TextStyle(color: _mut, fontSize: 12))),
-  ]);
+  Widget build(BuildContext context) => Semantics(
+    liveRegion: true,
+    container: true,
+    child: Row(children: [
+      const SizedBox(width: 14, height: 14,
+        child: CircularProgressIndicator(strokeWidth: 2, color: _brand)),
+      const SizedBox(width: 10),
+      Expanded(child: Text(label, style: const TextStyle(color: _mut, fontSize: 12))),
+    ]));
 }
+
+/// Consecutive failed paid-plan checks for one client, so a repeat failure is
+/// told apart from the first ("Still couldn't…").
+final _paidCheckFailuresProvider =
+    StateProvider.autoDispose.family<int, String>((ref, clientId) => 0);
 
 // ── Assign Program Sheet ──────────────────────────────────────────────────────
 class _AssignProgramSheet extends ConsumerStatefulWidget {
@@ -1947,8 +1985,12 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
   // had no error handler: a failed read left the form blank, and Save then
   // wrote the coach's blanks over the client's existing plan. A read that
   // answered "no plan" counts as loaded.
+  // The fields are read-only until then too: a coach typing into a form that a
+  // later successful Try again then pre-fills would have their edits silently
+  // overwritten (or, unnoticed, mixed with the server's).
   bool _loaded = false;
   Object? _loadError;
+  int _loadFailures = 0; // consecutive — a repeat failure reads "Still couldn't…"
 
   @override
   void initState() {
@@ -1964,12 +2006,18 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       p = await ref.read(coachProgramServiceProvider).getClientNutritionPlan(widget.clientId);
     } catch (e, s) {
       reportError('AssignNutritionSheet._loadCurrentPlan', e, s);
-      if (mounted) setState(() => _loadError = e);
+      if (mounted) {
+        setState(() {
+          _loadError = e;
+          _loadFailures++;
+        });
+      }
       return;
     }
     if (!mounted) return;
     setState(() {
       _loaded = true;
+      _loadFailures = 0;
       if (p == null) return;
       _cal.text   = '${p['calories_target'] ?? ''}';
       _pro.text   = '${p['protein_g'] ?? ''}';
@@ -1996,9 +2044,12 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       const SizedBox(height: 20),
       if (_loadError != null) ...[
         _LoadFailedNotice(
-          title: "Couldn't load the current plan.",
+          title: _loadFailures > 1
+              ? "Still couldn't load the current nutrition plan."
+              : "Couldn't load the current nutrition plan.",
           error: _loadError!,
-          detail: "Saving is off until it loads, so this client's plan isn't overwritten.",
+          detail: "You can't save until it loads, so this client's plan isn't overwritten.",
+          retryLabel: 'Try again, load current plan',
           onRetry: _loadCurrentPlan,
         ),
         const SizedBox(height: 16),
@@ -2047,6 +2098,7 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       const SizedBox(height: 4),
       TextField(
         controller: c,
+        enabled: _loaded,
         keyboardType: TextInputType.number,
         style: const TextStyle(color: _wht),
         decoration: InputDecoration(
@@ -2097,7 +2149,10 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
           _isNotAuthorized(e)
               ? "This client isn't active with you any more, so the plan wasn't saved."
-              : "Couldn't save the plan — check your connection and try again.")));
+              : _isNetworkFailure(e)
+                  ? "Couldn't save the plan — check your connection and try again."
+                  : "Couldn't save the plan. Try again, and if it keeps happening, "
+                      'contact support.')));
       return;
     }
     if (mounted) {
@@ -2139,8 +2194,11 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
   // selection, so a selection that was never pre-filled (failed read, no error
   // handler) wiped the client's habits on Save. Save stays off until the read
   // succeeded; a read that answered "no habits" counts as loaded.
+  // The toggles and targets are locked until then too, so a successful Try
+  // again can never merge the server's habits into picks the coach made blind.
   bool _loaded = false;
   Object? _loadError;
+  int _loadFailures = 0; // consecutive — a repeat failure reads "Still couldn't…"
 
   @override
   void initState() {
@@ -2159,12 +2217,18 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
       rows = await ref.read(coachProgramServiceProvider).getClientHabits(widget.clientId);
     } catch (e, s) {
       reportError('AssignHabitsSheet._loadCurrentHabits', e, s);
-      if (mounted) setState(() => _loadError = e);
+      if (mounted) {
+        setState(() {
+          _loadError = e;
+          _loadFailures++;
+        });
+      }
       return;
     }
     if (!mounted) return;
     setState(() {
       _loaded = true;
+      _loadFailures = 0;
       for (final r in rows) {
         final idx = _presets.indexWhere((p) => p['name'] == r['name']);
         if (idx >= 0) {
@@ -2193,9 +2257,12 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
       const SizedBox(height: 14),
       if (_loadError != null) ...[
         _LoadFailedNotice(
-          title: "Couldn't load the current habits.",
+          title: _loadFailures > 1
+              ? "Still couldn't load the current habits."
+              : "Couldn't load the current habits.",
           error: _loadError!,
-          detail: "Saving is off until they load, so this client's habits aren't switched off.",
+          detail: "You can't save until they load, so this client's habits aren't switched off.",
+          retryLabel: 'Try again, load current habits',
           onRetry: _loadCurrentHabits,
         ),
         const SizedBox(height: 14),
@@ -2212,7 +2279,9 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
           final sel = _selected.contains(i);
           final hasValue = p['value'] == true;
           return GestureDetector(
-            onTap: () => setState(() => sel ? _selected.remove(i) : _selected.add(i)),
+            onTap: _loaded
+                ? () => setState(() => sel ? _selected.remove(i) : _selected.add(i))
+                : null,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
@@ -2232,6 +2301,7 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
                     width: 64,
                     child: TextField(
                       controller: _vals[i],
+                      enabled: _loaded,
                       keyboardType: TextInputType.number,
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: _wht, fontSize: 13),
@@ -2287,8 +2357,11 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
       reportError('AssignHabitsSheet._save', e, s);
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("Couldn't assign habits — check your connection and try again.")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+          _isNetworkFailure(e)
+              ? "Couldn't assign habits — check your connection and try again."
+              : "Couldn't assign habits. Try again, and if it keeps happening, "
+                  'contact support.')));
       return;
     }
     if (mounted) {
