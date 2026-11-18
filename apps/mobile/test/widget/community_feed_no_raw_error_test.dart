@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show SocketException;
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
@@ -18,6 +20,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 // posts" — e.g. a PostgREST message naming a table and its RLS policy. The
 // feed service is faked; Supabase is initialised signed out only because the
 // real services resolve the client when constructed. Nothing is sent.
+
+const _later = 'Try again in a moment. If it keeps happening, contact support.';
+const _connection = 'Check your connection and try again.';
 
 const _secret =
     'PostgrestException(message: new row violates row-level security policy '
@@ -48,12 +53,13 @@ class _MemoryStore extends GotrueAsyncStorage {
 /// The feed read, which fails until told otherwise.
 class _Feed extends LiveCommunityService {
   bool fails = true;
+  Object? error; // what a failing read throws; the secret-bearing one by default
   int calls = 0;
   List<CommunityPost> posts = const [];
   @override
   Future<List<CommunityPost>> getPosts({int limit = 30}) async {
     calls++;
-    if (fails) throw Exception(_secret);
+    if (fails) throw error ?? Exception(_secret);
     return posts;
   }
 }
@@ -119,8 +125,10 @@ void main() {
     expect(find.textContaining('row-level security'), findsNothing);
     expect(find.textContaining('Exception'), findsNothing);
     expect(find.text("Couldn't load posts"), findsOneWidget);
-    expect(find.text('Check your connection and try again.'), findsOneWidget);
-    expect(find.text('Retry'), findsOneWidget);
+    // F1: not a network failure, so no connection hint.
+    expect(find.text(_later), findsOneWidget);
+    expect(find.text('Check your connection and try again.'), findsNothing);
+    expect(find.text('Try again'), findsOneWidget);
     expect(find.text('No posts yet. Be the first to share!'), findsNothing,
         reason: 'a failure is not an empty feed');
 
@@ -134,8 +142,8 @@ void main() {
     expect(reported.single.error.toString(), contains('SECRET_TABLE_X'),
         reason: 'the raw error is recorded, not shown');
 
-    // Retry re-reads; a second failure is recorded once more and still not shown.
-    await tester.tap(find.text('Retry'));
+    // Try again re-reads; a second failure is recorded once more and still not shown.
+    await tester.tap(find.text('Try again'));
     await _settle(tester);
     expect(feed.calls, 2);
     expect(find.text("Couldn't load posts"), findsOneWidget);
@@ -143,14 +151,14 @@ void main() {
     expect(reported.length, 2);
   });
 
-  testWidgets('Retry then shows the arrived posts', (tester) async {
+  testWidgets('Try again then shows the arrived posts', (tester) async {
     final feed = _Feed()..posts = [_post('Leg day done')];
     await tester.pumpWidget(_screen(feed));
     await _settle(tester);
     expect(find.text("Couldn't load posts"), findsOneWidget);
 
     feed.fails = false;
-    await tester.tap(find.text('Retry'));
+    await tester.tap(find.text('Try again'));
     await _settle(tester);
     expect(find.text("Couldn't load posts"), findsNothing);
     expect(find.textContaining('Leg day done'), findsOneWidget);
@@ -186,8 +194,7 @@ void main() {
       find.ancestor(of: live, matching: find.byType(SingleChildScrollView)),
       findsWidgets,
     );
-    final helper =
-        tester.widget<Text>(find.text('Check your connection and try again.'));
+    final helper = tester.widget<Text>(find.text(_later));
     expect(helper.style?.fontSize, 13);
     semantics.dispose();
   });
@@ -199,4 +206,58 @@ void main() {
     expect(find.text('No posts yet. Be the first to share!'), findsOneWidget);
     expect(find.textContaining("Couldn't load"), findsNothing);
   });
+  // F1 · the feed follows the Members rule: the connection hint is only for a
+  // request that never reached the server. A server answer (PostgREST error)
+  // is not a connection problem, and the old copy said it was.
+  testWidgets('F1 a server error does not blame the connection', (tester) async {
+    final feed = _Feed()
+      ..error = const PostgrestException(
+          message: 'permission denied for table SECRET_TABLE_X', code: '42501');
+    await tester.pumpWidget(_screen(feed));
+    await _settle(tester);
+
+    expect(find.text("Couldn't load posts"), findsOneWidget);
+    expect(find.text(_later), findsOneWidget);
+    expect(find.text(_connection), findsNothing);
+    expect(find.text('Try again'), findsOneWidget);
+    expect(find.text('Retry'), findsNothing);
+    expect(find.textContaining('SECRET_TABLE_X'), findsNothing);
+  });
+
+  testWidgets('F1 a network failure keeps the connection hint', (tester) async {
+    final feed = _Feed()..error = const SocketException('Failed host lookup');
+    await tester.pumpWidget(_screen(feed));
+    await _settle(tester);
+
+    expect(find.text("Couldn't load posts"), findsOneWidget);
+    expect(find.text(_connection), findsOneWidget);
+    expect(find.text(_later), findsNothing);
+    expect(find.text('Try again'), findsOneWidget);
+    expect(find.text('Retry'), findsNothing);
+  });
+
+  // P0-FL-8 M2 · the production network failures, not only SocketException:
+  // on a device package:http's IOClient throws http.ClientException, a slow
+  // network is a TimeoutException, and a dropped auth refresh is an
+  // AuthRetryableFetchException. Each keeps the connection hint.
+  final networkErrors = <String, Object>{
+    'http.ClientException': http.ClientException(
+        'Connection closed before full header was received'),
+    'TimeoutException': TimeoutException('read timed out'),
+    'AuthRetryableFetchException': AuthRetryableFetchException(),
+  };
+  for (final e in networkErrors.entries) {
+    testWidgets('M2 a feed read that fails with ${e.key} keeps the connection '
+        'hint', (tester) async {
+      final feed = _Feed()..error = e.value;
+      await tester.pumpWidget(_screen(feed));
+      await _settle(tester);
+
+      expect(find.text("Couldn't load posts"), findsOneWidget);
+      expect(find.text(_connection), findsOneWidget,
+          reason: '${e.key} is a connection failure');
+      expect(find.text(_later), findsNothing);
+      expect(find.text('Try again'), findsOneWidget);
+    });
+  }
 }
