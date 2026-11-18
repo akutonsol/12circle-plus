@@ -126,9 +126,11 @@ class CustomExerciseService {
     String visibility = 'private',
     Map<String, dynamic>? extra, // additional columns (metadata)
   }) async {
+    // S3: cleared before the signed-out return, so a caller never reads an
+    // earlier call's error as this one's.
+    lastError = null;
     final uid = _uid;
     if (uid == null) return null;
-    lastError = null;
     final data = <String, dynamic>{
       'coach_id': uid,
       'name': name,
@@ -214,12 +216,19 @@ class CustomExerciseService {
   /// touching the admin-managed text content. Privileged via the RPC.
   Future<bool> updateExerciseMedia(String id,
       {String? imageUrl, required List<Map<String, dynamic>> videoVariants}) async {
+    lastError = null; // never report an earlier call's error
     try {
-      await _db.rpc('update_exercise_media', params: {
+      final res = await _db.rpc('update_exercise_media', params: {
         'p_id': id,
         'p_image_url': imageUrl,
         'p_video_variants': videoVariants,
       });
+      // P0-FL-7 · the RPC returns `found` (migration 072): false = no row was
+      // updated. That was discarded and the media counted as saved.
+      if (res == false) {
+        lastError = 'No exercise was updated';
+        return false;
+      }
       return true;
     } catch (e) { lastError = e; return false; }
   }
@@ -350,6 +359,7 @@ class CustomExerciseService {
 
   /// Move an exercise through the editorial lifecycle (approve/publish/revise…).
   Future<bool> reviewExercise(String id, String status) async {
+    lastError = null; // S3: never report an earlier call's error
     try {
       await _db.rpc('review_exercise_content', params: {'p_id': id, 'p_status': status});
       return true;
@@ -857,6 +867,7 @@ class CustomExerciseService {
   // ── Update ────────────────────────────────────────────────────────────────
 
   Future<bool> updateExercise(String id, Map<String, dynamic> updates) async {
+    lastError = null; // S3: never report an earlier call's error
     try {
       // .select() so an RLS-filtered update (0 rows, no error) is detectable.
       final res = await _db.from('custom_exercises').update(updates).eq('id', id).select('id');

@@ -1,14 +1,18 @@
+import 'dart:async' show TimeoutException;
 import 'dart:convert';
+import 'dart:io' show SocketException;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http show ClientException;
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/content_review_submission.dart';
 import '../domain/custom_exercise_provider.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../workout/data/models/video_variant_model.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/widgets/named_icon_button.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -89,6 +93,9 @@ Widget _chipMulti(String label, List<String> options, List<String> selected,
   ]);
 }
 
+/// The gallery picker the Media tab uses (P0-FL-7: a test seam only).
+final exerciseMediaPickerProvider = Provider<ImagePicker>((ref) => ImagePicker());
+
 class CreateExerciseScreen extends ConsumerStatefulWidget {
   const CreateExerciseScreen({super.key});
   @override
@@ -144,7 +151,9 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   Uint8List? _imageBytes;
   String _imageExt = 'jpg';
   final List<_VideoEntry> _videoEntries = [];
-  final _picker = ImagePicker();
+  // Read through a provider so a test can hand in picked files; the picker,
+  // its options and what it returns are unchanged.
+  late final ImagePicker _picker = ref.read(exerciseMediaPickerProvider);
 
   @override
   void initState() {
@@ -210,10 +219,14 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   bool _isCoachMediaOnly() {
     if (_editingId == null) return false;
     final role = ref.read(currentUserProfileProvider).valueOrNull?['role'];
-    final myUid = Supabase.instance.client.auth.currentUser?.id;
+    final myUid = _myUid();
     return role != 'admin' &&
         !(_editingCoachId != null && _editingCoachId == myUid);
   }
+
+  /// The signed-in user's id. [currentUserProvider] falls back to
+  /// `auth.currentUser`, so this is the same id the screen always compared.
+  String? _myUid() => ref.read(currentUserProvider)?.id;
 
   List<String> _listFrom(List<TextEditingController> ctrls) =>
       ctrls.map((c) => c.text.trim()).where((s) => s.isNotEmpty).toList();
@@ -554,6 +567,9 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   }
 
   Future<void> _save() async {
+    // The SnackBar's "Save again" can be tapped while a save is running; the
+    // Save button is disabled then, and so is this.
+    if (_saving) return;
     if (!_formKey.currentState!.validate()) {
       _tabs.animateTo(0);
       return;
@@ -606,13 +622,28 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     // Coaches can edit their OWN exercises fully; on platform/other exercises
     // they may only add media (the AI text content is admin-managed).
     final role = ref.read(currentUserProfileProvider).valueOrNull?['role'];
-    final myUid = Supabase.instance.client.auth.currentUser?.id;
+    final myUid = _myUid();
     final mediaOnly = _editingId != null && role != 'admin' &&
         !(_editingCoachId != null && _editingCoachId == myUid);
 
+    // Whether THIS Save edits an existing row (fixed before a create below
+    // switches the screen into editing the row it made).
+    final editingExisting = _editingId != null;
     String? id;
-    if (_editingId == null) {
+    if (!editingExisting) {
       id = await ref.read(myExercisesNotifierProvider.notifier).create(fields: fields);
+      if (id != null) {
+        // B1 · the row exists now: from here on this screen edits it. A later
+        // Save (after a media/relations failure) updates THIS row instead of
+        // creating again — create upserts on (coach_id, slug), so a rename
+        // between taps used to make a second exercise. The creator owns the
+        // row (createExercise writes coach_id = uid), so it is a full edit,
+        // never media-only. Its content_status is not known here and stays
+        // null, so — exactly as on the create itself — this Save path never
+        // submits it for review (shouldSubmitForReview needs 'draft').
+        _editingId = id;
+        _editingCoachId = myUid;
+      }
     } else if (mediaOnly) {
       id = _editingId; // skip text update — media handled below
     } else {
@@ -627,11 +658,12 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
 
     // A hand-written library draft goes to the editorial review queue
     // (draft → under_review); a human still approves it there.
-    String? reviewSubmitError;
+    var reviewSubmitFailed = false;
+    Object? reviewSubmitError;
     if (id != null &&
         shouldSubmitForReview(
           role: role as String?,
-          editingExisting: _editingId != null,
+          editingExisting: editingExisting,
           mediaOnly: mediaOnly,
           visibility: _visibility,
           contentStatus: _editingContentStatus,
@@ -640,38 +672,79 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
       if (await svc.reviewExercise(id, 'under_review')) {
         _editingContentStatus = 'under_review';
       } else {
-        reviewSubmitError = svc.lastError?.toString() ?? 'unknown error';
+        reviewSubmitFailed = true;
+        reviewSubmitError = svc.lastError;
       }
+    }
+
+    // P0-FL-7 · every media/relations step after the row is saved is checked.
+    // These results were ignored and "Exercise Saved!" followed regardless —
+    // for a media-only edit, when nothing at all had been written.
+    final mediaFailures = <String>[]; // what the coach is told wasn't saved
+    final mediaErrors = <Object?>[];
+    var mediaWriteFailed = false; // media-only: the RPC wrote nothing
+    void mediaStepFailed(String origin, String what) {
+      // lastError is cleared before each step below, so this is never an
+      // earlier call's error.
+      final err = svc.lastError;
+      if (err != null) reportError('CreateExerciseScreen.$origin', err);
+      mediaFailures.add(what);
+      mediaErrors.add(err);
     }
 
     if (id != null) {
       // Upload picked image + video files.
       String? imageUrl;
-      if (_imageBytes != null) imageUrl = await svc.uploadImage(_imageBytes!, _imageExt, id);
+      if (_imageBytes != null) {
+        svc.lastError = null;
+        imageUrl = await svc.uploadImage(_imageBytes!, _imageExt, id);
+        if (imageUrl == null) {
+          mediaStepFailed('uploadImage', "the image couldn't be uploaded");
+        }
+      }
       final uploadedVariants = List<VideoVariant>.from(variants);
       for (int i = 0; i < _videoEntries.length; i++) {
         final entry = _videoEntries[i];
         if (entry.bytes != null) {
+          svc.lastError = null;
           final url = await svc.uploadVideo(entry.bytes!, entry.ext, id, entry.label);
           if (url != null) {
             uploadedVariants.add(VideoVariant(url: url, label: entry.label, type: 'upload'));
+          } else {
+            mediaStepFailed('uploadVideo',
+                "the ${entry.label} video couldn't be uploaded");
           }
         }
       }
 
       if (mediaOnly) {
         // Coach attaching media to an admin/platform exercise (privileged RPC).
-        await svc.updateExerciseMedia(id,
+        svc.lastError = null;
+        final ok = await svc.updateExerciseMedia(id,
           imageUrl: imageUrl,
           videoVariants: uploadedVariants.map((v) => v.toJson()).toList());
-      } else {
-        if (imageUrl != null) await svc.updateExercise(id, {'image_url': imageUrl});
-        if (uploadedVariants.length != variants.length || _editingId != null) {
-          await svc.updateExercise(id, {
-            'video_variants': uploadedVariants.map((v) => v.toJson()).toList(),
-          });
+        if (!ok) {
+          mediaWriteFailed = true;
+          mediaStepFailed('updateExerciseMedia', "the media couldn't be saved");
         }
-        await svc.syncRelations(id, _relationsJson());
+      } else {
+        if (imageUrl != null) {
+          if (!await svc.updateExercise(id, {'image_url': imageUrl})) {
+            mediaStepFailed('saveImageUrl', "the image couldn't be attached");
+          }
+        }
+        if (uploadedVariants.length != variants.length || editingExisting) {
+          if (!await svc.updateExercise(id, {
+            'video_variants': uploadedVariants.map((v) => v.toJson()).toList(),
+          })) {
+            mediaStepFailed('saveVideoVariants', "the videos couldn't be attached");
+          }
+        }
+        svc.lastError = null;
+        if (!await svc.syncRelations(id, _relationsJson())) {
+          mediaStepFailed('syncRelations',
+              "the muscle and equipment details couldn't be saved");
+        }
       }
       _savedId = id;
     }
@@ -681,28 +754,81 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     if (!mounted) return;
     if (id != null) {
       refreshExerciseLists(ref.invalidate);
-      if (reviewSubmitError != null) {
+      if (reviewSubmitFailed && reviewSubmitError != null) {
+        reportError('CreateExerciseScreen.submitForReview', reviewSubmitError);
+      }
+      if (mediaFailures.isNotEmpty) {
+        // Not "Exercise Saved!": say what was and wasn't saved, and stay on
+        // the screen so Save can be tapped again (it re-saves the details and
+        // re-uploads every picked file; the picks are kept).
+        // U4: a failed review submission is folded into this ONE message —
+        // Save again retries it too — rather than a second queued SnackBar.
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            duration: const Duration(seconds: 10),
+            // U3: retry from the message itself.
+            action: SnackBarAction(label: 'Save again', onPressed: _save),
+            content: Text(exerciseMediaFailureMessage(
+              mediaOnly: mediaOnly,
+              mediaWriteFailed: mediaWriteFailed,
+              failures: mediaFailures,
+              errors: mediaErrors,
+              reviewSubmitFailed: reviewSubmitFailed,
+              reviewSubmitError: reviewSubmitError,
+            ))));
+      } else if (reviewSubmitFailed) {
         // Saved, but not queued: say so rather than leave it invisible to reviewers.
+        // U2: there is no "submit for review" control for a saved draft, so
+        // the copy states what is still owed rather than pointing at one.
+        final msg = _appMessage(reviewSubmitError);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             duration: const Duration(seconds: 8),
-            content: Text('Saved, but not sent for review: ${_friendlyError(reviewSubmitError)}')));
+            content: Text(msg != null
+                ? 'Saved, but not sent for review: $msg'
+                : isNetworkFailure(reviewSubmitError)
+                    ? 'Saved, but not sent for review yet — check your connection. '
+                        'It still needs to be submitted for review.'
+                    : 'Saved, but not sent for review yet — it still needs to be '
+                        'submitted for review.')));
       }
-      _showSuccess();
+      if (mediaFailures.isEmpty) _showSuccess();
     } else {
       final err = svc.lastError;
+      if (err != null) reportError('CreateExerciseScreen.save', err);
+      // S3: createExercise returns null with no error when nobody is signed
+      // in; say that, not "check your connection".
+      final signedOut = ref.read(currentUserProvider) == null;
+      final msg = _appMessage(err);
+      // U1: the connection hint only for a failure that is one; anything else
+      // (a refusal, a conflict) is not fixed by checking the connection.
+      final String text;
+      if (signedOut) {
+        text = "You're signed out — sign in again to save.";
+      } else if (msg != null) {
+        text = 'Save failed: $msg';
+      } else if (isNetworkFailure(err)) {
+        text = "Couldn't save the exercise — check your connection and try again.";
+      } else {
+        text = "Couldn't save the exercise. Try again — if it keeps happening, "
+            'contact support.';
+      }
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         duration: const Duration(seconds: 8),
-        content: Text(err != null
-            ? 'Save failed: ${_friendlyError(err)}'
-            : 'Failed to save exercise. Try again.')));
+        content: Text(text)));
     }
   }
 
-  /// Pull a readable message out of a Postgrest/Storage exception.
-  String _friendlyError(Object err) {
-    final s = err.toString();
-    final msg = RegExp(r'message: ([^,)]+)').firstMatch(s)?.group(1);
-    return (msg ?? s).trim();
+  /// P0-FL-5 · the text of an error this app wrote on purpose, or null.
+  ///
+  /// This used to pull the `message:` out of any Postgrest/Storage exception
+  /// and show it — "new row violates row-level security policy for table …"
+  /// reached coaches. Only messages written for people pass now: a
+  /// [StateError]'s message, and the plain [String] the service stores as
+  /// `lastError` on purpose (`updateExercise`'s "You don't have permission to
+  /// edit this exercise"). Anything else is recorded, never shown.
+  String? _appMessage(Object? err) {
+    if (err is StateError) return err.message;
+    if (err is String && err.trim().isNotEmpty) return err.trim();
+    return null;
   }
 
   void _showSuccess() {
@@ -1183,3 +1309,57 @@ Widget _row(String label, List<String> options, String value, ValueChanged<Strin
         ))),
   ]);
 }
+
+/// P0-FL-7 · the one message for a save whose media/relations steps failed.
+///
+/// [failures] are the parts that weren't saved, worded as clauses
+/// ("the image couldn't be uploaded"). A media-only edit has no text save to
+/// report, so a failed media write there means nothing was saved. The
+/// connection hint appears only when every recorded error is a network one.
+/// Retrying = tapping Save again, which re-uploads the picked files.
+@visibleForTesting
+String exerciseMediaFailureMessage({
+  required bool mediaOnly,
+  required bool mediaWriteFailed,
+  required List<String> failures,
+  required List<Object?> errors,
+  bool reviewSubmitFailed = false,
+  Object? reviewSubmitError,
+}) {
+  // U4 · a review submission that also failed joins this message (a media-only
+  // edit is never submitted for review, so this only reaches a full save).
+  if (reviewSubmitFailed && !mediaOnly) {
+    failures = [...failures, "it wasn't sent for review"];
+    errors = [...errors, reviewSubmitError];
+  }
+  final network = errors.isNotEmpty && errors.every(isNetworkFailure);
+  final next = network
+      ? 'Check your connection, then tap Save to try again.'
+      : 'Tap Save to try again in a moment. If it keeps happening, contact '
+          'support.';
+  if (mediaOnly && mediaWriteFailed) {
+    return "Couldn't save the media — nothing was changed. $next";
+  }
+  final String parts;
+  if (failures.length == 1) {
+    parts = failures.single;
+  } else {
+    parts = '${failures.sublist(0, failures.length - 1).join(', ')} and '
+        '${failures.last}';
+  }
+  return mediaOnly
+      ? "Couldn't save all the media — $parts. $next"
+      : 'Exercise saved, but $parts. $next';
+}
+
+/// P0-FL-5 · U1 · true only when [err] is the request not reaching the server:
+/// no socket, a timeout, or the http client giving up (postgrest-dart lets the
+/// http client's exception through untouched; gotrue wraps it as
+/// [AuthRetryableFetchException]). A [PostgrestException] always carries the
+/// server's status code, so it is never treated as a network failure here.
+@visibleForTesting
+bool isNetworkFailure(Object? err) =>
+    err is SocketException ||
+    err is TimeoutException ||
+    err is http.ClientException ||
+    err is AuthRetryableFetchException;
