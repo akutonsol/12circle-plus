@@ -1,8 +1,5 @@
-import 'dart:async' show TimeoutException;
-import 'dart:io' show SocketException;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:http/http.dart' as http;
 
 import '../../../core/router/app_router.dart' show kQaToolingEnabled;
 import 'package:flutter/material.dart';
@@ -11,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 import '../../../core/utils/web_logout.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../coaching_mode/domain/coaching_mode_provider.dart';
@@ -40,14 +38,6 @@ const kUnitSaveFailedMessage =
 const kUnitSaveSignedOutMessage =
     "Couldn't save your unit preference — you're signed out. Sign in and try "
     'again.';
-
-/// Connection wording is only for failures that ARE the connection; a
-/// PostgrestException (the server answered) never is.
-bool _isNetworkFailure(Object e) =>
-    e is SocketException ||
-    e is TimeoutException ||
-    e is http.ClientException ||
-    e is AuthRetryableFetchException;
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -114,7 +104,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       return true;
     } catch (e, st) {
       reportError('settings.persistUnit', e, st);
-      _unitSaveWasOffline = _isNetworkFailure(e);
+      _unitSaveWasOffline = isNetworkFailure(e);
       return false;
     }
   }

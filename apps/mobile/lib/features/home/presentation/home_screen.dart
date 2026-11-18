@@ -1,10 +1,8 @@
-import 'dart:async' show TimeoutException;
-import 'dart:io' show SocketException;
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -1267,14 +1265,6 @@ const kReviewFailedMessage =
 const kReviewSignedOutMessage =
     "Couldn't submit your review — you're signed out. Sign in and try again.";
 
-/// Connection wording is only for failures that ARE the connection; a
-/// PostgrestException (the server answered) never is.
-bool _isNetworkFailure(Object e) =>
-    e is SocketException ||
-    e is TimeoutException ||
-    e is http.ClientException ||
-    e is AuthRetryableFetchException;
-
 /// The dialog is private and opened from deep in the home screen; tests open
 /// it directly rather than standing up the whole dashboard.
 @visibleForTesting
@@ -1382,7 +1372,7 @@ void _showRateCoachDialog(BuildContext context, String coachId) {
                 reportError('home.rateCoach', e, st);
                 setSt(() {
                   saving = false;
-                  error = _isNetworkFailure(e)
+                  error = isNetworkFailure(e)
                       ? kReviewOfflineMessage : kReviewFailedMessage;
                 });
                 return;

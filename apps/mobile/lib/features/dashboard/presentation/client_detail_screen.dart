@@ -1,12 +1,8 @@
-import 'dart:async' show TimeoutException;
-import 'dart:io' show SocketException;
-
 import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
-import 'package:supabase_flutter/supabase_flutter.dart'
-    show AuthRetryableFetchException, PostgrestException;
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 import '../../coach/domain/coach_ecosystem_provider.dart';
 import '../../coach/presentation/coach_video_response_screen.dart';
 import '../../action_items/presentation/assign_action_item_sheet.dart';
@@ -695,13 +691,18 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
               // setClientPrice's StateError says what happened (signed out, no
               // relationship with this client — P0-FL-3). A generic failure
               // (e.g. a timeout) may still have committed, so it does not
-              // claim nothing changed.
+              // claim nothing changed. Connection wording only for a failure
+              // that IS the connection (P0-FL-11): a server answer (a
+              // PostgrestException) said "check your connection" too.
               if (!dctx.mounted) return;
               setDialogState(() {
                 saving = false;
                 error = e is StateError
                     ? e.message
-                    : "Couldn't save your price — check your connection and try again.";
+                    : isNetworkFailure(e)
+                        ? "Couldn't save your price — check your connection and try again."
+                        : "Couldn't save your price — try again in a moment. "
+                            'If it keeps happening, contact support.';
               });
               return;
             }
@@ -1772,14 +1773,6 @@ class _ActionButton extends StatelessWidget {
       ])));
 }
 
-/// Connection wording is only for failures that ARE the connection; a
-/// PostgrestException (the server answered) never is. Same test as Settings.
-bool _isNetworkFailure(Object e) =>
-    e is SocketException ||
-    e is TimeoutException ||
-    e is http.ClientException ||
-    e is AuthRetryableFetchException;
-
 /// A read this screen needs before it can act failed: say so, say what is
 /// held back because of it, and offer Try again (P0-FL-12).
 ///
@@ -1800,7 +1793,7 @@ class _LoadFailedNotice extends StatelessWidget {
   Widget build(BuildContext context) {
     // The Try again button sits right beside this, so the non-network next
     // step is the escalation, not a second "try again".
-    final nextStep = _isNetworkFailure(error)
+    final nextStep = isNetworkFailure(error)
         ? 'Check your connection, then try again.'
         : 'If it keeps happening, contact support.';
     return Semantics(
@@ -2149,7 +2142,7 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
           _isNotAuthorized(e)
               ? "This client isn't active with you any more, so the plan wasn't saved."
-              : _isNetworkFailure(e)
+              : isNetworkFailure(e)
                   ? "Couldn't save the plan — check your connection and try again."
                   : "Couldn't save the plan. Try again, and if it keeps happening, "
                       'contact support.')));
@@ -2358,7 +2351,7 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
       if (!mounted) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
-          _isNetworkFailure(e)
+          isNetworkFailure(e)
               ? "Couldn't assign habits — check your connection and try again."
               : "Couldn't assign habits. Try again, and if it keeps happening, "
                   'contact support.')));

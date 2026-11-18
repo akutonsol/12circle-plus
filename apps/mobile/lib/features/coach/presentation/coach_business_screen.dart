@@ -1,12 +1,11 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const _bg    = Color(0xFF030303);
@@ -97,17 +96,8 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       "Invite saved, but the email couldn't be sent — ask them to check back, "
       'or send the invite again later.';
 
-  /// Only a failure to reach the server is a connection problem. A server
-  /// answer (PostgrestException, StorageException, a missing row) is not —
-  /// telling the coach to check their connection would send them the wrong way.
-  static bool _isNetworkFailure(Object e) =>
-      e is SocketException ||
-      e is TimeoutException ||
-      e is http.ClientException ||
-      e is AuthRetryableFetchException;
-
   /// "Couldn't WHAT — NEXT STEP." for a thrown failure.
-  static String _couldnt(String what, Object e) => _isNetworkFailure(e)
+  static String _couldnt(String what, Object e) => isNetworkFailure(e)
       ? "Couldn't $what — check your connection and try again."
       : "Couldn't $what — try again in a moment. If it keeps happening, "
           'contact support.';
@@ -254,7 +244,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _loadError = _isNetworkFailure(e) ? _checkConnection : _tryLater;
+        _loadError = isNetworkFailure(e) ? _checkConnection : _tryLater;
       });
     }
   }

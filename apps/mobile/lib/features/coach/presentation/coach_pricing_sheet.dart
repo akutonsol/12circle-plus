@@ -1,10 +1,9 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 import '../data/coach_relationship_service.dart';
 
 const _bg     = Color(0xFF030303);
@@ -66,14 +65,6 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
       'Reopen this to check, or try again in a moment. If it keeps happening, '
       'contact support.';
 
-  /// Only a failure to reach the server is a connection problem; a server
-  /// answer (PostgrestException) is not.
-  static bool _isNetworkFailure(Object e) =>
-      e is SocketException ||
-      e is TimeoutException ||
-      e is http.ClientException ||
-      e is AuthRetryableFetchException;
-
   /// Try again: back to the opening spinner (so a second tap cannot start a
   /// second read), then the same read.
   void _retry() {
@@ -106,7 +97,7 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
       reportError('CoachPricingSheet._load', e, s);
       if (!mounted) return;
       setState(() {
-        _loadError = _isNetworkFailure(e) ? _checkConnection : _tryLater;
+        _loadError = isNetworkFailure(e) ? _checkConnection : _tryLater;
         _loading = false;
       });
       return;
@@ -146,7 +137,7 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
         _saving = false;
         _error = e is StateError
             ? e.message
-            : _isNetworkFailure(e)
+            : isNetworkFailure(e)
                 ? "Couldn't save your price — check your connection and try again."
                 : _saveFailedMsg;
       });

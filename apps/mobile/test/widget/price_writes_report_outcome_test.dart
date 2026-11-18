@@ -36,9 +36,14 @@ const _generic =
     "Couldn't confirm your price was saved — it may still have saved. "
     'Reopen this to check, or try again in a moment. If it keeps happening, '
     'contact support.';
-// The Set Custom Price dialog's copy is unchanged by U2.
-const _dialogGeneric =
+// The Set Custom Price dialog (P0-FL-11): connection wording only for a
+// failure that IS the connection. Before, every non-StateError failure — a
+// server 500 included — said "check your connection".
+const _dialogConnection =
     "Couldn't save your price — check your connection and try again.";
+const _dialogTryLater =
+    "Couldn't save your price — try again in a moment. If it keeps happening, "
+    'contact support.';
 const _sheetZeroRows =
     "Your price couldn't be saved. Nothing was changed — try again.";
 const _sheetInvalid = r'Enter a monthly price above $0.';
@@ -107,7 +112,7 @@ class _MemoryStore extends GotrueAsyncStorage {
   Future<void> removeItem({required String key}) async => _m.remove(key);
 }
 
-enum _Patch { oneRow, zeroRows, fails }
+enum _Patch { oneRow, zeroRows, fails, offline }
 
 class _Server extends http.BaseClient {
   _Patch mode = _Patch.oneRow;
@@ -121,12 +126,18 @@ class _Server extends http.BaseClient {
     calls.add('${request.method} ${request.url.path}');
     if (request.method == 'PATCH') {
       if (gate != null) await gate!.future;
+      // The request never reaches the server: postgrest-dart lets the http
+      // client's exception through untouched.
+      if (mode == _Patch.offline) {
+        throw http.ClientException('Connection closed', request.url);
+      }
       return switch (mode) {
         _Patch.oneRow => _json([
             {'id': 'row-1'}
           ], 200, request),
         _Patch.zeroRows => _json([], 200, request),
         _Patch.fails => _json({'message': 'offline'}, 500, request),
+        _Patch.offline => throw StateError('unreachable'),
       };
     }
     // The sheet's opening read of the current price (maybeSingle).
@@ -301,10 +312,30 @@ void main() {
       server.mode = _Patch.fails;
       await saveDialog(tester);
       expect(find.text(_dialogSaved), findsNothing);
-      expect(_inDialog(_dialogGeneric), findsOneWidget);
+      expect(_inDialog(_dialogTryLater), findsOneWidget,
+          reason: 'P0-FL-11: a 500 is the server answering, not the '
+              'connection');
+      expect(find.text(_dialogConnection), findsNothing,
+          reason: 'THE defect: every failure said "check your connection"');
       expect(_fieldText(tester), '150', reason: 'the entered price is kept');
       expect(saveButton(tester).onPressed, isNotNull,
           reason: 'U3: Save is usable again after a failure');
+    });
+
+    testWidgets(
+        'a save that never reaches the server says check your connection '
+        'inside the dialog', (tester) async {
+      server.mode = _Patch.offline;
+      await saveDialog(tester);
+      expect(
+          server.calls, contains('PATCH /rest/v1/coach_client_relationships'),
+          reason: 'premise: the write was attempted');
+      expect(find.text(_dialogSaved), findsNothing);
+      expect(_inDialog(_dialogConnection), findsOneWidget);
+      expect(find.text(_dialogTryLater), findsNothing);
+      expect(_fieldText(tester), '150', reason: 'the entered price is kept');
+      expect(saveButton(tester).onPressed, isNotNull,
+          reason: 'Save is usable again after a failure');
     });
 
     testWidgets('an unreadable price is refused inside the dialog',
