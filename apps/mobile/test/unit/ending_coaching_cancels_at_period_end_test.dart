@@ -85,6 +85,8 @@ class _Server extends http.BaseClient {
       body = cancelStatus == 200 ? cancelAnswer : {'error': 'stripe_cancel_failed'};
     } else if (path.endsWith('/coach_client_relationships') && request.method == 'PATCH') {
       calls.add('PATCH relationship ${await request.finalize().bytesToString()}');
+      // The update matched the active relationship (cancelCoach checks rows).
+      body = [{'id': 'rel-1'}];
     } else if (request.method == 'POST') {
       status = 201;
       body = null;

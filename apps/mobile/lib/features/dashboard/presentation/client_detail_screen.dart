@@ -594,13 +594,24 @@ class _ClientTimeline extends StatelessWidget {
   return (price: v, error: null);
 }
 
+/// Opens the custom-price dialog without building the whole client screen,
+/// whose many providers a dialog test does not need.
+@visibleForTesting
+void showCustomPriceDialogForTest(BuildContext context, String clientId) =>
+    _showCustomPriceDialog(context, clientId);
+
 /// Coach sets a custom monthly price for THIS client (overrides their global
 /// rate). Leaving it blank and saving clears the override.
 void _showCustomPriceDialog(BuildContext context, String clientId) {
   final ctrl = TextEditingController();
+  // Why the last Save did not happen, shown on the field INSIDE the dialog. A
+  // SnackBar went to the page's messenger, under the dialog's scrim, so the
+  // coach saw nothing. [saving] disables Save while the write is in flight.
+  String? error;
+  var saving = false;
   showDialog(
     context: context,
-    builder: (dctx) => AlertDialog(
+    builder: (dctx) => StatefulBuilder(builder: (_, setDialogState) => AlertDialog(
       backgroundColor: _card,
       title: const Text('Custom Price', style: TextStyle(color: _wht, fontWeight: FontWeight.w800)),
       content: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -611,14 +622,19 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
         TextField(
           controller: ctrl,
           keyboardType: TextInputType.number,
+          onChanged: (_) {
+            if (error != null) setDialogState(() => error = null);
+          },
           style: const TextStyle(color: _wht, fontSize: 16, fontWeight: FontWeight.w700),
-          decoration: const InputDecoration(
+          decoration: InputDecoration(
             prefixText: '\$ ',
-            prefixStyle: TextStyle(color: _wht, fontSize: 16, fontWeight: FontWeight.w700),
+            prefixStyle: const TextStyle(color: _wht, fontSize: 16, fontWeight: FontWeight.w700),
             suffixText: '/mo',
-            suffixStyle: TextStyle(color: _mut),
+            suffixStyle: const TextStyle(color: _mut),
             hintText: 'e.g. 150',
-            hintStyle: TextStyle(color: _mut),
+            hintStyle: const TextStyle(color: _mut),
+            errorText: error,
+            errorMaxLines: 3,
           ),
         ),
       ]),
@@ -628,20 +644,32 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
           child: const Text('Cancel', style: TextStyle(color: _mut)),
         ),
         TextButton(
-          onPressed: () async {
+          onPressed: saving ? null : () async {
             final parsed = parseCustomPrice(ctrl.text);
             if (parsed.error != null) {
-              ScaffoldMessenger.of(dctx).showSnackBar(SnackBar(content: Text(parsed.error!)));
+              setDialogState(() => error = parsed.error);
               return;
             }
             final value = parsed.price;
+            setDialogState(() {
+              saving = true;
+              error = null;
+            });
             try {
               await CoachRelationshipService().setClientPrice(clientId, value);
-            } catch (_) {
+            } catch (e) {
               // A write that failed escaped here unhandled, with nothing said.
+              // setClientPrice's StateError says what happened (signed out, no
+              // relationship with this client — P0-FL-3). A generic failure
+              // (e.g. a timeout) may still have committed, so it does not
+              // claim nothing changed.
               if (!dctx.mounted) return;
-              ScaffoldMessenger.of(dctx).showSnackBar(const SnackBar(
-                  content: Text("Couldn't save the price — try again.")));
+              setDialogState(() {
+                saving = false;
+                error = e is StateError
+                    ? e.message
+                    : "Couldn't save your price — check your connection and try again.";
+              });
               return;
             }
             if (!dctx.mounted) return;
@@ -651,10 +679,15 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
                     ? 'Custom price cleared — using your standard rate.'
                     : 'Custom price set to \$${value.toStringAsFixed(0)}/mo.')));
           },
-          child: const Text('Save', style: TextStyle(color: _pri, fontWeight: FontWeight.w700)),
+          child: saving
+              ? Semantics(
+                  label: 'Saving',
+                  child: const SizedBox(width: 16, height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: _pri)))
+              : const Text('Save', style: TextStyle(color: _pri, fontWeight: FontWeight.w700)),
         ),
       ],
-    ),
+    )),
   );
 }
 
