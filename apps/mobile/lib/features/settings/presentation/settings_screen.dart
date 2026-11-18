@@ -1,4 +1,8 @@
+import 'dart:async' show TimeoutException;
+import 'dart:io' show SocketException;
+
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:http/http.dart' as http;
 
 import '../../../core/router/app_router.dart' show kQaToolingEnabled;
 import 'package:flutter/material.dart';
@@ -26,6 +30,24 @@ class _C {
   static const onSurfaceMuted      = Color(0xFFCFC2D6);
   static const error               = Color(0xFFFFB4AB);
 }
+
+/// Shown when the unit preference could not be stored and the toggle reverts.
+const kUnitSaveOfflineMessage =
+    "Couldn't save your unit preference — check your connection and try again.";
+const kUnitSaveFailedMessage =
+    "Couldn't save your unit preference — try again in a moment. "
+    'If it keeps happening, contact support.';
+const kUnitSaveSignedOutMessage =
+    "Couldn't save your unit preference — you're signed out. Sign in and try "
+    'again.';
+
+/// Connection wording is only for failures that ARE the connection; a
+/// PostgrestException (the server answered) never is.
+bool _isNetworkFailure(Object e) =>
+    e is SocketException ||
+    e is TimeoutException ||
+    e is http.ClientException ||
+    e is AuthRetryableFetchException;
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -62,19 +84,51 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// `_saveToggle` in `notification_preferences_screen` and
   /// `WeeklyCheckinService.submitWeeklyCheckin` already report failure; this
   /// matches them rather than inventing a convention.
+  ///
+  /// P0-FL-9: the update did not ask for the row back, so an update RLS
+  /// filtered to 0 rows also returned true and the toggle "persisted" over an
+  /// unchanged row. It now selects `id` and treats an empty result as failure.
+  /// On failure [_unitSaveWasOffline] says whether it was the connection, so
+  /// the caller can pick the wording (the bool shape is held by the CORR-2
+  /// guard in correction_rights_guard_test). Signed out is not a server
+  /// failure either: [_unitSaveSignedOut] picks the signed-out wording, as
+  /// Home's Rate Your Coach does.
   Future<bool> _persistUnit(String unit) async {
+    _unitSaveWasOffline = false;
+    _unitSaveSignedOut = false;
     final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (uid == null) return false;
+    if (uid == null) {
+      _unitSaveSignedOut = true;
+      return false;
+    }
     try {
-      await Supabase.instance.client.from('user_profiles').update({
+      final rows = await Supabase.instance.client.from('user_profiles').update({
         'unit_preference': unit == 'KG' ? 'metric' : 'imperial',
-      }).eq('id', uid);
+      }).eq('id', uid).select('id');
+      if (rows.isEmpty) {
+        reportError('settings.persistUnit',
+            StateError('unit_preference update changed 0 rows'));
+        return false;
+      }
       ref.invalidate(currentUserProfileProvider);
       return true;
-    } catch (_) {
+    } catch (e, st) {
+      reportError('settings.persistUnit', e, st);
+      _unitSaveWasOffline = _isNetworkFailure(e);
       return false;
     }
   }
+
+  /// Set by a failed [_persistUnit]: true only for a network failure.
+  bool _unitSaveWasOffline = false;
+
+  /// Set by a failed [_persistUnit]: true when there was no signed-in user.
+  bool _unitSaveSignedOut = false;
+
+  /// True while a unit save is in flight. Taps are ignored meanwhile: two
+  /// overlapping saves each captured their own "previous", so a late failure
+  /// of the first reverted over the second and showed a unit never stored.
+  bool _unitSaving = false;
 
   @override
   Widget build(BuildContext context) {
@@ -227,14 +281,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             onTap: () async {
                               // Optimistic, but REVERTED on failure: an
                               // un-reverted toggle shows a preference that was
-                              // never stored.
+                              // never stored. One save at a time (U4).
+                              if (_unitSaving) return;
+                              _unitSaving = true;
                               final previous = _selectedUnit;
                               setState(() => _selectedUnit = u);
                               final ok = await _persistUnit(u);
+                              _unitSaving = false;
                               if (!ok && context.mounted) {
                                 setState(() => _selectedUnit = previous);
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Failed to save.')),
+                                  SnackBar(content: Text(_unitSaveSignedOut
+                                      ? kUnitSaveSignedOutMessage
+                                      : _unitSaveWasOffline
+                                          ? kUnitSaveOfflineMessage
+                                          : kUnitSaveFailedMessage)),
                                 );
                               }
                             },

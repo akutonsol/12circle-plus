@@ -30,6 +30,15 @@ const _outlineV = Color(0xFF4D4354);
 const _btnPurple = Color(0xFF7C3AED);
 // ignore_for_file: unused_element, unused_element_parameter
 
+/// Non-blocking notice when a step's progress could not be stored.
+const kIntakeProgressNotSavedMessage =
+    "Your progress couldn't be saved — you may need to redo this step if you "
+    'leave.';
+
+/// How far the progress notice floats above the bottom inset — clear of every
+/// step's bottom bar so Continue stays tappable while it shows.
+const double kIntakeNoticeBottomClearance = 124;
+
 // ── Main flow controller ──────────────────────────────────────────────────────
 class IntakeFlowScreen extends StatefulWidget {
   const IntakeFlowScreen({super.key});
@@ -156,25 +165,71 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     if (uid == null) return;
     final db = Supabase.instance.client;
 
+    // P0-FL-9. Both phases used to be `catch (_) {}` with no row check, so a
+    // refused or 0-row write lost the person's resume point in silence. Each
+    // now asks for its row back; a throw or an empty result is a failure that
+    // is reported and — once, until a save succeeds again — told to the user.
+    // Moving on is never blocked, and what is written is unchanged.
+    var saved = true;
+
     // Phase 1: ALWAYS persist the step + incomplete flag on their own. These two
     // columns can't fail on data-type drift, so resume works even if a data
     // field below is rejected by the (hand-built) schema.
     try {
-      await db.from('user_profiles').update({
+      final rows = await db.from('user_profiles').update({
         'onboarding_step': _step,
         'onboarding_complete': false,
-      }).eq('id', uid);
-    } catch (_) {}
+      }).eq('id', uid).select('id');
+      if (rows.isEmpty) {
+        saved = false;
+        reportError('intake.saveProgress.step',
+            StateError('onboarding_step update changed 0 rows'));
+      }
+    } catch (e, st) {
+      saved = false;
+      reportError('intake.saveProgress.step', e, st);
+    }
 
-    // Phase 2: best-effort persist the collected intake data.
+    // Phase 2: persist the collected intake data.
     try {
       _data.biggestChallenges = _challenges.toList();
-      await db
+      final rows = await db
           .from('user_profiles')
           .update(_data.toSupabasePartial(_step))
-          .eq('id', uid);
-    } catch (_) {}
+          .eq('id', uid)
+          .select('id');
+      if (rows.isEmpty) {
+        saved = false;
+        reportError('intake.saveProgress.data',
+            StateError('intake data update changed 0 rows'));
+      }
+    } catch (e, st) {
+      saved = false;
+      reportError('intake.saveProgress.data', e, st);
+    }
+
+    if (saved) {
+      _progressNoticeShown = false;
+    } else if (!_progressNoticeShown && mounted) {
+      _progressNoticeShown = true;
+      // Floating, lifted clear of the step's bottom bar (U5): a fixed
+      // SnackBar sat over Continue and swallowed the tap that moves on. The
+      // tallest bar (button 54 + note + padding) is ~110 px above the inset.
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: const Text(kIntakeProgressNotSavedMessage),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.fromLTRB(
+              16, 0, 16, kIntakeNoticeBottomClearance +
+                  MediaQuery.of(context).padding.bottom),
+        ),
+      );
+    }
   }
+
+  /// Set once the "progress isn't being saved" notice has been shown; cleared
+  /// by the next save that succeeds, so a fresh failure is told again.
+  bool _progressNoticeShown = false;
 
   void _next() {
     if (_step < _totalSteps) {
@@ -4171,6 +4226,10 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
     // "Meet Coach …" only for a coach who IS linked. One `catch (_) {}` around
     // the whole chain welcomed a client to a coach whose link had failed.
     var linked = false;
+    // Set once the link is saved: ending the client's previous coach is a
+    // separate step, and its failure must not read as a failed link -- the new
+    // coach IS linked (P0-FL-1 follow-up F1).
+    String? previousNotEnded;
     try {
       final uid = Supabase.instance.client.auth.currentUser?.id;
       if (uid != null) {
@@ -4183,6 +4242,8 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
               'initiated_by':  'client',
               'activated_at':  DateTime.now().toUtc().toIso8601String(),
             }, onConflict: 'coach_id,client_id');
+        linked = true;
+        ref.invalidate(assignedCoachProvider);
         // Intake yields a single coach: cancel any other active relationship
         // (e.g. a coach picked earlier then changed) so re-selecting replaces
         // rather than accumulates. Multi-coach is added later via marketplace.
@@ -4190,18 +4251,32 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
         // Each through the one end-coaching policy (owner decision 2): a coach
         // the client was PAYING is cancelled at the end of the paid period and
         // coaching with them lasts until then; an unpaid one ends now.
-        final others = await Supabase.instance.client
-            .from('coach_client_relationships')
-            .select('coach_id')
-            .eq('client_id', uid)
-            .eq('status', 'active')
-            .neq('coach_id', coach['id'] as String);
-        for (final o in (others as List)) {
-          await CoachRelationshipService()
-              .cancelCoach(o['coach_id'] as String, 'switched_during_intake', null);
+        //
+        // Reported, not swallowed: a coach that could not be ended is still
+        // the client's coach, and they are told to end it from Profile.
+        try {
+          final others = await Supabase.instance.client
+              .from('coach_client_relationships')
+              .select('coach_id')
+              .eq('client_id', uid)
+              .eq('status', 'active')
+              .neq('coach_id', coach['id'] as String);
+          for (final o in (others as List)) {
+            try {
+              await CoachRelationshipService()
+                  .cancelCoach(o['coach_id'] as String, 'switched_during_intake', null);
+            } catch (e) {
+              reportError('IntakeFlow.selectCoach.endPrevious', e);
+              previousNotEnded =
+                  "Your previous coaching couldn't be ended — end it from Profile.";
+            }
+          }
+        } catch (e) {
+          // The read of other coaches failed: whether there is one is unknown.
+          reportError('IntakeFlow.selectCoach.endPrevious', e);
+          previousNotEnded = "We couldn't check for a previous coach — "
+              'if you had one, end it from Profile.';
         }
-        linked = true;
-        ref.invalidate(assignedCoachProvider);
         // Notify coach. Best-effort, and reported: the link above is saved, and
         // a failed notification must not read as a failed link (N3).
         try {
@@ -4228,6 +4303,11 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
     if (!linked) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text("Couldn't select this coach — check your connection and try again.")));
+    } else if (previousNotEnded != null) {
+      final name = '${coach['first_name'] ?? ''} ${coach['last_name'] ?? ''}'.trim();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text("You're set with ${name.isEmpty ? 'your new coach' : name}. "
+              '$previousNotEnded')));
     }
   }
 

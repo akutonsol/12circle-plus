@@ -79,6 +79,17 @@ class _MemoryStore extends GotrueAsyncStorage {
 class _Server extends http.BaseClient {
   bool linkFails = false;
   bool notificationFails = false;
+
+  /// The client already has another active coach, picked earlier.
+  bool hasPreviousCoach = false;
+
+  /// Ending that coach matched no row (RLS refusal / already ended), so
+  /// `cancelCoach` throws its StateError.
+  bool previousEndMatchesNoRow = false;
+
+  /// The read of the client's OTHER active coaches fails (500), so whether
+  /// there is a previous coach is unknown.
+  bool otherCoachesReadFails = false;
   final writes = <String>[];
 
   @override
@@ -97,6 +108,18 @@ class _Server extends http.BaseClient {
       return linkFails
           ? _json({'message': 'offline'}, 503, request)
           : _json([], 201, request);
+    }
+    if (request.method == 'GET' &&
+        path.endsWith('/coach_client_relationships') &&
+        request.url.queryParameters['coach_id'] == 'neq.coach-a') {
+      if (otherCoachesReadFails &&
+          request.url.queryParameters['status'] == 'eq.active') {
+        return _json({'message': 'other coaches read failed'}, 500, request);
+      }
+      return _json([if (hasPreviousCoach) {'coach_id': 'coach-old'}], 200, request);
+    }
+    if (request.method == 'PATCH' && path.endsWith('/coach_client_relationships')) {
+      return _json(previousEndMatchesNoRow ? [] : [{'id': 'rel-old'}], 200, request);
     }
     if (path.endsWith('/notifications')) {
       return notificationFails
@@ -141,6 +164,9 @@ void main() {
     server
       ..linkFails = false
       ..notificationFails = false
+      ..hasPreviousCoach = false
+      ..previousEndMatchesNoRow = false
+      ..otherCoachesReadFails = false
       ..writes.clear();
   });
 
@@ -192,5 +218,64 @@ void main() {
     await pickCoach(t);
 
     expect(find.text('Meet Coach Avery Stone'), findsOneWidget);
+  });
+
+  group('a previous coach', () {
+    // F1 (P0-FL-1 follow-up): the link was saved, THEN ending the client's
+    // other coach threw (0-row / signed out). That throw left the step
+    // "unlinked": "Couldn't select this coach", no notification to the new
+    // coach, no "Meet Coach" -- though the new coach IS linked.
+    testWidgets('that cannot be ended does not undo the new link', (t) async {
+      server
+        ..hasPreviousCoach = true
+        ..previousEndMatchesNoRow = true;
+      await pickCoach(t);
+
+      expect(server.writes, contains('PATCH /rest/v1/coach_client_relationships'),
+          reason: 'guard the premise: ending the previous coach was attempted');
+      expect(find.text('Meet Coach Avery Stone'), findsOneWidget,
+          reason: 'the new coach is linked');
+      expect(find.textContaining("Couldn't select this coach"), findsNothing);
+      expect(server.writes, contains('POST /rest/v1/notifications'),
+          reason: 'the new coach is still told they have a client');
+      expect(
+          find.text("You're set with Avery Stone. Your previous coaching "
+              "couldn't be ended — end it from Profile."),
+          findsOneWidget,
+          reason: 'the client still has the old coach, and is told so');
+    });
+
+    testWidgets('that is ended says nothing more', (t) async {
+      server.hasPreviousCoach = true;
+      await pickCoach(t);
+
+      expect(server.writes, contains('PATCH /rest/v1/coach_client_relationships'));
+      expect(find.text('Meet Coach Avery Stone'), findsOneWidget);
+      expect(find.textContaining("couldn't be ended"), findsNothing);
+    });
+
+    // QA follow-up: the READ of the client's other active coaches failed. The
+    // new coach is already linked, so the step stays linked, the coach is
+    // still notified, and the client is told the check could not be made
+    // (not that a previous coach exists, nor that the pick failed).
+    testWidgets('that cannot be looked up does not undo the new link', (t) async {
+      server.otherCoachesReadFails = true;
+      await pickCoach(t);
+
+      expect(server.writes, contains('POST /rest/v1/coach_client_relationships'),
+          reason: 'guard the premise: the link was saved');
+      expect(server.writes, isNot(contains('PATCH /rest/v1/coach_client_relationships')),
+          reason: 'guard the premise: nothing was ended -- the read failed first');
+      expect(find.text('Meet Coach Avery Stone'), findsOneWidget,
+          reason: 'the new coach is linked');
+      expect(find.textContaining("Couldn't select this coach"), findsNothing);
+      expect(server.writes, contains('POST /rest/v1/notifications'),
+          reason: 'the new coach is still told they have a client');
+      expect(
+          find.text("You're set with Avery Stone. We couldn't check for a "
+              'previous coach — if you had one, end it from Profile.'),
+          findsOneWidget,
+          reason: 'whether an old coach remains is unknown, and the client is told so');
+    });
   });
 }

@@ -1,7 +1,12 @@
+import 'dart:async' show TimeoutException;
+import 'dart:io' show SocketException;
+
 import '../../../core/observability/app_failure.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
+import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart'
+    show AuthRetryableFetchException, PostgrestException;
 import '../../coach/domain/coach_ecosystem_provider.dart';
 import '../../coach/presentation/coach_video_response_screen.dart';
 import '../../action_items/presentation/assign_action_item_sheet.dart';
@@ -227,7 +232,22 @@ class _OverviewTab extends ConsumerWidget {
     final summary    = _generateAiSummary(detail);
     final actions    = _generateActions(detail);
     // Coaches can only assign work once the client is on a paid plan with them.
-    final paidPlan   = ref.watch(clientHasPaidPlanProvider(clientId)).valueOrNull ?? false;
+    // P0-FL-12: a check that has not answered (still loading, or failed) is
+    // NOT "not subscribed" — [paidPlan] is null then, and the lock message is
+    // kept for a check that answered no.
+    final paidAsync  = ref.watch(clientHasPaidPlanProvider(clientId));
+    final bool? paidPlan = paidAsync.hasValue && !paidAsync.hasError
+        ? paidAsync.requireValue
+        : null;
+    final paidCheckFailed = paidPlan == null && paidAsync.hasError && !paidAsync.isLoading;
+    // Consecutive failed checks, so a Try again that fails again reads
+    // differently from the first failure instead of looking like nothing happened.
+    ref.listen<AsyncValue<bool>>(clientHasPaidPlanProvider(clientId), (_, next) {
+      if (next.isLoading) return;
+      final failures = ref.read(_paidCheckFailuresProvider(clientId).notifier);
+      failures.state = next.hasError ? failures.state + 1 : 0;
+    });
+    final paidFailures = ref.watch(_paidCheckFailuresProvider(clientId));
 
     final goalLabel = {
       'lose_fat': 'Lose Fat', 'build_muscle': 'Build Muscle',
@@ -318,7 +338,8 @@ class _OverviewTab extends ConsumerWidget {
         const SizedBox(height: 12),
 
         // ── Coach Action Center ──
-        _CoachActionCenter(actions: actions, clientId: clientId, paidPlan: paidPlan),
+        _CoachActionCenter(actions: actions, clientId: clientId, paidPlan: paidPlan,
+          paidCheckFailed: paidCheckFailed),
         const SizedBox(height: 12),
 
         // ── Assigned Program ──
@@ -339,7 +360,19 @@ class _OverviewTab extends ConsumerWidget {
           _ClientScheduleCard(clientId: clientId),
           const SizedBox(height: 10),
           // ── Coaching services — gated behind a paid plan ──
-          if (!paidPlan)
+          if (paidPlan == null && paidAsync.hasError && !paidAsync.isLoading)
+            _LoadFailedNotice(
+              title: paidFailures > 1
+                  ? "Still couldn't check this client's plan."
+                  : "Couldn't check this client's plan.",
+              error: paidAsync.error!,
+              detail: 'Coaching services stay hidden until it loads.',
+              retryLabel: "Try again, check this client's plan",
+              onRetry: () => ref.invalidate(clientHasPaidPlanProvider(clientId)),
+            )
+          else if (paidPlan == null)
+            const _CheckingNotice(label: "Checking this client's plan…")
+          else if (!paidPlan)
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
@@ -594,13 +627,24 @@ class _ClientTimeline extends StatelessWidget {
   return (price: v, error: null);
 }
 
+/// Opens the custom-price dialog without building the whole client screen,
+/// whose many providers a dialog test does not need.
+@visibleForTesting
+void showCustomPriceDialogForTest(BuildContext context, String clientId) =>
+    _showCustomPriceDialog(context, clientId);
+
 /// Coach sets a custom monthly price for THIS client (overrides their global
 /// rate). Leaving it blank and saving clears the override.
 void _showCustomPriceDialog(BuildContext context, String clientId) {
   final ctrl = TextEditingController();
+  // Why the last Save did not happen, shown on the field INSIDE the dialog. A
+  // SnackBar went to the page's messenger, under the dialog's scrim, so the
+  // coach saw nothing. [saving] disables Save while the write is in flight.
+  String? error;
+  var saving = false;
   showDialog(
     context: context,
-    builder: (dctx) => AlertDialog(
+    builder: (dctx) => StatefulBuilder(builder: (_, setDialogState) => AlertDialog(
       backgroundColor: _card,
       title: const Text('Custom Price', style: TextStyle(color: _wht, fontWeight: FontWeight.w800)),
       content: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -611,14 +655,19 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
         TextField(
           controller: ctrl,
           keyboardType: TextInputType.number,
+          onChanged: (_) {
+            if (error != null) setDialogState(() => error = null);
+          },
           style: const TextStyle(color: _wht, fontSize: 16, fontWeight: FontWeight.w700),
-          decoration: const InputDecoration(
+          decoration: InputDecoration(
             prefixText: '\$ ',
-            prefixStyle: TextStyle(color: _wht, fontSize: 16, fontWeight: FontWeight.w700),
+            prefixStyle: const TextStyle(color: _wht, fontSize: 16, fontWeight: FontWeight.w700),
             suffixText: '/mo',
-            suffixStyle: TextStyle(color: _mut),
+            suffixStyle: const TextStyle(color: _mut),
             hintText: 'e.g. 150',
-            hintStyle: TextStyle(color: _mut),
+            hintStyle: const TextStyle(color: _mut),
+            errorText: error,
+            errorMaxLines: 3,
           ),
         ),
       ]),
@@ -628,20 +677,32 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
           child: const Text('Cancel', style: TextStyle(color: _mut)),
         ),
         TextButton(
-          onPressed: () async {
+          onPressed: saving ? null : () async {
             final parsed = parseCustomPrice(ctrl.text);
             if (parsed.error != null) {
-              ScaffoldMessenger.of(dctx).showSnackBar(SnackBar(content: Text(parsed.error!)));
+              setDialogState(() => error = parsed.error);
               return;
             }
             final value = parsed.price;
+            setDialogState(() {
+              saving = true;
+              error = null;
+            });
             try {
               await CoachRelationshipService().setClientPrice(clientId, value);
-            } catch (_) {
+            } catch (e) {
               // A write that failed escaped here unhandled, with nothing said.
+              // setClientPrice's StateError says what happened (signed out, no
+              // relationship with this client — P0-FL-3). A generic failure
+              // (e.g. a timeout) may still have committed, so it does not
+              // claim nothing changed.
               if (!dctx.mounted) return;
-              ScaffoldMessenger.of(dctx).showSnackBar(const SnackBar(
-                  content: Text("Couldn't save the price — try again.")));
+              setDialogState(() {
+                saving = false;
+                error = e is StateError
+                    ? e.message
+                    : "Couldn't save your price — check your connection and try again.";
+              });
               return;
             }
             if (!dctx.mounted) return;
@@ -651,10 +712,15 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
                     ? 'Custom price cleared — using your standard rate.'
                     : 'Custom price set to \$${value.toStringAsFixed(0)}/mo.')));
           },
-          child: const Text('Save', style: TextStyle(color: _pri, fontWeight: FontWeight.w700)),
+          child: saving
+              ? Semantics(
+                  label: 'Saving',
+                  child: const SizedBox(width: 16, height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: _pri)))
+              : const Text('Save', style: TextStyle(color: _pri, fontWeight: FontWeight.w700)),
         ),
       ],
-    ),
+    )),
   );
 }
 
@@ -1459,8 +1525,13 @@ class _ClientScoreCard extends ConsumerWidget {
 class _CoachActionCenter extends ConsumerStatefulWidget {
   final List<Map<String, String>> actions;
   final String clientId;
-  final bool paidPlan;
-  const _CoachActionCenter({required this.actions, required this.clientId, required this.paidPlan});
+  /// Null while the paid-plan check has not answered (loading or failed).
+  final bool? paidPlan;
+  /// The check FAILED (as opposed to still running) — only meaningful while
+  /// [paidPlan] is null.
+  final bool paidCheckFailed;
+  const _CoachActionCenter({required this.actions, required this.clientId,
+    required this.paidPlan, required this.paidCheckFailed});
 
   @override
   ConsumerState<_CoachActionCenter> createState() => _CoachActionCenterState();
@@ -1493,7 +1564,16 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
     final icon = a['icon'] ?? '';
     final opensService = icon == 'fitness' || icon == 'nutrition' || icon == 'habit' || icon == 'checkin';
     // Services stay locked until the client is on a paid plan with this coach.
-    if (opensService && !widget.paidPlan) {
+    // An unanswered check is not "not subscribed" (P0-FL-12).
+    if (opensService && widget.paidPlan == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(widget.paidCheckFailed
+            ? "Couldn't check this client's plan. Use Try again in Coaching services."
+            : "Still checking this client's plan — try again in a moment."),
+        behavior: SnackBarBehavior.floating));
+      return;
+    }
+    if (opensService && widget.paidPlan == false) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Locked — the client must subscribe to one of your plans first.'),
         behavior: SnackBarBehavior.floating));
@@ -1572,7 +1652,7 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
           style: TextStyle(color: _mut, fontSize: 12, fontWeight: FontWeight.w600)),
         const Spacer(),
         // Keep the generated items; let the coach add their own (once paid).
-        if (widget.paidPlan)
+        if (widget.paidPlan == true)
           TextButton.icon(
             onPressed: () => showAssignActionItemSheet(context, ref, widget.clientId),
             icon: const Icon(Icons.add_rounded, color: _brand, size: 16),
@@ -1691,6 +1771,87 @@ class _ActionButton extends StatelessWidget {
         const Icon(Icons.arrow_forward_ios, color: _mut, size: 14),
       ])));
 }
+
+/// Connection wording is only for failures that ARE the connection; a
+/// PostgrestException (the server answered) never is. Same test as Settings.
+bool _isNetworkFailure(Object e) =>
+    e is SocketException ||
+    e is TimeoutException ||
+    e is http.ClientException ||
+    e is AuthRetryableFetchException;
+
+/// A read this screen needs before it can act failed: say so, say what is
+/// held back because of it, and offer Try again (P0-FL-12).
+///
+/// A live region, so a screen reader announces the failure (and a repeat
+/// failure, whose [title] the caller changes) without the coach hunting for it.
+class _LoadFailedNotice extends StatelessWidget {
+  final String title;
+  final Object error;
+  final String detail;
+  /// What Try again does, for a screen reader ("Try again, load current plan").
+  final String retryLabel;
+  final VoidCallback onRetry;
+  const _LoadFailedNotice({
+    required this.title, required this.error, required this.detail,
+    required this.retryLabel, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    // The Try again button sits right beside this, so the non-network next
+    // step is the escalation, not a second "try again".
+    final nextStep = _isNetworkFailure(error)
+        ? 'Check your connection, then try again.'
+        : 'If it keeps happening, contact support.';
+    return Semantics(
+      liveRegion: true,
+      container: true,
+      child: Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _red.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _red.withValues(alpha: 0.3))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.error_outline, color: _red, size: 18),
+          const SizedBox(width: 10),
+          Expanded(child: Text(title,
+            style: const TextStyle(color: _wht, fontSize: 13, fontWeight: FontWeight.w700))),
+        ]),
+        const SizedBox(height: 6),
+        Text('$detail $nextStep',
+          style: const TextStyle(color: _mut, fontSize: 12, height: 1.4)),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton(
+            onPressed: onRetry,
+            child: Text('Try again',
+              semanticsLabel: retryLabel,
+              style: const TextStyle(color: _brand, fontWeight: FontWeight.w700)))),
+      ])));
+  }
+}
+
+class _CheckingNotice extends StatelessWidget {
+  final String label;
+  const _CheckingNotice({required this.label});
+  @override
+  Widget build(BuildContext context) => Semantics(
+    liveRegion: true,
+    container: true,
+    child: Row(children: [
+      const SizedBox(width: 14, height: 14,
+        child: CircularProgressIndicator(strokeWidth: 2, color: _brand)),
+      const SizedBox(width: 10),
+      Expanded(child: Text(label, style: const TextStyle(color: _mut, fontSize: 12))),
+    ]));
+}
+
+/// Consecutive failed paid-plan checks for one client, so a repeat failure is
+/// told apart from the first ("Still couldn't…").
+final _paidCheckFailuresProvider =
+    StateProvider.autoDispose.family<int, String>((ref, clientId) => 0);
 
 // ── Assign Program Sheet ──────────────────────────────────────────────────────
 class _AssignProgramSheet extends ConsumerStatefulWidget {
@@ -1820,21 +1981,50 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
   final _water= TextEditingController();
   final _notes= TextEditingController();
   bool _saving = false;
+  // P0-FL-12: Save stays off until the current plan has been READ. The prefill
+  // had no error handler: a failed read left the form blank, and Save then
+  // wrote the coach's blanks over the client's existing plan. A read that
+  // answered "no plan" counts as loaded.
+  // The fields are read-only until then too: a coach typing into a form that a
+  // later successful Try again then pre-fills would have their edits silently
+  // overwritten (or, unnoticed, mixed with the server's).
+  bool _loaded = false;
+  Object? _loadError;
+  int _loadFailures = 0; // consecutive — a repeat failure reads "Still couldn't…"
 
   @override
   void initState() {
     super.initState();
-    // Pre-fill with the client's current active plan so the coach can review/edit.
-    ref.read(coachProgramServiceProvider).getClientNutritionPlan(widget.clientId).then((p) {
-      if (p == null || !mounted) return;
-      setState(() {
-        _cal.text   = '${p['calories_target'] ?? ''}';
-        _pro.text   = '${p['protein_g'] ?? ''}';
-        _carb.text  = '${p['carbs_g'] ?? ''}';
-        _fat.text   = '${p['fat_g'] ?? ''}';
-        _water.text = p['water_target_oz'] == null ? '' : '${p['water_target_oz']}';
-        _notes.text = '${p['notes'] ?? ''}';
-      });
+    _loadCurrentPlan();
+  }
+
+  /// Pre-fill with the client's current active plan so the coach can review/edit.
+  Future<void> _loadCurrentPlan() async {
+    if (_loadError != null) setState(() => _loadError = null);
+    final Map<String, dynamic>? p;
+    try {
+      p = await ref.read(coachProgramServiceProvider).getClientNutritionPlan(widget.clientId);
+    } catch (e, s) {
+      reportError('AssignNutritionSheet._loadCurrentPlan', e, s);
+      if (mounted) {
+        setState(() {
+          _loadError = e;
+          _loadFailures++;
+        });
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _loaded = true;
+      _loadFailures = 0;
+      if (p == null) return;
+      _cal.text   = '${p['calories_target'] ?? ''}';
+      _pro.text   = '${p['protein_g'] ?? ''}';
+      _carb.text  = '${p['carbs_g'] ?? ''}';
+      _fat.text   = '${p['fat_g'] ?? ''}';
+      _water.text = p['water_target_oz'] == null ? '' : '${p['water_target_oz']}';
+      _notes.text = '${p['notes'] ?? ''}';
     });
   }
 
@@ -1852,6 +2042,21 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       const Text('Set Nutrition Targets',
         style: TextStyle(color: _wht, fontSize: 18, fontWeight: FontWeight.w700)),
       const SizedBox(height: 20),
+      if (_loadError != null) ...[
+        _LoadFailedNotice(
+          title: _loadFailures > 1
+              ? "Still couldn't load the current nutrition plan."
+              : "Couldn't load the current nutrition plan.",
+          error: _loadError!,
+          detail: "You can't save until it loads, so this client's plan isn't overwritten.",
+          retryLabel: 'Try again, load current plan',
+          onRetry: _loadCurrentPlan,
+        ),
+        const SizedBox(height: 16),
+      ] else if (!_loaded) ...[
+        const _CheckingNotice(label: 'Loading the current plan…'),
+        const SizedBox(height: 16),
+      ],
       Row(children: [
         Expanded(child: _field(_cal, 'Calories', '1850')),
         const SizedBox(width: 12),
@@ -1875,7 +2080,7 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       SizedBox(
         width: double.infinity,
         child: ElevatedButton(
-          onPressed: _saving ? null : _save,
+          onPressed: _saving || !_loaded ? null : _save,
           style: ElevatedButton.styleFrom(
             backgroundColor: _brand, foregroundColor: _wht,
             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -1893,6 +2098,7 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       const SizedBox(height: 4),
       TextField(
         controller: c,
+        enabled: _loaded,
         keyboardType: TextInputType.number,
         style: const TextStyle(color: _wht),
         decoration: InputDecoration(
@@ -1912,6 +2118,8 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       e is PostgrestException && e.code == '42501';
 
   Future<void> _save() async {
+    // Never write a form that was not filled from the server (P0-FL-12).
+    if (!_loaded) return;
     final cal  = int.tryParse(_cal.text);
     final pro  = int.tryParse(_pro.text);
     final carb = int.tryParse(_carb.text);
@@ -1941,7 +2149,10 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
           _isNotAuthorized(e)
               ? "This client isn't active with you any more, so the plan wasn't saved."
-              : "Couldn't save the plan — check your connection and try again.")));
+              : _isNetworkFailure(e)
+                  ? "Couldn't save the plan — check your connection and try again."
+                  : "Couldn't save the plan. Try again, and if it keeps happening, "
+                      'contact support.')));
       return;
     }
     if (mounted) {
@@ -1979,6 +2190,15 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
   final Set<int> _selected = {};
   final Map<int, TextEditingController> _vals = {};
   bool _saving = false;
+  // P0-FL-12: assignHabits switches OFF every active habit before inserting the
+  // selection, so a selection that was never pre-filled (failed read, no error
+  // handler) wiped the client's habits on Save. Save stays off until the read
+  // succeeded; a read that answered "no habits" counts as loaded.
+  // The toggles and targets are locked until then too, so a successful Try
+  // again can never merge the server's habits into picks the coach made blind.
+  bool _loaded = false;
+  Object? _loadError;
+  int _loadFailures = 0; // consecutive — a repeat failure reads "Still couldn't…"
 
   @override
   void initState() {
@@ -1986,18 +2206,36 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
     for (var i = 0; i < _presets.length; i++) {
       _vals[i] = TextEditingController(text: '${_presets[i]['default']}');
     }
-    // Pre-select habits already assigned + restore their values.
-    ref.read(coachProgramServiceProvider).getClientHabits(widget.clientId).then((rows) {
-      if (rows.isEmpty || !mounted) return;
-      setState(() {
-        for (final r in rows) {
-          final idx = _presets.indexWhere((p) => p['name'] == r['name']);
-          if (idx >= 0) {
-            _selected.add(idx);
-            if (r['target_value'] != null) _vals[idx]!.text = '${r['target_value']}';
-          }
+    _loadCurrentHabits();
+  }
+
+  /// Pre-select habits already assigned + restore their values.
+  Future<void> _loadCurrentHabits() async {
+    if (_loadError != null) setState(() => _loadError = null);
+    final List<Map<String, dynamic>> rows;
+    try {
+      rows = await ref.read(coachProgramServiceProvider).getClientHabits(widget.clientId);
+    } catch (e, s) {
+      reportError('AssignHabitsSheet._loadCurrentHabits', e, s);
+      if (mounted) {
+        setState(() {
+          _loadError = e;
+          _loadFailures++;
+        });
+      }
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _loaded = true;
+      _loadFailures = 0;
+      for (final r in rows) {
+        final idx = _presets.indexWhere((p) => p['name'] == r['name']);
+        if (idx >= 0) {
+          _selected.add(idx);
+          if (r['target_value'] != null) _vals[idx]!.text = '${r['target_value']}';
         }
-      });
+      }
     });
   }
 
@@ -2017,6 +2255,21 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
       const Text('Tap to assign. For ones with a blank, set the daily target.',
         style: TextStyle(color: _mut, fontSize: 13)),
       const SizedBox(height: 14),
+      if (_loadError != null) ...[
+        _LoadFailedNotice(
+          title: _loadFailures > 1
+              ? "Still couldn't load the current habits."
+              : "Couldn't load the current habits.",
+          error: _loadError!,
+          detail: "You can't save until they load, so this client's habits aren't switched off.",
+          retryLabel: 'Try again, load current habits',
+          onRetry: _loadCurrentHabits,
+        ),
+        const SizedBox(height: 14),
+      ] else if (!_loaded) ...[
+        const _CheckingNotice(label: 'Loading the current habits…'),
+        const SizedBox(height: 14),
+      ],
       Flexible(child: ListView.separated(
         shrinkWrap: true,
         itemCount: _presets.length,
@@ -2026,7 +2279,9 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
           final sel = _selected.contains(i);
           final hasValue = p['value'] == true;
           return GestureDetector(
-            onTap: () => setState(() => sel ? _selected.remove(i) : _selected.add(i)),
+            onTap: _loaded
+                ? () => setState(() => sel ? _selected.remove(i) : _selected.add(i))
+                : null,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
@@ -2046,6 +2301,7 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
                     width: 64,
                     child: TextField(
                       controller: _vals[i],
+                      enabled: _loaded,
                       keyboardType: TextInputType.number,
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: _wht, fontSize: 13),
@@ -2067,7 +2323,7 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
       SizedBox(
         width: double.infinity,
         child: ElevatedButton(
-          onPressed: _selected.isEmpty || _saving ? null : _save,
+          onPressed: _selected.isEmpty || _saving || !_loaded ? null : _save,
           style: ElevatedButton.styleFrom(
             backgroundColor: _brand, foregroundColor: _wht,
             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -2080,6 +2336,8 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
     ]));
 
   Future<void> _save() async {
+    // Never send a selection that was not pre-filled from the server (P0-FL-12).
+    if (!_loaded) return;
     // Read before the await, as in the nutrition sheet.
     final container = ProviderScope.containerOf(context);
     setState(() => _saving = true);
@@ -2099,8 +2357,11 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
       reportError('AssignHabitsSheet._save', e, s);
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("Couldn't assign habits — check your connection and try again.")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+          _isNetworkFailure(e)
+              ? "Couldn't assign habits — check your connection and try again."
+              : "Couldn't assign habits. Try again, and if it keeps happening, "
+                  'contact support.')));
       return;
     }
     if (mounted) {
