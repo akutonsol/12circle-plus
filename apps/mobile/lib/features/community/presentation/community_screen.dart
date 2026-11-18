@@ -297,7 +297,16 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                             ],
                           ),
                         ),
-                        GestureDetector(
+                        // U4 · a button to assistive tech, named for what a
+                        // tap does, with a 44px tall tap target.
+                        Semantics(
+                          container: true,
+                          button: true,
+                          label: group.isJoined
+                              ? 'Leave ${group.name}'
+                              : 'Join ${group.name}',
+                          child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
                           onTap: () async {
                             AppAnimations.hapticLight();
                             final messenger = ScaffoldMessenger.of(context);
@@ -317,21 +326,31 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                               ));
                             }
                           },
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: group.isJoined ? AppColors.surfaceDarkElevated : AppColors.purple,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Text(
-                              group.isJoined ? 'Joined' : 'Join',
-                              style: TextStyle(
-                                color: group.isJoined ? AppColors.textSecondary : AppColors.white,
-                                fontSize: 13, fontWeight: FontWeight.w600,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(minHeight: 44),
+                            child: Center(
+                              widthFactor: 1,
+                              heightFactor: 1,
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: group.isJoined ? AppColors.surfaceDarkElevated : AppColors.purple,
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                // The label above names the action; the
+                                // pill's own word would be read twice.
+                                child: ExcludeSemantics(child: Text(
+                                  group.isJoined ? 'Joined' : 'Join',
+                                  style: TextStyle(
+                                    color: group.isJoined ? AppColors.textSecondary : AppColors.white,
+                                    fontSize: 13, fontWeight: FontWeight.w600,
+                                  ),
+                                )),
                               ),
                             ),
                           ),
+                        ),
                         ),
                       ],
                     ),

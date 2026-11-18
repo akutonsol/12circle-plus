@@ -993,7 +993,28 @@ class _GroupsFailureCard extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => _GlassCard(
+  Widget build(BuildContext context) {
+    final retry = TextButton(
+      onPressed: busy ? null : onRetry,
+      style: TextButton.styleFrom(
+        foregroundColor: _C.tertiary,
+        backgroundColor: _C.tertiary.withValues(alpha: 0.12),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        minimumSize: const Size(48, 44), // U5 · 44px tap target
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+      child: busy
+          ? Semantics(
+              label: 'Retrying',
+              child: const SizedBox(width: 14, height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2, color: _C.tertiary)))
+          : const Text('Try again',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+    );
+    // At large text a trailing Try again is wider than the room beside the
+    // icon: the text column was squeezed to nothing and the row overflowed
+    // (2x, 320 wide). There it goes under the message instead.
+    final stacked = MediaQuery.textScalerOf(context).scale(12) > 12 * 1.3;
+    return _GlassCard(
         padding: const EdgeInsets.all(18),
         child: Semantics(
           liveRegion: true,
@@ -1013,27 +1034,13 @@ class _GroupsFailureCard extends StatelessWidget {
                     ? 'Check your connection and try again.'
                     : 'Try again in a moment. If it keeps happening, contact support.',
                 style: const TextStyle(color: _C.onSurfVar, fontSize: 11, height: 1.4)),
+              if (stacked) ...[const SizedBox(height: 10), retry],
             ])),
-            const SizedBox(width: 8),
-            TextButton(
-              onPressed: busy ? null : onRetry,
-              style: TextButton.styleFrom(
-                foregroundColor: _C.tertiary,
-                backgroundColor: _C.tertiary.withValues(alpha: 0.12),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                minimumSize: const Size(48, 36),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-              child: busy
-                  ? Semantics(
-                      label: 'Retrying',
-                      child: const SizedBox(width: 14, height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: _C.tertiary)))
-                  : const Text('Try again',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-            ),
+            if (!stacked) ...[const SizedBox(width: 8), retry],
           ]),
         ),
       );
+  }
 }
 
 // ── Header helpers ────────────────────────────────────────────────────────────

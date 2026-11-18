@@ -70,6 +70,10 @@ class _Server extends http.BaseClient {
   /// Rows a DELETE on community_group_members hands back.
   List<Map<String, Object?>> deleted = [];
 
+  /// Status + body for a DELETE that fails (status != 200).
+  int deleteStatus = 200;
+  Object? deleteError;
+
   /// Status + body for an INSERT on community_group_members.
   int insertStatus = 201;
   Object? insertBody = [];
@@ -83,7 +87,8 @@ class _Server extends http.BaseClient {
     Object? body = [];
     if (request.url.path.endsWith('/community_group_members')) {
       if (request.method == 'DELETE') {
-        body = deleted;
+        status = deleteStatus;
+        body = deleteStatus == 200 ? deleted : deleteError;
       } else if (request.method == 'POST') {
         status = insertStatus;
         body = insertBody;
@@ -106,10 +111,18 @@ class _SlowService extends LiveCommunityService {
   }
 
   @override
-  Future<bool> leaveGroup(String groupId) {
+  Future<GroupLeave> leaveGroupOutcome(String groupId) async {
     leaves++;
-    return gate.future;
+    return await gate.future ? GroupLeave.left : GroupLeave.failed;
   }
+}
+
+/// Leave answers a fixed [GroupLeave].
+class _OutcomeService extends LiveCommunityService {
+  final GroupLeave outcome;
+  _OutcomeService(this.outcome);
+  @override
+  Future<GroupLeave> leaveGroupOutcome(String groupId) async => outcome;
 }
 
 CommunityGroup _group({required bool joined}) => CommunityGroup(
@@ -139,6 +152,8 @@ void main() {
   setUp(() {
     server
       ..deleted = []
+      ..deleteStatus = 200
+      ..deleteError = null
       ..insertStatus = 201
       ..insertBody = []
       ..requests.clear();
@@ -163,6 +178,54 @@ void main() {
         {'id': '22222222-2222-4222-8222-222222222222'},
       ];
       expect(await LiveCommunityService().leaveGroup(_gid), isTrue);
+      expect(await LiveCommunityService().leaveGroupOutcome(_gid), GroupLeave.left);
+      expect(reported, isEmpty);
+    });
+
+    test('zero rows is noRow (the list is stale), and records nothing', () async {
+      expect(await LiveCommunityService().leaveGroupOutcome(_gid), GroupLeave.noRow);
+      expect(reported, isEmpty, reason: 'not an error — the member is not in it');
+    });
+
+    test('a failed leave is recorded with its cause (M3)', () async {
+      server
+        ..deleteStatus = 500
+        ..deleteError = {'code': 'XX000', 'message': 'leave upstream down'};
+      expect(await LiveCommunityService().leaveGroupOutcome(_gid), GroupLeave.failed);
+      expect(reported, hasLength(1), reason: 'the cause of a failed leave is kept');
+      expect(reported.single.origin, 'community.leaveGroup');
+      expect(reported.single.context, {'group_id': _gid});
+      expect(reported.single.error.toString(), contains('leave upstream down'));
+    });
+  });
+
+  group('U2 · a leave that removed no row re-reads the groups', () {
+    test('noRow: reported as not left, and the groups are re-read', () async {
+      final svc = _OutcomeService(GroupLeave.noRow);
+      var rereads = 0;
+      final n = GroupNotifier(svc, reread: () => rereads++);
+      addTearDown(n.dispose);
+      expect(await n.toggleJoin(_group(joined: true)), isFalse,
+          reason: 'still a failure to the caller');
+      expect(rereads, 1, reason: 'THE defect: the stale list stayed forever');
+    });
+
+    test('failed: no re-read (the request never went through)', () async {
+      final svc = _OutcomeService(GroupLeave.failed);
+      var rereads = 0;
+      final n = GroupNotifier(svc, reread: () => rereads++);
+      addTearDown(n.dispose);
+      expect(await n.toggleJoin(_group(joined: true)), isFalse);
+      expect(rereads, 0);
+    });
+
+    test('left: no re-read, the list is marked locally', () async {
+      final svc = _OutcomeService(GroupLeave.left);
+      var rereads = 0;
+      final n = GroupNotifier(svc, reread: () => rereads++);
+      addTearDown(n.dispose);
+      expect(await n.toggleJoin(_group(joined: true)), isTrue);
+      expect(rereads, 0);
     });
   });
 
@@ -187,6 +250,19 @@ void main() {
         };
       expect(await LiveCommunityService().joinGroup(_gid), isTrue);
       expect(reported, isEmpty);
+    });
+
+    test('S1 · a non-23505 failure that MENTIONS duplicate/unique is a failure',
+        () async {
+      server
+        ..insertStatus = 400
+        ..insertBody = {
+          'code': 'P0001',
+          'message': 'duplicate request rejected: unique session required',
+        };
+      expect(await LiveCommunityService().joinGroup(_gid), isFalse,
+          reason: 'THE defect: the message text was taken as "already joined"');
+      expect(reported.single.origin, 'community.joinGroup');
     });
   });
 

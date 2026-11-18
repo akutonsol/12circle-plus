@@ -5,6 +5,9 @@ import '../domain/post_type_choice.dart';
 import '../domain/reaction_choice.dart';
 import '../../notifications/data/notification_service.dart';
 
+/// How a group leave ended — see [LiveCommunityService.leaveGroupOutcome].
+enum GroupLeave { left, noRow, failed }
+
 class LiveCommunityService {
   final _db = Supabase.instance.client;
 
@@ -191,11 +194,11 @@ class LiveCommunityService {
       try {
         await _db.from('community_group_members')
             .insert({'group_id': groupId, 'user_id': uid});
-      } catch (e) {
-        final s = e.toString();
-        if (s.contains('23505') || s.contains('duplicate') || s.contains('unique')) {
-          return true; // already joined
-        }
+      } on PostgrestException catch (e) {
+        // 23505 unique_violation: the membership row is already there. Read
+        // from the error CODE — searching the message text also took any
+        // failure that merely mentioned "duplicate" or "unique" as a join.
+        if (e.code == '23505') return true; // already joined
         rethrow;
       }
       return true;
@@ -211,20 +214,28 @@ class LiveCommunityService {
   /// for the removed rows back: RLS filters a delete it does not allow to
   /// zero rows with no error, so "no error" alone reported "left" while the
   /// member was still in the group (P0-FL-10 L1).
-  Future<bool> leaveGroup(String groupId) async {
+  Future<bool> leaveGroup(String groupId) async =>
+      await leaveGroupOutcome(groupId) == GroupLeave.left;
+
+  /// [leaveGroup] with the reason a leave did not happen:
+  /// [GroupLeave.noRow] — the request went through and removed nothing (no
+  /// longer a member, e.g. left on another device, or RLS refused it), so the
+  /// list on screen is stale; [GroupLeave.failed] — the request itself failed
+  /// (recorded).
+  Future<GroupLeave> leaveGroupOutcome(String groupId) async {
     try {
       final uid = _db.auth.currentUser?.id;
-      if (uid == null) return false;
+      if (uid == null) return GroupLeave.failed;
       final removed = await _db
           .from('community_group_members')
           .delete()
           .eq('group_id', groupId)
           .eq('user_id', uid)
           .select('id');
-      return (removed as List).isNotEmpty;
+      return (removed as List).isNotEmpty ? GroupLeave.left : GroupLeave.noRow;
     } catch (e, st) {
       reportError('community.leaveGroup', e, st, {'group_id': groupId});
-      return false;
+      return GroupLeave.failed;
     }
   }
 

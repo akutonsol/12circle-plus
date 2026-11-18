@@ -152,7 +152,17 @@ final liveGroupsProvider = FutureProvider<List<CommunityGroup>>((ref) async {
 /// for a read that never arrived.
 class GroupNotifier extends StateNotifier<AsyncValue<List<CommunityGroup>>> {
   final LiveCommunityService _svc;
-  GroupNotifier(this._svc) : super(const AsyncValue.loading());
+
+  /// Re-reads the groups. Called when a leave removed no row: the list on
+  /// screen is stale (already left elsewhere), so it corrects itself instead
+  /// of offering a Leave that can never succeed.
+  final void Function() _reread;
+
+  GroupNotifier(this._svc, {void Function()? reread})
+      : _reread = reread ?? _noop,
+        super(const AsyncValue.loading());
+
+  static void _noop() {}
 
   /// Follows [liveGroupsProvider]: its loading, its failure and its groups.
   void sync(AsyncValue<List<CommunityGroup>> next) {
@@ -180,10 +190,21 @@ class GroupNotifier extends StateNotifier<AsyncValue<List<CommunityGroup>>> {
     return ok;
   }
 
+  /// True only when a membership row was removed. A leave that removed none
+  /// is still reported as a failure, and the groups are re-read so the list
+  /// stops showing a membership that is not there (P0-FL-10 U2).
   Future<bool> leaveGroup(String groupId) async {
-    final ok = await _svc.leaveGroup(groupId);
-    if (ok) _mark(groupId, joined: false);
-    return ok;
+    final outcome = await _svc.leaveGroupOutcome(groupId);
+    switch (outcome) {
+      case GroupLeave.left:
+        _mark(groupId, joined: false);
+        return true;
+      case GroupLeave.noRow:
+        _reread();
+        return false;
+      case GroupLeave.failed:
+        return false;
+    }
   }
 
   /// Groups whose join/leave is on the wire right now.
@@ -214,7 +235,8 @@ final groupNotifierProvider = StateNotifierProvider<GroupNotifier,
   final svc = ref.watch(liveCommunityServiceProvider);
   // Starts loading — nothing is claimed until the real groups arrive (it
   // started with the five sample groups, then with a `[]` no failure left).
-  final notifier = GroupNotifier(svc);
+  final notifier =
+      GroupNotifier(svc, reread: () => ref.invalidate(liveGroupsProvider));
   ref.listen<AsyncValue<List<CommunityGroup>>>(
     liveGroupsProvider,
     (previous, next) {
