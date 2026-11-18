@@ -1,7 +1,12 @@
+import 'dart:async' show TimeoutException;
+import 'dart:io' show SocketException;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http show ClientException;
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthRetryableFetchException;
+import '../../../core/observability/app_failure.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/theme/app_background.dart';
 import '../../../core/animations/app_animations.dart';
@@ -82,7 +87,16 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
   @override
   Widget build(BuildContext context) {
     final postsAsync = ref.watch(postNotifierProvider);
-    final groups = ref.watch(groupNotifierProvider);
+    final groupsAsync = ref.watch(groupNotifierProvider);
+    // P0-FL-5: each failed feed read is recorded once, when it settles into
+    // an error — not on every rebuild that shows it.
+    ref.listen(postNotifierProvider, (previous, next) {
+      if (next.hasError &&
+          !next.isLoading &&
+          (previous == null || previous.isLoading || !previous.hasError)) {
+        reportError('CommunityScreen.posts', next.error!, next.stackTrace);
+      }
+    });
 
     return AppGradientBackground(
       child: Scaffold(
@@ -99,8 +113,12 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text('Community', style: TextStyle(color: AppColors.white, fontSize: 28, fontWeight: FontWeight.bold))
-                            .fadeSlideIn(),
+                        // U3: Flexible so 2x text on a narrow phone wraps
+                        // instead of overflowing past the Post button.
+                        Flexible(
+                          child: const Text('Community', style: TextStyle(color: AppColors.white, fontSize: 28, fontWeight: FontWeight.bold))
+                              .fadeSlideIn(),
+                        ),
                         ElevatedButton.icon(
                           onPressed: _showCreatePost,
                           icon: const Icon(Icons.add, size: 18),
@@ -130,8 +148,9 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                               child: Icon(Icons.person, color: AppColors.white, size: 14),
                             ),
                             const SizedBox(width: 12),
-                            const Text('Share your progress or motivation...', style: TextStyle(color: AppColors.textTertiary, fontSize: 14)),
-                            const Spacer(),
+                            const Expanded(
+                              child: Text('Share your progress or motivation...', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppColors.textTertiary, fontSize: 14)),
+                            ),
                             const Icon(Icons.photo_camera_outlined, color: AppColors.purple, size: 20),
                           ],
                         ),
@@ -166,19 +185,20 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
               postsAsync.when(
                 loading: () => const Center(
                   child: CircularProgressIndicator(color: AppColors.purple)),
-                error: (e, _) => Center(
-                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    const Icon(Icons.error_outline, color: AppColors.textTertiary, size: 48),
-                    const SizedBox(height: 12),
-                    Text('Could not load posts', style: const TextStyle(color: AppColors.white, fontSize: 16, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 6),
-                    Text(e.toString(), style: const TextStyle(color: AppColors.textTertiary, fontSize: 12), textAlign: TextAlign.center),
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed: () => ref.read(postNotifierProvider.notifier).reload(),
-                      child: const Text('Retry'),
-                    ),
-                  ])),
+                // P0-FL-5: the raw exception used to be printed under the
+                // heading. It is recorded (once per failure, see build) and
+                // never shown.
+                // U3: scrolls instead of overflowing at large text, and is
+                // announced when it appears.
+                // F1 (P0-FL-8 follow-up): same rule as the Members state —
+                // the connection hint only for a network failure, otherwise
+                // try-again-later; "Try again", busy-aware.
+                error: (err, _) => _LoadFailure(
+                  title: "Couldn't load posts",
+                  network: _isNetworkFailure(err),
+                  busy: postsAsync.isLoading,
+                  onRetry: () => ref.read(postNotifierProvider.notifier).reload(),
+                ),
                 data: (posts) => posts.isEmpty
                   ? const Center(child: Text('No posts yet. Be the first to share!',
                       style: TextStyle(color: AppColors.textTertiary, fontSize: 14)))
@@ -227,7 +247,26 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                       ]),
                     ),
                   ),
-                  ...groups.map((group) => Container(
+                  // P0-FL-10 · the groups' own three states. A failed read was
+                  // `[]` here: the tab showed only the Pods card, as if there
+                  // were no groups. The failure is recorded by the provider.
+                  ...groupsAsync.when<Iterable<Widget>>(
+                    loading: () => const [
+                      Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24),
+                        child: Center(
+                            child: CircularProgressIndicator(color: AppColors.purple)),
+                      ),
+                    ],
+                    error: (err, _) => [
+                      _LoadFailure(
+                        title: "Couldn't load groups",
+                        network: _isNetworkFailure(err),
+                        busy: groupsAsync.isLoading,
+                        onRetry: () => ref.invalidate(liveGroupsProvider),
+                      ),
+                    ],
+                    data: (groups) => groups.map((group) => Container(
                     margin: const EdgeInsets.only(bottom: 12),
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -258,32 +297,67 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                             ],
                           ),
                         ),
-                        GestureDetector(
-                          onTap: () {
-                            ref.read(groupNotifierProvider.notifier).toggleJoin(group.id);
+                        // U4 · a button to assistive tech, named for what a
+                        // tap does, with a 44px tall tap target.
+                        Semantics(
+                          container: true,
+                          button: true,
+                          label: group.isJoined
+                              ? 'Leave ${group.name}'
+                              : 'Join ${group.name}',
+                          child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () async {
                             AppAnimations.hapticLight();
+                            final messenger = ScaffoldMessenger.of(context);
+                            final ok = await ref
+                                .read(groupNotifierProvider.notifier)
+                                .toggleJoin(group);
+                            // P0-FL-10 · the result was dropped: a failed
+                            // join or leave left the button as it was and said
+                            // nothing. The list is unchanged on failure.
+                            // Null = a repeat tap while this group's request
+                            // was in flight; it was ignored, not failed.
+                            if (ok == false) {
+                              messenger.showSnackBar(SnackBar(
+                                content: Text(group.isJoined
+                                    ? "Couldn't leave ${group.name}. Try again."
+                                    : "Couldn't join ${group.name}. Try again."),
+                              ));
+                            }
                           },
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: group.isJoined ? AppColors.surfaceDarkElevated : AppColors.purple,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Text(
-                              group.isJoined ? 'Joined' : 'Join',
-                              style: TextStyle(
-                                color: group.isJoined ? AppColors.textSecondary : AppColors.white,
-                                fontSize: 13, fontWeight: FontWeight.w600,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(minHeight: 44),
+                            child: Center(
+                              widthFactor: 1,
+                              heightFactor: 1,
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: group.isJoined ? AppColors.surfaceDarkElevated : AppColors.purple,
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                // The label above names the action; the
+                                // pill's own word would be read twice.
+                                child: ExcludeSemantics(child: Text(
+                                  group.isJoined ? 'Joined' : 'Join',
+                                  style: TextStyle(
+                                    color: group.isJoined ? AppColors.textSecondary : AppColors.white,
+                                    fontSize: 13, fontWeight: FontWeight.w600,
+                                  ),
+                                )),
                               ),
                             ),
                           ),
+                        ),
                         ),
                       ],
                     ),
                   ).animate(delay: Duration(milliseconds: groups.indexOf(group) * 80))
                       .fadeIn(duration: 400.ms)
                       .slideX(begin: -0.2, end: 0, duration: 400.ms)),
+                  ),
                 ],
               ),
               _MembersTab(),
@@ -300,12 +374,27 @@ class _MembersTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final membersAsync = ref.watch(liveMembersProvider);
+    // P0-FL-8: each failed members read is recorded once, when it settles
+    // into an error — not on every rebuild (or tab switch) that shows it.
+    ref.listen(liveMembersProvider, (previous, next) {
+      if (next.hasError &&
+          !next.isLoading &&
+          (previous == null || previous.isLoading || !previous.hasError)) {
+        reportError('CommunityScreen.members', next.error!, next.stackTrace);
+      }
+    });
     return membersAsync.when(
       loading: () => const Center(
         child: CircularProgressIndicator(color: AppColors.purple)),
-      error: (_, __) => const Center(
-        child: Text('Could not load members',
-          style: TextStyle(color: AppColors.textTertiary, fontSize: 14))),
+      // P0-FL-8: reachable now that a failed read is an error, not `[]`.
+      // While a Try again is in flight the previous error stays on screen
+      // (a refresh), so the button shows it is busy instead of a dead tap.
+      error: (err, _) => _LoadFailure(
+        title: "Couldn't load members",
+        network: _isNetworkFailure(err),
+        busy: membersAsync.isLoading,
+        onRetry: () => ref.invalidate(liveMembersProvider),
+      ),
       data: (members) {
         if (members.isEmpty) {
           return const Center(
@@ -374,4 +463,73 @@ class _MembersTab extends ConsumerWidget {
       },
     );
   }
+}
+
+/// P0-FL-8 · true only when [err] is the request not reaching the server: no
+/// socket, a timeout, or the http client giving up (gotrue wraps it as
+/// [AuthRetryableFetchException]). A [PostgrestException] carries the server's
+/// answer, so it is never a connection problem. Same rule as
+/// `isNetworkFailure` in create_exercise_screen.dart (P0-FL-5), which is
+/// `@visibleForTesting` and so cannot be shared from here.
+bool _isNetworkFailure(Object? err) =>
+    err is SocketException ||
+    err is TimeoutException ||
+    err is http.ClientException ||
+    err is AuthRetryableFetchException;
+
+/// P0-FL-8 · a read (members, the feed — F1, or groups — P0-FL-10) failed: said in plain words
+/// with the next step and a way to read it again. Announced when it appears,
+/// and scrolls rather than overflowing at large text.
+class _LoadFailure extends StatelessWidget {
+  final String title;
+  final bool network;
+  final bool busy;
+  final VoidCallback onRetry;
+  const _LoadFailure({
+    required this.title,
+    required this.network,
+    required this.busy,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Semantics(
+            liveRegion: true,
+            container: true,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.error_outline, color: AppColors.textTertiary, size: 48),
+              const SizedBox(height: 12),
+              Text(title,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: AppColors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Text(
+                network
+                    ? 'Check your connection and try again.'
+                    : 'Try again in a moment. If it keeps happening, contact support.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: AppColors.textTertiary, fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: busy ? null : onRetry,
+                icon: busy
+                    ? Semantics(
+                        label: 'Retrying',
+                        child: const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.white),
+                        ),
+                      )
+                    : const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('Try again'),
+              ),
+            ]),
+          ),
+        ),
+      );
 }

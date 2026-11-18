@@ -1,14 +1,18 @@
+import 'dart:async' show TimeoutException;
 import 'dart:convert';
+import 'dart:io' show SocketException;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http show ClientException;
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/content_review_submission.dart';
 import '../domain/custom_exercise_provider.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../workout/data/models/video_variant_model.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/widgets/named_icon_button.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -627,7 +631,8 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
 
     // A hand-written library draft goes to the editorial review queue
     // (draft → under_review); a human still approves it there.
-    String? reviewSubmitError;
+    var reviewSubmitFailed = false;
+    Object? reviewSubmitError;
     if (id != null &&
         shouldSubmitForReview(
           role: role as String?,
@@ -640,7 +645,8 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
       if (await svc.reviewExercise(id, 'under_review')) {
         _editingContentStatus = 'under_review';
       } else {
-        reviewSubmitError = svc.lastError?.toString() ?? 'unknown error';
+        reviewSubmitFailed = true;
+        reviewSubmitError = svc.lastError;
       }
     }
 
@@ -681,28 +687,63 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     if (!mounted) return;
     if (id != null) {
       refreshExerciseLists(ref.invalidate);
-      if (reviewSubmitError != null) {
+      if (reviewSubmitFailed) {
         // Saved, but not queued: say so rather than leave it invisible to reviewers.
+        if (reviewSubmitError != null) {
+          reportError('CreateExerciseScreen.submitForReview', reviewSubmitError);
+        }
+        // U2: there is no "submit for review" control for a saved draft, so
+        // the copy states what is still owed rather than pointing at one.
+        final msg = _appMessage(reviewSubmitError);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             duration: const Duration(seconds: 8),
-            content: Text('Saved, but not sent for review: ${_friendlyError(reviewSubmitError)}')));
+            content: Text(msg != null
+                ? 'Saved, but not sent for review: $msg'
+                : isNetworkFailure(reviewSubmitError)
+                    ? 'Saved, but not sent for review yet — check your connection. '
+                        'It still needs to be submitted for review.'
+                    : 'Saved, but not sent for review yet — it still needs to be '
+                        'submitted for review.')));
       }
       _showSuccess();
     } else {
       final err = svc.lastError;
+      if (err != null) reportError('CreateExerciseScreen.save', err);
+      // S3: createExercise returns null with no error when nobody is signed
+      // in; say that, not "check your connection".
+      final signedOut = ref.read(currentUserProvider) == null;
+      final msg = _appMessage(err);
+      // U1: the connection hint only for a failure that is one; anything else
+      // (a refusal, a conflict) is not fixed by checking the connection.
+      final String text;
+      if (signedOut) {
+        text = "You're signed out — sign in again to save.";
+      } else if (msg != null) {
+        text = 'Save failed: $msg';
+      } else if (isNetworkFailure(err)) {
+        text = "Couldn't save the exercise — check your connection and try again.";
+      } else {
+        text = "Couldn't save the exercise. Try again — if it keeps happening, "
+            'contact support.';
+      }
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         duration: const Duration(seconds: 8),
-        content: Text(err != null
-            ? 'Save failed: ${_friendlyError(err)}'
-            : 'Failed to save exercise. Try again.')));
+        content: Text(text)));
     }
   }
 
-  /// Pull a readable message out of a Postgrest/Storage exception.
-  String _friendlyError(Object err) {
-    final s = err.toString();
-    final msg = RegExp(r'message: ([^,)]+)').firstMatch(s)?.group(1);
-    return (msg ?? s).trim();
+  /// P0-FL-5 · the text of an error this app wrote on purpose, or null.
+  ///
+  /// This used to pull the `message:` out of any Postgrest/Storage exception
+  /// and show it — "new row violates row-level security policy for table …"
+  /// reached coaches. Only messages written for people pass now: a
+  /// [StateError]'s message, and the plain [String] the service stores as
+  /// `lastError` on purpose (`updateExercise`'s "You don't have permission to
+  /// edit this exercise"). Anything else is recorded, never shown.
+  String? _appMessage(Object? err) {
+    if (err is StateError) return err.message;
+    if (err is String && err.trim().isNotEmpty) return err.trim();
+    return null;
   }
 
   void _showSuccess() {
@@ -1183,3 +1224,15 @@ Widget _row(String label, List<String> options, String value, ValueChanged<Strin
         ))),
   ]);
 }
+
+/// P0-FL-5 · U1 · true only when [err] is the request not reaching the server:
+/// no socket, a timeout, or the http client giving up (postgrest-dart lets the
+/// http client's exception through untouched; gotrue wraps it as
+/// [AuthRetryableFetchException]). A [PostgrestException] always carries the
+/// server's status code, so it is never treated as a network failure here.
+@visibleForTesting
+bool isNetworkFailure(Object? err) =>
+    err is SocketException ||
+    err is TimeoutException ||
+    err is http.ClientException ||
+    err is AuthRetryableFetchException;

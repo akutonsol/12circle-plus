@@ -134,7 +134,10 @@ void main() {
   test('nothing is shown as a group before the real ones arrive', () {
     server.mode = 'ok';
     final c = container();
-    expect(c.read(groupNotifierProvider).map((g) => g.name), isEmpty,
+    // P0-FL-10: it is loading, which shows no group at all — not a list.
+    final s = c.read(groupNotifierProvider);
+    expect(s.isLoading, isTrue);
+    expect(s.hasValue, isFalse,
         reason: 'the notifier started with the sample groups');
   });
 
