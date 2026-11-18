@@ -116,7 +116,34 @@ validated with a control mutant). FL-9's Home baseline needed a test hook on the
 
 Runtime (device/simulator/live QA): **not performed**; journey completion unchanged (2 of 14).
 
-### Backlog after cycle 4
+## Cycle 5 log (2026-11-17) — P0-FL-10, P0-FL-12, P0-FL-11, silent-error inventory, investigations
+
+New this cycle: an **integration branch** `integration/p0-flutter-stack` (origin/main + every open Flutter PR head,
+merged locally, nothing into main) gave P0-FL-11 one correct base; the lead ran its full suite and read CI twice
+(f4cf7b1: 2895 pass, CI 7/7; e606fe5: 2954 pass, CI 7/7). Reviews ran against the **exact final commits**; reviewers
+read from commits (`git show`) while QA used the worktree. Read-only investigations by `cplus-security-reviewer` (×2)
+and `cplus-supabase-engineer` (scratch-database validation only); the lead added read-only QA catalog reads.
+
+| Package | Agent | Responsibility | Branch / commits | Files changed | Tests | Independent review (final head) | Remaining |
+|---|---|---|---|---|---|---|---|
+| P0-FL-10 group-list failure states | `cplus-flutter-engineer` | implement + leave row check + review/mutant round | `fix/groups-failure-is-not-empty` (on #179) 14d8518, 452a87a, 2ff8080, 8e62718, 4c3a7c2 → **PR #181** (CI 7/7 on 4c3a7c2, `44231208557`) | community provider/screen, activity screen, live_community_service; 2 new + 1 updated tests | 2781 pass; analyze 291; mutants 8/8 | UX PASS; security APPROVE-WITH-NOTES; QA VERIFIED | group membership readable by all (decision) |
+| P0-FL-12 client-detail never wipes plan/habits | `cplus-flutter-engineer` | implement + review/mutant round | `fix/client-detail-prefill-failure-never-wipes` (on #180) 90e307a, 23dd969 → **PR #182** (CI 7/7 on 23dd969, `44232187464`) | client_detail_screen, coach_program_service; 1 new test file | 2755 pass; analyze 291; mutants 6/6 (+1 documented) | UX PASS-WITH-NOTES; security APPROVE-WITH-NOTES; QA VERIFIED | multi-coach plan ownership (decision 21); QA lacks 184/185 (QAX-SEC-01/03 live) |
+| P0-FL-11 shared error-handling cleanup | `cplus-flutter-engineer` | implement | `fix/shared-network-failure-and-cleanup` (on integration e606fe5) 2ecd6e2 → **PR #183, base = integration branch** (CI 7/7 on 2ecd6e2, `44236734289`) | new core helper + test; 9 lib files; 1 test expectation | 2969 pass; analyze 287; mutants 3/3 | UX PASS-WITH-NOTES; security APPROVE-WITH-NOTES; QA VERIFIED | rebase onto main after the stack lands |
+| Silent-error inventory | `cplus-flutter-engineer` (read-only) | inventory + grouping | — → `docs/SILENT_ERROR_INVENTORY.md` (ledger PR #164) | — | — | lead verified the P1 sites | P0-FL-13 … P0-FL-19 |
+| Decision 19 brief, Decision 20 + member list, P0-SB-3 design | `cplus-security-reviewer` ×2, `cplus-supabase-engineer` | read-only investigations | none (scratch only) | none | replays: D20 29+5+14 cases; SB-3 option D 25/25 on 4 shapes | lead confirmed coach_reviews policies and QA migration state read-only | Decisions 19–24 (Julia); SB-3 after D20; F1 PAR-Q clear (P1, migration) |
+
+Runtime (device/simulator/live QA): **not performed**; journey completion unchanged (2 of 14).
+
+### Backlog after cycle 5 (decision-free first)
+
+1. **P0-FL-19** intake (the remaining **P1**: baseline photos silently lost) + resume failure + coach list — on #180.
+2. **P0-FL-13** messaging inbox/send · **P0-FL-15** sign-in routing · **P0-FL-18** progress views — from `origin/main`.
+3. **P0-FL-14** coach notifications + availability (integration base) · **P0-FL-16/17** profile read + plan labels (on #180).
+4. **P0-FL-37** coach PAR-Q tab via the logged `get_client_assessment()` RPC (F3; fixes the PHI ledger's false CLOSED).
+5. Migrations needing approval: 184/185 QA window (QAX-SEC-01/03 live), P0-SB-3 (after Decision 20), Decision 19
+   (F1 PAR-Q clear), P0-SB-2 (Decisions 17/18).
+
+### Backlog after cycle 4 (FL-10/11 done in cycle 5)
 
 1. **P0-SB-3 (migration, needs approval)** coach rating rollup blocked by 115's pin — fix option A + backfill; after
    Decision 20 (who may review a coach).
