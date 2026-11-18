@@ -1,18 +1,18 @@
-import 'dart:async' show TimeoutException;
 import 'dart:convert';
-import 'dart:io' show SocketException;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:http/http.dart' as http show ClientException;
 import 'package:image_picker/image_picker.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/content_review_submission.dart';
 import '../domain/custom_exercise_provider.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../workout/data/models/video_variant_model.dart';
 import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
+// P0-FL-11: the classifier moved to core; re-exported so importers of this
+// screen keep the name they had (it was this file's @visibleForTesting export).
+export '../../../core/observability/network_failure.dart' show isNetworkFailure;
 import '../../../core/widgets/named_icon_button.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -1351,15 +1351,3 @@ String exerciseMediaFailureMessage({
       ? "Couldn't save all the media — $parts. $next"
       : 'Exercise saved, but $parts. $next';
 }
-
-/// P0-FL-5 · U1 · true only when [err] is the request not reaching the server:
-/// no socket, a timeout, or the http client giving up (postgrest-dart lets the
-/// http client's exception through untouched; gotrue wraps it as
-/// [AuthRetryableFetchException]). A [PostgrestException] always carries the
-/// server's status code, so it is never treated as a network failure here.
-@visibleForTesting
-bool isNetworkFailure(Object? err) =>
-    err is SocketException ||
-    err is TimeoutException ||
-    err is http.ClientException ||
-    err is AuthRetryableFetchException;

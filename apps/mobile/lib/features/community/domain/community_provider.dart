@@ -132,11 +132,6 @@ final liveMembersProvider = FutureProvider<List<Map<String, dynamic>>>((ref) asy
   return List<Map<String, dynamic>>.from(data as List);
 });
 
-// Shim for screens that watch old provider
-final postListProvider = Provider<List<CommunityPost>>((ref) {
-  return ref.watch(postNotifierProvider).valueOrNull ?? const [];
-});
-
 // ── Live groups from Supabase ─────────────────────────────────────────────────
 final liveGroupsProvider = FutureProvider<List<CommunityGroup>>((ref) async {
   ref.watch(currentUserProvider);

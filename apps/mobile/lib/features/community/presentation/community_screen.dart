@@ -1,12 +1,9 @@
-import 'dart:async' show TimeoutException;
-import 'dart:io' show SocketException;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
-import 'package:http/http.dart' as http show ClientException;
-import 'package:supabase_flutter/supabase_flutter.dart' show AuthRetryableFetchException;
 import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/theme/app_background.dart';
 import '../../../core/animations/app_animations.dart';
@@ -195,7 +192,7 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                 // try-again-later; "Try again", busy-aware.
                 error: (err, _) => _LoadFailure(
                   title: "Couldn't load posts",
-                  network: _isNetworkFailure(err),
+                  network: isNetworkFailure(err),
                   busy: postsAsync.isLoading,
                   onRetry: () => ref.read(postNotifierProvider.notifier).reload(),
                 ),
@@ -261,7 +258,7 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                     error: (err, _) => [
                       _LoadFailure(
                         title: "Couldn't load groups",
-                        network: _isNetworkFailure(err),
+                        network: isNetworkFailure(err),
                         busy: groupsAsync.isLoading,
                         onRetry: () => ref.invalidate(liveGroupsProvider),
                       ),
@@ -391,7 +388,7 @@ class _MembersTab extends ConsumerWidget {
       // (a refresh), so the button shows it is busy instead of a dead tap.
       error: (err, _) => _LoadFailure(
         title: "Couldn't load members",
-        network: _isNetworkFailure(err),
+        network: isNetworkFailure(err),
         busy: membersAsync.isLoading,
         onRetry: () => ref.invalidate(liveMembersProvider),
       ),
@@ -464,18 +461,6 @@ class _MembersTab extends ConsumerWidget {
     );
   }
 }
-
-/// P0-FL-8 · true only when [err] is the request not reaching the server: no
-/// socket, a timeout, or the http client giving up (gotrue wraps it as
-/// [AuthRetryableFetchException]). A [PostgrestException] carries the server's
-/// answer, so it is never a connection problem. Same rule as
-/// `isNetworkFailure` in create_exercise_screen.dart (P0-FL-5), which is
-/// `@visibleForTesting` and so cannot be shared from here.
-bool _isNetworkFailure(Object? err) =>
-    err is SocketException ||
-    err is TimeoutException ||
-    err is http.ClientException ||
-    err is AuthRetryableFetchException;
 
 /// P0-FL-8 · a read (members, the feed — F1, or groups — P0-FL-10) failed: said in plain words
 /// with the next step and a way to read it again. Announced when it appears,

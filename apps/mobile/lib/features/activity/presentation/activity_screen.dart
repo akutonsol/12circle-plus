@@ -1,13 +1,10 @@
-import 'dart:async' show TimeoutException;
-import 'dart:io' show SocketException;
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:http/http.dart' as http show ClientException;
-import 'package:supabase_flutter/supabase_flutter.dart' show AuthRetryableFetchException;
+import '../../../core/observability/network_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../nutrition/domain/nutrition_provider.dart';
 import '../../coach/domain/coach_ecosystem_provider.dart';
@@ -881,7 +878,7 @@ class _CommunitySection extends ConsumerWidget {
 
       if (groupsAsync.hasError)
         _GroupsFailureCard(
-          network: _isNetworkFailure(groupsAsync.error),
+          network: isNetworkFailure(groupsAsync.error),
           busy: groupsAsync.isLoading,
           onRetry: () => ref.invalidate(liveGroupsProvider),
         )
@@ -969,15 +966,6 @@ class _CommunitySection extends ConsumerWidget {
     ]);
   }
 }
-
-/// P0-FL-10 · true only when [err] is the request not reaching the server —
-/// the rule of `_isNetworkFailure` in community_screen.dart (P0-FL-8), which is
-/// private to that screen.
-bool _isNetworkFailure(Object? err) =>
-    err is SocketException ||
-    err is TimeoutException ||
-    err is http.ClientException ||
-    err is AuthRetryableFetchException;
 
 /// P0-FL-10 · the groups read failed: a compact card in the place of the
 /// groups, with the next step and a busy-aware Try again. Announced when it
