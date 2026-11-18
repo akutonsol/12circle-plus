@@ -487,6 +487,11 @@ class CoachProgramService {
   /// Coach: has this client PAID for a plan with me? True if there's an active
   /// coach/package subscription or a paid one-time package payment between us.
   /// Coaches can only assign work once this is true.
+  ///
+  /// A failed read THROWS (P0-FL-12). It used to answer false, and the client
+  /// page then said "Coaching services unlock once this client subscribes…"
+  /// about a client who may well have subscribed: a failure shown as a fact.
+  /// The rule itself (what unlocks the services) is unchanged.
   Future<bool> clientHasPaidPlan(String clientId) async {
     final coachId = _db.auth.currentUser?.id;
     if (coachId == null) return false;
@@ -511,8 +516,9 @@ class CoachProgramService {
           .limit(1)
           .maybeSingle();
       return pay != null;
-    } catch (_) {
-      return false;
+    } catch (e, s) {
+      reportError('CoachProgramService.clientHasPaidPlan', e, s);
+      rethrow;
     }
   }
 }

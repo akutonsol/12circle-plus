@@ -1,7 +1,12 @@
+import 'dart:async' show TimeoutException;
+import 'dart:io' show SocketException;
+
 import '../../../core/observability/app_failure.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
+import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart'
+    show AuthRetryableFetchException, PostgrestException;
 import '../../coach/domain/coach_ecosystem_provider.dart';
 import '../../coach/presentation/coach_video_response_screen.dart';
 import '../../action_items/presentation/assign_action_item_sheet.dart';
@@ -227,7 +232,13 @@ class _OverviewTab extends ConsumerWidget {
     final summary    = _generateAiSummary(detail);
     final actions    = _generateActions(detail);
     // Coaches can only assign work once the client is on a paid plan with them.
-    final paidPlan   = ref.watch(clientHasPaidPlanProvider(clientId)).valueOrNull ?? false;
+    // P0-FL-12: a check that has not answered (still loading, or failed) is
+    // NOT "not subscribed" — [paidPlan] is null then, and the lock message is
+    // kept for a check that answered no.
+    final paidAsync  = ref.watch(clientHasPaidPlanProvider(clientId));
+    final bool? paidPlan = paidAsync.hasValue && !paidAsync.hasError
+        ? paidAsync.requireValue
+        : null;
 
     final goalLabel = {
       'lose_fat': 'Lose Fat', 'build_muscle': 'Build Muscle',
@@ -339,7 +350,16 @@ class _OverviewTab extends ConsumerWidget {
           _ClientScheduleCard(clientId: clientId),
           const SizedBox(height: 10),
           // ── Coaching services — gated behind a paid plan ──
-          if (!paidPlan)
+          if (paidPlan == null && paidAsync.hasError && !paidAsync.isLoading)
+            _LoadFailedNotice(
+              title: "Couldn't check this client's plan.",
+              error: paidAsync.error!,
+              detail: 'Coaching services stay hidden until it loads.',
+              onRetry: () => ref.invalidate(clientHasPaidPlanProvider(clientId)),
+            )
+          else if (paidPlan == null)
+            const _CheckingNotice(label: "Checking this client's plan…")
+          else if (!paidPlan)
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
@@ -1492,7 +1512,8 @@ class _ClientScoreCard extends ConsumerWidget {
 class _CoachActionCenter extends ConsumerStatefulWidget {
   final List<Map<String, String>> actions;
   final String clientId;
-  final bool paidPlan;
+  /// Null while the paid-plan check has not answered (loading or failed).
+  final bool? paidPlan;
   const _CoachActionCenter({required this.actions, required this.clientId, required this.paidPlan});
 
   @override
@@ -1526,7 +1547,15 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
     final icon = a['icon'] ?? '';
     final opensService = icon == 'fitness' || icon == 'nutrition' || icon == 'habit' || icon == 'checkin';
     // Services stay locked until the client is on a paid plan with this coach.
-    if (opensService && !widget.paidPlan) {
+    // An unanswered check is not "not subscribed" (P0-FL-12).
+    if (opensService && widget.paidPlan == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text("This client's plan hasn't been confirmed yet — "
+            'use Try again under Assigned Program.'),
+        behavior: SnackBarBehavior.floating));
+      return;
+    }
+    if (opensService && widget.paidPlan == false) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Locked — the client must subscribe to one of your plans first.'),
         behavior: SnackBarBehavior.floating));
@@ -1605,7 +1634,7 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
           style: TextStyle(color: _mut, fontSize: 12, fontWeight: FontWeight.w600)),
         const Spacer(),
         // Keep the generated items; let the coach add their own (once paid).
-        if (widget.paidPlan)
+        if (widget.paidPlan == true)
           TextButton.icon(
             onPressed: () => showAssignActionItemSheet(context, ref, widget.clientId),
             icon: const Icon(Icons.add_rounded, color: _brand, size: 16),
@@ -1723,6 +1752,67 @@ class _ActionButton extends StatelessWidget {
         const Spacer(),
         const Icon(Icons.arrow_forward_ios, color: _mut, size: 14),
       ])));
+}
+
+/// Connection wording is only for failures that ARE the connection; a
+/// PostgrestException (the server answered) never is. Same test as Settings.
+bool _isNetworkFailure(Object e) =>
+    e is SocketException ||
+    e is TimeoutException ||
+    e is http.ClientException ||
+    e is AuthRetryableFetchException;
+
+/// A read this screen needs before it can act failed: say so, say what is
+/// held back because of it, and offer Try again (P0-FL-12).
+class _LoadFailedNotice extends StatelessWidget {
+  final String title;
+  final Object error;
+  final String detail;
+  final VoidCallback onRetry;
+  const _LoadFailedNotice({
+    required this.title, required this.error, required this.detail, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    final nextStep = _isNetworkFailure(error)
+        ? 'Check your connection, then try again.'
+        : 'Try again. If it keeps happening, contact support.';
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _red.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _red.withValues(alpha: 0.3))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.error_outline, color: _red, size: 18),
+          const SizedBox(width: 10),
+          Expanded(child: Text(title,
+            style: const TextStyle(color: _wht, fontSize: 13, fontWeight: FontWeight.w700))),
+        ]),
+        const SizedBox(height: 6),
+        Text('$detail $nextStep',
+          style: const TextStyle(color: _mut, fontSize: 12, height: 1.4)),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton(
+            onPressed: onRetry,
+            child: const Text('Try again',
+              style: TextStyle(color: _brand, fontWeight: FontWeight.w700)))),
+      ]));
+  }
+}
+
+class _CheckingNotice extends StatelessWidget {
+  final String label;
+  const _CheckingNotice({required this.label});
+  @override
+  Widget build(BuildContext context) => Row(children: [
+    const SizedBox(width: 14, height: 14,
+      child: CircularProgressIndicator(strokeWidth: 2, color: _brand)),
+    const SizedBox(width: 10),
+    Expanded(child: Text(label, style: const TextStyle(color: _mut, fontSize: 12))),
+  ]);
 }
 
 // ── Assign Program Sheet ──────────────────────────────────────────────────────
@@ -1853,21 +1943,40 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
   final _water= TextEditingController();
   final _notes= TextEditingController();
   bool _saving = false;
+  // P0-FL-12: Save stays off until the current plan has been READ. The prefill
+  // had no error handler: a failed read left the form blank, and Save then
+  // wrote the coach's blanks over the client's existing plan. A read that
+  // answered "no plan" counts as loaded.
+  bool _loaded = false;
+  Object? _loadError;
 
   @override
   void initState() {
     super.initState();
-    // Pre-fill with the client's current active plan so the coach can review/edit.
-    ref.read(coachProgramServiceProvider).getClientNutritionPlan(widget.clientId).then((p) {
-      if (p == null || !mounted) return;
-      setState(() {
-        _cal.text   = '${p['calories_target'] ?? ''}';
-        _pro.text   = '${p['protein_g'] ?? ''}';
-        _carb.text  = '${p['carbs_g'] ?? ''}';
-        _fat.text   = '${p['fat_g'] ?? ''}';
-        _water.text = p['water_target_oz'] == null ? '' : '${p['water_target_oz']}';
-        _notes.text = '${p['notes'] ?? ''}';
-      });
+    _loadCurrentPlan();
+  }
+
+  /// Pre-fill with the client's current active plan so the coach can review/edit.
+  Future<void> _loadCurrentPlan() async {
+    if (_loadError != null) setState(() => _loadError = null);
+    final Map<String, dynamic>? p;
+    try {
+      p = await ref.read(coachProgramServiceProvider).getClientNutritionPlan(widget.clientId);
+    } catch (e, s) {
+      reportError('AssignNutritionSheet._loadCurrentPlan', e, s);
+      if (mounted) setState(() => _loadError = e);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _loaded = true;
+      if (p == null) return;
+      _cal.text   = '${p['calories_target'] ?? ''}';
+      _pro.text   = '${p['protein_g'] ?? ''}';
+      _carb.text  = '${p['carbs_g'] ?? ''}';
+      _fat.text   = '${p['fat_g'] ?? ''}';
+      _water.text = p['water_target_oz'] == null ? '' : '${p['water_target_oz']}';
+      _notes.text = '${p['notes'] ?? ''}';
     });
   }
 
@@ -1885,6 +1994,18 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       const Text('Set Nutrition Targets',
         style: TextStyle(color: _wht, fontSize: 18, fontWeight: FontWeight.w700)),
       const SizedBox(height: 20),
+      if (_loadError != null) ...[
+        _LoadFailedNotice(
+          title: "Couldn't load the current plan.",
+          error: _loadError!,
+          detail: "Saving is off until it loads, so this client's plan isn't overwritten.",
+          onRetry: _loadCurrentPlan,
+        ),
+        const SizedBox(height: 16),
+      ] else if (!_loaded) ...[
+        const _CheckingNotice(label: 'Loading the current plan…'),
+        const SizedBox(height: 16),
+      ],
       Row(children: [
         Expanded(child: _field(_cal, 'Calories', '1850')),
         const SizedBox(width: 12),
@@ -1908,7 +2029,7 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       SizedBox(
         width: double.infinity,
         child: ElevatedButton(
-          onPressed: _saving ? null : _save,
+          onPressed: _saving || !_loaded ? null : _save,
           style: ElevatedButton.styleFrom(
             backgroundColor: _brand, foregroundColor: _wht,
             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -1945,6 +2066,8 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       e is PostgrestException && e.code == '42501';
 
   Future<void> _save() async {
+    // Never write a form that was not filled from the server (P0-FL-12).
+    if (!_loaded) return;
     final cal  = int.tryParse(_cal.text);
     final pro  = int.tryParse(_pro.text);
     final carb = int.tryParse(_carb.text);
@@ -2012,6 +2135,12 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
   final Set<int> _selected = {};
   final Map<int, TextEditingController> _vals = {};
   bool _saving = false;
+  // P0-FL-12: assignHabits switches OFF every active habit before inserting the
+  // selection, so a selection that was never pre-filled (failed read, no error
+  // handler) wiped the client's habits on Save. Save stays off until the read
+  // succeeded; a read that answered "no habits" counts as loaded.
+  bool _loaded = false;
+  Object? _loadError;
 
   @override
   void initState() {
@@ -2019,18 +2148,30 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
     for (var i = 0; i < _presets.length; i++) {
       _vals[i] = TextEditingController(text: '${_presets[i]['default']}');
     }
-    // Pre-select habits already assigned + restore their values.
-    ref.read(coachProgramServiceProvider).getClientHabits(widget.clientId).then((rows) {
-      if (rows.isEmpty || !mounted) return;
-      setState(() {
-        for (final r in rows) {
-          final idx = _presets.indexWhere((p) => p['name'] == r['name']);
-          if (idx >= 0) {
-            _selected.add(idx);
-            if (r['target_value'] != null) _vals[idx]!.text = '${r['target_value']}';
-          }
+    _loadCurrentHabits();
+  }
+
+  /// Pre-select habits already assigned + restore their values.
+  Future<void> _loadCurrentHabits() async {
+    if (_loadError != null) setState(() => _loadError = null);
+    final List<Map<String, dynamic>> rows;
+    try {
+      rows = await ref.read(coachProgramServiceProvider).getClientHabits(widget.clientId);
+    } catch (e, s) {
+      reportError('AssignHabitsSheet._loadCurrentHabits', e, s);
+      if (mounted) setState(() => _loadError = e);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _loaded = true;
+      for (final r in rows) {
+        final idx = _presets.indexWhere((p) => p['name'] == r['name']);
+        if (idx >= 0) {
+          _selected.add(idx);
+          if (r['target_value'] != null) _vals[idx]!.text = '${r['target_value']}';
         }
-      });
+      }
     });
   }
 
@@ -2050,6 +2191,18 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
       const Text('Tap to assign. For ones with a blank, set the daily target.',
         style: TextStyle(color: _mut, fontSize: 13)),
       const SizedBox(height: 14),
+      if (_loadError != null) ...[
+        _LoadFailedNotice(
+          title: "Couldn't load the current habits.",
+          error: _loadError!,
+          detail: "Saving is off until they load, so this client's habits aren't switched off.",
+          onRetry: _loadCurrentHabits,
+        ),
+        const SizedBox(height: 14),
+      ] else if (!_loaded) ...[
+        const _CheckingNotice(label: 'Loading the current habits…'),
+        const SizedBox(height: 14),
+      ],
       Flexible(child: ListView.separated(
         shrinkWrap: true,
         itemCount: _presets.length,
@@ -2100,7 +2253,7 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
       SizedBox(
         width: double.infinity,
         child: ElevatedButton(
-          onPressed: _selected.isEmpty || _saving ? null : _save,
+          onPressed: _selected.isEmpty || _saving || !_loaded ? null : _save,
           style: ElevatedButton.styleFrom(
             backgroundColor: _brand, foregroundColor: _wht,
             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -2113,6 +2266,8 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
     ]));
 
   Future<void> _save() async {
+    // Never send a selection that was not pre-filled from the server (P0-FL-12).
+    if (!_loaded) return;
     // Read before the await, as in the nutrition sheet.
     final container = ProviderScope.containerOf(context);
     setState(() => _saving = true);
