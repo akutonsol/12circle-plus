@@ -433,23 +433,31 @@ void main() {
       FlutterError.onError = (d) {
         if (d.toString().contains('_GroupsFailureCard')) ours.add(d);
       };
-      addTearDown(() => FlutterError.onError = previous);
-      await tester.pumpWidget(MediaQuery(
-        data: const MediaQueryData(
-          size: Size(320, 900),
-          textScaler: TextScaler.linear(2.0),
-        ),
-        child: _activity(),
-      ));
-      await _settle(tester);
-      await tester.scrollUntilVisible(find.text("Couldn't load your groups"), 300,
-          scrollable: find.byType(Scrollable).first);
-      await _settle(tester);
-      expect(find.text("Couldn't load your groups"), findsOneWidget);
-      expect(find.text('Try again'), findsOneWidget);
+      var shown = false;
+      try {
+        await tester.pumpWidget(MediaQuery(
+          data: const MediaQueryData(
+            size: Size(320, 900),
+            textScaler: TextScaler.linear(2.0),
+          ),
+          child: _activity(),
+        ));
+        await _settle(tester);
+        final card = find.text("Couldn't load your groups");
+        await tester.dragUntilVisible(
+            card, find.byType(SingleChildScrollView).first, const Offset(0, -300),
+            maxIteration: 30);
+        await _settle(tester);
+        shown = card.evaluate().length == 1 &&
+            find.text('Try again').evaluate().length == 1;
+        await _unmount(tester);
+      } on StateError {
+        shown = false; // the card never appeared
+      } finally {
+        FlutterError.onError = previous;
+      }
+      expect(shown, isTrue, reason: 'the failure card is shown with Try again');
       expect(ours, isEmpty, reason: 'the failure card does not overflow');
-      await _unmount(tester);
-      FlutterError.onError = previous;
     });
   });
 }
