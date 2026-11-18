@@ -552,6 +552,60 @@ P0-SB-2 **remains blocked** on Decisions 17 and 18 and explicit authorization.
 
 **P0 acceptance after cycle 4: unchanged — 2 of 14 journeys (14%), 0 of 4 beta-ready conditions.**
 
+### Cycle 5 — P0-FL-10, P0-FL-12, P0-FL-11, silent-error inventory, read-only investigations (2026-11-17)
+
+**Integration branch (new).** `integration/p0-flutter-stack` = `origin/main` + every open Flutter PR head merged (no
+PR merged into `main`). Evidence it composes: **f4cf7b1** (#172–#180) — analyze 287, **2895** tests pass, static
+guards 0, CI **7/7** (push run `44225771776`); **e606fe5** (+ #181, #182) — analyze 287, **2954** pass, guards 0,
+CI **7/7** (push run `44234316826`). It exists so P0-FL-11 could target one base.
+
+| PR | Package | Base | Commits (author) | Files | Automated evidence | Independent verdicts (at the final head) | CI (exact head) |
+|---|---|---|---|---|---|---|---|
+| #181 | **P0-FL-10** group list loading/failed/loaded on Community Groups and Activity (was "no groups" / "not joined"); join/leave failures reported; `leaveGroup` 0 rows = failure + list re-read; 23505 by error code; Join pill a named 44 px button | #179 | flutter-engineer: 14d8518, 452a87a, 2ff8080, 8e62718, 4c3a7c2 | `community_provider.dart`, `community_screen.dart`, `activity_screen.dart`, `live_community_service.dart`; 2 new + 1 updated tests | base +2 −12; full **2781**; analyze 291; lead mutants **8/8** caught | UX **PASS**; security **APPROVE-WITH-NOTES** (replay of 016); QA **VERIFIED** | 7/7 on 4c3a7c2 (`44231208557`) |
+| #182 | **P0-FL-12** client-detail: a failed prefill read no longer lets Save **overwrite the client's nutrition plan or switch off their habits** (data loss reproduced on e8ef987); inputs and Save locked until loaded; paid-plan check failure honest and fail-closed | #180 | flutter-engineer: 90e307a, 23dd969 | `client_detail_screen.dart`, `coach_program_service.dart` (`clientHasPaidPlan`); 1 new test file (22 tests) | base +3 −5 (90e307a), +8 −14 (23dd969 vs 90e307a); full **2755**; analyze 291; lead mutants **6/6** caught (M5 second-layer guard documented) | UX **PASS-WITH-NOTES**; security **APPROVE-WITH-NOTES**; QA **VERIFIED** | 7/7 on 23dd969 (`44232187464`) |
+| #183 | **P0-FL-11** one shared `isNetworkFailure` (`core/observability/network_failure.dart`) replaces 8 identical private copies; dead `postListProvider` removed (no references); Set Custom Price dialog network/other split | **integration/p0-flutter-stack @ e606fe5** | flutter-engineer: 2ecd6e2 | 12 files (helper + test new; 9 lib files; 1 test expectation) | dialog test base +12 −1; full **2969**; analyze 287; lead mutants **3/3** caught | UX **PASS-WITH-NOTES**; security **APPROVE-WITH-NOTES**; QA **VERIFIED** | 7/7 on 2ecd6e2 (`44236734289`) |
+
+**Evidence is automated only** (widget/unit tests on fakes, mutants, guards, CI on each PR and on the integration
+branch, local database replays, read-only QA catalog reads by the lead). **No device, simulator or live-QA write. No
+journey completion is claimed from these.**
+
+**Silent-error inventory** — `docs/SILENT_ERROR_INVENTORY.md` (new): every swallowed failure at f4cf7b1 traced to
+file:line, consequence, priority, fix, package and PR. **P1 3, P2 21, P3 ≈111.** #182 closes 2 P1 + 1 P2; P0-FL-13 …
+P0-FL-19 cover the remaining 1 P1 (intake baseline photos silently lost) and 20 P2.
+
+**Read-only investigations (no repo, policy, migration or data change):**
+- **Decision 19 brief** (coach writes client profile): no app, Edge Function, AI function or RPC depends on 015's coach
+  UPDATE arm; options A (drop), B (empty allow-list trigger), B′ (16 writable / 43 refused, fail-closed), C (status quo
+  + changed-columns-only audit) with SQL sketches, breakage, PHI and test plans. **New: F1 P1 defect** — an active
+  coach can clear a client's PAR-Q (high→low risk), contradicting 115's recorded rule (member owns the answers); closed
+  by A/B/B′ only, needs a migration + approval. **F3 P2 defect** — the coach's PAR-Q tab reads health data via
+  `select('*')`; the logged `get_client_assessment()` has 0 app callers, yet `SECURITY_LEDGER_PHI.md` SEC-PHI-AUDIT
+  says VERIFIED_CLOSED — the ledger status is wrong (app-side fix is decision-free; package P0-FL-37). AI-memory capture
+  (075) needs its own decision (memories persist after clearing, no authorship, likely re-created after deletion).
+- **Decision 20** (who may review a coach) — replay + **live QA catalog confirmed** (policies `all read reviews`
+  USING true; `clients manage own reviews` FOR ALL USING client_id = auth.uid(); unique (coach_id, client_id); rating
+  1–5; triggers rollup + notify): any signed-in user can review any user incl. self, competitors, non-coaches; move a
+  review to another coach; backdate it; each review notifies the target with chosen text; reviewer identity is public.
+  Options A status quo / B active-or-past relationship / C B + minimum, plus add-ons.
+- **Member-list access** — `public_profiles` has no row filter: every signed-in user lists all users incl. roles
+  (admins), sign-up times, demo accounts (demo filter app-side only); 8 tables expose user ids readable by all. Options
+  A status quo / B scoped / C opt-in / D column split.
+- **P0-SB-3** (coach ratings frozen since 115) — new **option D** (the guard computes the true totals itself; nothing a
+  caller sends can be stored) validated on a scratch database: 25/25 on four schema shapes, all 7 existing replays
+  unchanged; A also 25/25; B 24/25 (raw-SQL GUC forge). Backfill and rollback designed. **Should land with or after
+  Decision 20** — fixing it publishes today's unrestricted reviews in the rankings. Next number 201, after 200.
+- **QA migration state (read-only)**: `schema_migrations` = …180, 181, 187–192 — **182–186 are not applied** (main's
+  `expected_applied.json` still says applied_through 181). So on QA **QAX-SEC-01/03 are live**: any signed-in user can
+  call `assign_nutrition_plan` for any client and insert `client_habits` / `client_nutrition_plans` naming themselves
+  as coach (older FOR ALL policies). 184/185 need an owner-approved QA window. **Multi-coach plan overwrite** (a coach
+  sees only its own plans; Save replaces another coach's active plan) needs a plan-ownership decision.
+
+Backlog added: P0-FL-13 … P0-FL-19 (beta-journey silent errors, see inventory); P0-FL-37 (PAR-Q tab via the logged
+RPC); habit rows lack semantics and locked rows not dimmed (#182 UX); custom-price timeout wording (may have committed —
+copy decision); group-membership readable by all (decision).
+
+**P0 acceptance after cycle 5: unchanged — 2 of 14 journeys (14%), 0 of 4 beta-ready conditions.**
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
@@ -587,6 +641,10 @@ These are Julia's calls; the recommendation is engineering's view, not a decisio
 18. Is $0 a valid coaching price? The Custom Price dialog accepts 0; the Pricing sheet refuses it (UX U4, #174); may a coach clear a saved price or years of experience? (#176 keeps a blank field's saved value and says so)
 19. SR-4: may an active coach edit a client's profile fields at all, and which? (A none — remove the 015 policy; B an explicit allow-list; B′ block safety, consent and coach-only fields; C status quo.) No app screen uses it today.
 20. Who may review a coach (any signed-in user today, with or without a relationship) — decide before the rating-rollup fix lands.
+21. Multi-coach plan ownership: when a client has (or had) more than one coach, whose nutrition plan / habits win, and may a coach replace another coach's active plan? (#182 security N1)
+22. Member directory scope (public_profiles has no row filter) and group-membership visibility (A status quo … D column split).
+23. AI injury memories (075): keep after the field is cleared? record who wrote them? may they be sent to the model provider?
+24. Is payment enforcement required server-side for coaching services (today only an active relationship is checked)?
 
 ## Migration approvals required
 
