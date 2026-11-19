@@ -119,14 +119,30 @@ class CoachRelationshipService {
         .order('pending_at', ascending: false);
     if ((rels as List).isEmpty) return [];
     final clientIds = rels.map((r) => r['client_id'] as String).toList();
+    // P0-FL-38 / H-06. This read `user_profiles` for `email, fitness_goal,
+    // weight_kg` too — health data for people who are not (yet) this coach's
+    // clients. And it never arrived: user_profiles admits a coach only to an
+    // ACTIVE client's row (`is_active_coach_of`), so every pending card had no
+    // name ("New Client") and no avatar. Names and avatars come from
+    // public_profiles, readable for any user and carrying no email, contact or
+    // health column (migrations 101/110). No email is read: public_profiles has
+    // none by design. Whether a coach may see more of a requester (goal,
+    // email) is owner decision Q-H1 (QA_WORKSTREAM_H report §9) and would need
+    // a new scoped path; this is the report's "minimum safe fix now".
     final profiles = await _db
-        .from('user_profiles')
-        .select('id, first_name, last_name, email, avatar_url, fitness_goal, weight_kg')
+        .from('public_profiles')
+        .select('id, first_name, last_name, avatar_url')
         .inFilter('id', clientIds);
-    final profileMap = {for (final p in (profiles as List)) p['id']: p};
+    final profileMap = {
+      for (final p in (profiles as List))
+        p['id']: Map<String, dynamic>.from(p as Map),
+    };
     return rels.map((r) => {
       ...r,
-      'profile': profileMap[r['client_id']] ?? {},
+      // Typed: an untyped `{}` here is a Map<dynamic, dynamic>, and the
+      // Requests tab's `as Map<String, dynamic>?` threw on it while building —
+      // which, under the live policy, was every pending request.
+      'profile': profileMap[r['client_id']] ?? const <String, dynamic>{},
     }).toList();
   }
 
@@ -276,9 +292,8 @@ class CoachRelationshipService {
     final list = List<Map<String, dynamic>>.from(rels);
     if (list.isEmpty) return [];
     final ids = list.map((r) => r['coach_id'] as String).toList();
-    // H-06 / 3A-7: repointed at public_profiles. getPendingRequests() below is
-    // the coach-facing half of H-06 and stays on user_profiles — blocked on
-    // Q-H1, not touched here.
+    // H-06 / 3A-7: repointed at public_profiles. getPendingRequests() above,
+    // the coach-facing half of H-06, followed in P0-FL-38.
     final profiles = await _db
         .from('public_profiles')
         .select('id, first_name, last_name, avatar_url, coach_title, specialties, pricing_monthly')

@@ -1123,7 +1123,7 @@ section('16 · CON-03 authority (PD-A22 route b)');
       rpcCallSites++; rpcCallFiles.push(path.basename(f));
     }
   }
-  check('get_client_assessment has exactly ONE application call site (the coach client page)',
+  check('get_client_assessment has exactly ONE application call site (clientAssessmentProvider — serves the coach client page and the copilot)',
     rpcCallSites === 1 && rpcCallFiles[0] === 'coach_ecosystem_provider.dart',
     'so Option B must recreate the RPC in the SAME migration (memo §7.2) or every coach sees '
       + '"Couldn\'t load this client\'s assessment" — not only d09; found: ' + rpcCallFiles.join(', '));

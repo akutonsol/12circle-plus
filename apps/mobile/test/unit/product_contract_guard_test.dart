@@ -680,10 +680,10 @@ void main() {
   // `public_profiles` / `conversation_participant_profiles`. These four were
   // not moved. Recorded as a shrinking allowlist.
   group('H-G4 the coach-facing profile reads still go to the base table', () {
-    const sites = <String, String>{
-      'apps/mobile/lib/features/coach/data/coach_relationship_service.dart':
-          'getPendingRequests / getMyActiveCoaches',
-    };
+    // Empty: getMyActiveCoaches moved to public_profiles in 3A-7, and
+    // getPendingRequests followed in P0-FL-38. (coach_relationship_service
+    // still reads user_profiles, for the signed-in user's own row only.)
+    const sites = <String, String>{};
 
     test('102 is the policy this guard is about', () {
       final sql = _read('supabase/migrations/102_restrict_user_profiles.sql');
@@ -716,7 +716,8 @@ void main() {
         'lib/features/coach/data/score_service.dart',
         'lib/features/coach/domain/coach_ecosystem_provider.dart',
         'lib/features/coach/presentation/coach_business_screen.dart',
-        'lib/features/coach/presentation/coach_copilot_screen.dart',
+        // coach_copilot_screen.dart left in P0-FL-38: its client health
+        // context comes from the logged get_client_assessment RPC.
         'lib/features/coach/presentation/coach_pricing_sheet.dart',
       });
     });
