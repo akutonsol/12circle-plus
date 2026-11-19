@@ -42,6 +42,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 const _uid = '00000000-0000-4000-8000-0000000c0f38';
 const _clientId = '00000000-0000-4000-8000-00000000cf38';
+const _clientB = '00000000-0000-4000-8000-00000000cb38';
 
 String _b64(Map<String, Object?> m) =>
     base64Url.encode(utf8.encode(jsonEncode(m))).replaceAll('=', '');
@@ -114,6 +115,12 @@ enum _Rpc {
 class _Server extends http.BaseClient {
   _Rpc rpc = _Rpc.row;
   Completer<void>? holdRpc;
+
+  /// Per-client overrides of [rpc] / [holdRpc] (switching tests).
+  final rpcFor = <String, _Rpc>{};
+  final holdRpcFor = <String, Completer<void>>{};
+  Completer<void>? holdGenerate;
+  final holdPredictFor = <String, Completer<void>>{};
   final assessmentBodies = <String>[];
   final generateBodies = <Map<String, dynamic>>[];
   final profileReads = <Uri>[];
@@ -121,6 +128,10 @@ class _Server extends http.BaseClient {
   void reset() {
     rpc = _Rpc.row;
     holdRpc = null;
+    rpcFor.clear();
+    holdRpcFor.clear();
+    holdGenerate = null;
+    holdPredictFor.clear();
     assessmentBodies.clear();
     generateBodies.clear();
     profileReads.clear();
@@ -132,9 +143,10 @@ class _Server extends http.BaseClient {
     final body = request is http.Request ? request.body : '';
     if (path.endsWith('/rpc/get_client_assessment')) {
       assessmentBodies.add(body);
-      final h = holdRpc;
+      final client = (jsonDecode(body) as Map)['p_client'] as String?;
+      final h = holdRpcFor[client] ?? holdRpc;
       if (h != null) await h.future;
-      switch (rpc) {
+      switch (rpcFor[client] ?? rpc) {
         case _Rpc.row:
           return _json(request, 200, [
             {'client_id': _clientId, 'has_assessment': true,
@@ -175,6 +187,8 @@ class _Server extends http.BaseClient {
     if (path.endsWith('/rpc/generate_workout')) {
       generateBodies.add(
           Map<String, dynamic>.from(jsonDecode(body) as Map));
+      final h = holdGenerate;
+      if (h != null) await h.future;
       return _json(request, 200, {
         'selected': [
           {'name': 'Goblet squat', 'score': 80, 'pattern': 'squat'},
@@ -183,7 +197,17 @@ class _Server extends http.BaseClient {
       });
     }
     if (path.endsWith('/rpc/predict_client')) {
-      return _json(request, 200, null);
+      final subject = (jsonDecode(body) as Map)['p_subject'] as String?;
+      final h = holdPredictFor[subject];
+      if (h == null) return _json(request, 200, null);
+      // A held outlook answers for ITS client (the stale-outlook test).
+      await h.future;
+      return _json(request, 200, {
+        'status': 'ok', 'weeks_completed': 2, 'duration_weeks': 8,
+        'goal': {'progress_pct': 25, 'confidence': 90},
+        'plateau_risk': 'low', 'injury_risk': {'general': 'low'},
+        'recovery': {'trend': 'stable'}, 'alerts': [],
+      });
     }
     if (path.endsWith('/user_profiles')) {
       profileReads.add(request.url);
@@ -222,6 +246,7 @@ Future<void> _pumpAndSelect(WidgetTester t) async {
       // The roster row: id + name only (the non-health source of the name).
       coachClientsProvider.overrideWith((ref) async => [
             {'id': _clientId, 'first_name': 'Jordan', 'last_name': 'Test'},
+            {'id': _clientB, 'first_name': 'Sam', 'last_name': 'Other'},
           ]),
     ],
     child: const MaterialApp(home: CoachCopilotScreen()),
@@ -490,4 +515,183 @@ void main() {
         reason: 'both notices stay visible beside the recommendation');
     expect(server.profileReads, isEmpty);
   });
+
+  // ── P0-FL-38 review round ──────────────────────────────────────────────
+  // HOW TO SEE THESE FAIL: after committing, `git checkout HEAD~1 -- lib/
+  // features/coach/presentation/coach_copilot_screen.dart` (restore with
+  // `git checkout HEAD -- …`).
+
+  // UX-F1: red means blocked, amber means warned. Generate stays enabled for
+  // an injury without an area, so the notice is amber; and it scrolls away,
+  // so a one-line warning repeats beside Approve & assign.
+  testWidgets(
+      'UX-F1: injury without an area is an AMBER warning (healing icon, not '
+      'the blocking red) and repeats next to Approve & assign', (t) async {
+    server.rpc = _Rpc.injuryNoArea;
+    await _pumpAndSelect(t);
+    final icon = t.widget<Icon>(find.descendant(
+        of: find.ancestor(
+            of: find.text(_injuryNoArea),
+            matching: find.byWidgetPredicate(
+                (w) => w is Semantics && w.properties.liveRegion == true)),
+        matching: find.byType(Icon)));
+    expect(icon.icon, Icons.healing_outlined);
+    expect(icon.color, _amber, reason: 'Generate is not blocked: warn, not fail');
+    expect(find.byWidgetPredicate((w) => w is Icon && w.color == _red),
+        findsNothing, reason: 'nothing on screen claims a blocked state');
+    expect(find.text(_injuryRepeat), findsNothing,
+        reason: 'the repeat belongs to the recommendation');
+
+    await _tapGenerate(t);
+    final repeat = find.text(_injuryRepeat);
+    expect(repeat, findsOneWidget);
+    final approve = find.text('Approve & assign');
+    final gap = t.getTopLeft(approve).dy - t.getBottomLeft(repeat).dy;
+    expect(gap, inInclusiveRange(0, 60),
+        reason: 'the warning sits directly above the Assign control');
+    final repeatIcon = t.widget<Icon>(find.descendant(
+        of: find.ancestor(of: repeat, matching: find.byType(Row)).first,
+        matching: find.byType(Icon)));
+    expect(repeatIcon.icon, Icons.healing_outlined);
+    expect(repeatIcon.color, _amber);
+  });
+
+  testWidgets('UX-F1: no injury warning beside Assign when areas are known',
+      (t) async {
+    await _pumpAndSelect(t);
+    await _tapGenerate(t);
+    expect(find.text('Approve & assign'), findsOneWidget);
+    expect(find.text(_injuryRepeat), findsNothing);
+  });
+
+  // UX-F2: Generate and the client chips were bare GestureDetectors — a
+  // screen reader heard text, not a button, and nothing said which client
+  // was selected or that Generate was disabled.
+  testWidgets(
+      'UX-F2: Generate is a labelled button whose enabled state follows the '
+      'context read; client chips are buttons with a selected state',
+      (t) async {
+    final handle = t.ensureSemantics();
+    server.holdRpc = Completer<void>();
+    await _pumpAndSelect(t);
+
+    final generate = find.bySemanticsLabel('Generate recommendation');
+    expect(generate, findsOneWidget);
+    expect(t.getSemantics(generate), isSemantics(
+        label: 'Generate recommendation', isButton: true,
+        hasEnabledState: true, isEnabled: false),
+        reason: 'disabled while the health context is loading');
+    expect(t.getSemantics(find.bySemanticsLabel('Jordan Test')),
+        isSemantics(isButton: true, hasSelectedState: true,
+            isSelected: true, hasTapAction: true));
+    expect(t.getSemantics(find.bySemanticsLabel('Sam Other')),
+        isSemantics(isButton: true, hasSelectedState: true,
+            isSelected: false, hasTapAction: true));
+
+    server.holdRpc!.complete();
+    await _io(t);
+    expect(t.getSemantics(generate), isSemantics(
+        label: 'Generate recommendation', isButton: true,
+        hasEnabledState: true, isEnabled: true, hasTapAction: true));
+
+    // Busy: disabled while a generation is in flight (no double fire).
+    server.holdGenerate = Completer<void>();
+    await _tapGenerate(t);
+    expect(t.getSemantics(generate), isSemantics(
+        isButton: true, hasEnabledState: true, isEnabled: false));
+    server.holdGenerate!.complete();
+    await _io(t);
+    expect(server.generateBodies, hasLength(1));
+    handle.dispose();
+  });
+
+  // UX-F4: a recommendation generated for A must not land on B when the
+  // coach switches client while it is in flight.
+  testWidgets(
+      'UX-F4: switching client during Generate discards the stale result and '
+      'leaves Generate usable for the new client', (t) async {
+    await _pumpAndSelect(t);
+    server.holdGenerate = Completer<void>();
+    await _tapGenerate(t);
+    expect(server.generateBodies.single['p_subject'], _clientId);
+
+    await t.tap(find.text('Sam Other'));
+    await _io(t);
+    server.holdGenerate!.complete();
+    await _io(t);
+    expect(find.text('Goblet squat'), findsNothing,
+        reason: "Jordan's recommendation must not show under Sam");
+    expect(find.text('Approve & assign'), findsNothing,
+        reason: "nothing to assign to Sam from Jordan's context");
+    expect(find.text('Generate recommendation'), findsOneWidget,
+        reason: 'not stuck busy');
+
+    server.holdGenerate = null;
+    await _tapGenerate(t);
+    expect(server.generateBodies, hasLength(2));
+    expect(server.generateBodies.last['p_subject'], _clientB);
+    expect(find.text('Goblet squat'), findsOneWidget);
+  });
+
+  // QA: A → B → A sends one assessment read per selection and never shows the
+  // previous client's context for the newly selected one.
+  testWidgets(
+      'QA: switching A → B → A sends one read per selection and shows no '
+      "stale context for the newly selected client", (t) async {
+    server.rpcFor[_clientId] = _Rpc.injuryNoArea;
+    await _pumpAndSelect(t);
+    expect(find.text(_injuryNoArea), findsOneWidget);
+    expect(server.assessmentBodies, hasLength(1));
+
+    server.holdRpcFor[_clientB] = Completer<void>();
+    await t.tap(find.text('Sam Other'));
+    await _io(t);
+    expect(server.assessmentBodies.map((b) => jsonDecode(b)['p_client']),
+        [_clientId, _clientB]);
+    expect(find.text("Loading this client's health context…"), findsOneWidget);
+    expect(find.text(_injuryNoArea), findsNothing,
+        reason: "Jordan's injury must not show while Sam's context loads");
+
+    server.holdRpcFor[_clientB]!.complete();
+    await _io(t);
+    expect(find.text(_injuryNoArea), findsNothing);
+    expect(find.textContaining("Couldn't"), findsNothing);
+
+    await t.tap(find.text('Jordan Test'));
+    await _io(t);
+    expect(server.assessmentBodies.map((b) => jsonDecode(b)['p_client']),
+        [_clientId, _clientB, _clientId], reason: 'one read per selection');
+    expect(find.text(_injuryNoArea), findsOneWidget);
+
+    await t.drag(find.byType(Slider), const Offset(-80, 0));
+    await t.pump();
+    await _io(t);
+    expect(server.assessmentBodies, hasLength(3), reason: 'not on rebuilds');
+  });
+
+  testWidgets(
+      "QA: a late outlook for the previous client is not shown for the new one",
+      (t) async {
+    server.holdPredictFor[_clientId] = Completer<void>();
+    await _pumpAndSelect(t);
+    await t.tap(find.text('Sam Other'));
+    await _io(t);
+    server.holdPredictFor[_clientId]!.complete();
+    await _io(t);
+    expect(find.text('CLIENT OUTLOOK'), findsNothing,
+        reason: "Jordan's outlook must not show under Sam");
+
+    // Positive control: the same held outlook shows when the selection holds.
+    server.holdPredictFor[_clientId] = Completer<void>();
+    await t.tap(find.text('Jordan Test'));
+    await _io(t);
+    server.holdPredictFor[_clientId]!.complete();
+    await _io(t);
+    expect(find.text('CLIENT OUTLOOK'), findsOneWidget);
+  });
 }
+
+const _amber = Color(0xFFF59E0B);
+const _red = Color(0xFFEF4444);
+const _injuryRepeat =
+    'Injury reported with no area — review before assigning.';

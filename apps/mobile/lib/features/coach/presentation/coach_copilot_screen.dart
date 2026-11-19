@@ -113,9 +113,18 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     final source = _generationSource(
         c, ref.read(clientAssessmentProvider(c['id'] as String)));
     if (source == null) return; // the button is disabled: context unknown
+    // Captured before the await: the coach can pick another client while the
+    // engine runs, and A's session must never land on B (UX-F4).
+    final id = c['id'] as String;
     setState(() { _busy = true; _rec = null; _explanation = null; _status = null; });
-    final r = await _svc.generateWorkout(_context(source), subjectId: c['id'] as String);
+    final r = await _svc.generateWorkout(_context(source), subjectId: id);
     if (!mounted) return;
+    if (_client?['id'] != id) {
+      // Stale: discard it. Selecting the new client already cleared the
+      // panel; only the busy state is ours to end.
+      setState(() => _busy = false);
+      return;
+    }
     // A failed call used to leave the panel blank — the error went into
     // `lastError` and nothing said so.
     setState(() {
@@ -171,6 +180,9 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     final assessment = _watchAssessment();
     final ready = _generationSource(_client, assessment) != null;
     final notice = assessment == null ? null : _healthContextNotice(assessment);
+    final injuryWarn = assessment != null && assessment.hasValue &&
+        !assessment.hasError && !assessment.isLoading &&
+        _injuryWithoutArea(assessment.requireValue);
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(backgroundColor: _bg, foregroundColor: _text,
@@ -197,7 +209,7 @@ class _State extends ConsumerState<CoachCopilotScreen> {
           _recoveryCard(),
           const SizedBox(height: 12),
           _generateButton(ready),
-          if (_rec != null) ..._recommendation(_rec!),
+          if (_rec != null) ..._recommendation(_rec!, injuryWarn: injuryWarn),
           // The status line normally renders inside the recommendation; with no
           // recommendation (a failed call) it needs its own place, or it is lost.
           if (_rec == null && _status != null) Padding(
@@ -219,24 +231,30 @@ class _State extends ConsumerState<CoachCopilotScreen> {
         itemBuilder: (_, i) {
           final c = list[i];
           final sel = _client?['id'] == c['id'];
-          return GestureDetector(
-            onTap: () async {
-              // Selecting the client starts their logged assessment read
-              // (watched in build): the health context comes only from there.
-              setState(() { _client = c; _rec = null; _status = null; _explanation = null; _outlook = null; });
-              // Predictive outlook for this client (deterministic).
-              final o = await _programs.predictClient(c['id'] as String);
-              if (mounted) setState(() => _outlook = o);
-            },
+          final name = '${c['first_name'] ?? 'Client'} ${(c['last_name'] ?? '').toString()}'.trim();
+          Future<void> select() async {
+            // Selecting the client starts their logged assessment read
+            // (watched in build): the health context comes only from there.
+            setState(() { _client = c; _rec = null; _status = null; _explanation = null; _outlook = null; });
+            // Predictive outlook for this client (deterministic). A late
+            // answer for a client no longer selected is discarded.
+            final o = await _programs.predictClient(c['id'] as String);
+            if (mounted && _client?['id'] == c['id']) setState(() => _outlook = o);
+          }
+          return Semantics(
+            button: true, selected: sel, label: name, onTap: select,
+            excludeSemantics: true,
+            child: GestureDetector(
+            onTap: select,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
                 color: sel ? _brand : _panel2, borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: sel ? _brand : _brand.withValues(alpha: 0.2))),
-              child: Text('${c['first_name'] ?? 'Client'} ${(c['last_name'] ?? '').toString()}'.trim(),
+              child: Text(name,
                   style: TextStyle(color: sel ? Colors.white : _text, fontSize: 13, fontWeight: FontWeight.w700)),
             ),
-          );
+          ));
         },
       )),
     ]);
@@ -354,8 +372,9 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     // Prominent: the one case where the client told us something Copilot
     // cannot act on. Shown for a completed assessment and, beside the "not
     // completed" notice, for one never completed.
+    // Amber, not red: red means blocked, and Generate stays enabled (UX-F1).
     final injury = _injuryWithoutArea(v)
-        ? _notice(Icons.healing_outlined, _fail,
+        ? _notice(Icons.healing_outlined, _warn,
             'This client reported an injury without saying where.',
             "Copilot can't plan around it — review the session before "
                 'assigning it, or ask them to update their assessment.')
@@ -402,8 +421,13 @@ class _State extends ConsumerState<CoachCopilotScreen> {
 
   /// Disabled while the client's health context is unknown (loading or the
   /// read failed); enabled for every answer the read gave.
-  Widget _generateButton(bool ready) => GestureDetector(
-    onTap: _busy || !ready ? null : _run,
+  Widget _generateButton(bool ready) {
+    final enabled = ready && !_busy;
+    return Semantics(
+    button: true, enabled: enabled, label: 'Generate recommendation',
+    onTap: enabled ? _run : null, excludeSemantics: true,
+    child: GestureDetector(
+    onTap: enabled ? _run : null,
     child: Container(
       width: double.infinity, alignment: Alignment.center,
       padding: const EdgeInsets.symmetric(vertical: 13),
@@ -414,9 +438,13 @@ class _State extends ConsumerState<CoachCopilotScreen> {
           ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
           : const Text('Generate recommendation', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
     ),
-  );
+  ));
+  }
 
-  List<Widget> _recommendation(Map<String, dynamic> r) {
+  /// [injuryWarn]: the client reported an injury without an area. The full
+  /// notice sits above Generate and scrolls away, so one line repeats right
+  /// above Approve & assign (UX-F1).
+  List<Widget> _recommendation(Map<String, dynamic> r, {bool injuryWarn = false}) {
     final selected = (r['selected'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     final trace = (r['trace'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     final rejected = trace.where((e) => e['decision'] == 'rejected').toList();
@@ -480,6 +508,14 @@ class _State extends ConsumerState<CoachCopilotScreen> {
       else
         GestureDetector(onTap: _explain, child: Padding(padding: const EdgeInsets.only(bottom: 12),
           child: Text('Explain for coach →', style: TextStyle(color: _brand, fontSize: 12.5, fontWeight: FontWeight.w700)))),
+      if (injuryWarn) Padding(padding: const EdgeInsets.only(bottom: 10),
+        child: Row(children: [
+          const Icon(Icons.healing_outlined, color: _warn, size: 16),
+          const SizedBox(width: 8),
+          const Expanded(child: Text(
+              'Injury reported with no area — review before assigning.',
+              style: TextStyle(color: _warn, fontSize: 12.5, fontWeight: FontWeight.w700))),
+        ])),
       // Approve.
       GestureDetector(
         onTap: _assigning ? null : _approve,
