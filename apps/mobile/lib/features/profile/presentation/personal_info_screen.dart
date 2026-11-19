@@ -173,7 +173,16 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
     super.dispose();
   }
 
+  /// The same lock as `locked` in [build], read fresh for the write handlers.
+  ///
+  /// The build-time lock hides the form from touch AND from a screen reader,
+  /// but a handler must not rely on its caller having been blocked: every
+  /// write path checks this first (P0-FL-16 review, UX-F2).
+  bool _isLocked() =>
+      !_loaded && ref.read(currentUserProfileProvider) is! AsyncData;
+
   Future<void> _pickAndUploadAvatar() async {
+    if (_isLocked() || _loadingAvatar) return;
     final picker = ImagePicker();
     final file = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
     if (file == null || !mounted) return;
@@ -210,11 +219,15 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
   }
 
   Future<void> _save() async {
-    // Never save a form that was not filled from the stored profile. A failed
-    // read arrives here as `null` (currentUserProfileProvider catches), which
-    // left every field empty; Save then sent null height, weight, goal weight,
-    // phone and gender over the real values and said "Profile updated
-    // successfully".
+    // Locked (the profile is still loading, or the read failed): the Save
+    // controls are disabled, and this refuses even if something reaches it.
+    if (_isLocked() || _saving) return;
+    // Never save a form that was not filled from the stored profile. Since
+    // P0-FL-16 a failed read is an AsyncError and the screen stays locked (the
+    // return above); what still reaches here unfilled is a read that SUCCEEDED
+    // with no profile row. Saving that empty form would send null height,
+    // weight, goal weight, phone and gender and say "Profile updated
+    // successfully", so it is refused.
     if (!_loaded) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text("Your details didn't load, so nothing was saved. Go back and try again."),
@@ -349,8 +362,13 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
               const SizedBox(height: 24),
             ],
 
-            // Locked (inputs, photo, pickers) until the profile is read.
-            AbsorbPointer(absorbing: locked, child: Opacity(
+            // Locked (inputs, photo, pickers) until the profile is read —
+            // for touch (IgnorePointer) AND for a screen reader
+            // (ExcludeSemantics): blocking the pointer alone left every
+            // control activatable by TalkBack/VoiceOver (UX-F2).
+            IgnorePointer(ignoring: locked, child: ExcludeSemantics(
+              excluding: locked,
+              child: Opacity(
               opacity: locked ? 0.45 : 1,
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
 
@@ -474,31 +492,35 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
               const SizedBox(height: 32),
             ],
 
-            ]))),
+            ])))),
 
-            // Save button
+            // Save button — the whole button is dimmed while locked, not just
+            // its label, so it does not look live (UX-F1).
             Semantics(
               button: true,
               enabled: canSave,
               child: GestureDetector(
               onTap: canSave ? _save : null,
-              child: Container(
+              child: Opacity(
+                opacity: locked ? 0.4 : 1,
+                child: Container(
                 height: 54,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(999),
                   gradient: const LinearGradient(
                     colors: [Color(0xFFB76DFF), Color(0xFF7C3AED)],
                     begin: Alignment.centerLeft, end: Alignment.centerRight),
-                  boxShadow: const [BoxShadow(color: Color(0x557C3AED), blurRadius: 16)]),
+                  // Flat (no glow) while locked: a lit button reads as live.
+                  boxShadow: locked
+                    ? null
+                    : const [BoxShadow(color: Color(0x557C3AED), blurRadius: 16)]),
                 alignment: Alignment.center,
                 child: _saving
                   ? const SizedBox(width: 20, height: 20,
                       child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                  : Opacity(
-                      opacity: locked ? 0.45 : 1,
-                      child: const Text('Save Changes',
-                        style: TextStyle(color: Colors.white, fontSize: 16,
-                          fontWeight: FontWeight.w700, letterSpacing: 0.3)))))),
+                  : const Text('Save Changes',
+                      style: TextStyle(color: Colors.white, fontSize: 16,
+                        fontWeight: FontWeight.w700, letterSpacing: 0.3)))))),
           ]),
         )),
       ]),

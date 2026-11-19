@@ -131,12 +131,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Widget build(BuildContext context) {
     final profileAsync = ref.watch(currentUserProfileProvider);
     _syncUnit(profileAsync);
-    // The unit is unknown until a read succeeds (or answers "no row").
-    final unitLocked  = !_unitLoaded && profileAsync is! AsyncData;
+    // Has any read of the profile succeeded (a row, or "no row")? A refresh
+    // keeps the earlier answer: Riverpod carries the previous value through a
+    // reload and through a failed reload.
+    final profileKnown = profileAsync.hasValue;
+    // The unit is unknown until a read has succeeded. A refresh that FAILS
+    // after a successful read does not lock it: the earlier answer still
+    // stands. (Locking on `is! AsyncData` locked the toggle silently after an
+    // earlier "no row" answer — no notice, because the notice only shows when
+    // there is nothing earlier.)
+    final unitLocked  = !_unitLoaded && !profileKnown;
     // A failed read with nothing earlier to show: say so instead of "Member",
     // and do not guess the role (the client-only rows are left out).
     final profileError =
-        profileAsync.hasError && !profileAsync.hasValue ? profileAsync.error : null;
+        profileAsync.hasError && !profileKnown ? profileAsync.error : null;
+    // The first read still in flight: the same rows are held back (it is not
+    // yet known who this is, so "Member" and the client-only rows would be a
+    // guess — wrong for a coach), with a neutral loading row instead (UX-F3).
+    final profilePending = !profileKnown && profileError == null;
     final profile     = profileAsync.valueOrNull;
     final isCoach     = (profile?['role'] as String?) == 'coach';
     final firstName   = profile?['first_name'] as String? ?? '';
@@ -217,8 +229,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     const SizedBox(height: 10),
                   ],
                   _GlassSection(children: [
-                    // Profile row — not drawn as "Member" over a failed read.
-                    if (profileError == null) _SettingsRow(
+                    if (profilePending) Semantics(
+                      liveRegion: true,
+                      label: 'Loading your account',
+                      child: ExcludeSemantics(child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        decoration: const BoxDecoration(
+                          border: Border(bottom: BorderSide(color: Color(0x1A4B444F), width: 1))),
+                        child: const Row(children: [
+                          SizedBox(width: 18, height: 18,
+                            child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2)),
+                          SizedBox(width: 14),
+                          Text('Loading your account…',
+                            style: TextStyle(color: _C.onSurfaceMuted, fontSize: 14)),
+                        ]),
+                      )),
+                    ),
+                    // Profile row — not drawn as "Member" over a failed or
+                    // pending read.
+                    if (profileKnown) _SettingsRow(
                       leading: Container(
                         width: 48, height: 48,
                         decoration: BoxDecoration(
@@ -241,7 +270,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
 
                     // Subscription (client membership only)
-                    if (!isCoach && profileError == null) _SettingsRow(
+                    if (!isCoach && profileKnown) _SettingsRow(
                       icon: Icons.workspace_premium_outlined,
                       iconColor: _C.primary,
                       title: 'Subscription',
@@ -270,7 +299,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
 
                     // Coaching Mode (client preference only)
-                    if (!isCoach && profileError == null) _CoachingModeRow(),
+                    if (!isCoach && profileKnown) _CoachingModeRow(),
                   ]),
                   const SizedBox(height: 28),
 
@@ -291,8 +320,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
-                          children: ['KG', 'LB'].map((u) => GestureDetector(
-                            onTap: () async {
+                          // The lock is announced, not only drawn in a muted
+                          // colour (UX-F5): each unit is a button that is
+                          // disabled until the stored unit is known.
+                          children: ['KG', 'LB'].map((u) => Semantics(
+                            button: true,
+                            enabled: !unitLocked,
+                            selected: !unitLocked && _selectedUnit == u,
+                            child: GestureDetector(
+                            onTap: unitLocked ? null : () async {
                               // Optimistic, but REVERTED on failure: an
                               // un-reverted toggle shows a preference that was
                               // never stored. One save at a time (U4).
@@ -334,7 +370,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                   letterSpacing: 1,
                                 )),
                             ),
-                          )).toList(),
+                          ))).toList(),
                         ),
                       ),
                       hasBorder: true,

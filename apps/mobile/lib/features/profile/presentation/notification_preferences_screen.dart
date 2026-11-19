@@ -32,36 +32,37 @@ class _NotificationPreferencesScreenState
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadData());
+    // A profile already read (the usual case: Profile or Settings read it
+    // first) is applied before the first frame, so the screen does not flash
+    // a locked "Loading…" state for one frame (UX-F4). A read still in flight
+    // is applied by the listener in build when it lands.
+    _apply(ref.read(currentUserProfileProvider));
   }
 
   /// True once the toggles show the member's stored preferences (or the read
   /// answered "no profile row", which keeps the defaults as before).
   bool _loaded = false;
 
-  void _loadData() {
-    // P0-FL-16: only a successful read fills the toggles. A failed read is an
-    // AsyncError now (it used to be `null`, which left the defaults showing as
-    // the member's settings and every toggle live).
-    final state = ref.read(currentUserProfileProvider);
-    if (state is! AsyncData<Map<String, dynamic>?>) return;
+  /// P0-FL-16: only a successful read fills the toggles. A failed read is an
+  /// AsyncError now (it used to be `null`, which left the defaults showing as
+  /// the member's settings and every toggle live). Returns whether it applied.
+  bool _apply(AsyncValue<Map<String, dynamic>?> state) {
+    if (_loaded || state is! AsyncData<Map<String, dynamic>?>) return false;
+    _loaded = true;
     final p = state.value;
-    if (p == null) {
-      setState(() => _loaded = true);
-      return;
-    }
-    setState(() {
-      _loaded = true;
-      _workoutReminders = p['notif_workout_reminders'] as bool? ?? true;
-      _checkinReminders = p['notif_checkin_reminders'] as bool? ?? true;
-      _coachMessages    = p['notif_coach_messages']    as bool? ?? true;
-      _progressUpdates  = p['notif_progress_updates']  as bool? ?? true;
-      _challenges       = p['notif_challenges']        as bool? ?? false;
-      _community        = p['notif_community']         as bool? ?? false;
-    });
+    if (p == null) return true;
+    _workoutReminders = p['notif_workout_reminders'] as bool? ?? true;
+    _checkinReminders = p['notif_checkin_reminders'] as bool? ?? true;
+    _coachMessages    = p['notif_coach_messages']    as bool? ?? true;
+    _progressUpdates  = p['notif_progress_updates']  as bool? ?? true;
+    _challenges       = p['notif_challenges']        as bool? ?? false;
+    _community        = p['notif_community']         as bool? ?? false;
+    return true;
   }
 
   Future<void> _saveToggle(String field, bool value) async {
+    // Nothing is written over preferences that have not been read.
+    if (!_loaded) return;
     try {
       final uid = Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) return;
@@ -87,7 +88,7 @@ class _NotificationPreferencesScreenState
     // applied, so the defaults stayed on screen as if they were stored.
     ref.listen<AsyncValue<Map<String, dynamic>?>>(
       currentUserProfileProvider,
-      (_, next) { if (next is AsyncData && !_loaded) _loadData(); },
+      (_, next) { if (_apply(next)) setState(() {}); },
     );
     final profileAsync = ref.watch(currentUserProfileProvider);
     // Locked until the stored preferences are known: a toggle drawn from a
@@ -152,7 +153,12 @@ class _NotificationPreferencesScreenState
               const SizedBox(height: 20),
             ],
 
-            AbsorbPointer(absorbing: locked, child: Opacity(
+            // Locked for touch AND for a screen reader: blocking the pointer
+            // alone left every toggle activatable by TalkBack/VoiceOver, which
+            // WROTE a default over the stored setting (UX-F2).
+            IgnorePointer(ignoring: locked, child: ExcludeSemantics(
+              excluding: locked,
+              child: Opacity(
               opacity: locked ? 0.45 : 1,
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
 
@@ -247,7 +253,7 @@ class _NotificationPreferencesScreenState
                   }
                 }),
             ])),
-            ]))),
+            ])))),
           ]),
         )),
       ]),
@@ -294,7 +300,11 @@ class _NotificationPreferencesScreenState
           color: _out, fontSize: 12, height: 1.3)),
       ])),
       const SizedBox(width: 12),
-      _PurpleToggle(value: value, onChanged: onChanged),
+      // Every toggle refuses while locked, whatever reached it (UX-F2).
+      _PurpleToggle(value: value, onChanged: (v) {
+        if (!_loaded) return;
+        onChanged(v);
+      }),
     ]));
 }
 
