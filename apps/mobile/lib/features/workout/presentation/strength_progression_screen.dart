@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../domain/load_format.dart';
 import '../domain/workout_provider.dart';
 import '../../../core/widgets/named_icon_button.dart';
+import 'widgets/section_load_failure.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const _bg      = Color(0xFF030303);
@@ -30,6 +31,13 @@ class _StrengthProgressionScreenState extends ConsumerState<StrengthProgressionS
   Widget build(BuildContext context) {
     final topPad = MediaQuery.of(context).padding.top;
     final exerciseNames = ref.watch(loggedExerciseNamesProvider);
+    Widget namesFailure(Object? e) => Center(child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: SectionLoadFailure(
+        what: 'your exercises',
+        error: e,
+        busy: exerciseNames.isLoading,
+        onRetry: () => ref.invalidate(loggedExerciseNamesProvider))));
 
     return Scaffold(
       backgroundColor: _bg,
@@ -54,8 +62,14 @@ class _StrengthProgressionScreenState extends ConsumerState<StrengthProgressionS
           ])),
 
         Expanded(child: exerciseNames.when(
-          loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
-          error: (_, __) => const Center(child: Text('Failed to load exercises', style: TextStyle(color: _muted))),
+          // P0-FL-18: a reload of a failed read takes this arm — keep the
+          // failure card, busy, instead of swapping it for a spinner.
+          loading: () => exerciseNames.hasError
+              ? namesFailure(exerciseNames.error)
+              : const Center(child: CircularProgressIndicator(color: _brand)),
+          // P0-FL-18: the list of exercises could not be read. Not "No data
+          // yet" — that is the answer for a member who has logged nothing.
+          error: (e, _) => namesFailure(e),
           data: (names) {
             if (names.isEmpty) {
               return const _EmptyState();
@@ -106,9 +120,22 @@ class _ProgressionChart extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final progression = ref.watch(exerciseProgressionProvider(exerciseName));
     final metric = ref.watch(memberPrefersMetricProvider);
+    Widget failure(Object? e) => Center(child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: SectionLoadFailure(
+        what: 'progress for $exerciseName',
+        error: e,
+        busy: progression.isLoading,
+        onRetry: () => ref.invalidate(exerciseProgressionProvider(exerciseName)))));
     return progression.when(
-      loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
-      error: (_, __) => const Center(child: Text('No data yet', style: TextStyle(color: _muted))),
+      // P0-FL-18: a reload of a failed read takes this arm — keep the
+      // failure card, busy, instead of swapping it for a spinner.
+      loading: () => progression.hasError
+          ? failure(progression.error)
+          : const Center(child: CircularProgressIndicator(color: _brand)),
+      // P0-FL-18: this chart's read failed — scoped to the chart, the picker
+      // above stays usable. It said "No data yet", the empty-history answer.
+      error: (e, _) => failure(e),
       data: (data) {
         if (data.isEmpty) {
           return const _EmptyState(message: 'No sets logged yet for this exercise.\nComplete a workout to see progress.');
