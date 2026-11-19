@@ -462,8 +462,14 @@ void main() {
 
   // ── Review round (UX-1..5, SEC-F2, QA a–d, UX-2) ─────────────────────────
   group('review round', () {
+    // The last container pumpApp made, so a test can dispose it with the tree
+    // (a destination screen's providers — e.g. the coach dashboard's live
+    // notification stream and its retry timer — must not outlive the test).
+    ProviderContainer? appContainer;
+
     Future<GoRouter> pumpApp(WidgetTester tester, String location) async {
       final container = ProviderContainer();
+      appContainer = container;
       addTearDown(container.dispose);
       final router = container.read(routerProvider);
       router.go(location);
@@ -689,6 +695,9 @@ void main() {
         expect(_path(router), expected);
         expect(reported.map((f) => f.origin), isNot(contains('appRouter.redirect.roleRead')));
         await tester.pumpWidget(const SizedBox());
+        // The destination's providers go with the tree: a live stream that
+        // re-opens itself on a timer must not keep one pending past the test.
+        appContainer?.dispose();
         // The coach dashboard opens realtime channels; their timers outlive
         // the tree unless the channels are removed.
         await tester.runAsync(() => Supabase.instance.client.removeAllChannels());
