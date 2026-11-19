@@ -517,9 +517,11 @@ void main() {
   });
 
   // ── P0-FL-38 review round ──────────────────────────────────────────────
-  // HOW TO SEE THESE FAIL: after committing, `git checkout HEAD~1 -- lib/
-  // features/coach/presentation/coach_copilot_screen.dart` (restore with
-  // `git checkout HEAD -- …`).
+  // HOW TO SEE THESE FAIL: `git checkout ade875e -- lib/features/coach/
+  // presentation/coach_copilot_screen.dart` (restore with
+  // `git checkout HEAD -- …`): the UX-F1, UX-F2, UX-F4 and late-outlook
+  // tests fail; the A → B → A test and the "areas known" test are guards
+  // that already held.
 
   // UX-F1: red means blocked, amber means warned. Generate stays enabled for
   // an injury without an area, so the notice is amber; and it scrolls away,

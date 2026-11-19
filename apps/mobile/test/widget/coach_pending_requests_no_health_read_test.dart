@@ -243,8 +243,8 @@ void main() {
   // UX-F3: the requester's goal/email no longer arrive, so the subtitle under
   // the name was always '' — a blank line in every card. It is not built when
   // empty. (The goal/email branch stays until Julia decides Q-H1.)
-  // HOW TO SEE IT FAIL: `git checkout HEAD~1 -- lib/features/dashboard/
-  // presentation/coach_dashboard_screen.dart`.
+  // HOW TO SEE IT FAIL: `git checkout ade875e -- lib/features/dashboard/
+  // presentation/coach_dashboard_screen.dart` (the nameColumn has 2 children).
   testWidgets(
       'UX-F3: the request card builds no empty subtitle under the name',
       (t) async {
