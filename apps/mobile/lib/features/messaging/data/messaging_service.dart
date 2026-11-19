@@ -2,6 +2,14 @@ import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/observability/app_failure.dart';
 
+/// Receives what a send caught when the message was NOT saved, so the caller
+/// can pick the connection hint (`isNetworkFailure`) or the try-later one.
+///
+/// A typedef, not an inline `void Function(Object)`: ERR-G1's declaration
+/// detector reads a parameter list up to the first `)`, and an inline function
+/// type would hide `sendMessage` from it.
+typedef SendFailureHandler = void Function(Object error);
+
 class MessagingService {
   final supabase = Supabase.instance.client;
 
@@ -53,8 +61,15 @@ class MessagingService {
         };
       }).toList();
     } catch (e) {
+      // P0-FL-13: recorded, then PROPAGATED. Returning `[]` here put "No
+      // conversations yet" in front of a member whose inbox had simply failed
+      // to load. The inbox screen states the failure and offers Try again.
+      //
+      // Kept as `reportError('<origin>', e);` on purpose: it is one of the
+      // eleven mutation anchors `tool/negative_control/ec23_negative_control.sh`
+      // counts, and `error_sink_test` pins this origin as a reporting site.
       reportError('MessagingService.getConversations', e);
-      return [];
+      rethrow;
     }
   }
 
@@ -146,17 +161,31 @@ class MessagingService {
 
   // ── Messages ──────────────────────────────────────────────────────────────
 
+  /// Saves one message. `true` means the message ROW is saved; `false` means
+  /// it is not, and [onNotSent] (when given) receives the caught error so the
+  /// caller can tell a connection failure from any other.
+  ///
+  /// P0-FL-13 · two writes, two meanings. The `messages` insert IS the send.
+  /// The `conversations` update after it only refreshes the inbox preview
+  /// (`last_message` / `last_message_at`); no trigger maintains those columns
+  /// server-side (migration 004's `notify_on_message` is the only trigger on
+  /// `messages`). The two used to share one catch, so a saved message whose
+  /// preview update failed came back as "not sent": the chat took the bubble
+  /// away and handed the text back, and sending it again stored it twice. Now
+  /// a preview failure — a 0-row update included — is recorded and the send
+  /// still reports success.
   Future<bool> sendMessage({
     required String conversationId,
     required String content,
     Map<String, dynamic>? metadata,
+    SendFailureHandler? onNotSent,
   }) async {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return false;
+    // UTC, stated. Both columns are timestamptz, which reads a time with no zone
+    // as UTC: local time written that way recorded the wrong moment.
+    final now = DateTime.now().toUtc().toIso8601String();
     try {
-      // UTC, stated. Both columns are timestamptz, which reads a time with no zone
-      // as UTC: local time written that way recorded the wrong moment.
-      final now = DateTime.now().toUtc().toIso8601String();
       final row = <String, dynamic>{
         'conversation_id': conversationId,
         'sender_id': userId,
@@ -166,17 +195,34 @@ class MessagingService {
       };
       if (metadata != null) row['metadata'] = metadata;
       await supabase.from('messages').insert(row);
-      await supabase.from('conversations').update({
-        'last_message': content,
-        'last_message_at': now,
-      }).eq('id', conversationId);
-      // Recipient notification is handled server-side by the
-      // trg_notify_on_message DB trigger (MSG-003) — no Dart-side insert here,
-      // otherwise the recipient would get two notifications per message.
-      return true;
-    } catch (e) {
+    } catch (e, st) {
+      // Not saved. Recorded (this catch used to record nothing) and handed to
+      // the caller, which picks the connection hint or the try-later one.
+      reportError('MessagingService.sendMessage', e, st);
+      onNotSent?.call(e);
       return false;
     }
+    // Recipient notification is handled server-side by the
+    // trg_notify_on_message DB trigger (MSG-003) — no Dart-side insert here,
+    // otherwise the recipient would get two notifications per message.
+    try {
+      final updated = await supabase.from('conversations').update({
+        'last_message': content,
+        'last_message_at': now,
+      }).eq('id', conversationId).select('id');
+      if ((updated as List).isEmpty) {
+        // RLS or a wrong id filtered the update to nothing: the preview is
+        // stale. Recorded; the message itself is saved.
+        reportError(
+          'MessagingService.sendMessage.preview',
+          StateError('conversation preview update changed no row'),
+          StackTrace.current,
+        );
+      }
+    } catch (e, st) {
+      reportError('MessagingService.sendMessage.preview', e, st);
+    }
+    return true;
   }
 
   /// A thread's messages, oldest first. **The error propagates** (EC-13): this

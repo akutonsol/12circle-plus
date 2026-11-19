@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 import '../../../core/widgets/named_icon_button.dart';
 import '../data/chat_media_path.dart';
 import '../data/messaging_service.dart';
@@ -18,8 +19,11 @@ const _brand  = Color(0xFFA855F7);
 const _white  = Colors.white;
 const _muted  = Color(0xFFCFC2D6);
 
-const _sendFailedMessage =
+const _sendFailedNetworkMessage =
     "Couldn't send your message — check your connection and try again.";
+const _sendFailedOtherMessage =
+    "Couldn't send your message — try again in a moment. "
+    'If it keeps happening, contact support.';
 const _notReadyMessage =
     "This conversation isn't ready yet — try again in a moment.";
 
@@ -214,7 +218,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     };
     setState(() => _messages = [..._messages, optimistic]);
     _scrollToBottom();
-    final ok = await _service.sendMessage(conversationId: conversationId, content: text);
+    Object? sendError;
+    final ok = await _service.sendMessage(
+        conversationId: conversationId,
+        content: text,
+        onNotSent: (e) => sendError = e);
     if (ok) {
       ScoreEngine().messageCoach(); // +5, once/day (server dedup)
       return;
@@ -231,7 +239,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _msgCtrl.value = TextEditingValue(
           text: text, selection: TextSelection.collapsed(offset: text.length));
     }
-    _showSendFailure(_sendFailedMessage);
+    // P0-FL-13: the connection hint only when the send never reached the
+    // server. A refusal the server answered is not fixed by checking Wi-Fi.
+    _showSendFailure(isNetworkFailure(sendError)
+        ? _sendFailedNetworkMessage
+        : _sendFailedOtherMessage);
   }
 
   void _showSendFailure(String message) {
@@ -281,9 +293,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         await _removeOrphan(storage, storagePath);
         _showPhotoFailure();
       }
-    } catch (e) {
+    } catch (e, st) {
       // Upload itself failed, or something after it threw. If the object got
       // as far as storage, it has no message row and must not be left behind.
+      reportError('ChatScreen._sendPhoto', e, st);
       if (uploadedPath != null) await _removeOrphan(storage, uploadedPath);
       _showPhotoFailure();
     } finally {

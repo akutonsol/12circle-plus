@@ -157,7 +157,13 @@ void main() {
     ));
     await t.pump();
 
-    expect(find.text("Couldn't load messages"), findsOneWidget);
+    // P0-FL-13 put the failure in the one voice — "Couldn't <do X> — <next
+    // step>" — with the connection hint only for a network failure (a bare
+    // Exception is not one).
+    expect(
+        find.text("Couldn't load your messages — try again in a moment. "
+            'If it keeps happening, contact support.'),
+        findsOneWidget);
     expect(find.text(pitch), findsNothing);
     expect(find.text(neutral), findsNothing);
   });
