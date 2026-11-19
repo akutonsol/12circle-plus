@@ -133,10 +133,16 @@ class CoachRelationshipService {
         .from('public_profiles')
         .select('id, first_name, last_name, avatar_url')
         .inFilter('id', clientIds);
-    final profileMap = {for (final p in (profiles as List)) p['id']: p};
+    final profileMap = {
+      for (final p in (profiles as List))
+        p['id']: Map<String, dynamic>.from(p as Map),
+    };
     return rels.map((r) => {
       ...r,
-      'profile': profileMap[r['client_id']] ?? {},
+      // Typed: an untyped `{}` here is a Map<dynamic, dynamic>, and the
+      // Requests tab's `as Map<String, dynamic>?` threw on it while building —
+      // which, under the live policy, was every pending request.
+      'profile': profileMap[r['client_id']] ?? const <String, dynamic>{},
     }).toList();
   }
 

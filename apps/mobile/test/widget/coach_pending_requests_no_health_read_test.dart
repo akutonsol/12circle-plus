@@ -98,6 +98,10 @@ class _PolicyServer extends http.BaseClient {
   /// `table -> select=` of every GET.
   final reads = <String, List<String>>{};
 
+  /// False: public_profiles has no row for the requester (e.g. a deleted
+  /// account) — the request must still render.
+  bool publicRow = true;
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final table = request.url.path.split('/').last;
@@ -119,6 +123,7 @@ class _PolicyServer extends http.BaseClient {
         // requester is PENDING, so RLS filters their row out: 200 [].
         return _json(request, []);
       case 'public_profiles':
+        if (!publicRow) return _json(request, []);
         final row = <String, Object?>{
           'id': _requester,
           'first_name': 'Jordan',
@@ -158,7 +163,10 @@ void main() {
     );
   });
 
-  setUp(server.reads.clear);
+  setUp(() {
+    server.reads.clear();
+    server.publicRow = true;
+  });
 
   test(
       'getPendingRequests requests no health or contact column about a '
@@ -188,9 +196,7 @@ void main() {
     expect(server.reads.containsKey('public_profiles'), isTrue);
   });
 
-  testWidgets(
-      'the Requests tab names the requester instead of "New Client"',
-      (t) async {
+  Future<void> pumpRequestsTab(WidgetTester t) async {
     await t.pumpWidget(ProviderScope(
       overrides: [
         coachClientsProvider.overrideWith((ref) async => const []),
@@ -218,10 +224,33 @@ void main() {
     await t.tap(find.textContaining('Requests').first);
     await t.pump();
     await t.pump(const Duration(milliseconds: 400));
+  }
 
+  // On 6f8918f this did not even reach "New Client": the requester's row was
+  // filtered out, the fallback `{}` was a Map<dynamic, dynamic>, and the
+  // tab's `as Map<String, dynamic>?` cast threw while building the dashboard.
+  testWidgets(
+      'the Requests tab names the requester instead of "New Client"',
+      (t) async {
+    await pumpRequestsTab(t);
+    expect(t.takeException(), isNull, reason: 'the tab builds');
     expect(find.text('Pending Requests'), findsOneWidget);
     expect(find.text('Jordan Rivers'), findsOneWidget);
     expect(find.text('New Client'), findsNothing,
         reason: 'the coach must see who is asking before accepting');
+  });
+
+  testWidgets(
+      'a requester with no public profile row still renders (as "New '
+      'Client"), and the tab does not throw', (t) async {
+    server.publicRow = false;
+    final rows = await CoachRelationshipService().getPendingRequests(_coach);
+    expect(rows.single['profile'], isA<Map<String, dynamic>>(),
+        reason: 'the Requests tab casts it to Map<String, dynamic>');
+    await pumpRequestsTab(t);
+    expect(t.takeException(), isNull, reason: 'the tab builds');
+    expect(find.text('New Client'), findsOneWidget);
+    expect(find.text('Accept'), findsOneWidget,
+        reason: 'the request can still be answered');
   });
 }
