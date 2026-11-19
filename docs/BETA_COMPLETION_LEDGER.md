@@ -594,8 +594,10 @@ P0-FL-19 cover the remaining 1 P1 (intake baseline photos silently lost) and 20 
   caller sends can be stored) validated on a scratch database: 25/25 on four schema shapes, all 7 existing replays
   unchanged; A also 25/25; B 24/25 (raw-SQL GUC forge). Backfill and rollback designed. **Should land with or after
   Decision 20** — fixing it publishes today's unrestricted reviews in the rankings. Next number 201, after 200.
-- **QA migration state (read-only)**: `schema_migrations` = …180, 181, 187–192 — **182–186 are not applied** (main's
-  `expected_applied.json` still says applied_through 181). So on QA **QAX-SEC-01/03 are live**: any signed-in user can
+- **QA migration state (read-only)**: `schema_migrations` = …180, 181, 187–192 — **182–186 are not applied**.
+  (CORRECTED 2026-11-18: this line first said main's `expected_applied.json` "still says applied_through 181" — false; that
+  was read from a stale checkout. Main declares frontier **192** with 182–186 **excluded**, each with a reason and gate, which
+  matches QA. See `docs/QA_MIGRATION_DISCREPANCY_REPORT.md`.) So on QA **QAX-SEC-01/03 are live**: any signed-in user can
   call `assign_nutrition_plan` for any client and insert `client_habits` / `client_nutrition_plans` naming themselves
   as coach (older FOR ALL policies). 184/185 need an owner-approved QA window. **Multi-coach plan overwrite** (a coach
   sees only its own plans; Save replaces another coach's active plan) needs a plan-ownership decision.
