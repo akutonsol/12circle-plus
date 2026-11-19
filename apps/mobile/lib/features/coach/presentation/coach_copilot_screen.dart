@@ -67,17 +67,18 @@ class _State extends ConsumerState<CoachCopilotScreen> {
   ///
   /// When the read answered, generation works as it did before P0-FL-38;
   /// whether to block a client is a product decision, not this screen's:
-  /// - a completed assessment → its row (an injury with no area reaches the
-  ///   engine as no injury areas; the notice says so);
-  /// - not the active coach (42501), no row, or an intake never completed →
-  ///   the roster row, which carries no health fields, so the engine uses its
-  ///   defaults (the notice says so).
+  /// - a returned row → that row, completed or not: the answers on file are
+  ///   used and [_context] defaults only the missing fields, exactly as the
+  ///   pre-P0-FL-38 `user_profiles` row was (an injury with no area on a
+  ///   completed assessment reaches the engine as no areas; the notice says so);
+  /// - not the active coach (42501) or no row → the roster row, which carries
+  ///   no health fields, so the engine uses its defaults (the notice says so).
   static Map<String, dynamic>? _generationSource(
       Map<String, dynamic>? client, AsyncValue<ClientAssessment>? a) {
     if (client == null || a == null) return null;
     if (a.isLoading || a.hasError || !a.hasValue) return null;
     final v = a.requireValue;
-    return v.hasAssessment ? v.row : client;
+    return v.status == ClientAssessmentStatus.loaded ? v.row : client;
   }
 
   /// A completed assessment reports an injury but names no area.
@@ -358,15 +359,18 @@ class _State extends ConsumerState<CoachCopilotScreen> {
               'it, or ask them to update their assessment.');
     }
     if (v.hasAssessment) return null;
-    final (IconData icon, String title) = switch (v.status) {
+    const onFile = 'Recommendations use the answers on file and defaults for '
+        'the rest. Review the session before assigning it.';
+    final (IconData icon, String title, String detail) = switch (v.status) {
       ClientAssessmentStatus.notActiveCoach => (Icons.lock_outline,
-          "This client's health context is available once coaching is active."),
+          "This client's health context is available once coaching is active.",
+          defaults),
       ClientAssessmentStatus.noRow => (Icons.assignment_outlined,
-          'No assessment on file for this client yet.'),
+          'No assessment on file for this client yet.', defaults),
       ClientAssessmentStatus.loaded => (Icons.assignment_outlined,
-          "This client hasn't completed their assessment yet."),
+          "This client hasn't completed their assessment yet.", onFile),
     };
-    return _notice(icon, _warn, title, defaults);
+    return _notice(icon, _warn, title, detail);
   }
 
   /// A live region, so a screen reader hears the state change.

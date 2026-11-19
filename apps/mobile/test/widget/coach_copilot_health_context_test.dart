@@ -35,7 +35,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 // presentation/coach_copilot_screen.dart` — it reads user_profiles, never
 // calls the RPC, sends `injuries: []`, and shows no state for a failure.
 // Against 3bc0a80 (the blocking version) the answered-read tests fail: no
-// request reaches generate_workout.
+// request reaches generate_workout. Against c3d5706 the not-completed test
+// fails: the answers on file were dropped for the roster row's defaults.
 
 const _uid = '00000000-0000-4000-8000-0000000c0f38';
 const _clientId = '00000000-0000-4000-8000-00000000cf38';
@@ -143,7 +144,7 @@ class _Server extends http.BaseClient {
           // A half-finished intake: some answers saved, never completed.
           return _json(request, 200, [
             {'client_id': _clientId, 'has_assessment': false,
-              'fitness_goal': 'lose_fat'},
+              'fitness_goal': 'lose_fat', 'training_location': 'home'},
           ]);
         case _Rpc.empty:
           return _json(request, 200, []);
@@ -361,12 +362,11 @@ void main() {
   // An ANSWERED read never blocks Generate — whether to block these clients
   // is the owner's decision (P0-FL-38 adjustment). It is honest instead: a
   // live-region notice says the recommendation uses defaults, and the engine
-  // gets the roster row's defaults (as before P0-FL-38), not half an intake.
+  // gets the roster row's defaults (as before P0-FL-38: no health row read).
   final defaultsAnswers = <_Rpc, String>{
     _Rpc.denied:
         "This client's health context is available once coaching is active.",
     _Rpc.empty: 'No assessment on file for this client yet.',
-    _Rpc.notCompleted: "This client hasn't completed their assessment yet.",
   };
   defaultsAnswers.forEach((state, copy) {
     testWidgets(
@@ -393,6 +393,41 @@ void main() {
           reason: 'the notice stays visible beside the recommendation');
       expect(server.profileReads, isEmpty);
     });
+  });
+
+  // Lead decision (P0-FL-38 small round): an intake never completed is used
+  // as before P0-FL-38 — the answers on file reach the engine and only the
+  // missing fields are defaulted. Reverting to the roster row sends
+  // goal=hypertrophy and the gym kit, and the notice still says "defaults".
+  testWidgets(
+      'not completed: Generate stays ENABLED, the answers ON FILE are used '
+      '(defaults only for missing fields), and the notice says so', (t) async {
+    server.rpc = _Rpc.notCompleted;
+    await _pumpAndSelect(t);
+    const title = "This client hasn't completed their assessment yet.";
+    const detail = 'Recommendations use the answers on file and defaults for '
+        'the rest. Review the session before assigning it.';
+    expect(find.text(title), findsOneWidget);
+    expect(_inLiveRegion(find.text(title)), isTrue);
+    expect(find.text(detail), findsOneWidget);
+    expect(_inLiveRegion(find.text(detail)), isTrue);
+    expect(find.text(_defaults), findsNothing,
+        reason: 'the answers on file are not "unknown"');
+    expect(find.textContaining("Couldn't"), findsNothing);
+
+    await _tapGenerate(t);
+    expect(server.generateBodies, hasLength(1));
+    final ctx = server.generateBodies.single['p_context'] as Map;
+    expect(ctx['goal'], 'fat_loss', reason: 'fitness_goal on file is used');
+    expect(ctx['equipment'], ['dumbbell', 'bodyweight', 'band'],
+        reason: 'training_location home on file is used');
+    expect(ctx['experience'], 'intermediate',
+        reason: 'experience_level is missing → default');
+    expect(ctx['injuries'], isEmpty, reason: 'nothing on file → none');
+    expect(find.text('Goblet squat'), findsOneWidget);
+    expect(find.text(detail), findsOneWidget,
+        reason: 'the notice stays visible beside the recommendation');
+    expect(server.profileReads, isEmpty);
   });
 
   testWidgets(
