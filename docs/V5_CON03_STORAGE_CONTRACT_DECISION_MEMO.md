@@ -108,7 +108,7 @@ did not find this file.
 | **Migration required** | none for a `text` start; `text[] → text` only if a supported start is `text[]` | `ALTER COLUMN … TYPE text[] USING …` + `SET NOT NULL` + `SET DEFAULT '{}'` |
 | **Type-change precedent** | n/a | **none** — zero `ALTER COLUMN … TYPE` in all 182 migrations |
 | **SQL function impact** | **none.** `140:138`/`141:69` already declare `text` | **breaks `get_client_assessment()`** — `42804` on every call. Needs DROP + recreate + re-issue of 3 grants (`141:135-137`) |
-| **Who breaks** | nothing | `supabase/tests/security/d09-assessment-access.mjs` (live security suite). **No application caller exists** — no Dart/TS call site for the RPC |
+| **Who breaks** | nothing | `supabase/tests/security/d09-assessment-access.mjs` (live security suite). **No application caller exists** — no Dart/TS call site for the RPC. **FACT UPDATE 2026-11-18 (P0-FL-37):** the coach's client page now reads assessment data only through this RPC (`coach_ecosystem_provider.dart`), so under Option B the app's assessment view fails too unless the same migration recreates the RPC (§7.2). The decision itself is unchanged and still PENDING. |
 | **Seed impact** | `seeds/test_accounts.sql:156` must become `''` | already array-shaped — becomes correct |
 | **Sibling consistency** | consistent with `medical_conditions`, `injury_locations` | leaves both siblings on the opposite convention in the same table |
 | **Round-trip** | lossless **over the current value domain** — see §4 | lossless unconditionally |
