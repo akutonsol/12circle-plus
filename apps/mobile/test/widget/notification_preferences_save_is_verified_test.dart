@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/profile/presentation/notification_preferences_screen.dart';
@@ -24,9 +26,10 @@ import '../support/row_checking_postgrest.dart';
 // and nothing reported, and the PATCH carries no `select=id`.
 
 const _uid = '00000000-0000-4000-8000-0000000f1039';
-const _offline = "Couldn't save this notification setting — check your "
-    'connection and try again.';
-const _failed = "Couldn't save this notification setting — try again in a "
+// UX-4: the copy names the setting that did not save.
+String _offline(String setting) =>
+    "Couldn't save $setting — check your connection and try again.";
+String _failed(String setting) => "Couldn't save $setting — try again in a "
     'moment. If it keeps happening, contact support.';
 const _challengesOn = 'Challenges will now appear in your Activity feed';
 
@@ -94,7 +97,7 @@ void main() {
         reason: 'the key written is unchanged');
     expect(isOn(tester, 'Workout Reminders'), isTrue,
         reason: 'THE defect: the toggle stayed off though nothing was stored');
-    expect(find.text(_failed), findsOneWidget);
+    expect(find.text(_failed('Workout reminders')), findsOneWidget);
     expect(find.textContaining('Failed to save'), findsNothing);
     expect(reported.single.origin, 'NotificationPreferencesScreen._saveToggle');
   });
@@ -105,7 +108,7 @@ void main() {
     server.mode = WriteMode.serverError;
     await tapToggle(tester, 'Coach Messages');
     expect(isOn(tester, 'Coach Messages'), isTrue);
-    expect(find.text(_failed), findsOneWidget);
+    expect(find.text(_failed('Coach messages')), findsOneWidget);
     expect(find.textContaining('Check your connection'), findsNothing);
     expect(find.textContaining('refused'), findsNothing);
     expect(reported, hasLength(1));
@@ -117,7 +120,7 @@ void main() {
     server.mode = WriteMode.network;
     await tapToggle(tester, 'Progress Updates');
     expect(isOn(tester, 'Progress Updates'), isTrue);
-    expect(find.text(_offline), findsOneWidget);
+    expect(find.text(_offline('Progress updates')), findsOneWidget);
     expect(reported, hasLength(1));
   });
 
@@ -129,7 +132,52 @@ void main() {
     expect(isOn(tester, 'Challenges'), isFalse, reason: 'put back to off');
     expect(find.text(_challengesOn), findsNothing,
         reason: 'it was announced before the save answered');
-    expect(find.text(_failed), findsOneWidget);
+    expect(find.text(_failed('Challenges')), findsOneWidget);
+  });
+
+  // ── Review round (UX-4, QA) ───────────────────────────────────────────────
+
+  testWidgets('UX-4: the error SnackBar text has an explicit AA-contrast '
+      'colour on its background', (tester) async {
+    await open(tester);
+    server.mode = WriteMode.zeroRows;
+    await tapToggle(tester, 'Community');
+    final msg = find.text(_failed('Community'));
+    expect(msg, findsOneWidget);
+    final fg = tester.widget<Text>(msg).style?.color;
+    expect(fg, isNotNull, reason: 'UX-4: no explicit text colour');
+    final bg = tester.widget<SnackBar>(find.byType(SnackBar)).backgroundColor!;
+    final l1 = fg!.computeLuminance(), l2 = bg.computeLuminance();
+    final ratio = (l1 > l2 ? l1 + 0.05 : l2 + 0.05) /
+        (l1 > l2 ? l2 + 0.05 : l1 + 0.05);
+    expect(ratio, greaterThanOrEqualTo(4.5), reason: 'WCAG AA body text');
+  });
+
+  testWidgets('QA: two quick taps that both fail leave the toggle at the '
+      'stored value', (tester) async {
+    await open(tester);
+    expect(isOn(tester, 'Workout Reminders'), isTrue, reason: 'premise: stored on');
+    server.mode = WriteMode.serverError;
+    server.gate = Completer<void>();
+    final row = find.ancestor(
+        of: find.text('Workout Reminders'), matching: find.byType(Row)).first;
+    final toggle = find.descendant(of: row, matching: find.byType(AnimatedAlign));
+    // A frame between the taps, so the second tap sees the flipped toggle
+    // (off) and asks for on — the case where the newest failure put the
+    // toggle back to the opposite of ITS value, i.e. off, which was never
+    // stored.
+    await tester.tap(toggle);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(toggle);
+    await tester.pump(const Duration(milliseconds: 50));
+    server.gate!.complete();
+    await tester.pumpAndSettle();
+    expect(isOn(tester, 'Workout Reminders'), isTrue,
+        reason: 'QA: the toggle must show what is stored (on), whatever '
+            'order the failures land in');
+    expect(server.writes.where((w) => w.contains('user_profiles')),
+        hasLength(1),
+        reason: 'a toggle whose save is in flight takes no second tap');
   });
 
   // ── Controls ──────────────────────────────────────────────────────────────

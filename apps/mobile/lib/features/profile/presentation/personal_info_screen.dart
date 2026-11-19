@@ -247,11 +247,14 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
         backgroundColor: _err, behavior: SnackBarBehavior.floating));
       return;
     }
-    setState(() => _saving = true);
+    // UX-8 · the form is checked BEFORE the write, and only this check's
+    // FormatException speaks: its messages are authored here ("Enter a valid
+    // number for weight."). A FormatException thrown by the write itself
+    // (postgrest parses the response) carries parser text, so it falls to the
+    // generic catch below and is never shown.
+    final Map<String, dynamic> payload;
     try {
-      final uid = Supabase.instance.client.auth.currentUser?.id;
-      if (uid == null) throw Exception('Not logged in');
-      final payload = buildPersonalInfoPayload(
+      payload = buildPersonalInfoPayload(
         firstName: _fnCtrl.text, lastName: _lnCtrl.text,
         gender: _gender, dateOfBirth: _dob, phone: _phoneCtrl.text,
         isCoach: _isCoach,
@@ -260,6 +263,16 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
         trainingDays: _trainingDays, trainingLocation: _trainingLocation,
         nutritionGoal: _nutritionGoal,
       );
+    } on FormatException catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.message),
+        backgroundColor: _err, behavior: SnackBarBehavior.floating));
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid == null) throw Exception('Not logged in');
 
       // P0-FL-39: "updated successfully" only when the server says the row
       // changed; a 0-row update answers like a saved one unless asked back.
@@ -277,12 +290,6 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
           content: Text('Profile updated successfully'),
           backgroundColor: _tert, behavior: SnackBarBehavior.floating));
         Navigator.of(context).pop();
-      }
-    } on FormatException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e.message),
-          backgroundColor: _err, behavior: SnackBarBehavior.floating));
       }
     } catch (e, st) {
       reportError('PersonalInfoScreen._save', e, st);

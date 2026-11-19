@@ -15,6 +15,7 @@ const _onSV = Color(0xFFCDC3D0);
 const _out  = Color(0xFF968E99);
 const _outV = Color(0xFF4B444F);
 const _err  = Color(0xFFFFB4AB);
+const _onErr = Color(0xFF690005);
 
 class NotificationPreferencesScreen extends ConsumerStatefulWidget {
   const NotificationPreferencesScreen({super.key});
@@ -62,22 +63,25 @@ class _NotificationPreferencesScreenState
     return true;
   }
 
-  /// The latest save started for each field: only the newest one may put its
-  /// toggle back, so a slow failure cannot undo a later tap.
-  final Map<String, int> _saveSeq = {};
+  /// Fields whose save is in flight. Their toggle takes no tap until the
+  /// server answered: with two saves racing, the one that failed last put
+  /// the toggle at the opposite of ITS value — a value never stored (QA).
+  final Set<String> _saving = {};
 
   /// Stores one toggle; it counts as saved only when the server says the row
   /// changed (P0-FL-39). A 0-row update (RLS filters silently, and answers
   /// exactly like a saved one unless the row is asked back) or a thrown save
-  /// is reported, said, and the toggle is put back with [revert] — the screen
-  /// shows what is stored, not what was tapped. [savedNote] is said only
-  /// after the server confirmed the save.
+  /// is reported, said (naming [setting]), and the toggle is put back with
+  /// [revert] — the screen shows what is stored, not what was tapped. One
+  /// save per field at a time, so the value before the tap IS the stored one.
+  /// [savedNote] is said only after the server confirmed the save.
   Future<void> _saveToggle(String field, bool value,
-      {required ValueChanged<bool> revert, String? savedNote}) async {
+      {required String setting,
+      required ValueChanged<bool> revert,
+      String? savedNote}) async {
     // Nothing is written over preferences that have not been read.
     if (!_loaded) return;
-    final seq = (_saveSeq[field] ?? 0) + 1;
-    _saveSeq[field] = seq;
+    _saving.add(field);
     final messenger = ScaffoldMessenger.of(context);
     String? failure;
     try {
@@ -95,11 +99,13 @@ class _NotificationPreferencesScreenState
     } catch (e, st) {
       reportError('NotificationPreferencesScreen._saveToggle', e, st,
           {'field': field});
-      failure = "Couldn't save this notification setting — "
+      failure = "Couldn't save $setting — "
           '${isNetworkFailure(e) ? 'check your connection and try again.' : 'try again in a moment. If it keeps happening, contact support.'}';
     }
+    _saving.remove(field);
     if (!mounted) return;
     if (failure == null) {
+      setState(() {}); // the toggle takes taps again
       if (savedNote != null) {
         messenger.showSnackBar(SnackBar(
           content: Text(savedNote),
@@ -108,9 +114,12 @@ class _NotificationPreferencesScreenState
       }
       return;
     }
-    if (_saveSeq[field] == seq) setState(() => revert(!value));
+    setState(() => revert(!value));
     messenger.showSnackBar(SnackBar(
-      content: Semantics(liveRegion: true, child: Text(failure)),
+      // UX-4 · an explicit text colour: on _err (light coral) the theme's
+      // SnackBar text is not guaranteed legible. #690005 on #FFB4AB ≈ 7.6:1.
+      content: Semantics(liveRegion: true, child: Text(failure,
+          style: const TextStyle(color: _onErr))),
       backgroundColor: _err, behavior: SnackBarBehavior.floating,
       duration: const Duration(seconds: 6)));
   }
@@ -201,6 +210,7 @@ class _NotificationPreferencesScreenState
             const SizedBox(height: 10),
             _card(Column(children: [
               _toggle(
+                field: 'notif_workout_reminders',
                 icon: Icons.fitness_center_outlined,
                 title: 'Workout Reminders',
                 subtitle: 'Daily reminders to complete your scheduled workouts',
@@ -208,10 +218,12 @@ class _NotificationPreferencesScreenState
                 onChanged: (v) {
                   setState(() => _workoutReminders = v);
                   _saveToggle('notif_workout_reminders', v,
+                    setting: 'Workout reminders',
                     revert: (b) => _workoutReminders = b);
                 }),
               _divider(),
               _toggle(
+                field: 'notif_checkin_reminders',
                 icon: Icons.assignment_turned_in_outlined,
                 title: 'Check-in Reminders',
                 subtitle: 'Reminders to log your weekly check-ins',
@@ -219,6 +231,7 @@ class _NotificationPreferencesScreenState
                 onChanged: (v) {
                   setState(() => _checkinReminders = v);
                   _saveToggle('notif_checkin_reminders', v,
+                    setting: 'Check-in reminders',
                     revert: (b) => _checkinReminders = b);
                 }),
             ])),
@@ -229,6 +242,7 @@ class _NotificationPreferencesScreenState
             const SizedBox(height: 10),
             _card(Column(children: [
               _toggle(
+                field: 'notif_coach_messages',
                 icon: Icons.record_voice_over_outlined,
                 title: 'Coach Messages',
                 subtitle: 'Messages and feedback from your coach',
@@ -237,10 +251,12 @@ class _NotificationPreferencesScreenState
                 onChanged: (v) {
                   setState(() => _coachMessages = v);
                   _saveToggle('notif_coach_messages', v,
+                    setting: 'Coach messages',
                     revert: (b) => _coachMessages = b);
                 }),
               _divider(),
               _toggle(
+                field: 'notif_progress_updates',
                 icon: Icons.trending_up_outlined,
                 title: 'Progress Updates',
                 subtitle: 'Weekly summaries and milestone alerts',
@@ -249,6 +265,7 @@ class _NotificationPreferencesScreenState
                 onChanged: (v) {
                   setState(() => _progressUpdates = v);
                   _saveToggle('notif_progress_updates', v,
+                    setting: 'Progress updates',
                     revert: (b) => _progressUpdates = b);
                 }),
             ])),
@@ -259,6 +276,7 @@ class _NotificationPreferencesScreenState
             const SizedBox(height: 10),
             _card(Column(children: [
               _toggle(
+                field: 'notif_challenges',
                 icon: Icons.emoji_events_outlined,
                 title: 'Challenges',
                 subtitle: 'New challenges and leaderboard updates',
@@ -268,6 +286,7 @@ class _NotificationPreferencesScreenState
                   setState(() => _challenges = v);
                   // Said only once the server confirmed the save.
                   _saveToggle('notif_challenges', v,
+                    setting: 'Challenges',
                     revert: (b) => _challenges = b,
                     savedNote: v
                         ? 'Challenges will now appear in your Activity feed'
@@ -275,6 +294,7 @@ class _NotificationPreferencesScreenState
                 }),
               _divider(),
               _toggle(
+                field: 'notif_community',
                 icon: Icons.group_outlined,
                 title: 'Community',
                 subtitle: 'Activity in your pods and community posts',
@@ -283,6 +303,7 @@ class _NotificationPreferencesScreenState
                   setState(() => _community = v);
                   // Said only once the server confirmed the save.
                   _saveToggle('notif_community', v,
+                    setting: 'Community',
                     revert: (b) => _community = b,
                     savedNote: v
                         ? 'Community will now appear in your Activity feed'
@@ -312,6 +333,7 @@ class _NotificationPreferencesScreenState
   Widget _divider() => const Divider(height: 1, color: Color(0x1A4B444F));
 
   Widget _toggle({
+    required String field,
     required IconData icon,
     required String title,
     required String subtitle,
@@ -336,11 +358,14 @@ class _NotificationPreferencesScreenState
           color: _out, fontSize: 12, height: 1.3)),
       ])),
       const SizedBox(width: 12),
-      // Every toggle refuses while locked, whatever reached it (UX-F2).
-      _PurpleToggle(value: value, onChanged: (v) {
-        if (!_loaded) return;
-        onChanged(v);
-      }),
+      // Every toggle refuses while locked, whatever reached it (UX-F2), and
+      // while its own save is in flight (dimmed): one save per field.
+      Opacity(
+        opacity: _saving.contains(field) ? 0.5 : 1,
+        child: _PurpleToggle(value: value, onChanged: (v) {
+          if (!_loaded || _saving.contains(field)) return;
+          onChanged(v);
+        })),
     ]));
 }
 

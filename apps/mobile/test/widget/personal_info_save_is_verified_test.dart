@@ -43,14 +43,30 @@ class _Server extends RowCheckingPostgrest {
   _Server(super.uid);
   bool storageFails = false;
 
+  /// The PATCH answers with its row but a garbled `content-range`, which
+  /// postgrest parses with `int.parse` — a FormatException thrown from the
+  /// WRITE, carrying parser text (UX-8).
+  bool garbledRange = false;
+
   @override
   void reset() {
     super.reset();
     storageFails = false;
+    garbledRange = false;
   }
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    if (garbledRange && request.method == 'PATCH') {
+      writes.add('PATCH ${request.url.path}?${request.url.query}');
+      return http.StreamedResponse(
+          Stream.value(utf8.encode('[{"id":"row-1"}]')), 200,
+          request: request,
+          headers: {
+            'content-type': 'application/json',
+            'content-range': '0-0/oops',
+          });
+    }
     if (request.url.path.startsWith('/storage/v1/')) {
       writes.add('${request.method} ${request.url.path}');
       return storageFails
@@ -200,6 +216,44 @@ void main() {
       expect(find.text(_saveOffline), findsOneWidget);
       expect(find.byType(PersonalInfoScreen), findsOneWidget);
       expect(reported, hasLength(1));
+    });
+
+    // UX-8 · `on FormatException catch (e) => Text(e.message)` covered the
+    // whole save, so a FormatException thrown by the write itself (here:
+    // postgrest's int.parse of a garbled content-range) put parser text on a
+    // screen holding date of birth, unreported. Only the form's own authored
+    // number check may speak; anything else is the house copy.
+    testWidgets('UX-8: a FormatException from the write shows the house copy, '
+        'never its message, and is reported', (tester) async {
+      String? parserText;
+      try {
+        int.parse('oops');
+      } on FormatException catch (e) {
+        parserText = e.message;
+      }
+      await open(tester);
+      server.garbledRange = true;
+      await tapSave(tester);
+      expect(profileWrites(), hasLength(1), reason: 'premise: the write ran');
+      expect(find.textContaining(parserText!), findsNothing,
+          reason: 'UX-8: exception text reached the UI');
+      expect(find.text(_saveFailed), findsOneWidget);
+      expect(find.text('Profile updated successfully'), findsNothing);
+      expect(reported.single.origin, 'PersonalInfoScreen._save');
+    });
+
+    testWidgets('control: an unreadable number still gets the authored field '
+        'message, nothing is written or reported', (tester) async {
+      await open(tester);
+      final weight = find.byWidgetPredicate(
+          (w) => w is TextField && w.controller?.text == '64.5');
+      expect(weight, findsOneWidget, reason: 'premise: the weight field');
+      // The field only admits digits and dots, so "unreadable" is two dots.
+      await tester.enterText(weight, '6.4.5');
+      await tapSave(tester);
+      expect(find.text('Enter a valid number for weight.'), findsOneWidget);
+      expect(profileWrites(), isEmpty);
+      expect(reported, isEmpty);
     });
 
     testWidgets('control: a confirmed save still says so, closes, and writes '

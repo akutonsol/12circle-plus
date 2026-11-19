@@ -208,6 +208,9 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
 
   /// "Couldn't reopen its slot" with a Reopen slot retry (a SnackBarAction:
   /// it fires once, then disables itself — no double fire).
+  ///
+  /// UX-5 · it stays until acted on (retry or close): the slot is still
+  /// booked, and a timed toast let that pass unseen.
   void _sayReopenFailed(ScaffoldMessengerState messenger, String slotId,
       Object e, {String lead = ''}) {
     final next = isNetworkFailure(e)
@@ -215,7 +218,8 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
         : 'tap Reopen slot to try again. If it keeps happening, contact '
             'support.';
     messenger.showSnackBar(SnackBar(
-      duration: const Duration(seconds: 10),
+      persist: true,
+      showCloseIcon: true,
       content: Semantics(liveRegion: true,
           child: Text("${lead}Couldn't reopen its slot — $next")),
       action: SnackBarAction(
@@ -378,15 +382,26 @@ class _SessionTile extends StatelessWidget {
           Text('$when · $type · $mins min',
             style: const TextStyle(color: _mut, fontSize: 12)),
         ])),
-        TextButton(
-          onPressed: cancelling ? null : onCancel,
-          style: TextButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            minimumSize: const Size(0, 32),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-          child: const Text('Cancel',
-            style: TextStyle(color: Color(0xFFFFB4AB), fontSize: 13, fontWeight: FontWeight.w600)),
-        ),
+        // UX-6 · a 44x44 target; while the cancel is in flight a spinner
+        // that says so takes its place (no double fire).
+        if (cancelling)
+          Semantics(
+            container: true,
+            label: 'Cancelling',
+            liveRegion: true,
+            child: const SizedBox(width: 44, height: 44,
+              child: Center(child: SizedBox(width: 18, height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Color(0xFFFFB4AB))))))
+        else
+          TextButton(
+            onPressed: onCancel,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(44, 44)),
+            child: const Text('Cancel',
+              style: TextStyle(color: Color(0xFFFFB4AB), fontSize: 13, fontWeight: FontWeight.w600)),
+          ),
       ]),
     );
   }

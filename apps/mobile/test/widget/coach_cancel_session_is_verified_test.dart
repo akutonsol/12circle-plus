@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/coach/presentation/coach_availability_screen.dart';
 import 'package:flutter/material.dart';
@@ -197,6 +199,86 @@ void main() {
       expect(find.text(_slotOffline), findsOneWidget);
       expect(reported, hasLength(1));
     });
+  });
+
+  // ── Review round (UX-5, UX-6, mutant) ─────────────────────────────────────
+
+  testWidgets('UX-5: the partial-cancel notice stays until acted on, and '
+      'can be closed', (tester) async {
+    await open(tester);
+    server.mode = WriteMode.zeroRows;
+    server.modeAppliesTo = onSlots;
+    await cancelSession(tester);
+    expect(find.text(_slotFailed), findsOneWidget, reason: 'premise');
+
+    // Far past any toast: the slot is still booked, the coach must see it.
+    await tester.pump(const Duration(seconds: 60));
+    await tester.pumpAndSettle();
+    expect(find.text(_slotFailed), findsOneWidget,
+        reason: 'UX-5: a booked slot left by a cancel is not a 4 s toast');
+
+    // Acted on: closing it is a labelled control, and it goes.
+    await tester.tap(find.byIcon(Icons.close));
+    await tester.pumpAndSettle();
+    expect(find.text(_slotFailed), findsNothing);
+    expect(slotWrites(), hasLength(1), reason: 'closing is not a retry');
+  });
+
+  testWidgets('UX-6: Cancel is >= 44x44', (tester) async {
+    await open(tester);
+    final size = tester.getSize(find.widgetWithText(TextButton, 'Cancel'));
+    expect(size.width, greaterThanOrEqualTo(44));
+    expect(size.height, greaterThanOrEqualTo(44));
+  });
+
+  testWidgets('UX-6: while cancelling, a spinner labelled "Cancelling" '
+      'replaces Cancel', (tester) async {
+    final handle = tester.ensureSemantics();
+    await open(tester);
+    server.gate = Completer<void>();
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel session'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.bySemanticsLabel('Cancelling'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Cancel'), findsNothing);
+    server.gate!.complete();
+    await tester.pumpAndSettle();
+    expect(find.bySemanticsLabel('Cancelling'), findsNothing);
+    handle.dispose();
+  });
+
+  testWidgets('mutant: a second Cancel while one is cancelling sends one '
+      'update', (tester) async {
+    await open(tester);
+    server.gate = Completer<void>();
+    // Two activations of the tile's Cancel before it rebuilds: two confirm
+    // dialogs. (Driven through the tile's own `onCancel`: a pointer double
+    // tap cannot do it in a test, because pushing the first dialog absorbs
+    // the second pointer; a keyboard/assistive activation is not absorbed.)
+    // Confirming both must still send ONE call update — only the in-flight
+    // guard stands between the second confirm and a second write.
+    final tile = find.byWidgetPredicate(
+        (w) => w.runtimeType.toString() == '_SessionTile');
+    expect(tile, findsOneWidget, reason: 'premise');
+    final onCancel = (tester.widget(tile) as dynamic).onCancel as VoidCallback;
+    onCancel();
+    onCancel();
+    await tester.pumpAndSettle();
+    expect(find.text('Cancel session'), findsNWidgets(2), reason: 'premise');
+    await tester.tap(find.text('Cancel session').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Cancel session').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(callWrites(), hasLength(1));
+    server.gate!.complete();
+    await tester.pumpAndSettle();
+    expect(callWrites(), hasLength(1));
+    expect(notifyWrites(), hasLength(1), reason: 'the client is told once');
   });
 
   testWidgets('control: both writes confirmed → unchanged success copy, the '
