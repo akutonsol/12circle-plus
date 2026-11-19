@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../coach/presentation/coach_business_screen.dart';
+import 'widgets/profile_load_failed_notice.dart';
 
 const _bg    = Color(0xFF0E0E0F);
 const _surf  = Color(0xFF201F20);
@@ -135,8 +136,13 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
   }
 
   void _loadData() {
-    final p = ref.read(currentUserProfileProvider).valueOrNull
-        ?? ref.read(currentUserProfileProvider).asData?.value;
+    // P0-FL-16: only a SUCCESSFUL read fills the form. A failed one is an
+    // AsyncError now (it used to arrive as `null`), and an AsyncError that
+    // still carries an older profile is not used either — the form is filled
+    // from what the server just said, or not at all.
+    final state = ref.read(currentUserProfileProvider);
+    if (state is! AsyncData<Map<String, dynamic>?>) return;
+    final p = state.value;
     if (p == null) return;
     _fnCtrl.text     = p['first_name'] as String? ?? '';
     _lnCtrl.text     = p['last_name']  as String? ?? '';
@@ -167,7 +173,16 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
     super.dispose();
   }
 
+  /// The same lock as `locked` in [build], read fresh for the write handlers.
+  ///
+  /// The build-time lock hides the form from touch AND from a screen reader,
+  /// but a handler must not rely on its caller having been blocked: every
+  /// write path checks this first (P0-FL-16 review, UX-F2).
+  bool _isLocked() =>
+      !_loaded && ref.read(currentUserProfileProvider) is! AsyncData;
+
   Future<void> _pickAndUploadAvatar() async {
+    if (_isLocked() || _loadingAvatar) return;
     final picker = ImagePicker();
     final file = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
     if (file == null || !mounted) return;
@@ -204,11 +219,15 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
   }
 
   Future<void> _save() async {
-    // Never save a form that was not filled from the stored profile. A failed
-    // read arrives here as `null` (currentUserProfileProvider catches), which
-    // left every field empty; Save then sent null height, weight, goal weight,
-    // phone and gender over the real values and said "Profile updated
-    // successfully".
+    // Locked (the profile is still loading, or the read failed): the Save
+    // controls are disabled, and this refuses even if something reaches it.
+    if (_isLocked() || _saving) return;
+    // Never save a form that was not filled from the stored profile. Since
+    // P0-FL-16 a failed read is an AsyncError and the screen stays locked (the
+    // return above); what still reaches here unfilled is a read that SUCCEEDED
+    // with no profile row. Saving that empty form would send null height,
+    // weight, goal weight, phone and gender and say "Profile updated
+    // successfully", so it is refused.
     if (!_loaded) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text("Your details didn't load, so nothing was saved. Go back and try again."),
@@ -268,11 +287,23 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Populate fields as soon as profile data arrives (handles async load)
+    // Populate fields as soon as profile data arrives (handles async load,
+    // and a successful Try again after a failed read).
     ref.listen<AsyncValue<Map<String, dynamic>?>>(
       currentUserProfileProvider,
-      (_, next) { if (next.hasValue && !_loaded) _loadData(); },
+      (_, next) { if (next is AsyncData && !_loaded) _loadData(); },
     );
+
+    // P0-FL-16: until the profile has been READ the form holds nothing of the
+    // member's, so it is locked — inputs, photo and both Saves. Typing into it
+    // and then having a successful Try again overwrite (or mix with) those
+    // edits is the FL-12 trap. A read that answered "no profile row" is not a
+    // failure and keeps its existing behaviour (unlocked; Save refuses).
+    final profileAsync = ref.watch(currentUserProfileProvider);
+    final locked = !_loaded && profileAsync is! AsyncData;
+    final loadError =
+        !_loaded && profileAsync.hasError ? profileAsync.error : null;
+    final canSave = !_saving && !locked;
 
     final top    = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
@@ -295,12 +326,12 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
               style: TextStyle(color: _pri, fontSize: 16,
                 fontWeight: FontWeight.w800, letterSpacing: 2)))),
             GestureDetector(
-              onTap: _saving ? null : _save,
+              onTap: canSave ? _save : null,
               child: _saving
                 ? const SizedBox(width: 20, height: 20,
                     child: CircularProgressIndicator(color: _pri, strokeWidth: 2))
-                : const Text('Save',
-                    style: TextStyle(color: _pri, fontSize: 15,
+                : Text('Save',
+                    style: TextStyle(color: locked ? _outV : _pri, fontSize: 15,
                       fontWeight: FontWeight.w700))),
           ])),
         ),
@@ -308,6 +339,38 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
         Expanded(child: SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(20, 24, 20, bottom + 40),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+
+            if (loadError != null) ...[
+              ProfileLoadFailedNotice(
+                error: loadError,
+                busy: profileAsync.isLoading,
+                detail: "You can't save until your details load, so nothing "
+                    "you've saved before is overwritten.",
+                onRetry: () => ref.invalidate(currentUserProfileProvider),
+              ),
+              const SizedBox(height: 24),
+            ] else if (locked) ...[
+              Semantics(
+                liveRegion: true,
+                child: const Row(children: [
+                  SizedBox(width: 14, height: 14,
+                    child: CircularProgressIndicator(color: _pri, strokeWidth: 2)),
+                  SizedBox(width: 10),
+                  Text('Loading your details…',
+                    style: TextStyle(color: _out, fontSize: 12)),
+                ])),
+              const SizedBox(height: 24),
+            ],
+
+            // Locked (inputs, photo, pickers) until the profile is read —
+            // for touch (IgnorePointer) AND for a screen reader
+            // (ExcludeSemantics): blocking the pointer alone left every
+            // control activatable by TalkBack/VoiceOver (UX-F2).
+            IgnorePointer(ignoring: locked, child: ExcludeSemantics(
+              excluding: locked,
+              child: Opacity(
+              opacity: locked ? 0.45 : 1,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
 
             // ── Avatar ──
             Center(child: GestureDetector(
@@ -429,24 +492,35 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
               const SizedBox(height: 32),
             ],
 
-            // Save button
-            GestureDetector(
-              onTap: _saving ? null : _save,
-              child: Container(
+            ])))),
+
+            // Save button — the whole button is dimmed while locked, not just
+            // its label, so it does not look live (UX-F1).
+            Semantics(
+              button: true,
+              enabled: canSave,
+              child: GestureDetector(
+              onTap: canSave ? _save : null,
+              child: Opacity(
+                opacity: locked ? 0.4 : 1,
+                child: Container(
                 height: 54,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(999),
                   gradient: const LinearGradient(
                     colors: [Color(0xFFB76DFF), Color(0xFF7C3AED)],
                     begin: Alignment.centerLeft, end: Alignment.centerRight),
-                  boxShadow: const [BoxShadow(color: Color(0x557C3AED), blurRadius: 16)]),
+                  // Flat (no glow) while locked: a lit button reads as live.
+                  boxShadow: locked
+                    ? null
+                    : const [BoxShadow(color: Color(0x557C3AED), blurRadius: 16)]),
                 alignment: Alignment.center,
                 child: _saving
                   ? const SizedBox(width: 20, height: 20,
                       child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                   : const Text('Save Changes',
                       style: TextStyle(color: Colors.white, fontSize: 16,
-                        fontWeight: FontWeight.w700, letterSpacing: 0.3)))),
+                        fontWeight: FontWeight.w700, letterSpacing: 0.3)))))),
           ]),
         )),
       ]),
@@ -481,6 +555,9 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
           child: Text(label, style: const TextStyle(color: _onSV, fontSize: 14))),
         Expanded(child: TextField(
           controller: ctrl,
+          // Locked until the profile is read (P0-FL-16) — disabled, not only
+          // behind the pointer absorber, so focus/keyboard cannot reach it.
+          enabled: _loaded || ref.read(currentUserProfileProvider) is AsyncData,
           keyboardType: keyboard,
           inputFormatters: keyboard == TextInputType.number
             ? [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))]
