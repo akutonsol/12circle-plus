@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../observability/app_failure.dart' show reportError;
 import '../../features/auth/domain/auth_provider.dart';
 import '../../features/coach/data/pending_invite.dart';
 import '../../features/coach/domain/coach_provider.dart' show assignedCoachProvider, myCoachesProvider;
@@ -113,6 +114,14 @@ final passwordRecoveryNotifier = ValueNotifier<bool>(false);
 /// (e.g. flow_state_already_used, access_denied). Set in main() from the launch
 /// URL; the login screen shows it once and clears it. Null = no pending error.
 final authErrorNotifier = ValueNotifier<String?>(null);
+
+/// The redirect's role read for a signed-in user on an auth route FAILED
+/// (P0-FL-15). It sends them to /login; the login screen takes this result
+/// (for the same user only) and shows the failure at once, instead of
+/// repeating a read that just failed — on a dropped connection that second
+/// read would sit through the client's back-off again. Null = nothing pending.
+final accountReadFailureNotifier =
+    ValueNotifier<({String userId, Object error})?>(null);
 
 /// Redeems a remembered coach invite (owner decision 4, PendingInvite) for the
 /// signed-in account, and refreshes what a new coach changes.
@@ -239,8 +248,8 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       if (isAuthenticated && isAuthRoute) {
         if (path == '/intake') return null;
+        final userId = Supabase.instance.client.auth.currentUser?.id;
         try {
-          final userId = Supabase.instance.client.auth.currentUser?.id;
           if (userId != null) {
             final profile = await Supabase.instance.client
                 .from('user_profiles')
@@ -251,12 +260,27 @@ final routerProvider = Provider<GoRouter>((ref) {
             // Only send to intake when flag is explicitly false (new account mid-onboarding).
             // null means the field was never set → treat as complete and go to /home.
             final needsOnboarding = profile?['onboarding_complete'] == false;
+            accountReadFailureNotifier.value = null;
             if (role == 'coach') return '/coach-dashboard';
             if (role == 'admin') return '/admin-dashboard';
             if (role == 'vendor') return '/vendor-portal';
             return needsOnboarding ? '/intake' : '/home';
           }
-        } catch (_) {}
+        } catch (e, st) {
+          // P0-FL-15. Was `catch (_) {}` then '/home': a coach, admin or
+          // vendor whose role read failed was dropped into the client app.
+          // Do not guess. Land on /login, the one auth route that can say
+          // what happened: LoginScreen sees the session, re-runs the read
+          // and shows "Couldn't load your account" with Try again and Sign
+          // out. No loop: from /login this returns null (stay), and every
+          // other auth route goes to /login once.
+          reportError('appRouter.redirect.roleRead', e, st);
+          // Hand the failure to the login screen so it can say so at once.
+          if (userId != null) {
+            accountReadFailureNotifier.value = (userId: userId, error: e);
+          }
+          return path == '/login' ? null : '/login';
+        }
         return '/home';
       }
       return null;
