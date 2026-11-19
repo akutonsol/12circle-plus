@@ -9,6 +9,7 @@ import '../data/coach_program_service.dart';
 import '../domain/coach_ecosystem_provider.dart';
 import '../domain/engine_generation.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../profile/presentation/widgets/profile_load_failed_notice.dart';
 import '../../../core/observability/app_failure.dart';
 
 const _bg     = Color(0xFF0A0A0B);
@@ -177,7 +178,14 @@ class _State extends ConsumerState<DynamicProgramBuilderScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final role = ref.watch(currentUserProfileProvider).valueOrNull?['role'];
+    // P0-FL-40: an unread role is not a missing one. While the member's own
+    // profile is loading, or its read failed, the gate stays shut (nothing
+    // role-only is shown) and says which — never "… only.". Only a read that
+    // succeeded without the role gets that message.
+    final profileAsync = ref.watch(currentUserProfileProvider);
+    final unread = _unreadRoleGate(ref, profileAsync);
+    if (unread != null) return unread;
+    final role = profileAsync.value?['role'];
     if (role != 'coach' && role != 'admin') {
       return const Scaffold(backgroundColor: _bg,
         body: Center(child: Text('Coaches only.', style: TextStyle(color: _muted))));
@@ -320,4 +328,34 @@ class _State extends ConsumerState<DynamicProgramBuilderScreen> {
       ]),
     );
   }
+}
+
+/// P0-FL-40 · the role gate while the signed-in member's profile is unread:
+/// a neutral loading state, or the shared FL-16 failure notice with a
+/// busy-aware Try again. `null` once the read has succeeded — the gate then
+/// decides on the role exactly as before.
+Widget? _unreadRoleGate(
+    WidgetRef ref, AsyncValue<Map<String, dynamic>?> profile) {
+  if (profile.hasError) {
+    return Scaffold(
+      backgroundColor: _bg,
+      body: SafeArea(child: Center(child: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: ProfileLoadFailedNotice(
+          error: profile.error!,
+          busy: profile.isLoading,
+          detail: 'Coach tools stay closed until it loads.',
+          onRetry: () => ref.invalidate(currentUserProfileProvider),
+        ),
+      ))),
+    );
+  }
+  if (!profile.hasValue) {
+    return const Scaffold(
+      backgroundColor: _bg,
+      body: Center(child: CircularProgressIndicator(
+          color: _brand, semanticsLabel: 'Loading your account')),
+    );
+  }
+  return null;
 }

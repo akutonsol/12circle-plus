@@ -6,6 +6,7 @@ import '../domain/payment_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coach/data/coach_relationship_service.dart';
 import '../../../core/observability/app_failure.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import 'upgrade_screen.dart'
     show PlanLoadFailedNotice, knownPlan, reportPlanReadFailure;
 
@@ -147,10 +148,52 @@ class _ManageSubscriptionScreenState
     }
   }
 
+  /// Records a failure of [provider] once, when it settles.
+  void _reportSettledFailure(
+      ProviderListenable<AsyncValue<List<Map<String, dynamic>>>> provider,
+      String origin) {
+    ref.listen<AsyncValue<List<Map<String, dynamic>>>>(provider,
+        (previous, next) {
+      final settled = next.hasError &&
+          !next.isLoading &&
+          (previous == null || previous.isLoading || !previous.hasError);
+      if (settled) reportError(origin, next.error!, next.stackTrace);
+    });
+  }
+
+  Widget _subsFailure(AsyncValue<List<Map<String, dynamic>>> subsAsync) =>
+      SectionLoadFailure(
+        what: 'your subscriptions',
+        error: subsAsync.error,
+        busy: subsAsync.isLoading,
+        accent: _brand,
+        textColor: _white,
+        mutedColor: _muted,
+        onRetry: () => ref.invalidate(mySubscriptionsProvider),
+      );
+
+  Widget _coachesFailure(AsyncValue<List<Map<String, dynamic>>> coachesAsync) =>
+      SectionLoadFailure(
+        what: 'your coaches',
+        error: coachesAsync.error,
+        busy: coachesAsync.isLoading,
+        accent: _brand,
+        textColor: _white,
+        mutedColor: _muted,
+        onRetry: () => ref.invalidate(myCoachesProvider),
+      );
+
   @override
   Widget build(BuildContext context) {
     final planAsync = ref.watch(clientPlanProvider);
     final subsAsync = ref.watch(mySubscriptionsProvider);
+    final coachesAsync = ref.watch(myCoachesProvider);
+    // P0-FL-40: these reads propagate their failures; record each once, when
+    // it settles (not again on every rebuild).
+    _reportSettledFailure(mySubscriptionsProvider,
+        'ManageSubscriptionScreen.mySubscriptions');
+    _reportSettledFailure(myCoachesProvider,
+        'ManageSubscriptionScreen.myCoaches');
     // P0-FL-17: an unread plan is not Free — "…" while loading, "—" and a
     // failure notice with Try again when the read failed.
     reportPlanReadFailure(ref, 'ManageSubscriptionScreen.clientPlan');
@@ -230,10 +273,18 @@ class _ManageSubscriptionScreenState
 
             // Your plan — ONLY the platform membership (coaches show below).
             subsAsync.when(
-              loading: () => const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 24),
-                  child: Center(child: CircularProgressIndicator(color: _brand))),
-              error: (_, __) => const SizedBox.shrink(),
+              // P0-FL-40: a retry of a failed read takes this arm — keep the
+              // failure card (busy), not a spinner that hides what happened.
+              loading: () => subsAsync.hasError
+                  ? _subsFailure(subsAsync)
+                  : const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 24),
+                      child: Center(child: CircularProgressIndicator(
+                          color: _brand,
+                          semanticsLabel: 'Loading your subscriptions'))),
+              // P0-FL-40: a failed read rendered nothing — exactly what a
+              // member with no membership sees. Say it failed.
+              error: (_, __) => _subsFailure(subsAsync),
               data: (subs) {
                 final memberships = subs
                     .where((s) => ['self_guided', 'ai_guided'].contains(s['kind']) &&
@@ -277,9 +328,20 @@ class _ManageSubscriptionScreenState
               ],
             ),
             const SizedBox(height: 8),
-            ref.watch(myCoachesProvider).when(
-                  loading: () => const SizedBox.shrink(),
-                  error: (_, __) => const SizedBox.shrink(),
+            coachesAsync.when(
+                  // P0-FL-40: loading was blank and a failure was blank — the
+                  // member saw "no coaches" either way. Loading is a neutral
+                  // placeholder; a failure says so, with Try again (kept,
+                  // busy, while the retry is in flight).
+                  loading: () => coachesAsync.hasError
+                      ? _coachesFailure(coachesAsync)
+                      : const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: Center(child: SizedBox(width: 20, height: 20,
+                            child: CircularProgressIndicator(
+                                color: _brand, strokeWidth: 2,
+                                semanticsLabel: 'Loading your coaches')))),
+                  error: (_, __) => _coachesFailure(coachesAsync),
                   data: (coaches) => coaches.isEmpty
                       ? const Padding(
                           padding: EdgeInsets.only(bottom: 8),
