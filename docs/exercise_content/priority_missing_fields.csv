@@ -1,0 +1,47 @@
+content_status,name,no_advanced,no_alternatives,no_beginner,no_cues,no_description,no_image,no_instructions,no_mistakes,no_video,not_reviewed
+draft,Archer Pull-Up,True,True,True,True,True,True,True,True,True,True
+draft,Assisted Pull-Up Machine,True,True,True,True,True,True,True,True,True,True
+published,Back Squat,True,True,True,False,False,True,False,False,True,True
+draft,Band Bicep Curl,True,True,True,True,True,True,True,True,True,True
+draft,Band Lateral Raise,True,True,True,True,True,True,True,True,True,True
+draft,Band Leg Curl,True,True,True,True,True,True,True,True,True,True
+draft,Band-Assisted Pull-Up,True,True,True,True,True,True,True,True,True,True
+published,Barbell Bench Press,True,True,True,False,False,True,False,False,True,True
+draft,Barbell Calf Raise,True,True,True,True,True,True,True,True,True,True
+draft,Bent-Knee Calf Raise,True,True,True,True,True,True,True,True,True,True
+published,Bent-Over Barbell Row,True,True,True,False,False,True,False,False,True,True
+draft,Cable Lateral Raise,True,True,True,True,True,True,True,True,True,True
+draft,Cable Upright Row,True,True,True,True,True,True,True,True,True,True
+draft,Calf Raise Eccentric,True,True,True,True,True,True,True,True,True,True
+draft,Close-Grip Bench Press,True,True,True,True,True,True,True,True,True,True
+draft,Close-Grip Pull-Up,True,True,True,True,True,True,True,True,True,True
+draft,Commando Pull-Up,True,True,True,True,True,True,True,True,True,True
+draft,Decline Bench Press,True,True,True,True,True,True,True,True,True,True
+draft,Donkey Calf Raise,True,True,True,True,True,True,True,True,True,True
+published,Dumbbell Bench Press,True,True,True,False,False,True,False,False,True,True
+draft,Dumbbell Curl,True,True,True,True,True,True,True,True,True,True
+draft,Face Pull,True,True,True,True,True,True,True,True,True,True
+published,Hip Thrust,True,True,True,False,False,True,False,False,True,True
+draft,Incline Barbell Bench Press,True,True,True,True,True,True,True,True,True,True
+draft,Incline Dumbbell Press,True,True,True,True,True,True,True,True,True,True
+published,Lat Pulldown,True,True,True,False,False,True,False,False,True,True
+published,Lateral Raise,True,True,True,False,False,True,False,False,True,True
+draft,Leg Extension,True,True,True,True,True,True,True,True,True,True
+published,Leg Press,True,True,True,False,False,True,False,False,True,True
+draft,Lying Leg Curl,True,True,True,True,True,True,True,True,True,True
+draft,Machine Bicep Curl,True,True,True,True,True,True,True,True,True,True
+draft,Machine Lateral Raise,True,True,True,True,True,True,True,True,True,True
+published,Overhead Press,True,True,True,False,False,True,False,False,True,True
+published,Plank,True,True,True,False,False,True,False,False,True,True
+published,Push-Up,True,True,True,False,False,True,False,False,True,True
+published,Romanian Deadlift,True,True,True,False,False,True,False,False,True,True
+draft,Seated Cable Row,True,True,True,True,True,True,True,True,True,True
+draft,Seated Calf Raise,True,True,True,True,True,True,True,True,True,True
+draft,Seated Leg Curl,True,True,True,True,True,True,True,True,True,True
+draft,Single-Arm Cable Row,True,True,True,True,True,True,True,True,True,True
+draft,Single-Leg Curl,True,True,True,True,True,True,True,True,True,True
+draft,Standing Cable Row,True,True,True,True,True,True,True,True,True,True
+draft,Standing Calf Raise,True,True,True,True,True,True,True,True,True,True
+published,Tricep Pushdown,True,True,True,False,False,True,False,False,True,True
+draft,Walking Lateral Lunge,True,True,True,True,True,True,True,True,True,True
+published,Walking Lunge,True,True,True,False,False,True,False,False,True,True

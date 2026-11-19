@@ -1,0 +1,27 @@
+program_name,program_uses,log_uses,db_exact_match,db_complete,builtin_exact_match,status,candidates_UNREVIEWED
+Push Up,2,6,Push-Up,true,Push-Up,exact (db) + exact (built-in),
+Bench Press,6,0,,,,NEEDS HUMAN MAPPING,Barbell Bench Press | Close-Grip Bench Press | Decline Bench Press | Dumbbell Bench Press | Incline Barbell Bench Press
+Overhead Press,6,0,Overhead Press,true,,exact (db),
+Back Squat,4,1,Back Squat,true,,exact (db),
+Bent-Over Row,5,0,,,,NEEDS HUMAN MAPPING,Bent-Over Barbell Row
+Plank,5,0,Plank,true,Plank,exact (db) + exact (built-in),
+Barbell Squat,3,0,,,,NEEDS HUMAN MAPPING,
+Leg Curl,3,0,,,,NEEDS HUMAN MAPPING,Band Leg Curl | Lying Leg Curl | Seated Leg Curl | Single-Leg Curl
+Leg Press,3,0,Leg Press,true,Leg Press,exact (db) + exact (built-in),
+Romanian Deadlift,3,0,Romanian Deadlift,true,Romanian Deadlift,exact (db) + exact (built-in),
+Tricep Pushdown,3,0,Tricep Pushdown,true,,exact (db),
+Bicep Curl,2,0,,,,NEEDS HUMAN MAPPING,Band Bicep Curl | Machine Bicep Curl
+Lat Pulldown,2,0,Lat Pulldown,true,Lat Pulldown,exact (db) + exact (built-in),
+Standing Calf Raise,2,0,Standing Calf Raise,false,Standing Calf Raise,exact (db) + exact (built-in),
+Ab Wheel,1,0,,,,NEEDS HUMAN MAPPING,
+Barbell Row,1,0,,,,NEEDS HUMAN MAPPING,Bent-Over Barbell Row
+Cable Row,1,0,,,,NEEDS HUMAN MAPPING,Cable Upright Row | Seated Cable Row | Single-Arm Cable Row | Standing Cable Row
+Calf Raises,1,0,,,,NEEDS HUMAN MAPPING,Barbell Calf Raise | Bent-Knee Calf Raise | Calf Raise Eccentric | Donkey Calf Raise | Seated Calf Raise
+Dumbbell Curl,1,0,Dumbbell Curl,false,,exact (db),
+Face Pulls,1,0,,,,NEEDS HUMAN MAPPING,Face Pull
+Hip Thrust,1,0,Hip Thrust,true,Hip Thrust,exact (db) + exact (built-in),
+Incline Dumbbell Press,1,0,Incline Dumbbell Press,false,Incline Dumbbell Press,exact (db) + exact (built-in),
+Lateral Raises,1,0,,,,NEEDS HUMAN MAPPING,Band Lateral Raise | Cable Lateral Raise | Lateral Raise | Machine Lateral Raise
+Leg Extension,1,0,Leg Extension,false,,exact (db),
+Pull-Ups,1,0,,,,NEEDS HUMAN MAPPING,Archer Pull-Up | Assisted Pull-Up Machine | Band-Assisted Pull-Up | Close-Grip Pull-Up | Commando Pull-Up
+Walking Lunges,1,0,,,,NEEDS HUMAN MAPPING,Walking Lateral Lunge | Walking Lunge
