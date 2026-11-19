@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/domain/auth_provider.dart';
@@ -33,27 +36,96 @@ const _error   = Color(0xFFFFB4AB);
 // ── Providers ─────────────────────────────────────────────────────────────────
 final _supabase = Supabase.instance.client;
 
+/// How soon a notifications stream that ended is opened again, doubling while
+/// it keeps failing (the same back-off as the client's NotificationService).
+const _notifFirstRetry = Duration(seconds: 2);
+const _notifMaxRetry = Duration(minutes: 1);
+
+/// The signed-in coach's notifications, live.
+///
+/// P0-FL-14 · a failed read is an ERROR here, never an empty list. It used to
+/// end `.handleError((_) => [])` / `catch (_) { return Stream.value([]); }`, so
+/// a failed fetch read as "No notifications yet" and the bell as 0 unread.
+///
+/// supabase's `.stream()` also ends for good after a failed fetch, at start or
+/// on a reconnect. As the client side does (NotificationService
+/// .streamNotifications), the stream is opened again when it ends, backing off
+/// while it keeps failing; the error still reaches the consumers in between,
+/// and `ref.invalidate` (the sheet's Try again) opens a fresh one at once.
 final coachNotificationsProvider = StreamProvider<List<Map<String, dynamic>>>((ref) {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
   ref.watch(currentUserProvider);
   final uid = _supabase.auth.currentUser?.id;
   if (uid == null) return Stream.value([]);
-  try {
-    return _supabase
+  return reopenWhenDone(
+    () => _supabase
         .from('notifications')
         .stream(primaryKey: ['id'])
         .eq('recipient_id', uid)
         .order('created_at', ascending: false)
-        .map((rows) => List<Map<String, dynamic>>.from(rows))
-        .handleError((_) => <Map<String, dynamic>>[]);
-  } catch (_) {
-    return Stream.value([]);
-  }
+        .map((rows) => List<Map<String, dynamic>>.from(rows)),
+    origin: 'coachNotificationsProvider',
+  );
 });
 
-final unreadNotificationCountProvider = Provider<int>((ref) {
-  final notifs = ref.watch(coachNotificationsProvider).valueOrNull ?? [];
-  return notifs.where((n) => n['read'] == false).length;
+/// [open]'s stream, opened again each time it ends: after [first], doubling
+/// while it keeps ending without data, capped at [max], and back to [first]
+/// once data arrives. Every error is reported under [origin] and passed on —
+/// never swallowed into an empty value. Cancelling stops the retries.
+@visibleForTesting
+Stream<T> reopenWhenDone<T>(
+  Stream<T> Function() open, {
+  required String origin,
+  Duration first = _notifFirstRetry,
+  Duration max = _notifMaxRetry,
+}) {
+  late final StreamController<T> out;
+  StreamSubscription<T>? sub;
+  Timer? retry;
+  var delay = first;
+  void fail(Object e, StackTrace st) {
+    reportError(origin, e, st);
+    if (!out.isClosed) out.addError(e, st);
+  }
+
+  void subscribe() {
+    try {
+      sub = open().listen(
+        (value) {
+          delay = first;
+          if (!out.isClosed) out.add(value);
+        },
+        onError: fail,
+        onDone: () {
+          if (out.isClosed) return;
+          retry = Timer(delay, subscribe);
+          delay = delay * 2 > max ? max : delay * 2;
+        },
+      );
+    } catch (e, st) {
+      fail(e, st);
+    }
+  }
+
+  out = StreamController<T>(
+    onListen: subscribe,
+    onCancel: () {
+      retry?.cancel();
+      out.close();
+      return sub?.cancel();
+    },
+  );
+  return out.stream;
+}
+
+/// Unread notifications for the bell. `null` = unknown: the read failed, and
+/// a failure must not be shown as "0 unread" (P0-FL-14). While the first read
+/// is still in flight the bell shows no count, as it always has.
+final unreadNotificationCountProvider = Provider<int?>((ref) {
+  final async = ref.watch(coachNotificationsProvider);
+  if (async.hasError) return null;
+  if (!async.hasValue) return 0;
+  return async.requireValue.where((n) => n['read'] == false).length;
 });
 
 // F-15/F-16: the error propagates. These four reads ended `catch { return []; }`,
@@ -352,7 +424,11 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
               const SizedBox(width: 8),
               // Notification bell
               NamedIconButton(
-                label: 'Notifications',
+                // P0-FL-14 (UX-1) · the muted dot is visual only; a screen
+                // reader hears that the unread count is unknown.
+                label: ref.watch(unreadNotificationCountProvider) == null
+                    ? "Notifications — couldn't check for new ones"
+                    : 'Notifications',
                 onTap: () => _showNotificationsSheet(context),
                 child: Stack(
                   clipBehavior: Clip.none,
@@ -363,7 +439,20 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                         color: Colors.white.withValues(alpha: 0.06),
                         shape: BoxShape.circle),
                       child: const Icon(Icons.notifications_outlined, color: _white, size: 18)),
-                    if (ref.watch(unreadNotificationCountProvider) > 0)
+                    // P0-FL-14 · unknown (the read failed) is not 0: a small,
+                    // quiet muted dot, no number and no alarm red. The sheet
+                    // says what happened and offers Try again.
+                    if (ref.watch(unreadNotificationCountProvider) == null)
+                      Positioned(
+                        key: const ValueKey('coach-bell-unread-unknown'),
+                        top: 0, right: 0,
+                        child: Container(
+                          width: 8, height: 8,
+                          decoration: BoxDecoration(
+                            color: _muted.withValues(alpha: 0.6),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: _card, width: 1.5))))
+                    else if (ref.watch(unreadNotificationCountProvider)! > 0)
                       Positioned(
                         top: -2, right: -2,
                         child: Container(
@@ -374,7 +463,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                             border: Border.all(color: _card, width: 1.5)),
                           alignment: Alignment.center,
                           child: Text(
-                            ref.watch(unreadNotificationCountProvider) > 9
+                            ref.watch(unreadNotificationCountProvider)! > 9
                                 ? '9+' : '${ref.watch(unreadNotificationCountProvider)}',
                             style: const TextStyle(color: Colors.white,
                               fontSize: 8, fontWeight: FontWeight.w800)))),
@@ -1865,7 +1954,13 @@ class _NotificationsSheet extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final notifs = ref.watch(coachNotificationsProvider).valueOrNull ?? [];
+    // P0-FL-14 · a failed read is said, never shown as "No notifications
+    // yet"; the first read in flight is a spinner, not "none" either. The
+    // error wins over a stale list: the list is no longer live.
+    final async = ref.watch(coachNotificationsProvider);
+    final failed = async.hasError;
+    final loaded = !failed && async.hasValue;
+    final notifs = loaded ? async.requireValue : const <Map<String, dynamic>>[];
     final unread = notifs.where((n) => n['read'] == false).length;
     final bottom = MediaQuery.of(context).padding.bottom;
 
@@ -1932,7 +2027,24 @@ class _NotificationsSheet extends ConsumerWidget {
 
           // List
           Expanded(
-            child: notifs.isEmpty
+            child: failed
+              ? Center(child: SingleChildScrollView(
+                  controller: ctrl,
+                  padding: const EdgeInsets.all(24),
+                  child: _RetryableFailure(
+                    message: "Couldn't load your notifications",
+                    sub: isNetworkFailure(async.error)
+                        ? 'Check your connection and try again.'
+                        : 'Try again in a moment. If it keeps happening, '
+                            'contact support.',
+                    // Busy while the re-subscription is in flight: no double fire.
+                    busy: async.isLoading,
+                    onRetry: () => ref.invalidate(coachNotificationsProvider))))
+              : !loaded
+              ? Center(child: Semantics(
+                  label: 'Loading notifications',
+                  child: const CircularProgressIndicator(color: _brand)))
+              : notifs.isEmpty
               ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
                   Icon(Icons.notifications_none, color: _brand.withValues(alpha: 0.3), size: 48),
                   const SizedBox(height: 12),
