@@ -142,7 +142,7 @@ class _FakeThread extends Fake implements MessagingService {
     required String conversationId,
     required String content,
     Map<String, dynamic>? metadata,
-    SendFailureHandler? onNotSent,
+    void Function(Object error)? onNotSent,
   }) async {
     rows.add({
       'id': 'sent-${rows.length}',

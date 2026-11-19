@@ -64,7 +64,7 @@ class _FakeMessaging extends Fake implements MessagingService {
     required String conversationId,
     required String content,
     Map<String, dynamic>? metadata,
-    SendFailureHandler? onNotSent,
+    void Function(Object error)? onNotSent,
   }) async {
     sent.add(content);
     await gate?.future;
