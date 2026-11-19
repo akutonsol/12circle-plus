@@ -20,7 +20,7 @@ String profileLoadFailedMessage(Object error) => isNetworkFailure(error)
 /// The signed-in member's profile could not be read: say so, say what is held
 /// back because of it ([detail], optional) and offer Try again.
 ///
-/// A live region, so a screen reader announces it. Try again is busy-aware —
+/// The message is a live region, so a screen reader announces it. Try again is busy-aware —
 /// while [busy] (the re-read is in flight) it is disabled and reads "Loading…",
 /// so it cannot fire twice — at least 44px tall, and labelled for a screen
 /// reader.
@@ -45,48 +45,52 @@ class ProfileLoadFailedNotice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Semantics(
-      liveRegion: true,
-      container: true,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: _red.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _red.withValues(alpha: 0.3)),
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Icon(Icons.error_outline, color: _red, size: 18),
-            const SizedBox(width: 10),
-            Expanded(
+    // The live region covers the message only (UX-3): if it wrapped Try
+    // again, the button's "Try again" ↔ "Loading…" flip would re-announce the
+    // whole notice on every retry. The button keeps its own semantics.
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _red.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _red.withValues(alpha: 0.3)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Icon(Icons.error_outline, color: _red, size: 18),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Semantics(
+              liveRegion: true,
+              container: true,
               child: Text(profileLoadFailedMessage(error),
                   style: const TextStyle(
                       color: _text, fontSize: 13, fontWeight: FontWeight.w700)),
             ),
-          ]),
-          if (detail != null) ...[
-            const SizedBox(height: 6),
-            Text(detail!,
-                style: const TextStyle(color: _muted, fontSize: 12, height: 1.4)),
-          ],
-          Align(
-            alignment: Alignment.centerRight,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
-              child: TextButton(
-                onPressed: busy ? null : onRetry,
-                child: Text(busy ? 'Loading…' : 'Try again',
-                    semanticsLabel:
-                        busy ? 'Loading your profile' : 'Try again, load your profile',
-                    style: const TextStyle(
-                        color: _brand, fontWeight: FontWeight.w700)),
-              ),
-            ),
           ),
         ]),
-      ),
+        if (detail != null) ...[
+          const SizedBox(height: 6),
+          Text(detail!,
+              style: const TextStyle(color: _muted, fontSize: 12, height: 1.4)),
+        ],
+        Align(
+          alignment: Alignment.centerRight,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+            child: TextButton(
+              onPressed: busy ? null : onRetry,
+              child: Text(busy ? 'Loading…' : 'Try again',
+                  semanticsLabel: busy
+                      ? 'Loading your profile'
+                      : 'Try again, load your profile',
+                  style: const TextStyle(
+                      color: _brand, fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ),
+      ]),
     );
   }
 }

@@ -215,6 +215,9 @@ class _ManageSubscriptionScreenState
         onRefresh: () async {
           ref.invalidate(clientPlanProvider);
           ref.invalidate(mySubscriptionsProvider);
+          // UX-4: the coaches section is on this page too — a pull re-reads it
+          // (including after a failed read), not just the subscriptions.
+          ref.invalidate(myCoachesProvider);
         },
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),

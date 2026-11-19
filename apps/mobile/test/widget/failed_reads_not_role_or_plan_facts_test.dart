@@ -17,6 +17,7 @@ import 'package:circle_fitness/features/exercise_database/presentation/mie_debug
 import 'package:circle_fitness/features/payments/domain/entitlements.dart';
 import 'package:circle_fitness/features/payments/domain/payment_provider.dart';
 import 'package:circle_fitness/features/payments/presentation/manage_subscription_screen.dart';
+import 'package:circle_fitness/features/profile/presentation/widgets/profile_load_failed_notice.dart';
 import 'package:circle_fitness/features/workout/data/workout_session_store.dart';
 import 'package:circle_fitness/features/workout/domain/workout_provider.dart';
 import 'package:circle_fitness/features/workout/presentation/train_hub_screen.dart';
@@ -81,8 +82,11 @@ class _Source<T> {
 
 class _Gated {
   const _Gated(this.name, this.build, this.only, this.allowedRole,
-      {this.deniedRole = 'client'});
+      {this.deniedRole = 'client', String? title})
+      : title = title ?? name;
   final String name;
+  /// The screen's own AppBar title, which the gate keeps (UX-1).
+  final String title;
   final Widget Function() build;
   final String only;
   final String allowedRole;
@@ -98,13 +102,16 @@ final _gated = <_Gated>[
       'Coaches only.', 'admin'),
   _Gated('Weekly Review', () => const WeeklyReviewScreen(), 'Coaches only.', 'coach'),
   _Gated('Observability', () => const ObservabilityScreen(), 'Admins only.', 'admin',
-      deniedRole: 'coach'),
+      deniedRole: 'coach', title: 'Coaching Observability'),
   _Gated('Content Review Queue', () => const ContentReviewQueueScreen(),
-      'Admins & content managers only.', 'content_manager', deniedRole: 'coach'),
+      'Admins & content managers only.', 'content_manager', deniedRole: 'coach',
+      title: 'Review Queue'),
   _Gated('Exercise Content Center', () => const ExerciseContentCenterScreen(),
-      'Admins & content managers only.', 'admin', deniedRole: 'coach'),
+      'Admins & content managers only.', 'admin', deniedRole: 'coach',
+      title: 'Content Center'),
   _Gated('Intelligence Review', () => const IntelligenceReviewScreen(),
-      'Admins & content managers only.', 'content_manager', deniedRole: 'coach'),
+      'Admins & content managers only.', 'content_manager', deniedRole: 'coach',
+      title: 'Knowledge Review'),
   _Gated('MIE Debugger', () => const MieDebuggerScreen(),
       'Admins & content managers only.', 'admin', deniedRole: 'coach'),
 ];
@@ -164,8 +171,75 @@ void main() {
       return profile;
     }
 
+    /// The gate is shut: only the screen's own title-only AppBar (UX-1) —
+    /// no role-only actions (refresh) — and the gate body.
+    void expectGateChrome(_Gated g) {
+      expect(find.byType(AppBar), findsOneWidget);
+      expect(find.descendant(of: find.byType(AppBar), matching: find.text(g.title)),
+          findsOneWidget);
+      expect(find.byIcon(Icons.refresh_rounded), findsNothing,
+          reason: 'fail closed: nothing role-only is shown');
+    }
+
+    /// The gate has opened: neither its spinner nor its failure notice.
+    void expectScreenOpen() {
+      expect(find.byType(AppBar), findsOneWidget);
+      expect(find.byType(ProfileLoadFailedNotice), findsNothing);
+      expect(find.bySemanticsLabel('Loading your account'), findsNothing);
+    }
+
+    /// UX-1 · open [g] pushed over a home route, as the app does.
+    Future<void> pushGate(
+        WidgetTester tester, _Gated g, _Source<Map<String, dynamic>?> profile,
+        {required bool settleIt}) async {
+      tester.view
+        ..devicePixelRatio = 1
+        ..physicalSize = const Size(900, 3000);
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          currentUserProvider
+              .overrideWithValue(Supabase.instance.client.auth.currentUser),
+          currentUserProfileProvider.overrideWith((ref) => profile.read()),
+          coachClientsProvider.overrideWith((ref) async => const []),
+        ],
+        child: MaterialApp(
+          home: Builder(builder: (context) => Scaffold(body: Center(
+            child: TextButton(
+              onPressed: () => Navigator.of(context)
+                  .push(MaterialPageRoute<void>(builder: (_) => g.build())),
+              child: const Text('HOME'),
+            ),
+          ))),
+        ),
+      ));
+      await tester.tap(find.text('HOME'));
+      await settle(tester, settle: settleIt);
+    }
+
     for (final g in _gated) {
       group(g.name, () {
+        for (final pending in [true, false]) {
+          final state = pending ? 'loading' : 'failure';
+          testWidgets('UX-1 · the $state gate has the title and a back control',
+              (tester) async {
+            final p = _Source<Map<String, dynamic>?>({'id': _uid, 'role': g.allowedRole})
+              ..mode = pending ? _Read.pending : _Read.server;
+            await pushGate(tester, g, p, settleIt: !pending);
+            expect(pending ? find.bySemanticsLabel('Loading your account')
+                           : find.text(_profileFailed), findsOneWidget);
+            expect(find.descendant(of: find.byType(AppBar), matching: find.text(g.title)),
+                findsOneWidget);
+            expect(find.byType(BackButton), findsOneWidget,
+                reason: 'THE defect (UX-1): no in-app way out of the gate');
+            await tester.tap(find.byType(BackButton));
+            await settle(tester, settle: !pending);
+            expect(find.text('HOME'), findsOneWidget);
+            expect(find.byType(BackButton), findsNothing);
+            await unmount(tester);
+          });
+        }
+
         testWidgets('failed profile read → the failure notice, not "${g.only}"',
             (tester) async {
           final p = _Source<Map<String, dynamic>?>({'id': _uid, 'role': g.allowedRole})
@@ -175,8 +249,7 @@ void main() {
               reason: 'THE defect: an unread role was shown as "lacks the role"');
           expect(find.text(_profileFailed), findsOneWidget);
           expect(find.text('Try again'), findsOneWidget);
-          expect(find.byType(AppBar), findsNothing,
-              reason: 'fail closed: nothing role-only is shown');
+          expectGateChrome(g);
           await unmount(tester);
         });
 
@@ -188,7 +261,7 @@ void main() {
           expect(find.text(g.only), findsNothing);
           expect(find.textContaining("Couldn't load"), findsNothing);
           expect(find.byType(CircularProgressIndicator), findsOneWidget);
-          expect(find.byType(AppBar), findsNothing);
+          expectGateChrome(g);
           await unmount(tester);
         });
 
@@ -206,7 +279,7 @@ void main() {
           await openGate(tester, g, p);
           expect(find.text(g.only), findsNothing);
           expect(find.textContaining("Couldn't load your profile"), findsNothing);
-          expect(find.byType(AppBar), findsOneWidget);
+          expectScreenOpen();
           await unmount(tester);
         });
 
@@ -234,7 +307,7 @@ void main() {
           p.gate!.complete();
           await tester.pumpAndSettle();
           expect(find.textContaining("Couldn't load"), findsNothing);
-          expect(find.byType(AppBar), findsOneWidget);
+          expectScreenOpen();
           await unmount(tester);
         });
       });
@@ -256,6 +329,44 @@ void main() {
       semantics.dispose();
       await unmount(tester);
     });
+  });
+
+  // ── UX-3 · the notice's live region covers the message only ─────────────
+  group('ProfileLoadFailedNotice live region', () {
+    Future<void> pumpNotice(WidgetTester tester, {required bool busy}) =>
+        tester.pumpWidget(MaterialApp(home: Scaffold(body: ProfileLoadFailedNotice(
+          error: const PostgrestException(message: 'refused', code: 'XX000'),
+          busy: busy,
+          detail: 'Coach tools stay closed until it loads.',
+          onRetry: () {},
+        ))));
+
+    final live = find.byWidgetPredicate(
+        (w) => w is Semantics && (w.properties.liveRegion ?? false));
+
+    for (final busy in [false, true]) {
+      testWidgets('busy=$busy · the message is live, Try again is not inside it',
+          (tester) async {
+        final semantics = tester.ensureSemantics();
+        await pumpNotice(tester, busy: busy);
+        expect(live, findsOneWidget);
+        expect(find.descendant(of: live, matching: find.text(_profileFailed)),
+            findsOneWidget);
+        expect(find.descendant(of: live, matching: find.byType(TextButton)),
+            findsNothing,
+            reason: 'THE defect (UX-3): the label flip re-announced the notice');
+        expect(find.descendant(of: live,
+                matching: find.text('Coach tools stay closed until it loads.')),
+            findsNothing);
+        // The button keeps its own semantics.
+        expect(find.bySemanticsLabel(
+                busy ? 'Loading your profile' : 'Try again, load your profile'),
+            findsOneWidget);
+        expect(tester.getSize(find.byType(TextButton)).height,
+            greaterThanOrEqualTo(44));
+        semantics.dispose();
+      });
+    }
   });
 
   // ── 2 · Manage subscription ────────────────────────────────────────────────
@@ -333,6 +444,35 @@ void main() {
       await tester.tap(find.widgetWithText(TextButton, 'Try again'));
       await tester.pumpAndSettle();
       expect(coaches.reads, 2);
+      expect(find.textContaining("Couldn't load your coaches"), findsNothing);
+      expect(find.text(noCoach), findsOneWidget);
+    });
+
+    testWidgets('UX-4 · pull to refresh re-reads coaches as well as subscriptions',
+        (tester) async {
+      final subs = _Source<List<Map<String, dynamic>>>(const []);
+      final coaches = _Source<List<Map<String, dynamic>>>(const [])
+        ..mode = _Read.server;
+      await openManage(tester, subs: subs, coaches: coaches);
+      expect(find.text("Couldn't load your coaches"), findsOneWidget);
+      expect(subs.reads, 1);
+      expect(coaches.reads, 1);
+
+      coaches.mode = _Read.ok;
+      // A real pull: drag the page's list down from its top, far enough to arm
+      // the indicator (a share of the viewport height — this one is tall).
+      final list = find
+          .descendant(of: find.byType(RefreshIndicator), matching: find.byType(Scrollable))
+          .first;
+      await tester.timedDragFrom(tester.getTopLeft(list) + const Offset(20, 20),
+          Offset(0, tester.getSize(list).height * 0.6),
+          const Duration(milliseconds: 600));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(subs.reads, 2);
+      expect(coaches.reads, 2,
+          reason: 'THE defect (UX-4): the pull never re-read the coaches');
       expect(find.textContaining("Couldn't load your coaches"), findsNothing);
       expect(find.text(noCoach), findsOneWidget);
     });

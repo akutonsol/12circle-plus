@@ -120,7 +120,7 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     // role-only is shown) and says which — never "… only.". Only a read that
     // succeeded without the role gets that message.
     final profileAsync = ref.watch(currentUserProfileProvider);
-    final unread = _unreadRoleGate(ref, profileAsync);
+    final unread = _unreadRoleGate(ref, profileAsync, 'Coach Copilot');
     if (unread != null) return unread;
     final role = profileAsync.value?['role'];
     if (role != 'coach' && role != 'admin') {
@@ -405,11 +405,16 @@ class _State extends ConsumerState<CoachCopilotScreen> {
 /// a neutral loading state, or the shared FL-16 failure notice with a
 /// busy-aware Try again. `null` once the read has succeeded — the gate then
 /// decides on the role exactly as before.
-Widget? _unreadRoleGate(
-    WidgetRef ref, AsyncValue<Map<String, dynamic>?> profile) {
+///
+/// Both states keep the screen's own AppBar (title, normal back control —
+/// no role-only actions) so there is always an in-app way out (UX-1).
+Widget? _unreadRoleGate(WidgetRef ref,
+    AsyncValue<Map<String, dynamic>?> profile, String title) {
+  final appBar = _gateAppBar(title);
   if (profile.hasError) {
     return Scaffold(
       backgroundColor: _bg,
+      appBar: appBar,
       body: SafeArea(child: Center(child: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: ProfileLoadFailedNotice(
@@ -422,11 +427,18 @@ Widget? _unreadRoleGate(
     );
   }
   if (!profile.hasValue) {
-    return const Scaffold(
+    return Scaffold(
       backgroundColor: _bg,
-      body: Center(child: CircularProgressIndicator(
+      appBar: appBar,
+      body: const Center(child: CircularProgressIndicator(
           color: _brand, semanticsLabel: 'Loading your account')),
     );
   }
   return null;
 }
+
+/// The screen's own AppBar style for the unread-role gate.
+PreferredSizeWidget _gateAppBar(String title) => AppBar(
+    backgroundColor: _bg, foregroundColor: _text,
+    title: Text(title,
+        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)));
