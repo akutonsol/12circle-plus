@@ -240,6 +240,23 @@ void main() {
         reason: 'the coach must see who is asking before accepting');
   });
 
+  // UX-F3: the requester's goal/email no longer arrive, so the subtitle under
+  // the name was always '' — a blank line in every card. It is not built when
+  // empty. (The goal/email branch stays until Julia decides Q-H1.)
+  // HOW TO SEE IT FAIL: `git checkout HEAD~1 -- lib/features/dashboard/
+  // presentation/coach_dashboard_screen.dart`.
+  testWidgets(
+      'UX-F3: the request card builds no empty subtitle under the name',
+      (t) async {
+    await pumpRequestsTab(t);
+    final nameColumn = t.widget<Column>(find
+        .ancestor(of: find.text('Jordan Rivers'), matching: find.byType(Column))
+        .first);
+    expect(nameColumn.children, hasLength(1),
+        reason: 'only the name: no blank subtitle line');
+    expect(find.text(''), findsNothing, reason: 'no empty Text on the tab');
+  });
+
   testWidgets(
       'a requester with no public profile row still renders (as "New '
       'Client"), and the tab does not throw', (t) async {

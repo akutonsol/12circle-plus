@@ -1122,6 +1122,9 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                 final profile = req['profile'] as Map<String, dynamic>? ?? {};
                 final name = '${profile['first_name'] ?? ''} ${profile['last_name'] ?? ''}'.trim();
                 final goal = profile['fitness_goal'] as String? ?? '';
+                // P0-FL-38 no longer requests goal/email, so this is '' today;
+                // the branch stays until Q-H1 is decided. Not built when empty.
+                final subtitle = goal.isEmpty ? profile['email'] as String? ?? '' : _goalLabel(goal);
                 final msg = req['request_message'] as String?;
                 return Container(
                   margin: const EdgeInsets.only(bottom: 12),
@@ -1142,7 +1145,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         Text(name.isEmpty ? 'New Client' : name,
                           style: const TextStyle(color: _white, fontSize: 15, fontWeight: FontWeight.w700)),
-                        Text(goal.isEmpty ? profile['email'] as String? ?? '' : _goalLabel(goal),
+                        if (subtitle.isNotEmpty) Text(subtitle,
                           style: const TextStyle(color: _muted, fontSize: 12)),
                       ])),
                       Container(
