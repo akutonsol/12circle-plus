@@ -134,6 +134,43 @@ and `cplus-supabase-engineer` (scratch-database validation only); the lead added
 
 Runtime (device/simulator/live QA): **not performed**; journey completion unchanged (2 of 14).
 
+## Cycle 6 log (2026-11-18/19): P0-FL-19, P0-FL-37, P0-FL-13/15/18/14/16/17
+
+**How the cycle ran.**
+- Every package started from #183's head (`2ecd6e2`). Each PR targets #183's branch, except P0-FL-17, which targets P0-FL-16's.
+- **Batches.** Four engineers ran in parallel (batch A), then three, then FL-17.
+- **Reviews.** Every package got independent UX, security and QA review at its exact final head, then a fix round and narrow re-checks.
+- **Lead-run checks.**
+  - Code mutants, using the test list taken from the package's diff.
+  - CI's 10 negative-control scripts, run locally.
+  - Static guards.
+- **Combined evidence branch.** `integration/p0-flutter-stack-c6` = `e606fe5` + `2ecd6e2` + the eight final heads:
+  - @ `6f8918f`: 3192 tests pass, analyze 287, guards 0, CI **7/7** (push run `44463329197`).
+  - It caught one cross-package defect, which was fixed test-only on FL-15 (`c117cfb`).
+
+| Package | Agent | Branch, final head, PR | Files | Tests (full) | Independent review (final head) | Lead mutants | CI (exact head) |
+|---|---|---|---|---|---|---|---|
+| P0-FL-19 intake photos / resume / coach list | `cplus-flutter-engineer` ×2 rounds | `fix/intake-photos-and-resume-tell-the-truth` `e3d5636` → **#185** | `intake_flow_screen.dart`, `coach_provider.dart` | 2983 | UX PASS-WITH-NOTES · sec APPROVE · QA VERIFIED (first QA pass caught an EC-03 break) | all caught | 7/7 `44446529335` |
+| P0-FL-37 assessment only via the logged RPC | engineer ×3 rounds + lead (coordinator pin, CON-03 fact update, EC-04 probe) | `fix/coach-reads-assessment-through-logged-route` `ef3d67a` → **#187** | `coach_ecosystem_provider.dart`, `client_detail_screen.dart`, coordinator test, CON-03 memo, EC-04 probe | 2987 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 7/7 | 7/7 `44451418256` |
+| P0-FL-13 messaging inbox/send | engineer ×2 | `fix/messaging-inbox-and-send-truth` `72fed97` → **#184** | `messaging_service.dart`, `messaging_screen.dart`, `chat_screen.dart` | 2988 | UX PASS · sec APPROVE-WITH-NOTES · QA VERIFIED | 6/6 | 7/7 `44444119951` |
+| P0-FL-15 sign-in routing | engineer ×2 + lead (test teardown) | `fix/sign-in-role-read-failure-not-guessed` `c117cfb` → **#186** | `login_screen.dart`, `app_router.dart` | 3002 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 9/10 + 1 equivalent | 7/7 `44459402632` |
+| P0-FL-18 progress views | engineer ×2 | `fix/progress-reads-failure-not-empty` `b556bca` → **#188** | `workout_service.dart`, 3 screens, new `section_load_failure.dart` | 3002 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 9/9 | 7/7 `44453836812` |
+| P0-FL-16 profile read passes failures on | engineer ×3 | `fix/profile-read-failure-not-member-defaults` `3f357ee` → **#189** | `auth_provider.dart`, 4 screens, new notice widget | 3005 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | all single-surface + all-layers-off caught; 3 equivalent | 7/7 `44454848750` |
+| P0-FL-14 coach notifications + availability | engineer ×3 | `fix/coach-notifications-and-availability-truth` `beb2a3f` → **#190** | `coach_dashboard_screen.dart`, `coach_availability_screen.dart` | 3000 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | all caught | 7/7 `44456761740` |
+| P0-FL-17 plan label never "Free" when unknown | engineer ×2 (lead rebase onto FL-16) | `fix/plan-label-unknown-not-free` `d307187` → **#191** (base #189) | 5 payments/profile/settings screens | 3044 | UX PASS · sec APPROVE-WITH-NOTES · QA VERIFIED | 8/8 | 7/7 `44461871147` |
+
+**Read-only work.** The QA migration discrepancy report (`docs/QA_MIGRATION_DISCREPANCY_REPORT.md`, on #164) was produced by the lead using read-only CLI queries. Nothing was applied.
+
+**Runtime evidence.** No device, simulator or live-QA run. Journey completion is unchanged at 2 of 14.
+
+### Backlog after cycle 6 (decision-free first)
+
+1. **P0-FL-38: unlogged PHI reads.** `coach_copilot_screen.dart`, `coach_relationship_service.dart`; `coach_dashboard_screen.dart` roster `risk_level` needs a decision first, so report it.
+2. **P0-FL-39: false-success writes.** Notification `_saveToggle`; Personal Info avatar and save; notification-sheet mark read, mark all, swipe delete, clear all; `_cancelSession`.
+3. **P0-FL-40: failures shown as false facts.** Role-gated "Coaches only." on a profile failure; empty Manage subscription lists; `train_hub` activeSession (EC-G6).
+4. **Cosmetic and accessibility.** 2× overflows (photo step, client page, Profile and Settings headers, notification sheet header); `AuthButton` Semantics; then the P3 backlog P0-FL-20 … P0-FL-36.
+5. **Needs Julia.** The 184/185 QA window (Option S or R); Decision 19 / F1; server-side PHI read enforcement; P0-SB-2 (Decisions 17, 18); P0-SB-3 (Decision 20); member list (Decision 22); Decisions 21, 23 and 24.
+
 ### Backlog after cycle 5 (decision-free first)
 
 1. **P0-FL-19** intake (the remaining **P1**: baseline photos silently lost) + resume failure + coach list — on #180.
