@@ -177,7 +177,7 @@ class _ClientCard extends ConsumerWidget {
           ])),
 
         // ── Expanded: PRs + Recent Sessions ──────────────────────────────
-        if (isExpanded) _ExpandedDetails(clientId: clientId, name: name),
+        if (isExpanded) _ExpandedDetails(clientId: clientId),
       ]),
     );
   }
@@ -192,13 +192,25 @@ class _ClientCard extends ConsumerWidget {
 // ── Expanded details: PRs + sessions ─────────────────────────────────────────
 class _ExpandedDetails extends ConsumerWidget {
   final String clientId;
-  final String name;
-  const _ExpandedDetails({required this.clientId, required this.name});
+  const _ExpandedDetails({required this.clientId});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final prsAsync     = ref.watch(clientPersonalRecordsProvider(clientId));
     final sessionsAsync = ref.watch(clientRecentSessionsProvider(clientId));
+    // P0-FL-18: one failure card per list. The card names only the list — it
+    // sits under this client's own row. `.when` takes the loading arm on a
+    // reload, so that arm keeps the card (busy) while a failed read retries.
+    Widget prsFailure(Object? e) => SectionLoadFailure(
+      what: 'personal records',
+      error: e,
+      busy: prsAsync.isLoading,
+      onRetry: () => ref.invalidate(clientPersonalRecordsProvider(clientId)));
+    Widget sessionsFailure(Object? e) => SectionLoadFailure(
+      what: 'recent sessions',
+      error: e,
+      busy: sessionsAsync.isLoading,
+      onRetry: () => ref.invalidate(clientRecentSessionsProvider(clientId)));
 
     return Container(
       decoration: const BoxDecoration(
@@ -211,14 +223,12 @@ class _ExpandedDetails extends ConsumerWidget {
             style: TextStyle(color: _muted, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
           const SizedBox(height: 10),
           prsAsync.when(
-            loading: () => const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: _brand, strokeWidth: 2))),
+            loading: () => prsAsync.hasError
+                ? prsFailure(prsAsync.error)
+                : const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: _brand, strokeWidth: 2))),
             // P0-FL-18: a failed read rendered nothing, and the service turned
             // it into [] → "No personal records yet". Scoped to this list.
-            error: (e, _) => SectionLoadFailure(
-              what: "$name's personal records",
-              error: e,
-              busy: prsAsync.isLoading,
-              onRetry: () => ref.invalidate(clientPersonalRecordsProvider(clientId))),
+            error: (e, _) => prsFailure(e),
             data: (prs) {
               if (prs.isEmpty) {
                 return Text('No personal records yet', style: TextStyle(color: _muted.withValues(alpha: 0.4), fontSize: 12));
@@ -249,13 +259,11 @@ class _ExpandedDetails extends ConsumerWidget {
             style: TextStyle(color: _muted, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
           const SizedBox(height: 10),
           sessionsAsync.when(
-            loading: () => const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: _brand, strokeWidth: 2))),
+            loading: () => sessionsAsync.hasError
+                ? sessionsFailure(sessionsAsync.error)
+                : const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: _brand, strokeWidth: 2))),
             // P0-FL-18: was "No sessions recorded" for a failed read (J11).
-            error: (e, _) => SectionLoadFailure(
-              what: "$name's recent sessions",
-              error: e,
-              busy: sessionsAsync.isLoading,
-              onRetry: () => ref.invalidate(clientRecentSessionsProvider(clientId))),
+            error: (e, _) => sessionsFailure(e),
             data: (sessions) {
               if (sessions.isEmpty) {
                 return Text('No sessions recorded', style: TextStyle(color: _muted.withValues(alpha: 0.4), fontSize: 12));

@@ -9,7 +9,9 @@ import 'package:circle_fitness/features/workout/domain/workout_provider.dart';
 import 'package:circle_fitness/features/workout/presentation/coach_client_workout_screen.dart';
 import 'package:circle_fitness/features/workout/presentation/strength_progression_screen.dart';
 import 'package:circle_fitness/features/workout/presentation/train_hub_screen.dart';
+import 'package:circle_fitness/features/workout/presentation/widgets/section_load_failure.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart' show SemanticsNode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -97,6 +99,10 @@ class _Server extends http.BaseClient {
         request: request, headers: {'content-type': 'application/json'});
   }
 }
+
+/// A dependency every overridden read below watches: bumping it RELOADS the
+/// read (Riverpod: isReloading), which `.when` routes to the loading arm.
+final _gate = StateProvider<int>((ref) => 0);
 
 const _otherwise = 'Try again in a moment. If it keeps happening, contact support.';
 const _network = 'Check your connection and try again.';
@@ -290,7 +296,7 @@ void main() {
         }),
         clientRecentSessionsProvider('c1').overrideWith((ref) async => []),
       ]);
-      expect(find.text("Couldn't load Ana's personal records"), findsOneWidget);
+      expect(find.text("Couldn't load personal records"), findsOneWidget);
       expect(find.text('No personal records yet'), findsNothing,
           reason: 'THE defect: a failed read was "No personal records yet"');
       // Scoped: the sessions list beside it still answers.
@@ -317,7 +323,7 @@ void main() {
           ];
         }),
       ]);
-      expect(find.text("Couldn't load Ana's recent sessions"), findsOneWidget);
+      expect(find.text("Couldn't load recent sessions"), findsOneWidget);
       expect(find.text(_otherwise), findsOneWidget);
       expect(find.text('No sessions recorded'), findsNothing,
           reason: 'THE defect: a failed read was "No sessions recorded"');
@@ -398,6 +404,232 @@ void main() {
       expect(find.text('PERSONAL RECORDS'), findsNothing);
       expect(find.textContaining("Couldn't load"), findsNothing);
       await unmountHub(tester);
+    });
+  });
+
+  // ── Review round (UX-2): a retry/reload keeps the card, busy ────────────
+  //
+  // Riverpod 2.5: `ref.invalidate` of a failed read is a REFRESH — `.when`
+  // keeps the error arm with isLoading (the Try-again tap). A REBUILD caused
+  // by a watched dependency (e.g. the signed-in user re-emitting) is a RELOAD
+  // — `.when` takes the LOADING arm, and the card vanished: the hub section
+  // disappeared, the other three swapped it for a bare spinner. Both paths
+  // must keep "Couldn't load …" on screen with the retry busy.
+
+  /// The failure card's own retry button (not some other TextButton on screen).
+  Finder retryOf(String message) => find.descendant(
+      of: find.ancestor(of: find.text(message), matching: find.byType(SectionLoadFailure)),
+      matching: find.byType(TextButton));
+
+  void expectBusyCard(WidgetTester tester, String message, String why) {
+    expect(find.text(message), findsOneWidget, reason: why);
+    expect(tester.widget<TextButton>(retryOf(message)).onPressed, isNull,
+        reason: 'busy: the retry is disabled while the read is in flight');
+    expect(find.descendant(of: retryOf(message), matching: find.byType(CircularProgressIndicator)),
+        findsOneWidget, reason: 'busy feedback is visible in the button');
+  }
+
+  Future<void> reloadAndExpectBusyCard(WidgetTester tester, String message) async {
+    expect(find.text(message), findsOneWidget);
+    ProviderScope.containerOf(tester.element(find.text(message))).read(_gate.notifier).state++;
+    await tester.pump();
+    expectBusyCard(tester, message,
+        'THE defect (UX-2): a reload of a failed read took the loading arm and the card vanished');
+  }
+
+  Future<void> tapRetryAndExpectBusyCard(WidgetTester tester, String message) async {
+    await tester.ensureVisible(retryOf(message));
+    await tester.tap(retryOf(message));
+    await tester.pump();
+    expectBusyCard(tester, message, 'a Try-again tap keeps the card while it retries');
+  }
+
+  /// First call fails; every later call (the retry / reload) waits on [pending].
+  Future<List<T>> Function(Ref) failThenWait<T>(Completer<List<T>> pending, void Function() count) {
+    var n = 0;
+    return (ref) {
+      ref.watch(_gate);
+      count();
+      if (++n == 1) {
+        return Future<List<T>>.error(PostgrestException(message: 'boom', code: 'XX000'));
+      }
+      return pending.future;
+    };
+  }
+
+  group('Retry and reload keep the failure card, busy', () {
+    for (final mode in ['reload', 'tap']) {
+      Future<void> act(WidgetTester t, String msg) =>
+          mode == 'reload' ? reloadAndExpectBusyCard(t, msg) : tapRetryAndExpectBusyCard(t, msg);
+
+      testWidgets('Strength — exercise list ($mode)', (tester) async {
+        var calls = 0;
+        final pending = Completer<List<String>>();
+        await pumpStrength(tester, [
+          loggedExerciseNamesProvider.overrideWith(failThenWait(pending, () => calls++)),
+          exerciseProgressionProvider('Deadlift').overrideWith((ref) async => []),
+        ]);
+        await act(tester, "Couldn't load your exercises");
+        expect(calls, 2);
+        pending.complete(['Deadlift']);
+        await tester.pumpAndSettle();
+        expect(find.textContaining("Couldn't load"), findsNothing);
+        expect(find.text('EXERCISE'), findsOneWidget);
+      });
+
+      testWidgets('Strength — chart ($mode)', (tester) async {
+        var calls = 0;
+        final pending = Completer<List<Map<String, dynamic>>>();
+        await pumpStrength(tester, [
+          loggedExerciseNamesProvider.overrideWith((ref) async => ['Deadlift']),
+          exerciseProgressionProvider('Deadlift')
+              .overrideWith(failThenWait(pending, () => calls++)),
+        ]);
+        await act(tester, "Couldn't load progress for Deadlift");
+        expect(find.text('EXERCISE'), findsOneWidget, reason: 'scoped: the picker stays');
+        expect(calls, 2);
+        pending.complete([
+          {'date': '2026-11-05', 'max_weight': 100.0, 'total_volume': 500.0, 'sets_count': 1},
+        ]);
+        await tester.pumpAndSettle();
+        expect(find.textContaining("Couldn't load"), findsNothing);
+        expect(find.text('Current PR'), findsOneWidget);
+      });
+
+      testWidgets('Coach — personal records ($mode)', (tester) async {
+        var calls = 0;
+        final pending = Completer<List<Map<String, dynamic>>>();
+        await pumpCoach(tester, [
+          clientPersonalRecordsProvider('c1').overrideWith(failThenWait(pending, () => calls++)),
+          clientRecentSessionsProvider('c1').overrideWith((ref) async => []),
+        ]);
+        await act(tester, "Couldn't load personal records");
+        expect(calls, 2);
+        pending.complete([
+          {'exercise_name': 'Squat', 'weight_kg': 90.0, 'reps': 5},
+        ]);
+        await tester.pumpAndSettle();
+        expect(find.textContaining("Couldn't load"), findsNothing);
+        expect(find.text('Squat'), findsOneWidget);
+      });
+
+      testWidgets('Coach — recent sessions ($mode)', (tester) async {
+        var calls = 0;
+        final pending = Completer<List<Map<String, dynamic>>>();
+        await pumpCoach(tester, [
+          clientPersonalRecordsProvider('c1').overrideWith((ref) async => []),
+          clientRecentSessionsProvider('c1').overrideWith(failThenWait(pending, () => calls++)),
+        ]);
+        await act(tester, "Couldn't load recent sessions");
+        expect(calls, 2);
+        pending.complete([
+          {'workout_title': 'Leg Day', 'status': 'completed', 'completed_at': '2026-11-10T10:00:00Z'},
+        ]);
+        await tester.pumpAndSettle();
+        expect(find.textContaining("Couldn't load"), findsNothing);
+        expect(find.text('Leg Day'), findsOneWidget);
+      });
+
+      testWidgets('Train hub — personal records ($mode)', (tester) async {
+        var calls = 0;
+        final pending = Completer<List<Map<String, dynamic>>>();
+        await pumpHub(tester, personalRecordsProvider.overrideWith(failThenWait(pending, () => calls++)));
+        await act(tester, "Couldn't load your personal records");
+        expect(find.text('PERSONAL RECORDS'), findsOneWidget,
+            reason: 'the section stays, under its own heading');
+        expect(calls, 2);
+        pending.complete([
+          {'exercise_name': 'Bench Press', 'weight_kg': 80.0, 'reps': 5},
+        ]);
+        await tester.pumpAndSettle();
+        expect(find.textContaining("Couldn't load"), findsNothing);
+        expect(find.text('Bench Press'), findsOneWidget);
+        await unmountHub(tester);
+      });
+    }
+  });
+
+  // ── Review round: SectionLoadFailure itself (UX-1, UX-4, UX-5) ─────────
+  group('SectionLoadFailure', () {
+    Future<void> pumpCard(WidgetTester tester, {Object? error, double scale = 1}) async {
+      await tester.pumpWidget(MaterialApp(
+        builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(scale)),
+            child: child!),
+        home: Scaffold(
+          backgroundColor: Colors.black,
+          body: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            child: SectionLoadFailure(
+              what: 'your personal records',
+              error: error ?? PostgrestException(message: 'boom', code: 'XX000'),
+              busy: false,
+              onRetry: () {}),
+          ),
+        ),
+      ));
+    }
+
+    testWidgets('UX-1: the live region is the message with one label — the button is not in it',
+        (tester) async {
+      final handle = tester.ensureSemantics();
+      await pumpCard(tester);
+
+      final live = tester.getSemantics(find.text("Couldn't load your personal records"));
+      expect(live.getSemanticsData().flagsCollection.isLiveRegion, isTrue,
+          reason: 'the message is announced when it appears');
+      expect(live.label, "Couldn't load your personal records. $_otherwise",
+          reason: 'one sentence, not an empty or concatenated announcement');
+      expect(live.label, isNot(contains('Try again: load')),
+          reason: "the button's label is not part of the announcement");
+      var nested = 0;
+      bool visit(SemanticsNode n) {
+        nested++;
+        n.visitChildren(visit);
+        return true;
+      }
+      live.visitChildren(visit);
+      expect(nested, 0, reason: 'nothing (in particular the button) sits inside the live region');
+
+      final button = tester.getSemantics(find.byType(TextButton));
+      final data = button.getSemanticsData();
+      expect(data.flagsCollection.isButton, isTrue);
+      expect(button.label, 'Try again: load your personal records');
+      for (SemanticsNode? n = button; n != null; n = n.parent) {
+        expect(n.getSemanticsData().flagsCollection.isLiveRegion, isFalse,
+            reason: 'the button keeps its own node, outside the live region');
+      }
+      handle.dispose();
+    });
+
+    testWidgets('UX-1: a connection failure announces the connection hint', (tester) async {
+      final handle = tester.ensureSemantics();
+      await pumpCard(tester, error: const SocketException('offline'));
+      expect(tester.getSemantics(find.text("Couldn't load your personal records")).label,
+          "Couldn't load your personal records. $_network");
+      handle.dispose();
+    });
+
+    testWidgets('UX-4: the hint is at least 12px', (tester) async {
+      await pumpCard(tester);
+      expect(tester.widget<Text>(find.text(_otherwise)).style!.fontSize,
+          greaterThanOrEqualTo(12));
+    });
+
+    testWidgets('UX-5: 2.0 text scale on 320x568 — no overflow, retry below, >= 44 tall',
+        (tester) async {
+      tester.view
+        ..devicePixelRatio = 1
+        ..physicalSize = const Size(320, 568);
+      addTearDown(tester.view.reset);
+      await pumpCard(tester, scale: 2.0);
+      expect(tester.takeException(), isNull, reason: 'no RenderFlex overflow');
+      final retry = find.byType(TextButton);
+      expect(tester.getRect(retry).top,
+          greaterThanOrEqualTo(tester.getRect(find.text(_otherwise)).bottom),
+          reason: 'at large text the retry wraps under the message');
+      expect(tester.getSize(retry).height, greaterThanOrEqualTo(44));
+      expect(tester.getRect(retry).right, lessThanOrEqualTo(320));
     });
   });
 }

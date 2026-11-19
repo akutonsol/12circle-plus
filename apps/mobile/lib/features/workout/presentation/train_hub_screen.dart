@@ -59,6 +59,24 @@ class _TrainHubScreenState extends ConsumerState<TrainHubScreen> {
     final totalAsync        = ref.watch(totalWorkoutCountProvider);
     final activeSession     = ref.watch(activeSessionProvider);
     final prsAsync          = ref.watch(personalRecordsProvider);
+    // P0-FL-18: the Personal Records failure card, under the section's own
+    // heading — shown for an error and for a reload/retry of that error.
+    Widget prsFailure(Object? e) => Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('PERSONAL RECORDS',
+          style: TextStyle(color: _C.onSurface, fontSize: 16,
+            fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+        const SizedBox(height: 12),
+        SectionLoadFailure(
+          what: 'your personal records',
+          error: e,
+          busy: prsAsync.isLoading,
+          accent: _C.primary,
+          textColor: _C.onSurface,
+          mutedColor: _C.onSurfaceVar,
+          onRetry: () => ref.invalidate(personalRecordsProvider)),
+      ]));
     final completionAsync   = ref.watch(completionRateProvider);
     final profileAsync      = ref.watch(currentUserProfileProvider);
     final isCoach           = profileAsync.whenOrNull(data: (p) => p?['role'] == 'coach') ?? false;
@@ -326,26 +344,15 @@ class _TrainHubScreenState extends ConsumerState<TrainHubScreen> {
 
             // ── Personal Records ─────────────────────────────────────────────
             prsAsync.when(
-              loading: () => const SizedBox.shrink(),
+              // P0-FL-18: a reload of a failed read takes this arm. Keep the
+              // failure card, busy — not a section that blinks away mid-retry.
+              loading: () => prsAsync.hasError
+                  ? prsFailure(prsAsync.error)
+                  : const SizedBox.shrink(),
               // P0-FL-18: a failed read hid the section exactly as "no records
               // yet" does. Say so here, under the section's own heading; the
               // rest of the hub is unaffected.
-              error: (e, _) => Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  const Text('PERSONAL RECORDS',
-                    style: TextStyle(color: _C.onSurface, fontSize: 16,
-                      fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-                  const SizedBox(height: 12),
-                  SectionLoadFailure(
-                    what: 'your personal records',
-                    error: e,
-                    busy: prsAsync.isLoading,
-                    accent: _C.primary,
-                    textColor: _C.onSurface,
-                    mutedColor: _C.onSurfaceVar,
-                    onRetry: () => ref.invalidate(personalRecordsProvider)),
-                ])),
+              error: (e, _) => prsFailure(e),
               data: (prs) {
                 if (prs.isEmpty) return const SizedBox.shrink();
                 final top = prs.take(3).toList();
