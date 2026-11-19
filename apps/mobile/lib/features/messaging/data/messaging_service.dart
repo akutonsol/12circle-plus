@@ -2,6 +2,14 @@ import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/observability/app_failure.dart';
 
+/// Receives what a send caught when the message was NOT saved, so the caller
+/// can pick the connection hint (`isNetworkFailure`) or the try-later one.
+///
+/// A typedef, not an inline `void Function(Object)`: ERR-G1's declaration
+/// detector reads a parameter list up to the first `)`, and an inline function
+/// type would hide `sendMessage` from it.
+typedef SendFailureHandler = void Function(Object error);
+
 class MessagingService {
   final supabase = Supabase.instance.client;
 
@@ -170,7 +178,7 @@ class MessagingService {
     required String conversationId,
     required String content,
     Map<String, dynamic>? metadata,
-    void Function(Object error)? onNotSent,
+    SendFailureHandler? onNotSent,
   }) async {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return false;
