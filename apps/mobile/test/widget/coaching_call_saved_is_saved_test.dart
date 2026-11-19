@@ -141,6 +141,10 @@ class _Server extends http.BaseClient {
         for (final c in calls) {
           c['status'] = 'cancelled';
         }
+        // The changed rows, when asked back (P0-FL-39: a cancel now checks).
+        if (request.url.queryParameters.containsKey('select')) {
+          return _json([for (final c in calls) {'id': c['id']}], 200, request);
+        }
       }
       return _json([], m == 'POST' ? 201 : 200, request);
     }
@@ -148,7 +152,12 @@ class _Server extends http.BaseClient {
       // A second slot stays open, so the screen stays on its slot list (with
       // none open it shows a different state, which this file is not about).
       if (m == 'GET') return _json([if (slotOpen) _slot, _other], 200, request);
-      if (m == 'PATCH' && calls.every((c) => c['status'] != 'scheduled')) slotOpen = true;
+      if (m == 'PATCH' && calls.every((c) => c['status'] != 'scheduled')) {
+        slotOpen = true;
+        if (request.url.queryParameters.containsKey('select')) {
+          return _json([{'id': 'slot-1'}], 200, request);
+        }
+      }
       return _json([], 200, request);
     }
     if (path.endsWith('/coach_client_relationships')) {
@@ -325,7 +334,10 @@ void main() {
     testWidgets('control: a cancel that failed says so', (tester) async {
       server.callWriteFails = true;
       await cancel(tester);
-      expect(find.text('Could not cancel. Try again.'), findsOneWidget);
+      // P0-FL-39: the house voice (a 503 is the server answering, so no
+      // connection hint).
+      expect(find.text("Couldn't cancel this session — try again in a moment. "
+          'If it keeps happening, contact support.'), findsOneWidget);
       expect(posts('notifications'), 0);
     });
   });

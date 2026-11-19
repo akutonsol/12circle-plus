@@ -27,6 +27,8 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
   Object? _loadError;
   /// Slots whose delete is in flight: their button is disabled (no double fire).
   final Set<String> _deleting = {};
+  /// Sessions whose cancel is in flight: their Cancel is disabled.
+  final Set<String> _cancelling = {};
 
   /// The next step for a thrown failure; the connection hint only when it IS
   /// the connection.
@@ -121,16 +123,43 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
       ),
     );
     if (confirmed != true) return;
+    final id = call['id'] as String;
+    if (_cancelling.contains(id)) return;
+    if (mounted) setState(() => _cancelling.add(id));
+    // P0-FL-39 · step 1, the call: cancelled only when the server says the
+    // row changed. A 0-row update (RLS filters silently, or the call is
+    // already gone) answers like a saved one unless the row is asked back.
+    // On failure nothing else is written and the client is not notified.
     try {
-      await _db.from('coaching_calls').update({'status': 'cancelled'}).eq('id', call['id']);
-      if (call['availability_slot_id'] != null) {
-        await _db.from('coach_availability')
-            .update({'is_booked': false}).eq('id', call['availability_slot_id']);
+      final rows = await _db
+          .from('coaching_calls')
+          .update({'status': 'cancelled'})
+          .eq('id', id)
+          .select('id');
+      if ((rows as List).isEmpty) {
+        reportError('CoachAvailabilityScreen._cancelSession',
+            StateError('coaching_calls update matched no row'));
+        if (!mounted) return;
+        setState(() => _cancelling.remove(id));
+        messenger.showSnackBar(const SnackBar(content: Text(
+            "Couldn't cancel this session — it may already be cancelled. "
+            'Refreshing your sessions.')));
+        _load();
+        return;
       }
-    } catch (_) {
-      messenger.showSnackBar(const SnackBar(content: Text('Could not cancel. Try again.')));
+    } catch (e, st) {
+      reportError('CoachAvailabilityScreen._cancelSession', e, st);
+      if (!mounted) return;
+      setState(() => _cancelling.remove(id));
+      messenger.showSnackBar(SnackBar(content: Text(
+          "Couldn't cancel this session — ${_nextStep(e)}")));
       return;
     }
+    // Step 2, the slot. The call IS cancelled from here on, so a slot that
+    // fails to reopen is said as exactly that — never as a failed cancel —
+    // with a retry that re-sends only the slot update.
+    final slotId = call['availability_slot_id'] as String?;
+    final slotError = slotId == null ? null : await _reopenSlot(slotId);
     // Best-effort, and reported: the cancel above is saved, and a failed
     // notification thrown from here read as a failed cancel (N3).
     var notified = false;
@@ -146,9 +175,67 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
     } catch (e) {
       reportError('CoachAvailabilityScreen._cancelSession.notify', e);
     }
-    messenger.showSnackBar(SnackBar(content: Text(
-        notified ? 'Session cancelled — client notified.' : 'Session cancelled.')));
+    if (mounted) setState(() => _cancelling.remove(id));
+    final done =
+        notified ? 'Session cancelled — client notified.' : 'Session cancelled.';
+    if (slotError == null) {
+      messenger.showSnackBar(SnackBar(content: Text(done)));
+    } else {
+      _sayReopenFailed(messenger, slotId!, slotError,
+          lead: '${done.substring(0, done.length - 1)}. ');
+    }
     _load();
+  }
+
+  /// Sets the slot of a cancelled call back to open. Returns null when the
+  /// server confirmed a row changed, otherwise the failure (reported here).
+  Future<Object?> _reopenSlot(String slotId) async {
+    try {
+      final rows = await _db
+          .from('coach_availability')
+          .update({'is_booked': false})
+          .eq('id', slotId)
+          .select('id');
+      if ((rows as List).isNotEmpty) return null;
+      final e = StateError('coach_availability update matched no row');
+      reportError('CoachAvailabilityScreen._cancelSession.reopenSlot', e);
+      return e;
+    } catch (e, st) {
+      reportError('CoachAvailabilityScreen._cancelSession.reopenSlot', e, st);
+      return e;
+    }
+  }
+
+  /// "Couldn't reopen its slot" with a Reopen slot retry (a SnackBarAction:
+  /// it fires once, then disables itself — no double fire).
+  ///
+  /// UX-5 · it stays until acted on (retry or close): the slot is still
+  /// booked, and a timed toast let that pass unseen.
+  void _sayReopenFailed(ScaffoldMessengerState messenger, String slotId,
+      Object e, {String lead = ''}) {
+    final next = isNetworkFailure(e)
+        ? 'check your connection and tap Reopen slot.'
+        : 'tap Reopen slot to try again. If it keeps happening, contact '
+            'support.';
+    messenger.showSnackBar(SnackBar(
+      persist: true,
+      showCloseIcon: true,
+      content: Semantics(liveRegion: true,
+          child: Text("${lead}Couldn't reopen its slot — $next")),
+      action: SnackBarAction(
+        label: 'Reopen slot',
+        onPressed: () async {
+          final again = await _reopenSlot(slotId);
+          if (again == null) {
+            messenger.showSnackBar(
+                const SnackBar(content: Text('Slot reopened.')));
+          } else {
+            _sayReopenFailed(messenger, slotId, again);
+          }
+          if (mounted) _load();
+        },
+      ),
+    ));
   }
 
   void _showAddSheet() => showModalBottomSheet(
@@ -206,6 +293,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
                   ),
                   ..._sessions.map((c) => _SessionTile(
                         call: c,
+                        cancelling: _cancelling.contains(c['id']),
                         onCancel: () => _cancelSession(c),
                       )),
                   const SizedBox(height: 20),
@@ -257,7 +345,9 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
 class _SessionTile extends StatelessWidget {
   final Map<String, dynamic> call;
   final VoidCallback onCancel;
-  const _SessionTile({required this.call, required this.onCancel});
+  /// The cancel is in flight: the button is disabled (no double fire).
+  final bool cancelling;
+  const _SessionTile({required this.call, required this.onCancel, this.cancelling = false});
 
   @override
   Widget build(BuildContext context) {
@@ -292,15 +382,26 @@ class _SessionTile extends StatelessWidget {
           Text('$when · $type · $mins min',
             style: const TextStyle(color: _mut, fontSize: 12)),
         ])),
-        TextButton(
-          onPressed: onCancel,
-          style: TextButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            minimumSize: const Size(0, 32),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-          child: const Text('Cancel',
-            style: TextStyle(color: Color(0xFFFFB4AB), fontSize: 13, fontWeight: FontWeight.w600)),
-        ),
+        // UX-6 · a 44x44 target; while the cancel is in flight a spinner
+        // that says so takes its place (no double fire).
+        if (cancelling)
+          Semantics(
+            container: true,
+            label: 'Cancelling',
+            liveRegion: true,
+            child: const SizedBox(width: 44, height: 44,
+              child: Center(child: SizedBox(width: 18, height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Color(0xFFFFB4AB))))))
+        else
+          TextButton(
+            onPressed: onCancel,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(44, 44)),
+            child: const Text('Cancel',
+              style: TextStyle(color: Color(0xFFFFB4AB), fontSize: 13, fontWeight: FontWeight.w600)),
+          ),
       ]),
     );
   }
