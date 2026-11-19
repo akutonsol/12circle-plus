@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 
 const _bg    = Color(0xFF030303);
 const _card  = Color(0xFF0E0B16);
@@ -21,12 +22,23 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
   List<Map<String, dynamic>> _slots = [];
   List<Map<String, dynamic>> _sessions = [];
   bool _loading = true;
+  /// P0-FL-14 · the last load failed. A failed read is not "no slots" and "no
+  /// upcoming sessions": the page says so and offers Try again.
+  Object? _loadError;
+  /// Slots whose delete is in flight: their button is disabled (no double fire).
+  final Set<String> _deleting = {};
+
+  /// The next step for a thrown failure; the connection hint only when it IS
+  /// the connection.
+  static String _nextStep(Object e) => isNetworkFailure(e)
+      ? 'check your connection and try again.'
+      : 'try again in a moment. If it keeps happening, contact support.';
 
   @override
   void initState() { super.initState(); _load(); }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    setState(() { _loading = true; _loadError = null; });
     try {
       final uid = _db.auth.currentUser?.id;
       final data = await _db
@@ -55,12 +67,40 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
         _sessions = List<Map<String, dynamic>>.from(calls);
         _loading = false;
       });
-    } catch (_) { if (mounted) setState(() => _loading = false); }
+    } catch (e, st) {
+      reportError('CoachAvailabilityScreen._load', e, st);
+      if (mounted) setState(() { _loading = false; _loadError = e; });
+    }
   }
 
+  /// P0-FL-14 · a delete is done only when the server says a row went: a
+  /// thrown failure and a 0-row delete (RLS filters silently, or the slot was
+  /// already gone or booked) are both said on this page, not swallowed.
   Future<void> _delete(String id) async {
-    await _db.from('coach_availability').delete().eq('id', id);
-    _load();
+    if (_deleting.contains(id)) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _deleting.add(id));
+    try {
+      final rows = await _db
+          .from('coach_availability')
+          .delete()
+          .eq('id', id)
+          .select('id');
+      if (!mounted) return;
+      setState(() => _deleting.remove(id));
+      if ((rows as List).isEmpty) {
+        messenger.showSnackBar(const SnackBar(content: Text(
+            "Couldn't remove this slot — it may already be gone or booked. "
+            'Refreshing your list.')));
+      }
+      _load();
+    } catch (e, st) {
+      reportError('CoachAvailabilityScreen._delete', e, st);
+      if (!mounted) return;
+      setState(() => _deleting.remove(id));
+      messenger.showSnackBar(SnackBar(content: Text(
+          "Couldn't remove this slot — ${_nextStep(e)}")));
+    }
   }
 
   Future<void> _cancelSession(Map<String, dynamic> call) async {
@@ -140,13 +180,19 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
         title: const Text('Manage Availability',
           style: TextStyle(color: _wht, fontSize: 17, fontWeight: FontWeight.w700)),
         actions: [
+          // P0-FL-14 (UX-2) · while the load has failed the coach cannot see
+          // the schedule, so adding a slot to it is disabled until it loads.
           IconButton(
+            tooltip: 'Add slot',
             icon: const Icon(Icons.add_circle_outline_rounded, color: _tert, size: 24),
-            onPressed: _showAddSheet),
+            onPressed: _loadError != null ? null : _showAddSheet),
         ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: _brand))
+          : _loadError != null
+          ? _LoadFailed(message: "Couldn't load your availability — "
+                '${_nextStep(_loadError!)}', onRetry: _load)
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
@@ -185,7 +231,9 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
                         style: const TextStyle(color: _tert, fontSize: 13, fontWeight: FontWeight.w700,
                           letterSpacing: 0.5)),
                     ),
-                    ...entry.value.map((s) => _SlotTile(slot: s, onDelete: () => _delete(s['id'] as String))),
+                    ...entry.value.map((s) => _SlotTile(slot: s,
+                        deleting: _deleting.contains(s['id']),
+                        onDelete: () => _delete(s['id'] as String))),
                   ]);
                 }),
               ],
@@ -261,7 +309,8 @@ class _SessionTile extends StatelessWidget {
 class _SlotTile extends StatelessWidget {
   final Map<String, dynamic> slot;
   final VoidCallback onDelete;
-  const _SlotTile({required this.slot, required this.onDelete});
+  final bool deleting;
+  const _SlotTile({required this.slot, required this.onDelete, this.deleting = false});
 
   @override
   Widget build(BuildContext context) {
@@ -297,8 +346,12 @@ class _SlotTile extends StatelessWidget {
         ])),
         if (!isBooked)
           IconButton(
-            icon: const Icon(Icons.delete_outline_rounded, color: _mut, size: 20),
-            onPressed: onDelete)
+            tooltip: 'Remove slot',
+            icon: deleting
+                ? const SizedBox(width: 18, height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: _mut))
+                : const Icon(Icons.delete_outline_rounded, color: _mut, size: 20),
+            onPressed: deleting ? null : onDelete)
         else
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -538,5 +591,38 @@ class _DropdownField<T> extends StatelessWidget {
       value: value, items: items, onChanged: onChanged,
       dropdownColor: _card, isExpanded: true, underline: const SizedBox(),
       icon: const Icon(Icons.keyboard_arrow_down_rounded, color: _mut)),
+  );
+}
+
+/// P0-FL-14 · a failed load stated with a way to read it again. Scrolls so
+/// large text never overflows; a live region so a screen reader hears it.
+class _LoadFailed extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+  const _LoadFailed({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.all(32),
+      child: Semantics(
+        liveRegion: true,
+        container: true,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.cloud_off_rounded, color: _mut, size: 40),
+          const SizedBox(height: 12),
+          Text(message, textAlign: TextAlign.center,
+            style: const TextStyle(color: _wht, fontSize: 15, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 16),
+          // A retry swaps this view for the spinner, so it cannot fire twice.
+          OutlinedButton(
+            onPressed: onRetry,
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size(44, 44),
+              foregroundColor: _brand, side: const BorderSide(color: _brand)),
+            child: const Text('Try again', style: TextStyle(fontWeight: FontWeight.w700))),
+        ]),
+      ),
+    ),
   );
 }
