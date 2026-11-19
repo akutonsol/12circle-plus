@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/core/router/app_router.dart';
+import 'package:circle_fitness/features/auth/data/auth_service.dart';
+import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/auth/presentation/login_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -23,24 +25,25 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 // /intake) routes exactly as before.
 
 const _uid = '00000000-0000-4000-8000-0000000000f1';
+const _otherUid = '00000000-0000-4000-8000-0000000000f2';
 
 String _b64(Map<String, Object?> m) =>
     base64Url.encode(utf8.encode(jsonEncode(m))).replaceAll('=', '');
 
-String _jwt() {
+String _jwt([String uid = _uid]) {
   final exp = DateTime.now().add(const Duration(days: 3650)).millisecondsSinceEpoch ~/ 1000;
   return '${_b64({'alg': 'HS256', 'typ': 'JWT'})}.'
-      '${_b64({'sub': _uid, 'role': 'authenticated', 'exp': exp, 'aud': 'authenticated'})}.'
+      '${_b64({'sub': uid, 'role': 'authenticated', 'exp': exp, 'aud': 'authenticated'})}.'
       'not-verified-client-side';
 }
 
-Map<String, Object?> _session() => {
-      'access_token': _jwt(),
+Map<String, Object?> _session([String uid = _uid]) => {
+      'access_token': _jwt(uid),
       'token_type': 'bearer',
       'expires_in': 315360000,
       'refresh_token': 'test-refresh',
       'user': {
-        'id': _uid,
+        'id': uid,
         'email': 'member@example.com',
         'app_metadata': {},
         'user_metadata': {},
@@ -62,12 +65,35 @@ class _MemoryStore extends GotrueAsyncStorage {
 
 enum _Read { row, missingRow, network, serverError }
 
+/// The app's AuthService with a steerable sign-out: it can hang ([gate]) or
+/// fail ([error]) WITHOUT clearing the session — the "sign-out failed, still
+/// signed in" case gotrue itself does not produce.
+class _AuthService extends AuthService {
+  Completer<void>? gate;
+  Object? error;
+  @override
+  Future<void> signOut() async {
+    if (gate != null) await gate!.future;
+    if (error != null) throw error!;
+    return super.signOut();
+  }
+}
+
 /// Fake auth + PostgREST. The profile read is what every test steers.
 class _Server extends http.BaseClient {
   _Read profile = _Read.row;
   String role = 'client';
   Object? onboardingComplete = true;
   int profileReads = 0;
+
+  /// The account the token endpoint signs in.
+  String tokenUid = _uid;
+
+  /// Per-account role; accounts not listed get [role].
+  final Map<String, String> roleByUid = {};
+
+  /// The account each profile read asked for, in order.
+  final List<String> readUids = [];
 
   /// When set, profile reads are counted at once but not answered until it
   /// completes — a read "in flight".
@@ -76,13 +102,15 @@ class _Server extends http.BaseClient {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final path = request.url.path;
-    if (path.endsWith('/auth/v1/token')) return _json(_session(), 200, request);
+    if (path.endsWith('/auth/v1/token')) return _json(_session(tokenUid), 200, request);
     if (path.endsWith('/auth/v1/logout')) {
       return http.StreamedResponse(const Stream.empty(), 204, request: request);
     }
     final single = request.headers['Accept']?.contains('vnd.pgrst.object') ?? false;
     if (path.endsWith('/user_profiles')) {
       profileReads++;
+      final asked = (request.url.queryParameters['id'] ?? '').replaceFirst('eq.', '');
+      readUids.add(asked);
       if (gate != null) await gate!.future;
       switch (profile) {
         case _Read.network:
@@ -92,7 +120,10 @@ class _Server extends http.BaseClient {
         case _Read.missingRow:
           return _json(single ? null : [], 200, request);
         case _Read.row:
-          final row = {'role': role, 'onboarding_complete': onboardingComplete};
+          final row = {
+            'role': roleByUid[asked] ?? role,
+            'onboarding_complete': onboardingComplete,
+          };
           return _json(single ? row : [row], 200, request);
       }
     }
@@ -180,7 +211,11 @@ void main() {
       ..role = 'client'
       ..onboardingComplete = true
       ..profileReads = 0
-      ..gate = null;
+      ..gate = null
+      ..tokenUid = _uid;
+    server.roleByUid.clear();
+    server.readUids.clear();
+    accountReadFailureNotifier.value = null;
     reported.clear();
     setFailureSink(reported.add);
   });
@@ -198,15 +233,16 @@ void main() {
     }
   }
 
-  Future<GoRouter> pumpLogin(WidgetTester tester) async {
+  Future<GoRouter> pumpLogin(WidgetTester tester,
+      {List<Override> overrides = const [], bool settle = true}) async {
     final router = _loginOnlyRouter();
-    final container = ProviderContainer();
+    final container = ProviderContainer(overrides: overrides);
     addTearDown(container.dispose);
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
       child: MaterialApp.router(routerConfig: router),
     ));
-    await _settle(tester);
+    if (settle) await _settle(tester);
     return router;
   }
 
@@ -420,6 +456,280 @@ void main() {
       final router = await pumpApp(tester, '/forgot-password');
       expect(_path(router), '/forgot-password');
       expect(server.profileReads, 0);
+      await tester.pumpWidget(const SizedBox());
+    });
+  });
+
+  // ── Review round (UX-1..5, SEC-F2, QA a–d, UX-2) ─────────────────────────
+  group('review round', () {
+    Future<GoRouter> pumpApp(WidgetTester tester, String location) async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final router = container.read(routerProvider);
+      router.go(location);
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp.router(routerConfig: router),
+      ));
+      await _settle(tester);
+      return router;
+    }
+
+    Future<void> frames(WidgetTester tester) async {
+      for (var i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+    }
+
+    testWidgets('UX-1: while the read is in flight (first frame included) the screen says '
+        '"Loading your account…" — no fields, no Apple/Google — and offers Sign out',
+        (tester) async {
+      await signIn();
+      server.gate = Completer<void>();
+      server.profile = _Read.serverError;
+      final router = await pumpLogin(tester, settle: false);
+
+      void expectLoading(String when) {
+        expect(find.text('Loading your account…'), findsOneWidget, reason: when);
+        expect(find.byType(TextField), findsNothing,
+            reason: '$when: a signed-in user is not shown an empty credentials form');
+        expect(find.text('Continue with Google'), findsNothing, reason: when);
+        expect(find.text('Continue with Apple'), findsNothing, reason: when);
+        expect(find.text('Sign in'), findsNothing, reason: when);
+        expect(find.text('Sign out'), findsOneWidget, reason: when);
+      }
+
+      expectLoading('first frame');
+      final live = tester.getSemantics(find.byKey(const Key('login-account-loading')));
+      expect(live.flagsCollection.isLiveRegion, isTrue);
+      await frames(tester);
+      expect(server.profileReads, 1);
+      expectLoading('read in flight');
+
+      server.gate!.complete();
+      await _settle(tester);
+      expect(find.text(_supportMsg), findsOneWidget);
+      expect(_path(router), '/login');
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('UX-1 + SEC-F2: Sign out while the read is in flight leaves the session; '
+        'the late result is dropped, not routed', (tester) async {
+      await signIn();
+      server.gate = Completer<void>();
+      server.role = 'coach';
+      final router = await pumpLogin(tester, settle: false);
+      await frames(tester);
+      expect(find.text('Loading your account…'), findsOneWidget);
+
+      await tester.tap(find.text('Sign out'));
+      await frames(tester);
+      expect(Supabase.instance.client.auth.currentSession, isNull);
+      expect(find.text('Sign in'), findsOneWidget);
+
+      server.gate!.complete();
+      await _settle(tester);
+      expect(_path(router), '/login',
+          reason: 'a read that finished after sign-out describes no one signed in');
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('UX-3: a repeat failure after Try again is a NEW live region (re-announced)',
+        (tester) async {
+      await signIn();
+      server.profile = _Read.serverError;
+      await pumpLogin(tester);
+      final notice = find.byKey(const Key('login-account-read-failure'));
+      expect(notice, findsOneWidget);
+      final first = tester.element(notice);
+
+      await tester.tap(find.text('Try again'));
+      await _settle(tester);
+      expect(server.profileReads, 2);
+      expect(notice, findsOneWidget);
+      expect(identical(tester.element(notice), first), isFalse,
+          reason: 'the same element keeps its semantics node: a screen reader '
+              'hears nothing new on the second failure');
+      expect(tester.getSemantics(notice).flagsCollection.isLiveRegion, isTrue);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('UX-5: after Sign out from the failure the email and password are cleared',
+        (tester) async {
+      await signOut();
+      server.profile = _Read.serverError;
+      await pumpLogin(tester);
+      await emailSignIn(tester);
+      expect(find.text(_supportMsg), findsOneWidget);
+
+      await tester.tap(find.text('Sign out'));
+      await _settle(tester);
+      expect(find.text('Sign in'), findsOneWidget);
+      final fields = tester.widgetList<TextField>(find.byType(TextField)).toList();
+      expect(fields, hasLength(2));
+      expect(fields.map((f) => f.controller!.text), everyElement(isEmpty));
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('SEC-F2: another account signs in while the read is out — the first '
+        "account's result is dropped and the read re-runs for the new one", (tester) async {
+      await signIn();
+      server
+        ..gate = Completer<void>()
+        ..roleByUid[_uid] = 'client'
+        ..roleByUid[_otherUid] = 'coach';
+      final router = await pumpLogin(tester, settle: false);
+      await frames(tester);
+      expect(server.readUids, [_uid]);
+
+      server.tokenUid = _otherUid;
+      await tester.runAsync(signIn);
+      expect(Supabase.instance.client.auth.currentUser?.id, _otherUid);
+      server.gate!.complete();
+      await _settle(tester);
+
+      expect(server.readUids, [_uid, _otherUid]);
+      expect(_path(router), '/coach-dashboard',
+          reason: "THE defect: the first account's role (client → /home) routed the second");
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('SEC-F2: Try again does nothing while a sign-out is in flight', (tester) async {
+      await signIn();
+      server.profile = _Read.serverError;
+      final auth = _AuthService()..gate = Completer<void>();
+      await pumpLogin(tester, overrides: [authServiceProvider.overrideWithValue(auth)]);
+      expect(find.text(_supportMsg), findsOneWidget);
+      server.profileReads = 0;
+
+      await tester.tap(find.text('Sign out'));
+      await frames(tester);
+      expect(find.text('Signing out…'), findsOneWidget);
+      await tester.tap(find.text('Try again'));
+      await frames(tester);
+      expect(server.profileReads, 0, reason: 'a read during sign-out races it');
+
+      auth.gate!.complete();
+      await _settle(tester);
+      expect(Supabase.instance.client.auth.currentSession, isNull);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('QA a: a sign-out that FAILS (session still there) says so and keeps the notice',
+        (tester) async {
+      await signIn();
+      server.profile = _Read.serverError;
+      final auth = _AuthService()
+        ..error = const AuthException('internal', statusCode: '500');
+      await pumpLogin(tester, overrides: [authServiceProvider.overrideWithValue(auth)]);
+      expect(find.text(_supportMsg), findsOneWidget);
+
+      await tester.tap(find.text('Sign out'));
+      await frames(tester);
+      expect(Supabase.instance.client.auth.currentSession, isNotNull);
+      expect(
+          find.text("Couldn't sign you out — try again in a moment. "
+              'If it keeps happening, contact support.'),
+          findsOneWidget);
+      expect(find.text(_supportMsg), findsOneWidget, reason: 'still signed in, still unknown');
+      expect(find.text('Sign out'), findsOneWidget);
+      expect(find.textContaining('internal'), findsNothing);
+      expect(reported.map((f) => f.origin), contains('LoginScreen._signOutAfterFailure'));
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 5));
+    });
+
+    testWidgets('QA b: an email sign-in makes exactly ONE profile read', (tester) async {
+      await signOut();
+      server.role = 'coach';
+      final router = await pumpLogin(tester);
+      await emailSignIn(tester);
+      expect(_path(router), '/coach-dashboard');
+      expect(server.profileReads, 1,
+          reason: 'the signedIn listener must not start a second read');
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('QA b: an email sign-in whose read FAILS still makes exactly ONE read',
+        (tester) async {
+      await signOut();
+      server.profile = _Read.serverError;
+      await pumpLogin(tester);
+      await emailSignIn(tester);
+      expect(find.text(_supportMsg), findsOneWidget);
+      expect(server.profileReads, 1);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('QA d: a signedIn event while the read is in flight starts no second read',
+        (tester) async {
+      await signIn();
+      server.gate = Completer<void>();
+      server.role = 'admin';
+      final router = await pumpLogin(tester, settle: false);
+      await frames(tester);
+      expect(server.profileReads, 1);
+
+      await tester.runAsync(signIn); // same account again → a signedIn event
+      await frames(tester);
+      expect(server.profileReads, 1, reason: 'busy guard: one read in flight');
+
+      server.gate!.complete();
+      await _settle(tester);
+      expect(_path(router), '/admin-dashboard');
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    for (final (role, expected) in [('coach', '/coach-dashboard'), ('admin', '/admin-dashboard')]) {
+      testWidgets('QA c: redirect control — a signed-in $role on /login goes to $expected',
+          (tester) async {
+        await signIn();
+        server.role = role;
+        final router = await pumpApp(tester, '/login');
+        expect(_path(router), expected);
+        expect(reported.map((f) => f.origin), isNot(contains('appRouter.redirect.roleRead')));
+        await tester.pumpWidget(const SizedBox());
+        // The coach dashboard opens realtime channels; their timers outlive
+        // the tree unless the channels are removed.
+        await tester.runAsync(() => Supabase.instance.client.removeAllChannels());
+        await tester.pump(const Duration(minutes: 2));
+      });
+    }
+
+    testWidgets('UX-2: the router hands its failed read to the screen — the screen does not '
+        'repeat it (no second back-off before the notice)', (tester) async {
+      await signIn();
+      server.profile = _Read.serverError;
+      final router = await pumpApp(tester, '/login');
+      expect(_path(router), '/login');
+      expect(find.text(_supportMsg), findsOneWidget);
+      // The router may evaluate its redirect more than once (its refresh
+      // listenable); what matters is that every read was the router's.
+      final origins = reported.map((f) => f.origin).toList();
+      expect(origins, isNot(contains('LoginScreen._handlePostAuthNavigation')),
+          reason: 'the screen re-ran the read the router just failed');
+      expect(server.profileReads, origins.length);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('UX-2: a connection failure in the router reaches the screen with the '
+        'connection wording', (tester) async {
+      await signIn();
+      server.profile = _Read.network;
+      await pumpApp(tester, '/signup');
+      expect(find.text(_connectionMsg), findsOneWidget);
+      expect(reported.map((f) => f.origin),
+          isNot(contains('LoginScreen._handlePostAuthNavigation')));
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('UX-2: a handed-off failure for ANOTHER account is not shown', (tester) async {
+      await signIn();
+      server.role = 'coach';
+      accountReadFailureNotifier.value = (userId: _otherUid, error: Exception('x'));
+      final router = await pumpLogin(tester);
+      expect(find.text(_supportMsg), findsNothing);
+      expect(_path(router), '/coach-dashboard');
       await tester.pumpWidget(const SizedBox());
     });
   });

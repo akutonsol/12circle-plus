@@ -7,7 +7,8 @@ import '../domain/auth_provider.dart';
 import '../../../core/errors/auth_error_text.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
-import '../../../core/router/app_router.dart' show authErrorNotifier;
+import '../../../core/router/app_router.dart'
+    show accountReadFailureNotifier, authErrorNotifier;
 import 'widgets/auth_design.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
@@ -23,6 +24,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   void initState() {
     super.initState();
+    final session = Supabase.instance.client.auth.currentSession;
+    // The router's own role read just failed for this user: show that result
+    // now rather than repeat the read (and its back-off) before saying so.
+    // Taken once, and only for the account it was read for.
+    final handoff = accountReadFailureNotifier.value;
+    if (handoff != null) {
+      accountReadFailureNotifier.value = null;
+      if (session != null && handoff.userId == session.user.id) {
+        _accountReadError = handoff.error;
+        _failureCount++;
+      }
+    }
+    // Signed in with no result yet: the first frame is "Loading your
+    // account…", never an empty credentials form.
+    _awaitingFirstRead = session != null && _accountReadError == null;
+
     // If an OAuth redirect came back with an error, main() stashed a message.
     // Show it once now that the login screen is up, then clear it.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -31,11 +48,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         authErrorNotifier.value = null;
         _showError(msg);
       }
+      if (!mounted || !_awaitingFirstRead) return;
       // The router only leaves a signed-in user on /login when it could not
       // read their account (it no longer guesses '/home'). Run the read here
       // so the user gets the failure notice and Try again, not a bare form.
-      if (mounted && Supabase.instance.client.auth.currentSession != null) {
+      if (Supabase.instance.client.auth.currentSession != null) {
         _handlePostAuthNavigation();
+      } else {
+        setState(() => _awaitingFirstRead = false);
       }
     });
   }
@@ -63,22 +83,63 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   bool _signingOut = false;
 
+  /// Signed in, and the first role read has not started yet (the first
+  /// frame): render "Loading your account…", not the credentials form.
+  bool _awaitingFirstRead = false;
+
+  /// Bumped on every failure, so a repeat failure after Try again rebuilds
+  /// the notice as a NEW live region and is announced again.
+  int _failureCount = 0;
+
   Future<void> _handlePostAuthNavigation() async {
-    if (!mounted || _routing) return;
+    if (!mounted || _routing || _signingOut) return;
     // A failure notice stays up while Try again runs (the button shows
     // progress); success navigates away, another failure replaces it.
-    setState(() => _routing = true);
+    setState(() {
+      _routing = true;
+      _awaitingFirstRead = false;
+    });
     try {
-      final userId = Supabase.instance.client.auth.currentUser?.id;
-      if (userId != null) {
-        final profile = await Supabase.instance.client
-            .from('user_profiles')
-            .select('role, onboarding_complete')
-            .eq('id', userId)
-            .maybeSingle();
+      final auth = Supabase.instance.client.auth;
+      var userId = auth.currentUser?.id;
+      if (userId == null) {
+        if (mounted) context.go('/home');
+        return;
+      }
+      while (true) {
+        Map<String, dynamic>? profile;
+        Object? error;
+        try {
+          profile = await Supabase.instance.client
+              .from('user_profiles')
+              .select('role, onboarding_complete')
+              .eq('id', userId!)
+              .maybeSingle();
+        } catch (e, st) {
+          error = e;
+          reportError('LoginScreen._handlePostAuthNavigation', e, st);
+        }
+        if (!mounted) return;
+        // SEC-F2: the account may have changed while the read was out (a
+        // sign-out, or another account signing in). That result describes
+        // someone else — drop it, and read again for whoever is signed in now.
+        final nowId = auth.currentUser?.id;
+        if (nowId != userId) {
+          if (nowId == null) return;
+          userId = nowId;
+          continue;
+        }
+        if (error != null) {
+          // Was `catch (_) { context.go('/home'); }`: a coach, admin or vendor
+          // whose role read failed was dropped into the client app.
+          setState(() {
+            _accountReadError = error;
+            _failureCount++;
+          });
+          return;
+        }
         final role = profile?['role'] as String? ?? 'client';
         final needsOnboarding = profile?['onboarding_complete'] == false;
-        if (!mounted) return;
         if (role == 'coach') {
           context.go('/coach-dashboard');
         } else if (role == 'admin') {
@@ -90,14 +151,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         } else {
           context.go('/home');
         }
-      } else {
-        if (mounted) context.go('/home');
+        return;
       }
-    } catch (e, st) {
-      // Was `catch (_) { context.go('/home'); }`: a coach, admin or vendor
-      // whose role read failed was dropped into the client app.
-      reportError('LoginScreen._handlePostAuthNavigation', e, st);
-      if (mounted) setState(() => _accountReadError = e);
     } finally {
       if (mounted) setState(() => _routing = false);
     }
@@ -117,7 +172,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
     setState(() {
       _signingOut = false;
-      if (!stillSignedIn) _accountReadError = null;
+      if (!stillSignedIn) {
+        _accountReadError = null;
+        _awaitingFirstRead = false;
+        // The next person at the sign-in form should not find this
+        // account's credentials already filled in.
+        _emailCtrl.clear();
+        _passwordCtrl.clear();
+      }
     });
     if (stillSignedIn) {
       _showError(isNetworkFailure(result.error)
@@ -176,20 +238,65 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     final message = isNetworkFailure(_accountReadError)
         ? "Couldn't load your account — check your connection and try again."
         : "Couldn't load your account — try again in a moment. If it keeps happening, contact support.";
+    // Keyed by the failure count: a repeat failure after Try again is a new
+    // live region, so a screen reader announces it again.
+    return KeyedSubtree(
+      key: ValueKey('login-account-read-failure-$_failureCount'),
+      child: Semantics(
+        liveRegion: true,
+        container: true,
+        child: Container(
+          key: const Key('login-account-read-failure'),
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            // AuthColors.amber is the documented token for this notice block.
+            color: AuthColors.amber.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AuthColors.amber.withValues(alpha: 0.4)),
+          ),
+          child: Text(message,
+              style: const TextStyle(color: AuthColors.text, fontSize: 14, height: 1.45)),
+        ),
+      ),
+    );
+  }
+
+  /// Shown while a signed-in user's role read is in flight (first frame
+  /// included): no credentials form, no social buttons — just progress.
+  Widget _accountLoading() {
     return Semantics(
       liveRegion: true,
       container: true,
-      child: Container(
-        key: const Key('login-account-read-failure'),
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: const Color(0x26FF6B6B),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0x66FF6B6B)),
-        ),
-        child: Text(message,
-            style: const TextStyle(color: AuthColors.text, fontSize: 14, height: 1.45)),
+      child: const Row(
+        key: Key('login-account-loading'),
+        children: [
+          SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(color: AuthColors.purpleLight, strokeWidth: 2.5),
+          ),
+          SizedBox(width: 12),
+          Expanded(
+            child: Text('Loading your account…',
+                style: TextStyle(color: AuthColors.sub, fontSize: 15, height: 1.45)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 48pt; TextButton is a Semantics button named by its text, and is
+  /// disabled while the sign-out is in flight.
+  Widget _signOutButton() {
+    return SizedBox(
+      width: double.infinity,
+      height: 48,
+      child: TextButton(
+        key: const Key('login-account-read-sign-out'),
+        onPressed: _signingOut ? null : _signOutAfterFailure,
+        child: Text(_signingOut ? 'Signing out…' : 'Sign out',
+            style: const TextStyle(color: AuthColors.purpleLight, fontSize: 15, fontWeight: FontWeight.w500)),
       ),
     );
   }
@@ -226,26 +333,25 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           // AuthButton is 52pt, a Semantics button named by its label, and
           // takes no tap while [loading] — so a read in flight cannot be
           // fired twice (and _handlePostAuthNavigation guards on _routing).
+          // Off while signing out: a read then would race the sign-out.
           AuthButton(
             label: 'Try again',
             showArrow: false,
             loading: _routing,
-            onTap: _handlePostAuthNavigation,
+            onTap: _signingOut ? null : _handlePostAuthNavigation,
           ),
           const SizedBox(height: 12),
-          // 48pt; TextButton is a Semantics button named by its text, and is
-          // disabled while the sign-out is in flight.
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: TextButton(
-              key: const Key('login-account-read-sign-out'),
-              onPressed: _signingOut ? null : _signOutAfterFailure,
-              child: Text(_signingOut ? 'Signing out…' : 'Sign out',
-                  style: const TextStyle(color: AuthColors.purpleLight, fontSize: 15, fontWeight: FontWeight.w500)),
-            ),
-          ),
+          _signOutButton(),
         ],
+      );
+    }
+
+    if (Supabase.instance.client.auth.currentSession != null &&
+        (_routing || _awaitingFirstRead)) {
+      return AuthScaffold(
+        title: 'Welcome back',
+        notice: _accountLoading(),
+        children: [_signOutButton()],
       );
     }
 
@@ -267,7 +373,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           child: const Text('Forgot password?',
             style: TextStyle(color: AuthColors.purpleLight, fontSize: 13, fontWeight: FontWeight.w500)))),
         const SizedBox(height: 22),
-        AuthButton(label: 'Sign in', loading: isLoading || _routing, onTap: _signIn),
+        // A role read in flight while signed in shows the loading view, not
+        // this form; one still finishing for an account that has signed out
+        // is dropped on return and must not lock the form meanwhile.
+        AuthButton(label: 'Sign in', loading: isLoading, onTap: _signIn),
         const SizedBox(height: 22),
         const AuthDivider(),
         const SizedBox(height: 22),
