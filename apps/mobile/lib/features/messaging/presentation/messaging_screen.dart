@@ -361,25 +361,30 @@ class _LoadFailure extends StatelessWidget {
   const _LoadFailure({required this.network, required this.busy, required this.onRetry});
 
   @override
-  Widget build(BuildContext context) => SizedBox(
-        // Bounded because FIT-005 put this inside a scroll view.
-        height: 320,
+  Widget build(BuildContext context) => ConstrainedBox(
+        // Inside FIT-005's scroll view: at least the old 320 so it still reads
+        // as the screen's answer, but free to grow — at large text sizes a
+        // fixed height clipped the copy and pushed Try again out of reach.
+        constraints: const BoxConstraints(minHeight: 320),
         child: Center(
           child: Padding(
             padding: const EdgeInsets.all(32),
-            child: Semantics(
-              liveRegion: true,
-              container: true,
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
                 Icon(Icons.error_outline, color: _brand.withValues(alpha: 0.3), size: 52),
                 const SizedBox(height: 16),
-                Text(
-                  network
-                      ? "Couldn't load your messages — check your connection and try again."
-                      : "Couldn't load your messages — try again in a moment. "
-                          'If it keeps happening, contact support.',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: _white, fontSize: 15, fontWeight: FontWeight.w600)),
+                // The live region is the notice alone: wrapping the button too
+                // would re-announce on every Try again ↔ Retrying flip.
+                Semantics(
+                  liveRegion: true,
+                  container: true,
+                  child: Text(
+                    network
+                        ? "Couldn't load your messages — check your connection and try again."
+                        : "Couldn't load your messages — try again in a moment. "
+                            'If it keeps happening, contact support.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: _white, fontSize: 15, fontWeight: FontWeight.w600)),
+                ),
                 const SizedBox(height: 18),
                 Semantics(
                   // Its own node, or the label merges into the notice above.
@@ -409,7 +414,6 @@ class _LoadFailure extends StatelessWidget {
                   ),
                 ),
               ]),
-            ),
           ),
         ),
       );

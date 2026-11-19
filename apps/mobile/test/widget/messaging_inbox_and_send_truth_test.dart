@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/core/realtime/realtime.dart';
@@ -9,6 +10,8 @@ import 'package:circle_fitness/features/messaging/domain/messaging_provider.dart
 import 'package:circle_fitness/features/messaging/presentation/chat_screen.dart';
 import 'package:circle_fitness/features/messaging/presentation/messaging_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -237,6 +240,73 @@ void main() {
       semantics.dispose();
     });
 
+    // UX-1 · at 2x text on a small phone the fixed 320 px box clipped the
+    // notice and pushed Try again outside its own bounds (overflow, untappable).
+    testWidgets('2x text on a 320x568 phone: no overflow, Try again reachable',
+        (t) async {
+      server.conversationsRead = _ReadFailure.server;
+      await t.binding.setSurfaceSize(const Size(320, 568));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      await t.pumpWidget(ProviderScope(
+        overrides: [
+          tableTickerProvider.overrideWith((ref, table) => Stream.value(0)),
+          currentUserProfileProvider
+              .overrideWith((ref) async => {'id': _uid, 'role': 'coach'}),
+        ],
+        child: MaterialApp(
+          builder: (c, child) => MediaQuery(
+              data: MediaQuery.of(c)
+                  .copyWith(textScaler: const TextScaler.linear(2.0)),
+              child: child!),
+          home: const MessagingScreen(),
+        ),
+      ));
+      await settle(t);
+
+      expect(t.takeException(), isNull,
+          reason: 'the failure notice must grow with the text, not overflow');
+      expect(find.text(_inboxOther), findsOneWidget);
+
+      final retry = find.text('Try again');
+      await t.scrollUntilVisible(retry, 100,
+          scrollable: find.byType(Scrollable).first);
+      await t.pump();
+      final before = server.conversationReads;
+      await t.tap(retry); // warns (and the count stays) if it is not hittable
+      await t.pump(const Duration(milliseconds: 50));
+      expect(server.conversationReads, before + 1,
+          reason: 'Try again must be reachable and tappable at 2x text');
+      await settle(t);
+    });
+
+    // UX-2 · the live region is the notice only; the button (whose label flips
+    // Try again ↔ Retrying) keeps its own, non-live node.
+    testWidgets('the live region holds the message, not the button', (t) async {
+      final semantics = t.ensureSemantics();
+      server.conversationsRead = _ReadFailure.server;
+      await openInbox(t);
+
+      bool inLiveRegion(Finder f) {
+        SemanticsNode? n = t.getSemantics(f);
+        while (n != null) {
+          if (n.getSemanticsData().flagsCollection.isLiveRegion) return true;
+          n = n.parent;
+        }
+        return false;
+      }
+
+      final message = t.getSemantics(find.text(_inboxOther));
+      expect(message.getSemanticsData().flagsCollection.isLiveRegion, isTrue);
+      expect(message.label, contains("Couldn't load your messages"));
+      expect(message.label, isNot(contains('Try again')));
+      expect(inLiveRegion(find.bySemanticsLabel('Try again')), isFalse,
+          reason: 'a live region around the button re-announces each '
+              'Try again ↔ Retrying flip');
+      final button = t.getSemantics(find.bySemanticsLabel('Try again'));
+      expect(button.getSemanticsData().flagsCollection.isButton, isTrue);
+      semantics.dispose();
+    });
+
     testWidgets('an empty inbox keeps today\'s empty copy', (t) async {
       await openInbox(t);
 
@@ -363,6 +433,53 @@ void main() {
           reason: 'the text is not handed back for a resend');
 
       // Let any SnackBar / scroll timers run out before teardown.
+      await t.pump(const Duration(seconds: 5));
+    });
+
+    // QA minor · the photo upload's catch used to record nothing.
+    testWidgets('a refused photo upload is recorded and reported, not hidden',
+        (t) async {
+      final dir = await t.runAsync(
+          () => Directory.systemTemp.createTemp('fl13_photo'));
+      final photo = File('${dir!.path}/p.jpg');
+      await t.runAsync(() => photo.writeAsBytes(const [0xFF, 0xD8, 0xFF]));
+      addTearDown(() => dir.deleteSync(recursive: true));
+      const channel = MethodChannel('plugins.flutter.io/image_picker');
+      t.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel,
+          (call) async => call.method == 'pickImage' ? photo.path : null);
+      addTearDown(() => t.binding.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null));
+
+      server
+        ..mode = WriteMode.serverError
+        ..modeAppliesTo = (line) => line.contains('/storage/v1/object');
+      final svc = _RealSendThread();
+      addTearDown(svc.dispose);
+      t.view
+        ..devicePixelRatio = 1
+        ..physicalSize = const Size(1200, 2400);
+      addTearDown(t.view.reset);
+      await t.pumpWidget(ProviderScope(
+        overrides: [messagingServiceProvider.overrideWithValue(svc)],
+        child: const MaterialApp(home: ChatScreen()),
+      ));
+      for (var i = 0; i < 10; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+
+      await t.tap(find.byIcon(Icons.image_outlined));
+      for (var i = 0; i < 20; i++) {
+        await t.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)));
+        await t.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(server.writes.where((w) => w.contains('/storage/v1/object')),
+          isNotEmpty, reason: 'the upload was attempted');
+      expect(server.writes.where(_isMessageInsert), isEmpty);
+      expect(origins(), contains('ChatScreen._sendPhoto'),
+          reason: 'this catch used to swallow the failure unrecorded');
+      expect(find.text('Failed to send photo'), findsOneWidget);
       await t.pump(const Duration(seconds: 5));
     });
   });
