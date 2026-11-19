@@ -110,9 +110,6 @@ void main() {
     late final String provider = File(
             '${_mobileRoot().path}/lib/features/workout/domain/workout_provider.dart')
         .readAsStringSync();
-    late final String trainHub = File(
-            '${_mobileRoot().path}/lib/features/workout/presentation/train_hub_screen.dart')
-        .readAsStringSync();
     late final String banner = File(
             '${_mobileRoot().path}/lib/features/workout/presentation/resume_workout_banner.dart')
         .readAsStringSync();
@@ -124,19 +121,10 @@ void main() {
           isFalse);
     });
 
-    test('DEFECT: Train hub renders the failure as "nothing to resume"', () {
-      final body = _withoutLineComments(trainHub);
-      expect(body, contains('activeSession.when('));
-      // The error arm and the "no session" arm produce the identical widget, so
-      // a client mid-workout whose lookup fails is shown the same screen as a
-      // client with no workout in progress.
-      expect(
-          RegExp(r'activeSession\.when\([\s\S]{0,200}?error:\s*\(_,\s*__\)\s*=>\s*const SizedBox\.shrink\(\)')
-              .hasMatch(body),
-          isTrue,
-          reason: 'if this now fails because the arm renders an error state '
-              'with a retry, delete this test — the finding is closed');
-    });
+    // "DEFECT: Train hub renders the failure as 'nothing to resume'" — deleted
+    // by P0-FL-40 as that test instructed ("if this now fails because the arm
+    // renders an error state with a retry, delete this test — the finding is
+    // closed"): the arm now renders SectionLoadFailure with Try again.
 
     test('DEFECT: the shared Resume banner collapses the error with '
         '.valueOrNull', () {
@@ -196,8 +184,9 @@ void main() {
       // Named so that fixing one is visible here rather than absorbed by the
       // count, and so a NEW workout surface with a silent error arm is caught
       // even if another was fixed in the same change.
-      const recorded = {
-        'lib/features/workout/presentation/train_hub_screen.dart',
+      const recorded = <String>{
+        // train_hub_screen.dart closed by P0-FL-40 (the active-session arm now
+        // renders SectionLoadFailure with Try again).
         // coach_client_workout_screen.dart closed by P0-FL-18 (PR and session
         // lists now render SectionLoadFailure with Try again).
       };

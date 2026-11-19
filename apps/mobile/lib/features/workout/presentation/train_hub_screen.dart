@@ -19,6 +19,7 @@ import '../domain/workout_provider.dart';
 import '../../coach/domain/coach_name.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../data/workout_session_store.dart';
+import '../../../core/observability/app_failure.dart';
 
 /// The palette moved to `train_palette.dart` so `WeekRowTile` could be
 /// extracted without copying it into a 21st per-screen private palette.
@@ -77,6 +78,27 @@ class _TrainHubScreenState extends ConsumerState<TrainHubScreen> {
           mutedColor: _C.onSurfaceVar,
           onRetry: () => ref.invalidate(personalRecordsProvider)),
       ]));
+    // P0-FL-40: the Resume banner's place, when the active-session lookup
+    // failed. Recorded once, when the failure settles.
+    ref.listen<AsyncValue<WorkoutSessionRecord?>>(activeSessionProvider,
+        (previous, next) {
+      final settled = next.hasError &&
+          !next.isLoading &&
+          (previous == null || previous.isLoading || !previous.hasError);
+      if (settled) {
+        reportError('TrainHubScreen.activeSession', next.error!, next.stackTrace);
+      }
+    });
+    Widget activeSessionFailure(Object? e) => Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+      child: SectionLoadFailure(
+        what: 'your workout in progress',
+        error: e,
+        busy: activeSession.isLoading,
+        accent: _C.primary,
+        textColor: _C.onSurface,
+        mutedColor: _C.onSurfaceVar,
+        onRetry: () => ref.invalidate(activeSessionProvider)));
     final completionAsync   = ref.watch(completionRateProvider);
     final profileAsync      = ref.watch(currentUserProfileProvider);
     final isCoach           = profileAsync.whenOrNull(data: (p) => p?['role'] == 'coach') ?? false;
@@ -188,8 +210,15 @@ class _TrainHubScreenState extends ConsumerState<TrainHubScreen> {
 
             // ── Resume Workout Banner ────────────────────────────────────────
             activeSession.when(
-              loading: () => const SizedBox.shrink(),
-              error: (_, __) => const SizedBox.shrink(),
+              // P0-FL-40: a retry of a failed lookup takes this arm — keep the
+              // failure card, busy, rather than blinking it away.
+              loading: () => activeSession.hasError
+                  ? activeSessionFailure(activeSession.error)
+                  : const SizedBox.shrink(),
+              // P0-FL-40 / EC-G6: a failed lookup rendered exactly what "no
+              // workout in progress" does, hiding Resume from a member who is
+              // mid-workout. Say it failed, with Try again.
+              error: (e, _) => activeSessionFailure(e),
               data: (session) {
                 if (session == null) return const SizedBox.shrink();
                 final title = session.workoutTitle.isNotEmpty
