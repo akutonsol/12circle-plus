@@ -128,6 +128,10 @@ class _Server extends http.BaseClient {
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final path = request.url.path;
     final table = path.split('/').last;
+    // P0-FL-37: the page reads the client's assessment through this RPC. It is
+    // a POST but a READ (it changes nothing the coach owns), so it is not one
+    // of the writes these tests count. No row: "No assessment on file".
+    if (table == 'get_client_assessment') return _json(request, 200, []);
     if (request.method != 'GET' && request.method != 'HEAD') {
       writes.add('${request.method} $table');
       final body = request is http.Request ? request.body : '';

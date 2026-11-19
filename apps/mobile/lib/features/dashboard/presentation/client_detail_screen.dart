@@ -130,6 +130,10 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
   @override
   Widget build(BuildContext context) {
     final detailAsync = ref.watch(clientDetailProvider(widget.clientId));
+    // P0-FL-37: the assessment is read separately, through the logged RPC, and
+    // watched HERE so it is read once per page open whichever tab is showing.
+    // Its failure fails only the assessment areas, not the page.
+    final assessment = ref.watch(clientAssessmentProvider(widget.clientId));
 
     return Scaffold(
       backgroundColor: _bg,
@@ -148,15 +152,29 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
             error: (e, _) => const Center(
                 child: Text('Could not load this client',
                     style: TextStyle(color: _mut))),
-            data: (detail) => TabBarView(
-              controller: _tabs,
-              children: [
-                _OverviewTab(detail: detail, clientId: widget.clientId),
-                _AssessmentTab(detail: detail),
-                _ParqHealthTab(detail: detail),
-                _ProgressTab(detail: detail),
-              ],
-            ),
+            data: (profileDetail) {
+              // The assessment fields join the page's map only when the RPC
+              // answered with a row, so every existing reader keeps its key.
+              final row = _loadedAssessmentRow(assessment);
+              final detail = row == null
+                  ? profileDetail
+                  : {...profileDetail, ...row};
+              final gated = _AssessmentStatePanel.isNeeded(assessment);
+              Widget gatePage() => ListView(
+                padding: const EdgeInsets.all(16),
+                children: [_AssessmentStatePanel(
+                    clientId: widget.clientId, assessment: assessment)]);
+              return TabBarView(
+                controller: _tabs,
+                children: [
+                  _OverviewTab(detail: detail, clientId: widget.clientId,
+                    assessment: assessment),
+                  gated ? gatePage() : _AssessmentTab(detail: detail),
+                  gated ? gatePage() : _ParqHealthTab(detail: detail),
+                  _ProgressTab(detail: detail),
+                ],
+              );
+            },
           )),
         ]),
       ),
@@ -201,7 +219,11 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
 class _OverviewTab extends ConsumerWidget {
   final Map<String, dynamic> detail;
   final String clientId;
-  const _OverviewTab({required this.detail, required this.clientId});
+  /// The logged assessment read (P0-FL-37). The risk badge and AI summary are
+  /// assessment data, so they follow its state rather than the profile's.
+  final AsyncValue<ClientAssessment> assessment;
+  const _OverviewTab({required this.detail, required this.clientId,
+    required this.assessment});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -287,8 +309,13 @@ class _OverviewTab extends ConsumerWidget {
                 _chip('Started ${startDate.split('T')[0]}', _mut),
             ]),
           ])),
-          // Risk badge
-          _riskBadge(riskLevel),
+          // Risk badge — only from an assessment that ANSWERED. A read still in
+          // flight shows nothing yet; a failed one says the risk is unknown,
+          // never "not assessed" (a claim about the client) or low risk.
+          if (assessment.hasError && !assessment.isLoading)
+            _riskBadgeLabel('RISK UNKNOWN')
+          else if (_assessmentAnswered(assessment))
+            _riskBadge(riskLevel),
         ])),
         const SizedBox(height: 12),
 
@@ -324,8 +351,13 @@ class _OverviewTab extends ConsumerWidget {
             const Text('AI Client Summary', style: TextStyle(color: _mut, fontSize: 12, fontWeight: FontWeight.w600)),
           ]),
           const SizedBox(height: 10),
-          Text(summary,
-            style: const TextStyle(color: _wht, fontSize: 13, height: 1.6)),
+          // Built from the assessment. Without one it would read "No specific
+          // flags", which is a claim nobody measured.
+          if (_AssessmentStatePanel.isNeeded(assessment))
+            _AssessmentStatePanel(clientId: clientId, assessment: assessment)
+          else
+            Text(summary,
+              style: const TextStyle(color: _wht, fontSize: 13, height: 1.6)),
         ])),
         const SizedBox(height: 12),
 
@@ -478,6 +510,10 @@ class _OverviewTab extends ConsumerWidget {
       case 'low':      color = _green; label = 'LOW RISK';  break;
       default:         color = _mut;   label = 'NOT ASSESSED'; break;
     }
+    return _riskBadgeLabel(label, color);
+  }
+
+  Widget _riskBadgeLabel(String label, [Color color = _mut]) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
@@ -1823,6 +1859,85 @@ class _LoadFailedNotice extends StatelessWidget {
               semanticsLabel: retryLabel,
               style: const TextStyle(color: _brand, fontWeight: FontWeight.w700)))),
       ])));
+  }
+}
+
+/// The settled assessment answer, or null while it loads or after it failed.
+ClientAssessment? _settledAssessment(AsyncValue<ClientAssessment> a) =>
+    !a.isLoading && !a.hasError && a.hasValue ? a.requireValue : null;
+
+/// The RPC row to merge into the page's map, only when it actually answered.
+Map<String, dynamic>? _loadedAssessmentRow(AsyncValue<ClientAssessment> a) {
+  final s = _settledAssessment(a);
+  return s != null && s.status == ClientAssessmentStatus.loaded ? s.row : null;
+}
+
+/// The assessment read answered about THIS client: a row, or no row at all.
+/// (Not while loading, not on failure, not when the coach may not read it.)
+bool _assessmentAnswered(AsyncValue<ClientAssessment> a) {
+  final s = _settledAssessment(a);
+  return s != null && s.status != ClientAssessmentStatus.notActiveCoach;
+}
+
+/// What the assessment areas show instead of answers they do not have
+/// (P0-FL-37). A failed or refused read is never rendered as an empty
+/// assessment, because an empty PAR-Q reads as a client with no flags.
+class _AssessmentStatePanel extends ConsumerWidget {
+  final String clientId;
+  final AsyncValue<ClientAssessment> assessment;
+  const _AssessmentStatePanel({required this.clientId, required this.assessment});
+
+  /// True when there are no assessment answers to show.
+  static bool isNeeded(AsyncValue<ClientAssessment> a) {
+    final s = _settledAssessment(a);
+    return s == null || !s.hasAssessment;
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Loading first: a Try again in flight shows this, not a second button,
+    // so the read cannot be fired twice.
+    if (assessment.isLoading) {
+      return const _CheckingNotice(label: "Loading this client's assessment…");
+    }
+    if (assessment.hasError) {
+      return _LoadFailedNotice(
+        title: "Couldn't load this client's assessment.",
+        error: assessment.error!,
+        detail: 'Risk level and PAR-Q answers stay hidden until it loads.',
+        retryLabel: "Try again, load this client's assessment",
+        onRetry: () => ref.invalidate(clientAssessmentProvider(clientId)),
+      );
+    }
+    final s = assessment.requireValue;
+    final String text;
+    switch (s.status) {
+      case ClientAssessmentStatus.notActiveCoach:
+        text = "This client's assessment is available once coaching is active.";
+        break;
+      case ClientAssessmentStatus.noRow:
+        text = 'No assessment on file.';
+        break;
+      case ClientAssessmentStatus.loaded:
+        // has_assessment = false: the intake was never filled in.
+        text = 'Not completed yet — this client has not finished their assessment.';
+        break;
+    }
+    return Semantics(
+      liveRegion: true,
+      container: true,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: _card,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _brd)),
+        child: Row(children: [
+          const Icon(Icons.assignment_outlined, color: _mut, size: 18),
+          const SizedBox(width: 10),
+          Expanded(child: Text(text,
+            style: const TextStyle(color: _mut, fontSize: 13, height: 1.4))),
+        ])));
   }
 }
 

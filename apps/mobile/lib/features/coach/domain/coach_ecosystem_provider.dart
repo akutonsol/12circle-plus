@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/realtime/realtime.dart';
 import '../data/coach_program_service.dart';
 import '../data/coach_relationship_service.dart';
@@ -151,11 +152,23 @@ final coachLeaderboardProvider = FutureProvider<List<Map<String, dynamic>>>((ref
 // ── Client data (coach reads a specific client) ───────────────
 // Disposed with the page: reopening a client must read them again, because
 // what changes here is the client's doing and nothing else tells this device.
+//
+// P0-FL-37 (security ledger F3). This used to read the client's WHOLE
+// user_profiles row (`select('*')`), so every PAR-Q answer, risk flag, medical
+// condition and injury a coach saw on this page was read without a trace in
+// `assessment_access_log`. The profile read now names only what the page needs
+// that is NOT assessment data; the assessment comes from
+// [clientAssessmentProvider], whose RPC logs the read before it returns.
+// Names stay here: the page header, notes and video sheets need them even when
+// the assessment read fails, and a coach already sees them on the roster.
+const clientDetailProfileColumns =
+    'id, first_name, last_name, avatar_url, coaching_mode, created_at, onboarding_complete';
+
 final clientDetailProvider = FutureProvider.autoDispose.family<Map<String, dynamic>, String>((ref, clientId) async {
   final db = Supabase.instance.client;
   final profile = await db
       .from('user_profiles')
-      .select('*')
+      .select(clientDetailProfileColumns)
       .eq('id', clientId)
       .maybeSingle();
   if (profile == null) return {};
@@ -261,6 +274,74 @@ final clientDetailProvider = FutureProvider.autoDispose.family<Map<String, dynam
     'habits': List.from(habits),
     'today_score': todayScore,
   };
+});
+
+// ── Client assessment (logged read) ───────────────────────────
+/// What the coach's assessment read answered (P0-FL-37).
+enum ClientAssessmentStatus {
+  /// The RPC returned the client's row. `has_assessment` may still be false.
+  loaded,
+
+  /// The RPC returned no row: there is no assessment on file.
+  noRow,
+
+  /// 42501: the signed-in coach is not this client's ACTIVE coach.
+  notActiveCoach,
+}
+
+class ClientAssessment {
+  final ClientAssessmentStatus status;
+
+  /// The RPC row, keyed by the same column names `user_profiles` uses, so the
+  /// screen's readers (`parq_answers`, `risk_level`, …) are unchanged. Empty
+  /// unless [status] is [ClientAssessmentStatus.loaded].
+  final Map<String, dynamic> row;
+  const ClientAssessment(this.status, [this.row = const {}]);
+
+  /// The client completed (some of) their intake. False for every status but
+  /// [ClientAssessmentStatus.loaded].
+  bool get hasAssessment =>
+      status == ClientAssessmentStatus.loaded && row['has_assessment'] == true;
+}
+
+/// The client's assessment (PAR-Q, risk, medical, injuries, lifestyle, goals,
+/// consent), read ONLY through `get_client_assessment` (migrations 140/141),
+/// which writes an `assessment_access_log` row before it returns — so every
+/// time a coach opens this, it is on the record (SEC-PHI-AUDIT).
+///
+/// Once per page open: autoDispose, and nothing here watches a ticker, so
+/// rebuilds and re-reads of [clientDetailProvider] do not log extra reads.
+///
+/// A network or server failure is an ERROR (the page shows "Couldn't load"),
+/// never an empty assessment: an empty one would read as no PAR-Q flags.
+final clientAssessmentProvider = FutureProvider.autoDispose
+    .family<ClientAssessment, String>((ref, clientId) async {
+  final dynamic res;
+  try {
+    res = await Supabase.instance.client
+        .rpc('get_client_assessment', params: {'p_client': clientId});
+  } on PostgrestException catch (e, st) {
+    if (e.code == '42501') {
+      // Not this client's active coach. An answer, not an outage — but the
+      // profile read admits the same coaches, so seeing it is worth a record.
+      reportError('clientAssessmentProvider.notActiveCoach', e, st);
+      return const ClientAssessment(ClientAssessmentStatus.notActiveCoach);
+    }
+    reportError('clientAssessmentProvider', e, st);
+    rethrow;
+  } catch (e, st) {
+    reportError('clientAssessmentProvider', e, st);
+    rethrow;
+  }
+  final Object? first = res is List ? (res.isEmpty ? null : res.first) : res;
+  if (first is! Map) {
+    return const ClientAssessment(ClientAssessmentStatus.noRow);
+  }
+  final row = Map<String, dynamic>.from(first)
+    // `client_id` is the RPC's name for the profile's `id`; nothing on the
+    // page reads it, and it must not shadow the profile's own keys.
+    ..remove('client_id');
+  return ClientAssessment(ClientAssessmentStatus.loaded, row);
 });
 
 // Services exposed as providers for use in screens

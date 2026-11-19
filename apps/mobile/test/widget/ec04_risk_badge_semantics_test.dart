@@ -22,13 +22,20 @@ import 'package:circle_fitness/features/dashboard/presentation/client_detail_scr
 /// Nothing is signed in: `clientDetailProvider` is overridden with an in-memory profile.
 const _clientId = 'ec04-probe-client';
 
-Map<String, dynamic> _profile({String? riskLevel}) => {
+Map<String, dynamic> _profile() => {
       'id': _clientId,
       'first_name': 'Probe',
       'last_name': 'Client',
       'role': 'client',
-      if (riskLevel != null) 'risk_level': riskLevel,
     };
+
+/// P0-FL-37: the risk level is assessment data and reaches the page only
+/// through the logged `get_client_assessment` read, not the profile.
+ClientAssessment _assessment({String? riskLevel}) =>
+    ClientAssessment(ClientAssessmentStatus.loaded, {
+      'has_assessment': true,
+      if (riskLevel != null) 'risk_level': riskLevel,
+    });
 
 Future<void> _mount(WidgetTester t, {String? riskLevel}) async {
   await t.pumpWidget(ProviderScope(
@@ -42,7 +49,9 @@ Future<void> _mount(WidgetTester t, {String? riskLevel}) async {
     // network, and one that does is neither fast nor deterministic.
     overrides: [
       clientDetailProvider(_clientId)
-          .overrideWith((ref) async => _profile(riskLevel: riskLevel)),
+          .overrideWith((ref) async => _profile()),
+      clientAssessmentProvider(_clientId)
+          .overrideWith((ref) async => _assessment(riskLevel: riskLevel)),
       clientHasPaidPlanProvider(_clientId).overrideWith((ref) async => false),
       clientScheduleProvider(_clientId).overrideWith((ref) async => null),
       clientScoreProvider(_clientId).overrideWith((ref) async => null),
