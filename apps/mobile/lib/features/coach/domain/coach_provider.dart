@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../data/coach_relationship_service.dart';
 
@@ -165,7 +166,13 @@ final availableCoachesProvider = FutureProvider<List<Map<String, dynamic>>>((ref
       });
     }
     return result;
-  } catch (_) { return []; }
+  } catch (e, st) {
+    // P0-FL-19. A failed read is not "no coaches": it used to return [] and
+    // the intake coach step said "No coaches available right now". Recorded,
+    // then rethrown so the screen shows a failure with Try again.
+    reportError('coach.availableCoaches', e, st);
+    rethrow;
+  }
 });
 
 // ── Relationship status for the current client ────────────────────────────────
