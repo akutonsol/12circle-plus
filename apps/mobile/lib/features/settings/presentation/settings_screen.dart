@@ -14,7 +14,8 @@ import '../../auth/domain/auth_provider.dart';
 import '../../coaching_mode/domain/coaching_mode_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coach/data/coach_relationship_service.dart';
-import '../../payments/domain/entitlements.dart';
+import '../../payments/presentation/upgrade_screen.dart'
+    show PlanChipState, reportPlanReadFailure;
 import '../../profile/presentation/widgets/profile_load_failed_notice.dart';
 
 class _C {
@@ -160,7 +161,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final avatarUrl   = profile?['avatar_url'] as String?;
     // Subscription = the client's effective plan (Free/Self-Guided/AI-Guided/
     // Coach-Guided), not the legacy membership_tier column (which read "basic").
-    final planLabel   = (ref.watch(clientPlanProvider).valueOrNull ?? ClientPlan.free).label;
+    // Drawn by PlanChipState: "…" while unread, "—" + Try again when the read
+    // failed — never "Free" for a plan it could not read (P0-FL-17).
+    reportPlanReadFailure(ref, 'SettingsScreen.clientPlan');
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light.copyWith(
       statusBarColor: Colors.transparent,
     ));
@@ -274,16 +277,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       icon: Icons.workspace_premium_outlined,
                       iconColor: _C.primary,
                       title: 'Subscription',
-                      trailing: Container(
+                      trailing: PlanChipState(chip: (text) => Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
                           color: _C.primaryContainer.withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(999),
                           border: Border.all(color: _C.primaryContainer.withValues(alpha: 0.4))),
-                        child: Text(planLabel.toUpperCase(),
+                        child: Text(text,
                           style: const TextStyle(color: _C.primaryContainer,
                             fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
-                      ),
+                      )),
                       hasBorder: true,
                       onTap: () => context.push('/subscription'),
                     ),

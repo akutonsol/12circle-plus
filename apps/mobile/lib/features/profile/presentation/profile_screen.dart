@@ -10,7 +10,8 @@ import '../../../core/observability/app_failure.dart';
 import '../../coach/data/coach_relationship_service.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coaching_mode/domain/coaching_mode_provider.dart';
-import '../../payments/domain/entitlements.dart';
+import '../../payments/presentation/upgrade_screen.dart'
+    show PlanChipState, reportPlanReadFailure;
 import '../domain/connected_apps.dart';
 import 'widgets/profile_load_failed_notice.dart';
 
@@ -61,8 +62,10 @@ class ProfileScreen extends ConsumerWidget {
         ?? 'client';
     final isCoach     = role == 'coach';
     final avatarUrl   = profile?['avatar_url']      as String?;
-    // Real effective plan (Coach-Guided / AI / Self / Free) — not the raw column.
-    final memberTier  = (ref.watch(clientPlanProvider).valueOrNull ?? ClientPlan.free).label;
+    // Real effective plan (Coach-Guided / AI / Self / Free) — not the raw
+    // column — drawn by PlanChipState: "…" while unread and "—" + Try again
+    // when the read failed, never "Free" for a plan it could not read (P0-FL-17).
+    reportPlanReadFailure(ref, 'ProfileScreen.clientPlan');
     final unitPref    = profile?['unit_preference'] as String? ?? 'imperial';
     final coachingMode= ref.watch(coachingModeProvider);
 
@@ -429,17 +432,17 @@ class ProfileScreen extends ConsumerWidget {
                   icon: Icons.card_membership_outlined,
                   label: 'Subscription',
                   hasBorder: true,
-                  trailing: Container(
+                  trailing: PlanChipState(chip: (text) => Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: _C.tertiary.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(4),
                       border: Border.all(color: _C.tertiary.withValues(alpha: 0.3)),
                     ),
-                    child: Text(memberTier.toUpperCase(),
+                    child: Text(text,
                       style: const TextStyle(color: _C.tertiary, fontSize: 10,
                         fontWeight: FontWeight.w700)),
-                  ),
+                  )),
                   onTap: () => context.push('/subscription'),
                 ),
                 _ProfileRow(
