@@ -163,6 +163,35 @@ Runtime (device/simulator/live QA): **not performed**; journey completion unchan
 
 **Runtime evidence.** No device, simulator or live-QA run. Journey completion is unchanged at 2 of 14.
 
+## Cycle 7 log (2026-11-19): P0-FL-38, P0-FL-39, P0-FL-40
+
+**How the cycle ran.**
+- Every package started from `integration/p0-flutter-stack-c6` @ `6f8918f` and targets that branch.
+- Three engineers ran in parallel, each followed by independent UX, security and QA review at the final head, fix rounds, and narrow re-checks.
+- The lead ran mutants (test lists taken from each package's diff), CI's 10 negative-control scripts locally, and the static guards.
+- **Combined branch `integration/p0-flutter-stack-c7`** @ `df35d5f`: 3335 tests pass, analyze 287, guards 0, CI **7/7** (push run `44497593361`).
+  - It surfaced one cross-package conflict: an import block in `coach_copilot_screen.dart` (FL-38 vs FL-40), resolved by keeping both imports.
+
+| Package | Agent | Branch, final head, PR | Tests (full) | Independent review (final head) | Lead mutants | CI (exact head) |
+|---|---|---|---|---|---|---|
+| P0-FL-38 health data only via the logged route; Requests crash; injury parse | `cplus-flutter-engineer` ×5 rounds + lead (coordinator message, decision-free readings) | `fix/coach-health-reads-through-logged-route` `a58db40` → **#194** | 3213 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 6/7 + 1 equivalent | 7/7 `44492737057` |
+| P0-FL-39 writes confirmed before success | engineer ×2 | `fix/writes-confirm-they-persisted` `6b82a6d` → **#192** | 3242 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 9/9 | 7/7 `44486090822` |
+| P0-FL-40 failed reads not shown as role or plan facts | engineer ×2 | `fix/failed-reads-not-shown-as-role-or-plan-facts` `6189d19` → **#193** | 3264 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 12/12 | 7/7 `44488770104` |
+
+**Lead (read-only):** `docs/QA_184_185_WINDOW_DECISION_BRIEF.md` (on #164), the owner decision brief for the QA window. Nothing executed.
+
+**Runtime evidence:** none (no device, simulator or live QA). Journeys unchanged at 2 of 14.
+
+### Backlog after cycle 7 (decision-free first)
+
+1. **Data integrity.** `score_service.dart:114` leaderboard missing-profile crash; client booking cancel (0-row check and voice); `generateWorkout` and `predictClient` swallow errors.
+2. **Role reads.** Sibling `valueOrNull?['role']` reads (`paywall_gate.dart:31` first).
+3. **Accessibility and cosmetic.** Shared gate helper; 2× overflows; `AuthButton` Semantics; deflake the business-profile photo test; then P0-FL-20 … P0-FL-36.
+4. **Needs Julia.**
+   - The 184/185 QA window (decision brief).
+   - Decisions 17–24; P0-SB-2; P0-SB-3; member list.
+   - Server-side PHI read enforcement; roster risk logging; Q-H1; copilot blocking.
+
 ### Backlog after cycle 6 (decision-free first)
 
 1. **P0-FL-38: unlogged PHI reads.** `coach_copilot_screen.dart`, `coach_relationship_service.dart`; `coach_dashboard_screen.dart` roster `risk_level` needs a decision first, so report it.
