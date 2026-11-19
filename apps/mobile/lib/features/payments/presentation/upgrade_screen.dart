@@ -5,6 +5,8 @@ import '../domain/entitlements.dart';
 import '../domain/payment_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coach/presentation/coach_packages_view_sheet.dart';
+import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 import '../../../core/widgets/named_icon_button.dart';
 import 'checkout_launcher.dart';
 
@@ -53,7 +55,11 @@ class UpgradeScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final currentAsync = ref.watch(clientPlanProvider);
-    final current = currentAsync.valueOrNull ?? ClientPlan.free;
+    reportPlanReadFailure(ref, 'UpgradeScreen.clientPlan');
+    // P0-FL-17: an unread plan is not Free. Until client_plan() has answered,
+    // no card is "Current" and nothing can be bought or switched — a coached
+    // client was offered the plan they already had as if it were new.
+    final current = knownPlan(currentAsync);
 
     return Scaffold(
       backgroundColor: _bg,
@@ -87,9 +93,21 @@ class UpgradeScreen extends ConsumerWidget {
             const Text('Upgrade any time. Cancel any time.',
                 style: TextStyle(color: _muted, fontSize: 14)),
             const SizedBox(height: 20),
+            if (current == null) ...[
+              if (currentAsync.hasError)
+                PlanLoadFailedNotice(
+                  error: currentAsync.error!,
+                  busy: currentAsync.isLoading,
+                  detail: "Plans can't be changed until it loads.",
+                  onRetry: () => ref.invalidate(clientPlanProvider),
+                )
+              else
+                const PlanLoadingRow(),
+              const SizedBox(height: 16),
+            ],
             ..._plans.map((p) => _PlanCard(
                   plan: p,
-                  isCurrent: p.plan == current,
+                  isCurrent: current != null && p.plan == current,
                   current: current,
                 )),
           ],
@@ -102,7 +120,8 @@ class UpgradeScreen extends ConsumerWidget {
 class _PlanCard extends ConsumerStatefulWidget {
   final _Plan plan;
   final bool isCurrent;
-  final ClientPlan current;
+  /// Null while the plan is unknown: every action is disabled.
+  final ClientPlan? current;
   const _PlanCard(
       {required this.plan, required this.isCurrent, required this.current});
   @override
@@ -245,7 +264,9 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
     final p = widget.plan;
     if (p.plan == ClientPlan.coachGuided) return 'Find a Coach';
     if (p.plan == ClientPlan.free) return 'Switch to Free';
-    return p.plan.rank > widget.current.rank
+    final current = widget.current;
+    if (current == null) return 'Choose ${p.name}';
+    return p.plan.rank > current.rank
         ? 'Upgrade to ${p.name}'
         : 'Switch to ${p.name}';
   }
@@ -389,7 +410,8 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
                 ),
-                onPressed: _loading ? null : _onCta,
+                onPressed:
+                    _loading || widget.current == null ? null : _onCta,
                 child: _loading
                     ? const SizedBox(
                         width: 18,
@@ -402,6 +424,191 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+// ── Unknown plan (P0-FL-17) ─────────────────────────────────────────────────
+// Shared by the plan screens (Plans, Subscription, Manage subscription, and
+// the Profile and Settings rows). They live in this file only because the
+// package that added them was limited to those five screens; nothing here
+// depends on the rest of the file.
+
+/// The plan client_plan() answered, or null while it is unknown (the first
+/// read in flight, or it failed). A refresh that fails after a successful read
+/// keeps the last real answer, as Riverpod does.
+ClientPlan? knownPlan(AsyncValue<ClientPlan> plan) =>
+    plan.hasValue ? plan.value : null;
+
+/// "Couldn't load your plan — check your connection and try again."
+const kPlanLoadOfflineMessage =
+    "Couldn't load your plan — check your connection and try again.";
+
+/// The non-network wording.
+const kPlanLoadFailedMessage =
+    "Couldn't load your plan — try again in a moment. "
+    'If it keeps happening, contact support.';
+
+/// The connection hint only for a network failure.
+String planLoadFailedMessage(Object error) =>
+    isNetworkFailure(error) ? kPlanLoadOfflineMessage : kPlanLoadFailedMessage;
+
+/// Records a failed client_plan() read once per failure — on the transition
+/// into a settled error, not on every rebuild that shows it. Call from build.
+void reportPlanReadFailure(WidgetRef ref, String origin) {
+  ref.listen<AsyncValue<ClientPlan>>(clientPlanProvider, (previous, next) {
+    final settled = next.hasError &&
+        !next.isLoading &&
+        (previous == null || previous.isLoading || !previous.hasError);
+    if (settled) reportError(origin, next.error!, next.stackTrace);
+  });
+}
+
+/// The first plan read is in flight: a neutral line, never a plan name.
+class PlanLoadingRow extends StatelessWidget {
+  const PlanLoadingRow({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      liveRegion: true,
+      label: 'Loading your plan',
+      child: const ExcludeSemantics(
+        child: Row(children: [
+          SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2, color: _muted)),
+          SizedBox(width: 10),
+          Text('Loading your plan…',
+              style: TextStyle(color: _muted, fontSize: 13)),
+        ]),
+      ),
+    );
+  }
+}
+
+/// The plan could not be read: say so, say what is held back ([detail]) and
+/// offer Try again. A live region; Try again is busy-aware (disabled and
+/// "Loading…" while [busy], so it cannot fire twice), at least 44px tall, and
+/// labelled for a screen reader.
+class PlanLoadFailedNotice extends StatelessWidget {
+  const PlanLoadFailedNotice({
+    super.key,
+    required this.error,
+    required this.busy,
+    required this.onRetry,
+    this.detail,
+  });
+
+  final Object error;
+  final bool busy;
+  final VoidCallback onRetry;
+  final String? detail;
+
+  static const _red = Color(0xFFFFB4AB);
+  static const _text = Color(0xFFE5E2E3);
+  static const _link = Color(0xFFDDB7FF);
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      liveRegion: true,
+      container: true,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: _red.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _red.withValues(alpha: 0.3)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Icon(Icons.error_outline, color: _red, size: 18),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(planLoadFailedMessage(error),
+                  style: const TextStyle(
+                      color: _text, fontSize: 13, fontWeight: FontWeight.w700)),
+            ),
+          ]),
+          if (detail != null) ...[
+            const SizedBox(height: 6),
+            Text(detail!,
+                style: const TextStyle(color: _muted, fontSize: 12, height: 1.4)),
+          ],
+          Align(
+            alignment: Alignment.centerRight,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+              child: TextButton(
+                onPressed: busy ? null : onRetry,
+                child: Text(busy ? 'Loading…' : 'Try again',
+                    semanticsLabel:
+                        busy ? 'Loading your plan' : 'Try again, load your plan',
+                    style: const TextStyle(
+                        color: _link, fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// The compact plan chip for a settings-style row (Profile, Settings): the
+/// plan's [ClientPlan.label] once known; "…" while the first read is in
+/// flight; "—" when it failed, and then the chip itself is a busy-aware,
+/// 44px, labelled Try again that re-reads the plan. [chip] draws the text in
+/// the host screen's own style.
+class PlanChipState extends ConsumerWidget {
+  const PlanChipState({super.key, required this.chip});
+
+  final Widget Function(String text) chip;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final planAsync = ref.watch(clientPlanProvider);
+    final plan = knownPlan(planAsync);
+    if (plan != null) return chip(plan.label.toUpperCase());
+    if (!planAsync.hasError) {
+      return Semantics(
+          label: 'Loading your plan',
+          child: ExcludeSemantics(child: chip('…')));
+    }
+    final busy = planAsync.isLoading;
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      button: true,
+      enabled: !busy,
+      label: busy
+          ? 'Loading your plan'
+          : '${planLoadFailedMessage(planAsync.error!)} Try again',
+      child: ExcludeSemantics(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          // While busy the tap is swallowed (not passed to the row, which
+          // would navigate away mid-read) and does nothing: no second read.
+          onTap: busy ? () {} : () => ref.invalidate(clientPlanProvider),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              chip('—'),
+              const SizedBox(width: 6),
+              busy
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: _muted))
+                  : const Icon(Icons.refresh_rounded, size: 16, color: _muted),
+            ]),
+          ),
+        ),
       ),
     );
   }

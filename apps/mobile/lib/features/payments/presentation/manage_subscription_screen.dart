@@ -6,6 +6,8 @@ import '../domain/payment_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coach/data/coach_relationship_service.dart';
 import '../../../core/observability/app_failure.dart';
+import 'upgrade_screen.dart'
+    show PlanLoadFailedNotice, knownPlan, reportPlanReadFailure;
 
 const _bg     = Color(0xFF030303);
 const _card   = Color(0xFF0E0B16);
@@ -149,7 +151,11 @@ class _ManageSubscriptionScreenState
   Widget build(BuildContext context) {
     final planAsync = ref.watch(clientPlanProvider);
     final subsAsync = ref.watch(mySubscriptionsProvider);
-    final plan = planAsync.valueOrNull ?? ClientPlan.free;
+    // P0-FL-17: an unread plan is not Free — "…" while loading, "—" and a
+    // failure notice with Try again when the read failed.
+    reportPlanReadFailure(ref, 'ManageSubscriptionScreen.clientPlan');
+    final plan = knownPlan(planAsync);
+    final planError = plan == null && planAsync.hasError ? planAsync.error : null;
 
     return Scaffold(
       backgroundColor: _bg,
@@ -191,16 +197,35 @@ class _ManageSubscriptionScreenState
                     children: [
                       const Text('Current plan',
                           style: TextStyle(color: _muted, fontSize: 12)),
-                      Text(plan.label,
-                          style: const TextStyle(
-                              color: _white,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w800)),
+                      Semantics(
+                        label: plan != null
+                            ? null
+                            : planError != null
+                                ? "Your plan couldn't be loaded"
+                                : 'Loading your plan',
+                        child: ExcludeSemantics(
+                          excluding: plan == null,
+                          child: Text(
+                              plan?.label ?? (planError != null ? '—' : '…'),
+                              style: const TextStyle(
+                                  color: _white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w800)),
+                        ),
+                      ),
                     ],
                   ),
                 ],
               ),
             ),
+            if (planError != null) ...[
+              const SizedBox(height: 12),
+              PlanLoadFailedNotice(
+                error: planError,
+                busy: planAsync.isLoading,
+                onRetry: () => ref.invalidate(clientPlanProvider),
+              ),
+            ],
             const SizedBox(height: 16),
 
             // Your plan — ONLY the platform membership (coaches show below).
@@ -215,6 +240,9 @@ class _ManageSubscriptionScreenState
                         ['active', 'trialing', 'past_due'].contains(s['status']))
                     .toList();
                 if (memberships.isEmpty) {
+                  // No membership is not "Free plan" while the plan itself
+                  // is unknown (P0-FL-17): the banner says what is known.
+                  if (plan == null) return const SizedBox.shrink();
                   return const Padding(
                     padding: EdgeInsets.symmetric(vertical: 8),
                     child: Text(
