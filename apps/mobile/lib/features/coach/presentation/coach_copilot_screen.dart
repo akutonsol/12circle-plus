@@ -6,11 +6,13 @@
 // backend. Coaches/admins only.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../exercise_database/data/custom_exercise_service.dart';
 import '../data/coach_program_service.dart';
 import '../../dashboard/presentation/coach_dashboard_screen.dart' show coachClientsProvider;
 import '../../auth/domain/auth_provider.dart';
+import '../../../core/observability/network_failure.dart';
+import '../domain/coach_ecosystem_provider.dart'
+    show ClientAssessment, ClientAssessmentStatus, clientAssessmentProvider;
 
 const _bg     = Color(0xFF0A0A0B);
 const _panel  = Color(0xFF14101E);
@@ -31,7 +33,11 @@ class CoachCopilotScreen extends ConsumerStatefulWidget {
 class _State extends ConsumerState<CoachCopilotScreen> {
   final _svc = CustomExerciseService();
   final _programs = CoachProgramService();
-  Map<String, dynamic>? _client;    // selected client profile
+  // The selected client's ROSTER row (`coachClientsProvider`): id and name
+  // only. Their health context — goal, experience, location, injuries — is
+  // read through the logged `get_client_assessment` RPC
+  // ([clientAssessmentProvider]), never from `user_profiles` (P0-FL-38).
+  Map<String, dynamic>? _client;
   int _recovery = 75;
   bool _busy = false, _assigning = false;
   Map<String, dynamic>? _rec;       // engine recommendation (+ trace)
@@ -39,9 +45,38 @@ class _State extends ConsumerState<CoachCopilotScreen> {
   String? _explanation;
   String? _status;
 
-  SupabaseClient get _db => Supabase.instance.client;
+  /// The selected client's assessment read, or null with no client selected.
+  /// Watched (not read) so it is sent ONCE per selection: autoDispose, and
+  /// nothing here re-runs it on a rebuild.
+  AsyncValue<ClientAssessment>? _watchAssessment() {
+    final id = _client?['id'] as String?;
+    return id == null ? null : ref.watch(clientAssessmentProvider(id));
+  }
 
-  // Derive the MIE context from the client's onboarding profile + recovery.
+  /// The client's injury areas. `injury_locations` is comma-joined TEXT
+  /// (migration 013, `IntakeData.toSupabase`), never a JSON list — the old
+  /// `is List` check sent every client to the engine as uninjured.
+  static List<String> _injuries(Object? raw) => [
+        if (raw is List) ...raw.map((e) => e.toString().trim())
+        else if (raw is String) ...raw.split(',').map((e) => e.trim()),
+      ].where((e) => e.isNotEmpty).toList();
+
+  /// The assessment row Copilot may build a recommendation from, or null when
+  /// it has none to build from: still loading, failed, refused, no row, an
+  /// intake never completed, or an injury reported with no area. Recommending
+  /// from a missing context would treat the client as uninjured.
+  static Map<String, dynamic>? _usableContext(AsyncValue<ClientAssessment>? a) {
+    if (a == null || a.isLoading || a.hasError || !a.hasValue) return null;
+    final v = a.requireValue;
+    if (!v.hasAssessment) return null;
+    if (v.row['has_injuries'] == true &&
+        _injuries(v.row['injury_locations']).isEmpty) {
+      return null;
+    }
+    return v.row;
+  }
+
+  // Derive the MIE context from the client's logged assessment + recovery.
   Map<String, dynamic> _context(Map<String, dynamic> p) {
     final goalRaw = (p['fitness_goal'] as String?)?.toLowerCase() ?? '';
     final goal = goalRaw.contains('fat') || goalRaw.contains('lose') ? 'fat_loss'
@@ -52,9 +87,7 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     final equipment = loc.contains('home')
         ? ['dumbbell', 'bodyweight', 'band']
         : ['barbell', 'dumbbell', 'cable', 'machine', 'bodyweight'];
-    final injuries = <String>[
-      if (p['injury_locations'] is List) ...List<String>.from(p['injury_locations'] as List),
-    ];
+    final injuries = _injuries(p['injury_locations']);
     return {
       'goal': goal, 'recovery': _recovery,
       'experience': (p['experience_level'] as String?)?.toLowerCase() ?? 'intermediate',
@@ -65,8 +98,11 @@ class _State extends ConsumerState<CoachCopilotScreen> {
   Future<void> _run() async {
     final c = _client;
     if (c == null) return;
+    final health =
+        _usableContext(ref.read(clientAssessmentProvider(c['id'] as String)));
+    if (health == null) return; // the button is disabled; never guess a context
     setState(() { _busy = true; _rec = null; _explanation = null; _status = null; });
-    final r = await _svc.generateWorkout(_context(c), subjectId: c['id'] as String);
+    final r = await _svc.generateWorkout(_context(health), subjectId: c['id'] as String);
     if (!mounted) return;
     // A failed call used to leave the panel blank — the error went into
     // `lastError` and nothing said so.
@@ -120,6 +156,8 @@ class _State extends ConsumerState<CoachCopilotScreen> {
         body: Center(child: Text('Coaches only.', style: TextStyle(color: _muted))));
     }
     final clients = ref.watch(coachClientsProvider);
+    final assessment = _watchAssessment();
+    final ready = _usableContext(assessment) != null;
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(backgroundColor: _bg, foregroundColor: _text,
@@ -138,10 +176,14 @@ class _State extends ConsumerState<CoachCopilotScreen> {
             const SizedBox(height: 14),
             _outlookCard(_outlook!),
           ],
+          if (!ready && assessment != null) ...[
+            const SizedBox(height: 14),
+            _healthContextNotice(assessment),
+          ],
           const SizedBox(height: 14),
           _recoveryCard(),
           const SizedBox(height: 12),
-          _generateButton(),
+          _generateButton(ready),
           if (_rec != null) ..._recommendation(_rec!),
           // The status line normally renders inside the recommendation; with no
           // recommendation (a failed call) it needs its own place, or it is lost.
@@ -166,11 +208,9 @@ class _State extends ConsumerState<CoachCopilotScreen> {
           final sel = _client?['id'] == c['id'];
           return GestureDetector(
             onTap: () async {
-              // Load full profile for context derivation.
-              final full = await _db.from('user_profiles')
-                  .select('id, first_name, fitness_goal, experience_level, training_location, injury_locations')
-                  .eq('id', c['id']).maybeSingle();
-              if (mounted) setState(() { _client = full ?? c; _rec = null; _status = null; _explanation = null; _outlook = null; });
+              // Selecting the client starts their logged assessment read
+              // (watched in build): the health context comes only from there.
+              setState(() { _client = c; _rec = null; _status = null; _explanation = null; _outlook = null; });
               // Predictive outlook for this client (deterministic).
               final o = await _programs.predictClient(c['id'] as String);
               if (mounted) setState(() => _outlook = o);
@@ -265,12 +305,84 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     );
   }
 
-  Widget _generateButton() => GestureDetector(
-    onTap: _busy ? null : _run,
+  /// Why Copilot has no health context to recommend from, and what the coach
+  /// can do. Never an empty context: that would read as a client with no
+  /// injuries. The failure itself is recorded by [clientAssessmentProvider].
+  Widget _healthContextNotice(AsyncValue<ClientAssessment> a) {
+    // Loading first: a Try again in flight shows this, not a second button,
+    // so the read cannot be fired twice.
+    if (a.isLoading) {
+      return _notice(Icons.hourglass_top_rounded, _muted,
+          "Loading this client's health context…", null);
+    }
+    if (a.hasError) {
+      final nextStep = isNetworkFailure(a.error)
+          ? 'check your connection, then try again.'
+          : 'try again in a moment. If it keeps happening, contact support.';
+      return _notice(Icons.error_outline, _fail,
+        "Couldn't load this client's health context — $nextStep",
+        "Copilot won't recommend a session without their goals, experience "
+            'and injuries.',
+        retry: Align(alignment: Alignment.centerRight, child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+          child: TextButton(
+            onPressed: () => ref.invalidate(
+                clientAssessmentProvider(_client!['id'] as String)),
+            child: const Text('Try again',
+              semanticsLabel: "Try again, load this client's health context",
+              style: TextStyle(color: _brand, fontWeight: FontWeight.w700))))));
+    }
+    final v = a.requireValue;
+    const byHand = 'Copilot needs their goals, experience and injuries to '
+        'recommend a session. Build this session by hand in Programs for now.';
+    final (IconData icon, String title, String detail) = switch (v.status) {
+      ClientAssessmentStatus.notActiveCoach => (Icons.lock_outline,
+          "This client's health context is available once coaching is active.",
+          'Copilot can recommend a session for them after that.'),
+      ClientAssessmentStatus.noRow => (Icons.assignment_outlined,
+          'No assessment on file for this client yet.', byHand),
+      ClientAssessmentStatus.loaded when !v.hasAssessment => (
+          Icons.assignment_outlined,
+          "This client hasn't completed their assessment yet.", byHand),
+      ClientAssessmentStatus.loaded => (Icons.healing_outlined,
+          'This client reported an injury without saying where.',
+          "Copilot can't plan around it. Build this session by hand in "
+              'Programs, or ask them to update their assessment.'),
+    };
+    return _notice(icon, _warn, title, detail);
+  }
+
+  /// A live region, so a screen reader hears the state change.
+  Widget _notice(IconData icon, Color color, String title, String? detail,
+      {Widget? retry}) => Semantics(liveRegion: true, container: true,
+    child: Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withValues(alpha: 0.35))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(icon, color: color, size: 18), const SizedBox(width: 10),
+          Expanded(child: Text(title, style: const TextStyle(
+              color: _text, fontSize: 13, fontWeight: FontWeight.w700))),
+        ]),
+        if (detail != null) Padding(padding: const EdgeInsets.only(top: 6),
+          child: Text(detail,
+              style: const TextStyle(color: _muted, fontSize: 12, height: 1.4))),
+        if (retry != null) retry,
+      ]),
+    ));
+
+  /// Disabled until the client's health context has loaded: a recommendation
+  /// is never generated from a context Copilot does not have.
+  Widget _generateButton(bool ready) => GestureDetector(
+    onTap: _busy || !ready ? null : _run,
     child: Container(
       width: double.infinity, alignment: Alignment.center,
       padding: const EdgeInsets.symmetric(vertical: 13),
-      decoration: BoxDecoration(color: _brand, borderRadius: BorderRadius.circular(12)),
+      decoration: BoxDecoration(
+          color: ready ? _brand : _brand.withValues(alpha: 0.3),
+          borderRadius: BorderRadius.circular(12)),
       child: _busy
           ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
           : const Text('Generate recommendation', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
