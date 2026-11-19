@@ -585,28 +585,42 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      // P0-FL-39 · each write asks for its rows back and THROWS when none
+      // changed: a 0-row update/delete (RLS filters silently) answers exactly
+      // like a done one otherwise. The sheet catches, reports and says it.
       builder: (_) => _NotificationsSheet(
         onMarkRead: (id) async {
-          await _supabase.from('notifications').update({'read': true}).eq('id', id);
+          _expectRows(await _supabase
+              .from('notifications')
+              .update({'read': true})
+              .eq('id', id)
+              .select('id'));
         },
         onMarkAllRead: () async {
           final uid = _supabase.auth.currentUser?.id;
-          if (uid != null) {
-            await _supabase
-                .from('notifications')
-                .update({'read': true})
-                .eq('recipient_id', uid)
-                .eq('read', false);
-          }
+          if (uid == null) throw StateError('signed out');
+          _expectRows(await _supabase
+              .from('notifications')
+              .update({'read': true})
+              .eq('recipient_id', uid)
+              .eq('read', false)
+              .select('id'));
         },
         onDelete: (id) async {
-          await _supabase.from('notifications').delete().eq('id', id);
+          _expectRows(await _supabase
+              .from('notifications')
+              .delete()
+              .eq('id', id)
+              .select('id'));
         },
         onClearAll: () async {
           final uid = _supabase.auth.currentUser?.id;
-          if (uid != null) {
-            await _supabase.from('notifications').delete().eq('recipient_id', uid);
-          }
+          if (uid == null) throw StateError('signed out');
+          _expectRows(await _supabase
+              .from('notifications')
+              .delete()
+              .eq('recipient_id', uid)
+              .select('id'));
         },
       ),
     );
@@ -1933,8 +1947,27 @@ bool _settledFailure(AsyncValue<Object?>? previous, AsyncValue<Object?> next) =>
     !next.isLoading &&
     (previous == null || previous.isLoading || !previous.hasError);
 
+/// One of the sheet's writes. A typedef, not an inline `Function()` type: the
+/// ERR-G1 guard reads bool/int/double future declarations with a regex that
+/// cannot see past nested parentheses in the parameter list.
+typedef _SheetWrite = Future<void> Function();
+
+/// A notifications write the server answered with no changed row
+/// (P0-FL-39). Its own type, so Mark all read can tell "nothing changed"
+/// (another device may have read them first) from a write that failed.
+class _NoRowChanged implements Exception {
+  const _NoRowChanged();
+  @override
+  String toString() => 'notifications write matched no row';
+}
+
+void _expectRows(Object? rows) {
+  if (rows is! List || rows.isEmpty) throw const _NoRowChanged();
+}
+
 // ── Notifications Sheet ───────────────────────────────────────────────────────
-class _NotificationsSheet extends ConsumerWidget {
+class _NotificationsSheet extends ConsumerStatefulWidget {
+  /// Each throws when the write failed or changed no row (P0-FL-39).
   final Future<void> Function(String id) onMarkRead;
   final Future<void> Function() onMarkAllRead;
   final Future<void> Function(String id) onDelete;
@@ -1943,6 +1976,112 @@ class _NotificationsSheet extends ConsumerWidget {
     required this.onMarkRead, required this.onMarkAllRead,
     required this.onDelete, required this.onClearAll,
   });
+
+  @override
+  ConsumerState<_NotificationsSheet> createState() => _NotificationsSheetState();
+}
+
+class _NotificationsSheetState extends ConsumerState<_NotificationsSheet> {
+  /// Writes in flight, by key (`all-read`, `clear`, `read:ID`, `delete:ID`):
+  /// a second tap does nothing (no double fire).
+  final Set<String> _busy = {};
+
+  /// Rows the server confirmed deleted, hidden until the live list drops
+  /// them (a swiped-away Dismissible must leave the tree at once).
+  final Set<String> _deleted = {};
+
+  /// The last failed write, said INSIDE the sheet: a page SnackBar sits under
+  /// the modal and would never be seen. Cleared by Dismiss, by a later write
+  /// that succeeds, or by new data from the live list (UX-2).
+  String? _failure;
+
+  /// [_failure] is the "nothing changed, refreshing" note (UX-3), not a
+  /// failure: drawn neutral, and NOT cleared by the refresh it announces.
+  bool _failureIsInfo = false;
+
+  /// Runs one write. True only when the server confirmed it; otherwise the
+  /// failure is reported and said here, and the list keeps showing what is
+  /// stored (nothing was changed locally). [onNoRow], when given, is said
+  /// instead of a failure for a 0-row answer, and the list is re-read.
+  Future<bool> _run(String key, String origin, String what,
+      _SheetWrite write, {String? onNoRow}) async {
+    if (_busy.contains(key)) return false;
+    setState(() => _busy.add(key));
+    try {
+      await write();
+      if (mounted) setState(() { _busy.remove(key); _failure = null; });
+      return true;
+    } catch (e, st) {
+      // A 0-row write is recorded either way: it is still a write that
+      // changed nothing.
+      reportError('CoachNotificationsSheet.$origin', e, st);
+      final noRow = onNoRow != null && e is _NoRowChanged;
+      if (mounted) {
+        setState(() {
+          _busy.remove(key);
+          _failureIsInfo = noRow;
+          _failure = noRow
+              ? onNoRow
+              : "Couldn't $what — ${isNetworkFailure(e)
+                  ? 'check your connection and try again.'
+                  : 'try again in a moment. If it keeps happening, contact support.'}";
+        });
+        // Re-read, so what the server holds is what the sheet shows.
+        if (noRow) ref.invalidate(coachNotificationsProvider);
+      }
+      return false;
+    }
+  }
+
+  Future<void> _markRead(String id) async {
+    if (await _run('read:$id', 'markRead', 'mark this notification as read',
+        () => widget.onMarkRead(id))) {
+      ref.invalidate(coachNotificationsProvider);
+    }
+  }
+
+  /// UX-3 · 0 rows is not always a failure here — another device may have
+  /// marked them read first — so it is said as "nothing changed" and the
+  /// list is re-read; never as done, never as "Couldn't".
+  Future<void> _markAllRead() async {
+    if (await _run('all-read', 'markAllRead', 'mark your notifications as read',
+        widget.onMarkAllRead,
+        onNoRow: 'Nothing was marked read — your list may have changed. '
+            'Refreshing it now.')) {
+      ref.invalidate(coachNotificationsProvider);
+    }
+  }
+
+  Future<void> _clearAll() async {
+    if (await _run('clear', 'clearAll', 'clear your notifications',
+        widget.onClearAll)) {
+      ref.invalidate(coachNotificationsProvider);
+    }
+  }
+
+  /// A header action (UX-1): a >= 44x44 target, a button with an enabled
+  /// state, disabled and dimmed while its write is in flight (no double
+  /// fire).
+  Widget _sheetAction(String label, Color color,
+          {required bool busy, required VoidCallback onTap}) =>
+      MergeSemantics(child: Semantics(
+        button: true,
+        enabled: !busy,
+        child: TextButton(
+          onPressed: busy ? null : onTap,
+          style: TextButton.styleFrom(
+            foregroundColor: color,
+            disabledForegroundColor: color.withValues(alpha: 0.4),
+            minimumSize: const Size(44, 44),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            tapTargetSize: MaterialTapTargetSize.padded),
+          child: Text(label, style: const TextStyle(
+            fontSize: 13, fontWeight: FontWeight.w600)))));
+
+  /// The swipe is let through only once the server confirmed the delete; a
+  /// refused or failed one springs the row back into place.
+  Future<bool> _confirmDelete(String id) => _run('delete:$id', 'delete',
+      'delete this notification', () => widget.onDelete(id));
 
   String _timeAgo(String? isoDate) {
     if (isoDate == null) return '';
@@ -1956,14 +2095,24 @@ class _NotificationsSheet extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     // P0-FL-14 · a failed read is said, never shown as "No notifications
     // yet"; the first read in flight is a spinner, not "none" either. The
     // error wins over a stale list: the list is no longer live.
+    // UX-2 · a failure notice speaks of the list as it was; new data from the
+    // live list retires it. The "refreshing" note is kept: it announces that
+    // very refresh.
+    ref.listen(coachNotificationsProvider, (_, next) {
+      if (_failure != null && !_failureIsInfo && next is AsyncData) {
+        setState(() => _failure = null);
+      }
+    });
     final async = ref.watch(coachNotificationsProvider);
     final failed = async.hasError;
     final loaded = !failed && async.hasValue;
-    final notifs = loaded ? async.requireValue : const <Map<String, dynamic>>[];
+    final notifs = loaded
+        ? async.requireValue.where((n) => !_deleted.contains(n['id'])).toList()
+        : const <Map<String, dynamic>>[];
     final unread = notifs.where((n) => n['read'] == false).length;
     final bottom = MediaQuery.of(context).padding.bottom;
 
@@ -1985,16 +2134,20 @@ class _NotificationsSheet extends ConsumerWidget {
               color: const Color(0xFF3A2A50),
               borderRadius: BorderRadius.circular(2))),
 
-          // Header
+          // Header. A Wrap, so on a narrow phone (or large text) the actions
+          // drop under the title instead of overflowing (UX-1).
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            padding: const EdgeInsets.fromLTRB(20, 8, 12, 0),
+            child: Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
               children: [
-                Row(children: [
-                  const Text('Notifications',
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Flexible(child: Text('Notifications',
+                    maxLines: 1, overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: _white, fontSize: 20,
-                      fontWeight: FontWeight.w700)),
+                      fontWeight: FontWeight.w700))),
                   if (unread > 0) ...[
                     const SizedBox(width: 8),
                     Container(
@@ -2008,24 +2161,47 @@ class _NotificationsSheet extends ConsumerWidget {
                           fontWeight: FontWeight.w700))),
                   ],
                 ]),
-                Row(children: [
+                // A Wrap too: at large text sizes the two actions alone are
+                // wider than a narrow phone.
+                Wrap(children: [
                   if (unread > 0)
-                    GestureDetector(
-                      onTap: () async { await onMarkAllRead(); ref.invalidate(coachNotificationsProvider); },
-                      child: const Text('Mark all read',
-                        style: TextStyle(color: _brand, fontSize: 13,
-                          fontWeight: FontWeight.w600))),
-                  if (notifs.isNotEmpty) ...[
-                    const SizedBox(width: 16),
-                    GestureDetector(
-                      onTap: () async { await onClearAll(); ref.invalidate(coachNotificationsProvider); },
-                      child: const Text('Clear all',
-                        style: TextStyle(color: _error, fontSize: 13,
-                          fontWeight: FontWeight.w600))),
-                  ],
+                    _sheetAction('Mark all read', _brand,
+                        busy: _busy.contains('all-read'), onTap: _markAllRead),
+                  if (notifs.isNotEmpty)
+                    _sheetAction('Clear all', _error,
+                        busy: _busy.contains('clear'), onTap: _clearAll),
                 ]),
               ])),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
+          // P0-FL-39 · a failed write is said here, in the sheet, as a live
+          // region; the list below still shows what the server holds.
+          if (_failure != null)
+            Semantics(
+              liveRegion: true,
+              container: true,
+              child: Container(
+                key: const ValueKey('coach-notifications-write-failure'),
+                width: double.infinity,
+                margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                padding: const EdgeInsets.fromLTRB(14, 4, 4, 4),
+                decoration: BoxDecoration(
+                  color: (_failureIsInfo ? _brand : _error)
+                      .withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: (_failureIsInfo ? _brand : _error)
+                      .withValues(alpha: 0.35))),
+                child: Row(children: [
+                  Expanded(child: Text(_failure!,
+                    maxLines: 4, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: _white, fontSize: 13,
+                      height: 1.4))),
+                  // UX-2 · the notice can be put away; 44 px, labelled.
+                  IconButton(
+                    onPressed: () => setState(() => _failure = null),
+                    tooltip: 'Dismiss',
+                    constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                    icon: const Icon(Icons.close, color: _muted, size: 18)),
+                ]))),
           const Divider(color: Color(0xFF1A1020), height: 1),
 
           // List
@@ -2070,8 +2246,11 @@ class _NotificationsSheet extends ConsumerWidget {
                     return Dismissible(
                       key: ValueKey(n['id']),
                       direction: DismissDirection.endToStart,
-                      onDismissed: (_) async {
-                        await onDelete(n['id'] as String);
+                      // P0-FL-39 · gone from view only once the server
+                      // confirmed the delete; otherwise the row comes back.
+                      confirmDismiss: (_) => _confirmDelete(n['id'] as String),
+                      onDismissed: (_) {
+                        setState(() => _deleted.add(n['id'] as String));
                         ref.invalidate(coachNotificationsProvider);
                       },
                       background: Container(
@@ -2080,8 +2259,8 @@ class _NotificationsSheet extends ConsumerWidget {
                         padding: const EdgeInsets.only(right: 20),
                         child: const Icon(Icons.delete_outline, color: _error)),
                       child: GestureDetector(
-                      onTap: () async {
-                        if (isUnread) { await onMarkRead(n['id'] as String); ref.invalidate(coachNotificationsProvider); }
+                      onTap: () {
+                        if (isUnread) _markRead(n['id'] as String);
                       },
                       child: Container(
                         color: isUnread

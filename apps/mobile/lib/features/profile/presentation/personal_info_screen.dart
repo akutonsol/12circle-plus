@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../coach/presentation/coach_business_screen.dart';
 import 'widgets/profile_load_failed_notice.dart';
@@ -201,18 +203,23 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
       // a cache-buster so the new image actually shows instead of the cached one.
       final base = Supabase.instance.client.storage.from('avatars').getPublicUrl(path);
       final url = '$base?t=${DateTime.now().millisecondsSinceEpoch}';
-      await Supabase.instance.client
+      // P0-FL-39: the photo is changed only when the profile now points at
+      // it. A 0-row update (RLS filters silently, and answers exactly like a
+      // saved one unless the row is asked back) leaves the old photo stored,
+      // so the old photo stays on screen and the failure is said.
+      final rows = await Supabase.instance.client
           .from('user_profiles')
           .update({'avatar_url': url})
-          .eq('id', uid);
+          .eq('id', uid)
+          .select('id');
+      if ((rows as List).isEmpty) {
+        throw StateError('user_profiles avatar update matched no row');
+      }
       ref.invalidate(currentUserProfileProvider);
       if (mounted) setState(() => _avatarUrl = url);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Could not upload photo.'),
-          backgroundColor: _err, behavior: SnackBarBehavior.floating));
-      }
+    } catch (e, st) {
+      reportError('PersonalInfoScreen._pickAndUploadAvatar', e, st);
+      if (mounted) _sayFailure("Couldn't update your photo", e);
     } finally {
       if (mounted) setState(() => _loadingAvatar = false);
     }
@@ -240,11 +247,14 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
         backgroundColor: _err, behavior: SnackBarBehavior.floating));
       return;
     }
-    setState(() => _saving = true);
+    // UX-8 · the form is checked BEFORE the write, and only this check's
+    // FormatException speaks: its messages are authored here ("Enter a valid
+    // number for weight."). A FormatException thrown by the write itself
+    // (postgrest parses the response) carries parser text, so it falls to the
+    // generic catch below and is never shown.
+    final Map<String, dynamic> payload;
     try {
-      final uid = Supabase.instance.client.auth.currentUser?.id;
-      if (uid == null) throw Exception('Not logged in');
-      final payload = buildPersonalInfoPayload(
+      payload = buildPersonalInfoPayload(
         firstName: _fnCtrl.text, lastName: _lnCtrl.text,
         gender: _gender, dateOfBirth: _dob, phone: _phoneCtrl.text,
         isCoach: _isCoach,
@@ -253,11 +263,27 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
         trainingDays: _trainingDays, trainingLocation: _trainingLocation,
         nutritionGoal: _nutritionGoal,
       );
+    } on FormatException catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.message),
+        backgroundColor: _err, behavior: SnackBarBehavior.floating));
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid == null) throw Exception('Not logged in');
 
-      await Supabase.instance.client
+      // P0-FL-39: "updated successfully" only when the server says the row
+      // changed; a 0-row update answers like a saved one unless asked back.
+      final rows = await Supabase.instance.client
           .from('user_profiles')
           .update(payload)
-          .eq('id', uid);
+          .eq('id', uid)
+          .select('id');
+      if ((rows as List).isEmpty) {
+        throw StateError('user_profiles update matched no row');
+      }
       ref.invalidate(currentUserProfileProvider);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -265,24 +291,27 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
           backgroundColor: _tert, behavior: SnackBarBehavior.floating));
         Navigator.of(context).pop();
       }
-    } on FormatException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e.message),
-          backgroundColor: _err, behavior: SnackBarBehavior.floating));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          // ERR-2: this screen edits name, gender and DATE OF BIRTH. A raw
-          // database error rendered here is the SEC-PHI-2 shape on a screen
-          // holding personal data.
-          content: const Text('Failed to save. Please try again.'),
-          backgroundColor: _err, behavior: SnackBarBehavior.floating));
-      }
+    } catch (e, st) {
+      reportError('PersonalInfoScreen._save', e, st);
+      // ERR-2: this screen edits name, gender and DATE OF BIRTH. A raw
+      // database error rendered here is the SEC-PHI-2 shape on a screen
+      // holding personal data — the exception text is never shown.
+      if (mounted) _sayFailure("Couldn't save your details", e);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  /// One voice for a failed write: `Couldn't [do X] — [next step]`, the
+  /// connection hint only when it IS the connection; never the exception.
+  void _sayFailure(String what, Object e) {
+    final next = isNetworkFailure(e)
+        ? 'check your connection and try again.'
+        : 'try again in a moment. If it keeps happening, contact support.';
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Semantics(liveRegion: true, child: Text('$what — $next')),
+      backgroundColor: _err, behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 6)));
   }
 
   @override
