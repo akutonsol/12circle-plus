@@ -49,7 +49,7 @@ String _intakeNextStep(Object? error) => isNetworkFailure(error)
 
 /// P0-FL-19 · an inline failure notice: the message (a live region, so a
 /// screen reader hears it), a busy-aware Try again, and optional further
-/// actions (e.g. "Continue without photos").
+/// actions (e.g. "Continue anyway").
 class _IntakeFailureNotice extends StatelessWidget {
   final String message;
   final String? detail;
@@ -57,6 +57,7 @@ class _IntakeFailureNotice extends StatelessWidget {
   final VoidCallback onRetry;
   final List<Widget> extraActions;
   const _IntakeFailureNotice({
+    super.key,
     required this.message,
     required this.busy,
     required this.onRetry,
@@ -222,11 +223,12 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     final uid = Supabase.instance.client.auth.currentUser?.id;
     setState(() => _retryingResume = true);
     if (uid == null) {
-      // Signed out since the first read: nothing to restore, as at start-up.
-      setState(() {
-        _retryingResume = false;
-        _resumeError = null;
-      });
+      // No session, so nothing can be read. This is NOT "no stored answers":
+      // a fresh start (and the blank saves it allows) comes only after a read
+      // that SUCCEEDS with no row. Keep the failure notice and record it.
+      reportError('intake.loadProgress.retryNoSession',
+          StateError('resume retry without a session; nothing read'));
+      setState(() => _retryingResume = false);
       return;
     }
     await _readProgress(uid);
@@ -3805,7 +3807,7 @@ class _Step8PageState extends State<_Step8Page> {
 
   /// Uploads ONLY the slots not yet stored, one by one, so one failure does
   /// not hide what did save. Moves on only when every pick is stored; any
-  /// failure keeps the person here with Try again / Continue without photos.
+  /// failure keeps the person here with Try again / Continue anyway.
   ///
   /// This used to wrap every upload in one `catch (_) {}` ("Upload errors
   /// don't block onboarding") and move on as if the baseline photos were
@@ -3822,8 +3824,10 @@ class _Step8PageState extends State<_Step8Page> {
     for (final slot in pending) {
       final file = _picks[slot]!;
       try {
+        // No session: this slot counts as failed and is reported. (The
+        // wording avoids the phrase the EC-03 negative control keys on.)
         if (uid == null) {
-          throw StateError('not signed in; photo not uploaded');
+          throw StateError('no session; photo not uploaded');
         }
         final bytes = await file.readAsBytes();
         // On web file.path is a blob: URL with no extension — derive from the
@@ -3853,7 +3857,26 @@ class _Step8PageState extends State<_Step8Page> {
       _failedSlots = failed;
       _uploadError = firstError;
     });
-    if (failed.isEmpty) widget.onContinue();
+    if (failed.isEmpty) {
+      widget.onContinue();
+    } else {
+      _revealNotice();
+    }
+  }
+
+  /// The failure notice sits below the three photo cards; on a small phone or
+  /// with large text it would render off-screen, so a failed upload looked
+  /// like nothing happened (UX-1). Scroll it into view once it is laid out.
+  final _noticeKey = GlobalKey();
+  void _revealNotice() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _noticeKey.currentContext;
+      if (!mounted || ctx == null) return;
+      final reduce = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+      Scrollable.ensureVisible(ctx,
+          duration: reduce ? Duration.zero : const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic);
+    });
   }
 
   /// The person chose to move on with some photos not stored — explicit, so
@@ -3874,6 +3897,7 @@ class _Step8PageState extends State<_Step8Page> {
         ? 'Not uploaded: ${_labelList(notSaved)}.'
         : 'Saved: ${_labelList(saved)}. Not uploaded: ${_labelList(notSaved)}.';
     return _IntakeFailureNotice(
+      key: _noticeKey,
       message: "Couldn't upload your photos — ${_intakeNextStep(_uploadError)}",
       detail: detail,
       busy: _uploading,
@@ -3882,14 +3906,14 @@ class _Step8PageState extends State<_Step8Page> {
         Semantics(
           button: true,
           enabled: !_uploading,
-          label: 'Continue without photos',
+          label: 'Continue anyway',
           excludeSemantics: true,
           onTap: _uploading ? null : _continueWithoutPhotos,
           child: TextButton(
             onPressed: _uploading ? null : _continueWithoutPhotos,
             style: TextButton.styleFrom(
                 foregroundColor: _onSurfV, minimumSize: const Size(44, 44)),
-            child: const Text('Continue without photos'),
+            child: const Text('Continue anyway'),
           ),
         ),
       ],

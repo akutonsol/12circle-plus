@@ -19,7 +19,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 //    if the photos were saved. Now each slot is uploaded on its own; any
 //    failure keeps the person on the step with "Couldn't upload your photos —
 //    …", what DID save, Try again (failed slots only) and an explicit
-//    "Continue without photos".
+//    "Continue anyway".
 // 2. Resume: a failed read of the stored answers dropped the person into a
 //    BLANK flow, and the next save (a step, or backgrounding the app) wrote the
 //    blanks over the stored answers. Now: "Couldn't load your answers — …"
@@ -91,6 +91,9 @@ class _MemoryStore extends GotrueAsyncStorage {
 
 enum _Fail { none, server, network }
 
+/// How the entry write `{onboarding_complete: false}` is answered.
+enum _Mark { ok, server, zeroRows }
+
 /// PostgREST + Storage, failing on request.
 class _Server extends http.BaseClient {
   /// The stored profile (null = a successful read that finds no row).
@@ -106,6 +109,11 @@ class _Server extends http.BaseClient {
 
   _Fail coachesRead = _Fail.none;
 
+  _Mark markIncomplete = _Mark.ok;
+
+  /// When set, photo uploads wait for it — an upload "in flight".
+  Completer<void>? uploadGate;
+
   final profileReads = <String>[];
   final profilePatches = <String>[];
   final uploads = <String>[];
@@ -117,6 +125,8 @@ class _Server extends http.BaseClient {
     failingSlots = {};
     uploadFailure = _Fail.server;
     coachesRead = _Fail.none;
+    markIncomplete = _Mark.ok;
+    uploadGate = null;
     profileReads.clear();
     profilePatches.clear();
     uploads.clear();
@@ -137,6 +147,7 @@ class _Server extends http.BaseClient {
     if (path.startsWith('/storage/v1/object/progress-photos/')) {
       final slot = path.split('/').last.split('.').first;
       uploads.add(slot);
+      if (uploadGate != null) await uploadGate!.future;
       if (failingSlots.contains(slot)) {
         if (uploadFailure == _Fail.network) {
           throw http.ClientException('Connection refused', request.url);
@@ -167,6 +178,20 @@ class _Server extends http.BaseClient {
         }
       }
       profilePatches.add('${request.method} ?${request.url.query} $body');
+      if (body == '{"onboarding_complete":false}') {
+        switch (markIncomplete) {
+          case _Mark.server:
+            return _json({'message': 'boom', 'code': 'XX000'}, 500, request);
+          case _Mark.zeroRows:
+            // RLS filtered the row out: PostgREST answers 200 with nothing.
+            return request.url.queryParameters.containsKey('select')
+                ? _json([], 200, request)
+                : http.StreamedResponse(const Stream.empty(), 204,
+                    request: request);
+          case _Mark.ok:
+            break;
+        }
+      }
       return request.url.queryParameters.containsKey('select')
           ? _json([{'id': _uid}], 200, request)
           : http.StreamedResponse(const Stream.empty(), 204, request: request);
@@ -331,8 +356,8 @@ void main() {
     });
 
     testWidgets(
-        'a network failure gives the connection hint; "Continue without '
-        'photos" moves on explicitly without another upload', (tester) async {
+        'a network failure gives the connection hint; "Continue anyway" '
+        'moves on explicitly without another upload', (tester) async {
       await openPhotos(tester);
       await pickAll(tester);
       server
@@ -347,11 +372,123 @@ void main() {
       expect(find.text('Saved · tap to replace'), findsNothing);
 
       server.uploads.clear();
-      await tester.tap(find.text('Continue without photos'));
+      expect(find.text('Continue without photos'), findsNothing,
+          reason: 'UX-2: the copy is accurate for a partial success too');
+      expect(find.bySemanticsLabel('Continue anyway'), findsOneWidget);
+      await tester.tap(find.text('Continue anyway'));
       await settle(tester);
       await tester.pump(const Duration(milliseconds: 500));
       expect(server.uploads, isEmpty);
       expect(page(tester), (_photosPage + 1).toDouble());
+    });
+
+    testWidgets(
+        'a second tap while an upload is in flight starts no second upload',
+        (tester) async {
+      await openPhotos(tester);
+      await pickAll(tester);
+      server.uploadGate = Completer<void>();
+      // Two taps with NO frame between them: the second lands on the same
+      // still-enabled button, so only the in-method `_uploading` guard can
+      // stop a second run.
+      await tester.tap(find.text('Continue (3/3)'));
+      await tester.tap(find.text('Continue (3/3)'));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 100)));
+      await tester.pump();
+      expect(find.text('Uploading...'), findsOneWidget,
+          reason: 'premise: the upload is in flight');
+      server.uploadGate!.complete();
+      await settle(tester);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(server.uploads, ['front', 'side', 'back'],
+          reason: 'one upload run, not two:\n${server.uploads}');
+      expect(page(tester), (_photosPage + 1).toDouble());
+    });
+
+    testWidgets(
+        'on a 320×568 phone at 2× text the failure notice is scrolled into '
+        'view', (tester) async {
+      // At 2× text the fixed-height photo cards and the Continue button's row
+      // overflow. That is a separate, PRE-EXISTING layout issue (on the base
+      // too; reported for a follow-up). Only that class of error is tolerated
+      // here, so this test judges the notice alone.
+      final original = FlutterError.onError;
+      var overflows = 0;
+      FlutterError.onError = (details) {
+        if (details.exceptionAsString().contains('A RenderFlex overflowed')) {
+          overflows++;
+          return;
+        }
+        original?.call(details);
+      };
+      try {
+        server.profile = {'id': _uid, 'onboarding_step': _photosPage};
+        await tester.binding.setSurfaceSize(const Size(320, 568));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        // The picker sheet itself is pushed off-screen at 2× text (same
+        // pre-existing class), so the photo is picked at 1× and the scale is
+        // raised to 2× BEFORE the failing upload — the notice is judged at 2×.
+        final scale = ValueNotifier<double>(1);
+        addTearDown(scale.dispose);
+        await tester.pumpWidget(ProviderScope(
+          child: MaterialApp(
+            builder: (context, child) => ValueListenableBuilder<double>(
+              valueListenable: scale,
+              builder: (context, s, _) => MediaQuery(
+                data: MediaQuery.of(context)
+                    .copyWith(textScaler: TextScaler.linear(s)),
+                child: child!,
+              ),
+            ),
+            home: const IntakeFlowScreen(),
+          ),
+        ));
+        await settle(tester);
+        expect(page(tester), _photosPage.toDouble(),
+            reason: 'premise: the flow opened on Progress Photos');
+
+        await tester.ensureVisible(find.text('Front Photo'));
+        await settle(tester);
+        await tester.tap(find.text('Front Photo'));
+        await settle(tester);
+        await tester.tap(find.text('Choose from Library'));
+        await settle(tester);
+        scale.value = 2;
+        await settle(tester);
+        await tester.ensureVisible(find.text('Front Photo'));
+        await settle(tester);
+        server.failingSlots = {'front'};
+        await tester.tap(find.text('Continue (1/3)'));
+        await settle(tester);
+        await tester.pump(const Duration(milliseconds: 500));
+
+        expect(page(tester), _photosPage.toDouble());
+        final message = find.text(notice(_generic));
+        expect(message, findsOneWidget, reason: 'premise: the upload failed');
+        final viewport = tester.getRect(find
+            .ancestor(of: message, matching: find.byType(Scrollable))
+            .first);
+        final rect = tester.getRect(message);
+        // At 2× text the message alone is taller than this viewport, so
+        // "fully inside" is impossible; what matters is that its START —
+        // "Couldn't upload your photos" — is on screen and not under the
+        // bottom bar.
+        expect(
+            viewport.top <= rect.top && rect.top + 60 <= viewport.bottom,
+            isTrue,
+            reason: 'UX-1: the notice is off-screen ($rect, viewport '
+                '$viewport) — a failed upload looks like nothing happened');
+        expect(message.hitTestable(at: const Alignment(0, -0.95)),
+            findsOneWidget,
+            reason: 'the opening line of the notice is the visible, topmost '
+                'thing at its position');
+      } finally {
+        FlutterError.onError = original;
+      }
+      expect(overflows, greaterThan(0),
+          reason: 'premise: this really is the 2× text small-phone layout');
     });
 
     testWidgets('control: uploads that all succeed move on as before',
@@ -441,6 +578,63 @@ void main() {
       expect(find.text("Couldn't load your answers — $_connection"),
           findsOneWidget);
       expect(find.byType(PageView), findsNothing);
+    });
+
+    for (final mark in [_Mark.server, _Mark.zeroRows]) {
+      testWidgets(
+          'the entry write onboarding_complete=false: a ${mark.name} result '
+          'is recorded, and the person sees nothing', (tester) async {
+        server.markIncomplete = mark;
+        await open(tester);
+
+        expect(
+            server.profilePatches
+                .where((p) => p.contains('{"onboarding_complete":false}')),
+            hasLength(1),
+            reason: 'premise: the entry write ran');
+        final marks = reported
+            .where((f) => f.origin == 'intake.loadProgress.markIncomplete');
+        expect(marks, hasLength(1),
+            reason: 'a ${mark.name} entry write was swallowed in silence');
+        expect(find.byType(PageView), findsOneWidget,
+            reason: 'best effort: the flow still opens');
+        expect(find.textContaining("Couldn't"), findsNothing,
+            reason: 'no UI for this write (acceptance item 4)');
+        expect(find.textContaining('boom'), findsNothing);
+      });
+    }
+
+    testWidgets(
+        'Try again with NO session keeps the failure notice — never a fresh '
+        'start', (tester) async {
+      server.profileRead = _Fail.server;
+      await open(tester);
+      expect(find.text("Couldn't load your answers — $_generic"),
+          findsOneWidget, reason: 'premise: the resume read failed');
+
+      final auth = Supabase.instance.client.auth;
+      final session = jsonEncode(auth.currentSession!.toJson());
+      addTearDown(() async {
+        await auth.recoverSession(session);
+        auth.stopAutoRefresh();
+      });
+      await tester.runAsync(
+          () => auth.signOut(scope: SignOutScope.local).catchError((_) {}));
+      await settle(tester);
+      expect(auth.currentUser, isNull, reason: 'premise: no session');
+
+      reported.clear();
+      final reads = server.profileReads.length;
+      await tester.tap(tryAgain());
+      await settle(tester);
+
+      expect(find.byType(PageView), findsNothing,
+          reason: 'S-4: a retry that read nothing started the flow fresh');
+      expect(find.text("Couldn't load your answers — $_generic"),
+          findsOneWidget);
+      expect(server.profileReads.length, reads, reason: 'nothing was read');
+      expect(reported.map((f) => f.origin),
+          contains('intake.loadProgress.retryNoSession'));
     });
 
     testWidgets('control: a read that finds no row starts fresh as today',
