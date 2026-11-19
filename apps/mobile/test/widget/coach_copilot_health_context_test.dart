@@ -26,9 +26,16 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 // The fake below answers both routes: `user_profiles` with the stored row (so
 // the old code "works"), and `get_client_assessment` per the test's choice.
 //
+// Generate is disabled ONLY while the context is unknown (loading / failed
+// read). Every answered read — not the active coach, no row, an intake never
+// completed, an injury with no area — keeps Generate enabled as before, with a
+// live-region notice; blocking those clients is the owner's decision.
+//
 // HOW TO SEE IT FAIL: `git checkout 6f8918f -- lib/features/coach/
 // presentation/coach_copilot_screen.dart` — it reads user_profiles, never
 // calls the RPC, sends `injuries: []`, and shows no state for a failure.
+// Against 3bc0a80 (the blocking version) the answered-read tests fail: no
+// request reaches generate_workout.
 
 const _uid = '00000000-0000-4000-8000-0000000c0f38';
 const _clientId = '00000000-0000-4000-8000-00000000cf38';
@@ -133,8 +140,10 @@ class _Server extends http.BaseClient {
               ..._health(injuryArea: false)},
           ]);
         case _Rpc.notCompleted:
+          // A half-finished intake: some answers saved, never completed.
           return _json(request, 200, [
-            {'client_id': _clientId, 'has_assessment': false},
+            {'client_id': _clientId, 'has_assessment': false,
+              'fitness_goal': 'lose_fat'},
           ]);
         case _Rpc.empty:
           return _json(request, 200, []);
@@ -221,7 +230,9 @@ bool _inLiveRegion(Finder text) => find
     .evaluate()
     .isNotEmpty;
 
-const _byHand = 'Build this session by hand in Programs for now.';
+const _defaults = 'Recommendations use defaults — their goal, experience and '
+    'injuries are unknown. Review the session before assigning it.';
+const _injuryNoArea = 'This client reported an injury without saying where.';
 
 void main() {
   final server = _Server();
@@ -339,30 +350,68 @@ void main() {
     handle.dispose();
   });
 
-  final answers = <_Rpc, String>{
+  testWidgets('a completed assessment with injury areas shows no notice',
+      (t) async {
+    await _pumpAndSelect(t);
+    expect(find.textContaining(_defaults), findsNothing);
+    expect(find.text(_injuryNoArea), findsNothing);
+    expect(find.textContaining("Couldn't"), findsNothing);
+  });
+
+  // An ANSWERED read never blocks Generate — whether to block these clients
+  // is the owner's decision (P0-FL-38 adjustment). It is honest instead: a
+  // live-region notice says the recommendation uses defaults, and the engine
+  // gets the roster row's defaults (as before P0-FL-38), not half an intake.
+  final defaultsAnswers = <_Rpc, String>{
     _Rpc.denied:
         "This client's health context is available once coaching is active.",
     _Rpc.empty: 'No assessment on file for this client yet.',
     _Rpc.notCompleted: "This client hasn't completed their assessment yet.",
-    _Rpc.injuryNoArea: 'This client reported an injury without saying where.',
   };
-  answers.forEach((state, copy) {
+  defaultsAnswers.forEach((state, copy) {
     testWidgets(
-        '${state.name}: says why Copilot cannot recommend and generates '
-        'nothing — never a client with no injuries', (t) async {
+        '${state.name}: Generate stays ENABLED (defaults) and a live-region '
+        'notice says the goal, experience and injuries are unknown', (t) async {
       server.rpc = state;
       await _pumpAndSelect(t);
       expect(find.text(copy), findsOneWidget);
       expect(_inLiveRegion(find.text(copy)), isTrue);
-      if (state == _Rpc.empty || state == _Rpc.notCompleted) {
-        expect(find.textContaining(_byHand), findsOneWidget,
-            reason: 'say what the coach can do instead');
-      }
+      expect(find.text(_defaults), findsOneWidget);
+      expect(_inLiveRegion(find.text(_defaults)), isTrue);
       expect(find.textContaining("Couldn't"), findsNothing,
           reason: 'an answer is not an outage');
+
       await _tapGenerate(t);
-      expect(server.generateBodies, isEmpty);
+      expect(server.generateBodies, hasLength(1),
+          reason: 'an answered read does not block generation');
+      final ctx = server.generateBodies.single['p_context'] as Map;
+      expect(ctx['goal'], 'hypertrophy', reason: 'defaults, as the notice says');
+      expect(ctx['experience'], 'intermediate');
+      expect(ctx['injuries'], isEmpty);
+      expect(find.text('Goblet squat'), findsOneWidget);
+      expect(find.text(_defaults), findsOneWidget,
+          reason: 'the notice stays visible beside the recommendation');
       expect(server.profileReads, isEmpty);
     });
+  });
+
+  testWidgets(
+      'injury reported with no area: Generate stays ENABLED with a prominent '
+      'live-region notice to review before assigning', (t) async {
+    server.rpc = _Rpc.injuryNoArea;
+    await _pumpAndSelect(t);
+    expect(find.text(_injuryNoArea), findsOneWidget);
+    expect(_inLiveRegion(find.text(_injuryNoArea)), isTrue);
+    expect(find.textContaining('review the session before assigning'),
+        findsOneWidget);
+    expect(find.textContaining("Couldn't"), findsNothing);
+
+    await _tapGenerate(t);
+    expect(server.generateBodies, hasLength(1));
+    final ctx = server.generateBodies.single['p_context'] as Map;
+    expect(ctx['goal'], 'fat_loss', reason: 'the completed assessment is used');
+    expect(ctx['experience'], 'beginner');
+    expect(find.text(_injuryNoArea), findsOneWidget,
+        reason: 'the warning stays visible beside the recommendation');
   });
 }
