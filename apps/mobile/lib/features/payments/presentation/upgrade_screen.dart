@@ -580,6 +580,10 @@ class PlanChipState extends ConsumerWidget {
           child: ExcludeSemantics(child: chip('…')));
     }
     final busy = planAsync.isLoading;
+    // While busy the tap is swallowed (not passed to the row, which would
+    // navigate away mid-read) and does nothing: no second read.
+    final VoidCallback onTap =
+        busy ? () {} : () => ref.invalidate(clientPlanProvider);
     return Semantics(
       container: true,
       liveRegion: true,
@@ -588,12 +592,13 @@ class PlanChipState extends ConsumerWidget {
       label: busy
           ? 'Loading your plan'
           : '${planLoadFailedMessage(planAsync.error!)} Try again',
+      // ExcludeSemantics drops the InkWell's tap action, so the node carries
+      // it itself: TalkBack / VoiceOver users can retry too (UX-N1).
+      onTap: onTap,
       child: ExcludeSemantics(
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
-          // While busy the tap is swallowed (not passed to the row, which
-          // would navigate away mid-read) and does nothing: no second read.
-          onTap: busy ? () {} : () => ref.invalidate(clientPlanProvider),
+          onTap: onTap,
           child: ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
