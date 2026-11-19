@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import 'widgets/profile_load_failed_notice.dart';
 
@@ -60,25 +62,57 @@ class _NotificationPreferencesScreenState
     return true;
   }
 
-  Future<void> _saveToggle(String field, bool value) async {
+  /// The latest save started for each field: only the newest one may put its
+  /// toggle back, so a slow failure cannot undo a later tap.
+  final Map<String, int> _saveSeq = {};
+
+  /// Stores one toggle; it counts as saved only when the server says the row
+  /// changed (P0-FL-39). A 0-row update (RLS filters silently, and answers
+  /// exactly like a saved one unless the row is asked back) or a thrown save
+  /// is reported, said, and the toggle is put back with [revert] — the screen
+  /// shows what is stored, not what was tapped. [savedNote] is said only
+  /// after the server confirmed the save.
+  Future<void> _saveToggle(String field, bool value,
+      {required ValueChanged<bool> revert, String? savedNote}) async {
     // Nothing is written over preferences that have not been read.
     if (!_loaded) return;
+    final seq = (_saveSeq[field] ?? 0) + 1;
+    _saveSeq[field] = seq;
+    final messenger = ScaffoldMessenger.of(context);
+    String? failure;
     try {
       final uid = Supabase.instance.client.auth.currentUser?.id;
-      if (uid == null) return;
-      await Supabase.instance.client
+      if (uid == null) throw StateError('signed out');
+      final rows = await Supabase.instance.client
           .from('user_profiles')
           .update({field: value})
-          .eq('id', uid);
-      ref.invalidate(currentUserProfileProvider);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Failed to save.'),
-          backgroundColor: _err, behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 4)));
+          .eq('id', uid)
+          .select('id');
+      if ((rows as List).isEmpty) {
+        throw StateError('user_profiles update matched no row');
       }
+      ref.invalidate(currentUserProfileProvider);
+    } catch (e, st) {
+      reportError('NotificationPreferencesScreen._saveToggle', e, st,
+          {'field': field});
+      failure = "Couldn't save this notification setting — "
+          '${isNetworkFailure(e) ? 'check your connection and try again.' : 'try again in a moment. If it keeps happening, contact support.'}';
     }
+    if (!mounted) return;
+    if (failure == null) {
+      if (savedNote != null) {
+        messenger.showSnackBar(SnackBar(
+          content: Text(savedNote),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3)));
+      }
+      return;
+    }
+    if (_saveSeq[field] == seq) setState(() => revert(!value));
+    messenger.showSnackBar(SnackBar(
+      content: Semantics(liveRegion: true, child: Text(failure)),
+      backgroundColor: _err, behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 6)));
   }
 
   @override
@@ -173,7 +207,8 @@ class _NotificationPreferencesScreenState
                 value: _workoutReminders,
                 onChanged: (v) {
                   setState(() => _workoutReminders = v);
-                  _saveToggle('notif_workout_reminders', v);
+                  _saveToggle('notif_workout_reminders', v,
+                    revert: (b) => _workoutReminders = b);
                 }),
               _divider(),
               _toggle(
@@ -183,7 +218,8 @@ class _NotificationPreferencesScreenState
                 value: _checkinReminders,
                 onChanged: (v) {
                   setState(() => _checkinReminders = v);
-                  _saveToggle('notif_checkin_reminders', v);
+                  _saveToggle('notif_checkin_reminders', v,
+                    revert: (b) => _checkinReminders = b);
                 }),
             ])),
             const SizedBox(height: 24),
@@ -200,7 +236,8 @@ class _NotificationPreferencesScreenState
                 iconColor: const Color(0xFFF8ACFF),
                 onChanged: (v) {
                   setState(() => _coachMessages = v);
-                  _saveToggle('notif_coach_messages', v);
+                  _saveToggle('notif_coach_messages', v,
+                    revert: (b) => _coachMessages = b);
                 }),
               _divider(),
               _toggle(
@@ -211,7 +248,8 @@ class _NotificationPreferencesScreenState
                 iconColor: _tert,
                 onChanged: (v) {
                   setState(() => _progressUpdates = v);
-                  _saveToggle('notif_progress_updates', v);
+                  _saveToggle('notif_progress_updates', v,
+                    revert: (b) => _progressUpdates = b);
                 }),
             ])),
             const SizedBox(height: 24),
@@ -228,13 +266,12 @@ class _NotificationPreferencesScreenState
                 iconColor: const Color(0xFFFFD700),
                 onChanged: (v) {
                   setState(() => _challenges = v);
-                  _saveToggle('notif_challenges', v);
-                  if (v) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                      content: Text('Challenges will now appear in your Activity feed'),
-                      behavior: SnackBarBehavior.floating,
-                      duration: Duration(seconds: 3)));
-                  }
+                  // Said only once the server confirmed the save.
+                  _saveToggle('notif_challenges', v,
+                    revert: (b) => _challenges = b,
+                    savedNote: v
+                        ? 'Challenges will now appear in your Activity feed'
+                        : null);
                 }),
               _divider(),
               _toggle(
@@ -244,13 +281,12 @@ class _NotificationPreferencesScreenState
                 value: _community,
                 onChanged: (v) {
                   setState(() => _community = v);
-                  _saveToggle('notif_community', v);
-                  if (v) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                      content: Text('Community will now appear in your Activity feed'),
-                      behavior: SnackBarBehavior.floating,
-                      duration: Duration(seconds: 3)));
-                  }
+                  // Said only once the server confirmed the save.
+                  _saveToggle('notif_community', v,
+                    revert: (b) => _community = b,
+                    savedNote: v
+                        ? 'Community will now appear in your Activity feed'
+                        : null);
                 }),
             ])),
             ])))),

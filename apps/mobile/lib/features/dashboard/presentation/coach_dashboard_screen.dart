@@ -585,28 +585,42 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      // P0-FL-39 · each write asks for its rows back and THROWS when none
+      // changed: a 0-row update/delete (RLS filters silently) answers exactly
+      // like a done one otherwise. The sheet catches, reports and says it.
       builder: (_) => _NotificationsSheet(
         onMarkRead: (id) async {
-          await _supabase.from('notifications').update({'read': true}).eq('id', id);
+          _expectRows(await _supabase
+              .from('notifications')
+              .update({'read': true})
+              .eq('id', id)
+              .select('id'));
         },
         onMarkAllRead: () async {
           final uid = _supabase.auth.currentUser?.id;
-          if (uid != null) {
-            await _supabase
-                .from('notifications')
-                .update({'read': true})
-                .eq('recipient_id', uid)
-                .eq('read', false);
-          }
+          if (uid == null) throw StateError('signed out');
+          _expectRows(await _supabase
+              .from('notifications')
+              .update({'read': true})
+              .eq('recipient_id', uid)
+              .eq('read', false)
+              .select('id'));
         },
         onDelete: (id) async {
-          await _supabase.from('notifications').delete().eq('id', id);
+          _expectRows(await _supabase
+              .from('notifications')
+              .delete()
+              .eq('id', id)
+              .select('id'));
         },
         onClearAll: () async {
           final uid = _supabase.auth.currentUser?.id;
-          if (uid != null) {
-            await _supabase.from('notifications').delete().eq('recipient_id', uid);
-          }
+          if (uid == null) throw StateError('signed out');
+          _expectRows(await _supabase
+              .from('notifications')
+              .delete()
+              .eq('recipient_id', uid)
+              .select('id'));
         },
       ),
     );
@@ -1930,8 +1944,16 @@ bool _settledFailure(AsyncValue<Object?>? previous, AsyncValue<Object?> next) =>
     !next.isLoading &&
     (previous == null || previous.isLoading || !previous.hasError);
 
+/// A write the server answered with no changed row (P0-FL-39).
+void _expectRows(Object? rows) {
+  if (rows is! List || rows.isEmpty) {
+    throw StateError('notifications write matched no row');
+  }
+}
+
 // ── Notifications Sheet ───────────────────────────────────────────────────────
-class _NotificationsSheet extends ConsumerWidget {
+class _NotificationsSheet extends ConsumerStatefulWidget {
+  /// Each throws when the write failed or changed no row (P0-FL-39).
   final Future<void> Function(String id) onMarkRead;
   final Future<void> Function() onMarkAllRead;
   final Future<void> Function(String id) onDelete;
@@ -1940,6 +1962,74 @@ class _NotificationsSheet extends ConsumerWidget {
     required this.onMarkRead, required this.onMarkAllRead,
     required this.onDelete, required this.onClearAll,
   });
+
+  @override
+  ConsumerState<_NotificationsSheet> createState() => _NotificationsSheetState();
+}
+
+class _NotificationsSheetState extends ConsumerState<_NotificationsSheet> {
+  /// Writes in flight, by key (`all-read`, `clear`, `read:ID`, `delete:ID`):
+  /// a second tap does nothing (no double fire).
+  final Set<String> _busy = {};
+
+  /// Rows the server confirmed deleted, hidden until the live list drops
+  /// them (a swiped-away Dismissible must leave the tree at once).
+  final Set<String> _deleted = {};
+
+  /// The last failed write, said INSIDE the sheet: a page SnackBar sits under
+  /// the modal and would never be seen.
+  String? _failure;
+
+  /// Runs one write. True only when the server confirmed it; otherwise the
+  /// failure is reported and said here, and the list keeps showing what is
+  /// stored (nothing was changed locally).
+  Future<bool> _run(String key, String origin, String what,
+      Future<void> Function() write) async {
+    if (_busy.contains(key)) return false;
+    setState(() { _busy.add(key); _failure = null; });
+    try {
+      await write();
+      if (mounted) setState(() => _busy.remove(key));
+      return true;
+    } catch (e, st) {
+      reportError('CoachNotificationsSheet.$origin', e, st);
+      if (mounted) {
+        setState(() {
+          _busy.remove(key);
+          _failure = "Couldn't $what — ${isNetworkFailure(e)
+              ? 'check your connection and try again.'
+              : 'try again in a moment. If it keeps happening, contact support.'}";
+        });
+      }
+      return false;
+    }
+  }
+
+  Future<void> _markRead(String id) async {
+    if (await _run('read:$id', 'markRead', 'mark this notification as read',
+        () => widget.onMarkRead(id))) {
+      ref.invalidate(coachNotificationsProvider);
+    }
+  }
+
+  Future<void> _markAllRead() async {
+    if (await _run('all-read', 'markAllRead', 'mark your notifications as read',
+        widget.onMarkAllRead)) {
+      ref.invalidate(coachNotificationsProvider);
+    }
+  }
+
+  Future<void> _clearAll() async {
+    if (await _run('clear', 'clearAll', 'clear your notifications',
+        widget.onClearAll)) {
+      ref.invalidate(coachNotificationsProvider);
+    }
+  }
+
+  /// The swipe is let through only once the server confirmed the delete; a
+  /// refused or failed one springs the row back into place.
+  Future<bool> _confirmDelete(String id) => _run('delete:$id', 'delete',
+      'delete this notification', () => widget.onDelete(id));
 
   String _timeAgo(String? isoDate) {
     if (isoDate == null) return '';
@@ -1953,14 +2043,16 @@ class _NotificationsSheet extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     // P0-FL-14 · a failed read is said, never shown as "No notifications
     // yet"; the first read in flight is a spinner, not "none" either. The
     // error wins over a stale list: the list is no longer live.
     final async = ref.watch(coachNotificationsProvider);
     final failed = async.hasError;
     final loaded = !failed && async.hasValue;
-    final notifs = loaded ? async.requireValue : const <Map<String, dynamic>>[];
+    final notifs = loaded
+        ? async.requireValue.where((n) => !_deleted.contains(n['id'])).toList()
+        : const <Map<String, dynamic>>[];
     final unread = notifs.where((n) => n['read'] == false).length;
     final bottom = MediaQuery.of(context).padding.bottom;
 
@@ -2008,14 +2100,15 @@ class _NotificationsSheet extends ConsumerWidget {
                 Row(children: [
                   if (unread > 0)
                     GestureDetector(
-                      onTap: () async { await onMarkAllRead(); ref.invalidate(coachNotificationsProvider); },
+                      // Busy while in flight: no double fire.
+                      onTap: _busy.contains('all-read') ? null : _markAllRead,
                       child: const Text('Mark all read',
                         style: TextStyle(color: _brand, fontSize: 13,
                           fontWeight: FontWeight.w600))),
                   if (notifs.isNotEmpty) ...[
                     const SizedBox(width: 16),
                     GestureDetector(
-                      onTap: () async { await onClearAll(); ref.invalidate(coachNotificationsProvider); },
+                      onTap: _busy.contains('clear') ? null : _clearAll,
                       child: const Text('Clear all',
                         style: TextStyle(color: _error, fontSize: 13,
                           fontWeight: FontWeight.w600))),
@@ -2023,6 +2116,23 @@ class _NotificationsSheet extends ConsumerWidget {
                 ]),
               ])),
           const SizedBox(height: 12),
+          // P0-FL-39 · a failed write is said here, in the sheet, as a live
+          // region; the list below still shows what the server holds.
+          if (_failure != null)
+            Semantics(
+              liveRegion: true,
+              container: true,
+              child: Container(
+                key: const ValueKey('coach-notifications-write-failure'),
+                width: double.infinity,
+                margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: _error.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _error.withValues(alpha: 0.35))),
+                child: Text(_failure!,
+                  style: const TextStyle(color: _white, fontSize: 13, height: 1.4)))),
           const Divider(color: Color(0xFF1A1020), height: 1),
 
           // List
@@ -2067,8 +2177,11 @@ class _NotificationsSheet extends ConsumerWidget {
                     return Dismissible(
                       key: ValueKey(n['id']),
                       direction: DismissDirection.endToStart,
-                      onDismissed: (_) async {
-                        await onDelete(n['id'] as String);
+                      // P0-FL-39 · gone from view only once the server
+                      // confirmed the delete; otherwise the row comes back.
+                      confirmDismiss: (_) => _confirmDelete(n['id'] as String),
+                      onDismissed: (_) {
+                        setState(() => _deleted.add(n['id'] as String));
                         ref.invalidate(coachNotificationsProvider);
                       },
                       background: Container(
@@ -2077,8 +2190,8 @@ class _NotificationsSheet extends ConsumerWidget {
                         padding: const EdgeInsets.only(right: 20),
                         child: const Icon(Icons.delete_outline, color: _error)),
                       child: GestureDetector(
-                      onTap: () async {
-                        if (isUnread) { await onMarkRead(n['id'] as String); ref.invalidate(coachNotificationsProvider); }
+                      onTap: () {
+                        if (isUnread) _markRead(n['id'] as String);
                       },
                       child: Container(
                         color: isUnread
