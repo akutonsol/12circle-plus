@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../observability/app_failure.dart' show reportError;
 import '../../features/auth/domain/auth_provider.dart';
 import '../../features/coach/data/pending_invite.dart';
 import '../../features/coach/domain/coach_provider.dart' show assignedCoachProvider, myCoachesProvider;
@@ -256,7 +257,17 @@ final routerProvider = Provider<GoRouter>((ref) {
             if (role == 'vendor') return '/vendor-portal';
             return needsOnboarding ? '/intake' : '/home';
           }
-        } catch (_) {}
+        } catch (e, st) {
+          // P0-FL-15. Was `catch (_) {}` then '/home': a coach, admin or
+          // vendor whose role read failed was dropped into the client app.
+          // Do not guess. Land on /login, the one auth route that can say
+          // what happened: LoginScreen sees the session, re-runs the read
+          // and shows "Couldn't load your account" with Try again and Sign
+          // out. No loop: from /login this returns null (stay), and every
+          // other auth route goes to /login once.
+          reportError('appRouter.redirect.roleRead', e, st);
+          return path == '/login' ? null : '/login';
+        }
         return '/home';
       }
       return null;
