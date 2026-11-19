@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:typed_data';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -12,6 +13,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/intake_data.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 import '../../coach/data/coach_relationship_service.dart';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -38,6 +40,104 @@ const kIntakeProgressNotSavedMessage =
 /// How far the progress notice floats above the bottom inset — clear of every
 /// step's bottom bar so Continue stays tappable while it shows.
 const double kIntakeNoticeBottomClearance = 124;
+
+/// The "next step" half of a "Couldn't (do X) — (next step)" notice: the
+/// connection hint only when the request never reached the server.
+String _intakeNextStep(Object? error) => isNetworkFailure(error)
+    ? 'check your connection and try again.'
+    : 'try again in a moment. If it keeps happening, contact support.';
+
+/// P0-FL-19 · an inline failure notice: the message (a live region, so a
+/// screen reader hears it), a busy-aware Try again, and optional further
+/// actions (e.g. "Continue anyway").
+class _IntakeFailureNotice extends StatelessWidget {
+  final String message;
+  final String? detail;
+  final bool busy;
+  final VoidCallback onRetry;
+  final List<Widget> extraActions;
+  const _IntakeFailureNotice({
+    super.key,
+    required this.message,
+    required this.busy,
+    required this.onRetry,
+    this.detail,
+    this.extraActions = const [],
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: _surfC,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _tertiary.withValues(alpha: 0.35)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Semantics(
+              liveRegion: true,
+              container: true,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const ExcludeSemantics(
+                      child: Icon(Icons.cloud_off_rounded,
+                          color: _tertiary, size: 20)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(message,
+                          style: const TextStyle(
+                              color: _onSurf,
+                              fontSize: 14,
+                              height: 1.45,
+                              fontWeight: FontWeight.w600)),
+                    ),
+                  ]),
+                  if (detail != null) ...[
+                    const SizedBox(height: 6),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 30),
+                      child: Text(detail!,
+                          style: const TextStyle(
+                              color: _onSurfV, fontSize: 13, height: 1.4)),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              Semantics(
+                button: true,
+                enabled: !busy,
+                label: busy ? 'Trying again' : 'Try again',
+                excludeSemantics: true,
+                onTap: busy ? null : onRetry,
+                child: ConstrainedBox(
+                  constraints:
+                      const BoxConstraints(minHeight: 44, minWidth: 44),
+                  child: OutlinedButton(
+                    onPressed: busy ? null : onRetry,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _primary,
+                      minimumSize: const Size(44, 44),
+                      side: const BorderSide(color: _primary)),
+                    child: Text(busy ? 'Trying again…' : 'Try again',
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ),
+              ...extraActions,
+            ]),
+          ],
+        ),
+      );
+}
 
 // ── Main flow controller ──────────────────────────────────────────────────────
 class IntakeFlowScreen extends StatefulWidget {
@@ -89,11 +189,53 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     }
     // Entering the flow means onboarding isn't done — flag it so re-login always
     // routes back here (covers closing before advancing past the first step).
-    Supabase.instance.client
-        .from('user_profiles')
-        .update({'onboarding_complete': false})
-        .eq('id', uid)
-        .then((_) {}, onError: (_) {});
+    // Best effort and silent to the person (P0-FL-19 item 4), but a refused or
+    // 0-row write is recorded rather than swallowed.
+    unawaited(() async {
+      try {
+        final rows = await Supabase.instance.client
+            .from('user_profiles')
+            .update({'onboarding_complete': false})
+            .eq('id', uid)
+            .select('id');
+        if (rows.isEmpty) {
+          reportError('intake.loadProgress.markIncomplete',
+              StateError('onboarding_complete update changed 0 rows'));
+        }
+      } catch (e, st) {
+        reportError('intake.loadProgress.markIncomplete', e, st);
+      }
+    }());
+    await _readProgress(uid);
+  }
+
+  /// P0-FL-19 · set when the resume read of the stored answers failed. While
+  /// it is non-null the flow is NOT shown (it would be blank) and no save of
+  /// any kind runs — a blank answer set saved now would overwrite the stored
+  /// one. Cleared only by a read that succeeds.
+  Object? _resumeError;
+
+  /// A "Try again" of the resume read is in flight.
+  bool _retryingResume = false;
+
+  Future<void> _retryResume() async {
+    if (_retryingResume) return;
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    setState(() => _retryingResume = true);
+    if (uid == null) {
+      // No session, so nothing can be read. This is NOT "no stored answers":
+      // a fresh start (and the blank saves it allows) comes only after a read
+      // that SUCCEEDS with no row. Keep the failure notice and record it.
+      reportError('intake.loadProgress.retryNoSession',
+          StateError('resume retry without a session; nothing read'));
+      setState(() => _retryingResume = false);
+      return;
+    }
+    await _readProgress(uid);
+    if (mounted) setState(() => _retryingResume = false);
+  }
+
+  Future<void> _readProgress(String uid) async {
     try {
       final profile = await Supabase.instance.client
           .from('user_profiles')
@@ -151,16 +293,34 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
           _challenges.addAll(saved.biggestChallenges);
           _step = savedStep;
           _loading = false;
+          _resumeError = null;
         });
       } else if (mounted) {
-        setState(() => _loading = false);
+        // A read that worked and found no row: a fresh start, as before.
+        setState(() {
+          _loading = false;
+          _resumeError = null;
+        });
       }
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
+    } catch (e, st) {
+      // P0-FL-19. This used to drop the person into a BLANK flow at step 0,
+      // and the next save (a step, or just backgrounding the app) wrote those
+      // blank answers over the stored ones. Now the failure is said, with
+      // Try again, and nothing is saved until a read succeeds.
+      reportError('intake.loadProgress.read', e, st);
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _resumeError = e;
+        });
+      }
     }
   }
 
   Future<void> _saveProgress() async {
+    // Never while the stored answers are unknown (loading, or the resume read
+    // failed): what is in memory is blank and would overwrite them.
+    if (_loading || _resumeError != null) return;
     final uid = Supabase.instance.client.auth.currentUser?.id;
     if (uid == null) return;
     final db = Supabase.instance.client;
@@ -378,6 +538,25 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
         backgroundColor: _bg,
         body: Center(
           child: CircularProgressIndicator(color: _priCont),
+        ),
+      );
+    }
+
+    if (_resumeError != null) {
+      return Scaffold(
+        backgroundColor: _bg,
+        body: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: _IntakeFailureNotice(
+                message:
+                    "Couldn't load your answers — ${_intakeNextStep(_resumeError)}",
+                busy: _retryingResume,
+                onRetry: _retryResume,
+              ),
+            ),
+          ),
         ),
       );
     }
@@ -3602,43 +3781,143 @@ class _Step8PageState extends State<_Step8Page> {
     return 'jpg';
   }
 
+  /// P0-FL-19 · the file each slot last uploaded successfully this session. A
+  /// slot whose current pick is in here is saved and is never sent again.
+  final Map<String, XFile> _uploadedFiles = {};
+
+  /// Slots whose last upload attempt failed, and one of the failures (for the
+  /// connection-or-not wording). Non-empty ⇒ the failure notice shows.
+  List<String> _failedSlots = const [];
+  Object? _uploadError;
+
+  static const _slotLabels = {'front': 'Front', 'side': 'Side', 'back': 'Back'};
+
+  Map<String, XFile?> get _picks =>
+      {'front': _front, 'side': _side, 'back': _back};
+
+  /// Slots with a pick that is not yet stored.
+  List<String> get _pendingSlots => [
+        for (final e in _picks.entries)
+          if (e.value != null && !identical(_uploadedFiles[e.key], e.value))
+            e.key,
+      ];
+
+  String _labelList(List<String> slots) =>
+      slots.map((s) => _slotLabels[s]!).join(', ');
+
+  /// Uploads ONLY the slots not yet stored, one by one, so one failure does
+  /// not hide what did save. Moves on only when every pick is stored; any
+  /// failure keeps the person here with Try again / Continue anyway.
+  ///
+  /// This used to wrap every upload in one `catch (_) {}` ("Upload errors
+  /// don't block onboarding") and move on as if the baseline photos were
+  /// saved — they were silently lost.
   Future<void> _uploadAndContinue() async {
+    if (_uploading) return;
+    final pending = _pendingSlots;
     // Nothing new to upload — just proceed
-    if (_newPickCount == 0) { widget.onContinue(); return; }
+    if (pending.isEmpty) { widget.onContinue(); return; }
     setState(() => _uploading = true);
-    try {
-      final uid = Supabase.instance.client.auth.currentUser?.id;
-      if (uid != null) {
-        final entries = <String, XFile?>{
-          'front': _front, 'side': _side, 'back': _back,
-        };
-        for (final e in entries.entries) {
-          final file = e.value;
-          if (file == null) continue; // skip slots with no new pick
-          final bytes = await file.readAsBytes();
-          // On web file.path is a blob: URL with no extension — derive from the
-          // file name / mime instead so the stored path matches the reload probe.
-          final ext = _photoExt(file);
-          final mime = ext == 'heic' ? 'image/heic'
-              : ext == 'png' ? 'image/png'
-              : ext == 'webp' ? 'image/webp'
-              : 'image/jpeg';
-          await Supabase.instance.client.storage
-              .from('progress-photos')
-              .uploadBinary(
-                '$uid/${e.key}.$ext',
-                bytes,
-                fileOptions: FileOptions(contentType: mime, upsert: true),
-              );
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    final failed = <String>[];
+    Object? firstError;
+    for (final slot in pending) {
+      final file = _picks[slot]!;
+      try {
+        // No session: this slot counts as failed and is reported. (The
+        // wording avoids the phrase the EC-03 negative control keys on.)
+        if (uid == null) {
+          throw StateError('no session; photo not uploaded');
         }
+        final bytes = await file.readAsBytes();
+        // On web file.path is a blob: URL with no extension — derive from the
+        // file name / mime instead so the stored path matches the reload probe.
+        final ext = _photoExt(file);
+        final mime = ext == 'heic' ? 'image/heic'
+            : ext == 'png' ? 'image/png'
+            : ext == 'webp' ? 'image/webp'
+            : 'image/jpeg';
+        await Supabase.instance.client.storage
+            .from('progress-photos')
+            .uploadBinary(
+              '$uid/$slot.$ext',
+              bytes,
+              fileOptions: FileOptions(contentType: mime, upsert: true),
+            );
+        _uploadedFiles[slot] = file;
+      } catch (e, st) {
+        reportError('intake.photos.upload.$slot', e, st);
+        failed.add(slot);
+        firstError ??= e;
       }
-    } catch (_) {
-      // Upload errors don't block onboarding — photos can be added later
     }
-    if (mounted) {
-      setState(() => _uploading = false);
+    if (!mounted) return;
+    setState(() {
+      _uploading = false;
+      _failedSlots = failed;
+      _uploadError = firstError;
+    });
+    if (failed.isEmpty) {
       widget.onContinue();
+    } else {
+      _revealNotice();
     }
+  }
+
+  /// The failure notice sits below the three photo cards; on a small phone or
+  /// with large text it would render off-screen, so a failed upload looked
+  /// like nothing happened (UX-1). Scroll it into view once it is laid out.
+  final _noticeKey = GlobalKey();
+  void _revealNotice() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _noticeKey.currentContext;
+      if (!mounted || ctx == null) return;
+      final reduce = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+      Scrollable.ensureVisible(ctx,
+          duration: reduce ? Duration.zero : const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic);
+    });
+  }
+
+  /// The person chose to move on with some photos not stored — explicit, so
+  /// it is never silent. The step is optional.
+  void _continueWithoutPhotos() {
+    if (_uploading) return;
+    setState(() => _failedSlots = const []);
+    widget.onContinue();
+  }
+
+  Widget _uploadFailureNotice() {
+    final saved = [
+      for (final e in _picks.entries)
+        if (e.value != null && identical(_uploadedFiles[e.key], e.value)) e.key,
+    ];
+    final notSaved = _failedSlots;
+    final detail = saved.isEmpty
+        ? 'Not uploaded: ${_labelList(notSaved)}.'
+        : 'Saved: ${_labelList(saved)}. Not uploaded: ${_labelList(notSaved)}.';
+    return _IntakeFailureNotice(
+      key: _noticeKey,
+      message: "Couldn't upload your photos — ${_intakeNextStep(_uploadError)}",
+      detail: detail,
+      busy: _uploading,
+      onRetry: _uploadAndContinue,
+      extraActions: [
+        Semantics(
+          button: true,
+          enabled: !_uploading,
+          label: 'Continue anyway',
+          excludeSemantics: true,
+          onTap: _uploading ? null : _continueWithoutPhotos,
+          child: TextButton(
+            onPressed: _uploading ? null : _continueWithoutPhotos,
+            style: TextButton.styleFrom(
+                foregroundColor: _onSurfV, minimumSize: const Size(44, 44)),
+            child: const Text('Continue anyway'),
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -3673,6 +3952,8 @@ class _Step8PageState extends State<_Step8Page> {
                   hint: 'Face forward, arms at sides',
                   image: _front,
                   existingUrl: _frontUrl,
+                  uploaded: _front != null &&
+                      identical(_uploadedFiles['front'], _front),
                   onPicked: (f) => setState(() => _front = f),
                 ),
                 const SizedBox(height: 12),
@@ -3682,6 +3963,8 @@ class _Step8PageState extends State<_Step8Page> {
                   hint: 'Profile view, 90° turn',
                   image: _side,
                   existingUrl: _sideUrl,
+                  uploaded: _side != null &&
+                      identical(_uploadedFiles['side'], _side),
                   onPicked: (f) => setState(() => _side = f),
                 ),
                 const SizedBox(height: 12),
@@ -3691,8 +3974,14 @@ class _Step8PageState extends State<_Step8Page> {
                   hint: 'Straight posture, rear view',
                   image: _back,
                   existingUrl: _backUrl,
+                  uploaded: _back != null &&
+                      identical(_uploadedFiles['back'], _back),
                   onPicked: (f) => setState(() => _back = f),
                 ),
+                if (_failedSlots.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  _uploadFailureNotice(),
+                ],
                 const SizedBox(height: 20),
                 Container(
                   padding: const EdgeInsets.all(16),
@@ -3766,11 +4055,14 @@ class _PhotoUploadCard extends StatefulWidget {
   final String hint;
   final XFile? image;
   final String? existingUrl;
+  /// The current pick was stored this session (P0-FL-19).
+  final bool uploaded;
   final ValueChanged<XFile?> onPicked;
   const _PhotoUploadCard({
     required this.icon, required this.label,
     required this.hint, required this.image,
     this.existingUrl,
+    this.uploaded = false,
     required this.onPicked,
   });
 
@@ -3916,7 +4208,7 @@ class _PhotoUploadCardState extends State<_PhotoUploadCard> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(
-                        hasNetworkPhoto
+                        hasNetworkPhoto || widget.uploaded
                           ? Icons.cloud_done_outlined
                           : Icons.check_circle,
                         color: _tertiary, size: 16),
@@ -3924,9 +4216,12 @@ class _PhotoUploadCardState extends State<_PhotoUploadCard> {
                       Text(widget.label, style: const TextStyle(
                         color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
                       const SizedBox(width: 10),
-                      Text(
-                        hasNetworkPhoto ? 'Saved · tap to replace' : 'Tap to change',
-                        style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                      Flexible(child: Text(
+                        hasNetworkPhoto || widget.uploaded
+                            ? 'Saved · tap to replace'
+                            : 'Tap to change',
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white60, fontSize: 11))),
                     ],
                   ),
                 ),
@@ -4362,9 +4657,12 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
               coachesAsync.when(
                 loading: () => const Center(
                   child: CircularProgressIndicator(color: _primary)),
-                error: (_, __) => const Center(
-                  child: Text('Could not load coaches. Please try again.',
-                    style: TextStyle(color: _onSurfV))),
+                // P0-FL-19 · a failed read is a failure with Try again —
+                // never "No coaches available right now".
+                error: (e, _) => _IntakeFailureNotice(
+                  message: "Couldn't load coaches — ${_intakeNextStep(e)}",
+                  busy: coachesAsync.isLoading,
+                  onRetry: () => ref.invalidate(availableCoachesProvider)),
                 data: (coaches) => coaches.isEmpty
                   ? const Center(child: Padding(
                       padding: EdgeInsets.only(top: 40),
