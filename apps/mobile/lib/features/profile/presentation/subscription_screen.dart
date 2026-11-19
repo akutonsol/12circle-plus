@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../payments/domain/entitlements.dart';
+import '../../payments/presentation/upgrade_screen.dart'
+    show PlanLoadFailedNotice, knownPlan, reportPlanReadFailure;
 
 const _bg   = Color(0xFF0E0E0F);
 const _pri  = Color(0xFFDDB7FF);
@@ -67,12 +69,20 @@ class SubscriptionScreen extends ConsumerWidget {
     // not the legacy membership_tier column (which always read "basic"). This
     // is the same source the Settings/Profile plan labels use, so the screen
     // stays consistent — and reactive — when the coaching mode changes.
-    final plan = ref.watch(clientPlanProvider).valueOrNull ?? ClientPlan.free;
-    final currentTier = switch (plan) {
+    //
+    // P0-FL-17: an unread plan is not Basic/Free. Until client_plan() answers,
+    // no tier is "Current": "…" while loading, "—" and a failure notice with
+    // Try again when the read failed.
+    final planAsync = ref.watch(clientPlanProvider);
+    reportPlanReadFailure(ref, 'SubscriptionScreen.clientPlan');
+    final plan = knownPlan(planAsync);
+    final String? currentTier = switch (plan) {
+      null                   => null,
       ClientPlan.coachGuided => 'elite',
       ClientPlan.aiGuided    => 'pro',
       _                      => 'basic', // free + self-guided map to Basic
     };
+    final planError = plan == null && planAsync.hasError ? planAsync.error : null;
     final top    = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
 
@@ -117,9 +127,19 @@ class SubscriptionScreen extends ConsumerWidget {
                   style: TextStyle(color: _pri.withValues(alpha: 0.7), fontSize: 12,
                     fontWeight: FontWeight.w600, letterSpacing: 1.5)),
                 const SizedBox(height: 4),
-                Text(_tierLabel(currentTier),
-                  style: const TextStyle(color: _onS, fontSize: 28,
-                    fontWeight: FontWeight.w800, letterSpacing: -0.5)),
+                if (currentTier != null)
+                  Text(_tierLabel(currentTier),
+                    style: const TextStyle(color: _onS, fontSize: 28,
+                      fontWeight: FontWeight.w800, letterSpacing: -0.5))
+                else
+                  Semantics(
+                    label: planError != null
+                        ? "Your plan couldn't be loaded"
+                        : 'Loading your plan',
+                    child: ExcludeSemantics(child: Text(
+                      planError != null ? '—' : '…',
+                      style: const TextStyle(color: _onS, fontSize: 28,
+                        fontWeight: FontWeight.w800, letterSpacing: -0.5)))),
                 const SizedBox(height: 16),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
@@ -130,6 +150,14 @@ class SubscriptionScreen extends ConsumerWidget {
                   child: Text('Manage on App Store / Play Store',
                     style: TextStyle(color: _onSV, fontSize: 13))),
               ])),
+            if (planError != null) ...[
+              const SizedBox(height: 16),
+              PlanLoadFailedNotice(
+                error: planError,
+                busy: planAsync.isLoading,
+                onRetry: () => ref.invalidate(clientPlanProvider),
+              ),
+            ],
             const SizedBox(height: 32),
 
             // Plan comparison
