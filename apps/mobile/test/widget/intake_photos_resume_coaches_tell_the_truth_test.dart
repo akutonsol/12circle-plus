@@ -295,10 +295,10 @@ void main() {
       await tester.tap(find.text('Continue (3/3)'));
       await settle(tester);
 
-      expect(server.uploads, ['front', 'side', 'back'],
-          reason: 'premise: every slot was attempted');
       expect(page(tester), _photosPage.toDouble(),
           reason: 'THE defect: the flow moved on as if the photos were saved');
+      expect(server.uploads, ['front', 'side', 'back'],
+          reason: 'every slot is attempted; one failure does not stop the rest');
       expect(find.text(notice(_generic)), findsOneWidget);
       expect(find.text('Saved: Front. Not uploaded: Side, Back.'),
           findsOneWidget, reason: 'partial success is told truthfully');
@@ -388,18 +388,17 @@ void main() {
         ..profileRead = _Fail.server;
       await open(tester);
 
-      expect(find.text("Couldn't load your answers — $_generic"),
-          findsOneWidget);
-      expect(find.byType(PageView), findsNothing,
-          reason: 'THE defect: the flow was shown blank at step 0');
-      expect(reported.map((f) => f.origin), contains('intake.loadProgress.read'));
-      expect(find.textContaining('boom'), findsNothing,
-          reason: 'no raw error text');
-
       await background(tester);
       expect(answerSaves(), isEmpty,
           reason: 'THE data loss: a save now writes blank answers over the '
               'stored ones:\n${answerSaves().join('\n')}');
+      expect(find.byType(PageView), findsNothing,
+          reason: 'THE defect: the flow was shown blank at step 0');
+      expect(find.text("Couldn't load your answers — $_generic"),
+          findsOneWidget);
+      expect(reported.map((f) => f.origin), contains('intake.loadProgress.read'));
+      expect(find.textContaining('boom'), findsNothing,
+          reason: 'no raw error text');
 
       // Busy-aware Try again: one read in flight, a second tap does nothing.
       server
