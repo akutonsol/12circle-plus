@@ -312,10 +312,15 @@ class _OverviewTab extends ConsumerWidget {
           // Risk badge — only from an assessment that ANSWERED. A read still in
           // flight shows nothing yet; a failed one says the risk is unknown,
           // never "not assessed" (a claim about the client) or low risk.
+          // A refused read (42501) says the risk is hidden rather than leaving
+          // the slot empty (UX-2). Flexible: at large text scales on a narrow
+          // screen the badge wraps instead of squeezing the name column.
           if (assessment.hasError && !assessment.isLoading)
-            _riskBadgeLabel('RISK UNKNOWN')
+            const Flexible(child: _RiskStateBadge.unknown())
+          else if (_assessmentRefused(assessment))
+            const Flexible(child: _RiskStateBadge.hidden())
           else if (_assessmentAnswered(assessment))
-            _riskBadge(riskLevel),
+            Flexible(child: _riskBadge(riskLevel)),
         ])),
         const SizedBox(height: 12),
 
@@ -367,7 +372,8 @@ class _OverviewTab extends ConsumerWidget {
 
         // ── Coach Action Center ──
         _CoachActionCenter(actions: actions, clientId: clientId, paidPlan: paidPlan,
-          paidCheckFailed: paidCheckFailed),
+          paidCheckFailed: paidCheckFailed,
+          riskActionsUnavailable: _assessmentUnavailable(assessment)),
         const SizedBox(height: 12),
 
         // ── Assigned Program ──
@@ -510,19 +516,63 @@ class _OverviewTab extends ConsumerWidget {
       case 'low':      color = _green; label = 'LOW RISK';  break;
       default:         color = _mut;   label = 'NOT ASSESSED'; break;
     }
-    return _riskBadgeLabel(label, color);
-  }
-
-  Widget _riskBadgeLabel(String label, [Color color = _mut]) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: color.withValues(alpha: 0.4))),
-      child: Text(label,
+      child: Text(label, maxLines: 2, overflow: TextOverflow.ellipsis,
+        textAlign: TextAlign.center,
         style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 0.5)));
   }
+}
+
+/// The header badge when the assessment did NOT answer with a risk level
+/// (P0-FL-37 UX-2/UX-3). Each looks unlike every assessed state and unlike
+/// "NOT ASSESSED" (a claim about the client), and tells a screen reader why.
+class _RiskStateBadge extends StatelessWidget {
+  final String label;
+  final String semanticsLabel;
+  final IconData icon;
+  final Color color;
+  /// Outlined (no fill): a state of the READ, not a risk level.
+  final bool outlined;
+
+  /// The read failed: risk is unknown. Amber, outlined, question mark.
+  const _RiskStateBadge.unknown()
+      : label = 'RISK UNKNOWN',
+        semanticsLabel = 'Risk level unknown — assessment could not load',
+        icon = Icons.help_outline,
+        color = _amber,
+        outlined = true;
+
+  /// 42501: not this client's active coach. Muted, with a lock.
+  const _RiskStateBadge.hidden()
+      : label = 'RISK HIDDEN',
+        semanticsLabel = 'Risk level hidden until coaching is active',
+        icon = Icons.lock_outline,
+        color = _mut,
+        outlined = false;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    container: true,
+    excludeSemantics: true,
+    label: semanticsLabel,
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: outlined ? Colors.transparent : color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: outlined ? 0.8 : 0.4))),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, color: color, size: 11),
+        const SizedBox(width: 4),
+        Flexible(child: Text(label, maxLines: 2, overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.w800,
+            letterSpacing: 0.5))),
+      ])));
 }
 
 // ── Client Timeline ───────────────────────────────────────────────────────────
@@ -1567,8 +1617,14 @@ class _CoachActionCenter extends ConsumerStatefulWidget {
   /// The check FAILED (as opposed to still running) — only meaningful while
   /// [paidPlan] is null.
   final bool paidCheckFailed;
+  /// P0-FL-37 (SEC S-4): the assessment read failed or was refused, so the
+  /// assessment-driven items ("Review Injury Details", "Review High-Risk
+  /// PAR-Q") cannot be generated. Said in one neutral line — no action is
+  /// invented in their place, and their absence is not "nothing to review".
+  final bool riskActionsUnavailable;
   const _CoachActionCenter({required this.actions, required this.clientId,
-    required this.paidPlan, required this.paidCheckFailed});
+    required this.paidPlan, required this.paidCheckFailed,
+    this.riskActionsUnavailable = false});
 
   @override
   ConsumerState<_CoachActionCenter> createState() => _CoachActionCenterState();
@@ -1698,6 +1754,17 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
               minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap)),
       ]),
       const SizedBox(height: 10),
+      // Not a live region: the assessment's own failure notice on this page
+      // already announces the failure; this only explains the gap here.
+      if (widget.riskActionsUnavailable)
+        const Padding(
+          padding: EdgeInsets.only(bottom: 8),
+          child: Row(children: [
+            Icon(Icons.info_outline, color: _mut, size: 16),
+            SizedBox(width: 8),
+            Expanded(child: Text('Assessment not loaded — risk actions unavailable',
+              style: TextStyle(color: _mut, fontSize: 12))),
+          ])),
       if (visible.isEmpty)
         const Text('All caught up — tap “Add” to assign a custom action item.',
           style: TextStyle(color: _mut, fontSize: 13))
@@ -1879,6 +1946,16 @@ bool _assessmentAnswered(AsyncValue<ClientAssessment> a) {
   return s != null && s.status != ClientAssessmentStatus.notActiveCoach;
 }
 
+/// The read settled as 42501: the coach may not read it yet.
+bool _assessmentRefused(AsyncValue<ClientAssessment> a) =>
+    _settledAssessment(a)?.status == ClientAssessmentStatus.notActiveCoach;
+
+/// The read settled WITHOUT the client's answers it would need for risk
+/// actions: it failed, or it was refused. (Not while loading; not a client
+/// with no assessment — that is an answer, and there is no risk to act on.)
+bool _assessmentUnavailable(AsyncValue<ClientAssessment> a) =>
+    (a.hasError && !a.isLoading) || _assessmentRefused(a);
+
 /// What the assessment areas show instead of answers they do not have
 /// (P0-FL-37). A failed or refused read is never rendered as an empty
 /// assessment, because an empty PAR-Q reads as a client with no flags.
@@ -1911,12 +1988,16 @@ class _AssessmentStatePanel extends ConsumerWidget {
     }
     final s = assessment.requireValue;
     final String text;
+    var icon = Icons.assignment_outlined;
     switch (s.status) {
       case ClientAssessmentStatus.notActiveCoach:
         text = "This client's assessment is available once coaching is active.";
+        icon = Icons.lock_outline;
         break;
       case ClientAssessmentStatus.noRow:
-        text = 'No assessment on file.';
+        // UX-1: names the cause, so it does not read like "Not completed yet".
+        text = 'No assessment on file for this client yet — it appears here '
+            'once they complete one.';
         break;
       case ClientAssessmentStatus.loaded:
         // has_assessment = false: the intake was never filled in.
@@ -1933,7 +2014,7 @@ class _AssessmentStatePanel extends ConsumerWidget {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: _brd)),
         child: Row(children: [
-          const Icon(Icons.assignment_outlined, color: _mut, size: 18),
+          Icon(icon, color: _mut, size: 18),
           const SizedBox(width: 10),
           Expanded(child: Text(text,
             style: const TextStyle(color: _mut, fontSize: 13, height: 1.4))),

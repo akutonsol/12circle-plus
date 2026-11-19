@@ -244,11 +244,14 @@ Future<void> _io(WidgetTester t) async {
   }
 }
 
-Future<void> _pumpPage(WidgetTester t) async {
+Future<void> _pumpPage(WidgetTester t,
+    {double width = 1200, double textScale = 1}) async {
   t.view
     ..devicePixelRatio = 1
-    ..physicalSize = const Size(1200, 4000);
+    ..physicalSize = Size(width, 4000);
   addTearDown(t.view.reset);
+  t.platformDispatcher.textScaleFactorTestValue = textScale;
+  addTearDown(t.platformDispatcher.clearTextScaleFactorTestValue);
   await t.pumpWidget(ProviderScope(
     overrides: [
       // Only reads unrelated to the assessment are substituted; the page's
@@ -279,6 +282,14 @@ String _screenText(WidgetTester t) => find
     .join(' | ');
 
 final _lowRisk = RegExp(r'low\s*risk', caseSensitive: false);
+
+const _noRowCopy = 'No assessment on file for this client yet — it appears '
+    'here once they complete one.';
+const _notActiveCopy =
+    "This client's assessment is available once coaching is active.";
+const _riskActionsGap = 'Assessment not loaded — risk actions unavailable';
+const _unknownSemantics = 'Risk level unknown — assessment could not load';
+const _hiddenSemantics = 'Risk level hidden until coaching is active';
 
 /// [text] sits inside a `Semantics(liveRegion: true, container: true)`.
 bool _inLiveRegion(WidgetTester t, Finder text) => find
@@ -388,13 +399,18 @@ void main() {
     }
   });
 
-  testWidgets('no row: "No assessment on file"', (t) async {
+  testWidgets('no row: "No assessment on file", naming the cause (UX-1)',
+      (t) async {
     server.rpc = _Rpc.empty;
     await _pumpPage(t);
-    expect(find.text('No assessment on file.'), findsOneWidget);
+    expect(find.text(_noRowCopy), findsOneWidget);
     expect(find.textContaining(_lowRisk), findsNothing);
+    expect(find.textContaining('Not completed yet'), findsNothing,
+        reason: 'no row and has_assessment=false must not read the same');
+    expect(find.text(_riskActionsGap), findsNothing,
+        reason: 'no assessment is an answer, not a failed read');
     await _openTab(t, 'PAR-Q');
-    expect(find.text('No assessment on file.'), findsOneWidget);
+    expect(find.text(_noRowCopy), findsOneWidget);
     final text = _screenText(t);
     expect(text.contains('none reported'), isFalse);
     expect(text.contains('no injuries reported'), isFalse);
@@ -482,5 +498,127 @@ void main() {
     expect(server.rpcBodies.length, sentBefore + 1);
     expect(find.text('Risk Score: 5 / 8'), findsOneWidget);
     expect(find.text('HIGH RISK'), findsOneWidget);
+  });
+
+  // ── Review round (UX-1/2/3, SEC S-4) ──────────────────────────
+
+  testWidgets(
+      'UX-1: the 42501 panel carries a lock, not the same icon as the '
+      'no-row / not-completed panels', (t) async {
+    server.rpc = _Rpc.denied;
+    await _pumpPage(t);
+    final panel = find.ancestor(
+        of: find.text(_notActiveCopy), matching: find.byType(Row)).first;
+    expect(find.descendant(of: panel, matching: find.byIcon(Icons.lock_outline)),
+        findsOneWidget);
+    expect(
+        find.descendant(
+            of: panel, matching: find.byIcon(Icons.assignment_outlined)),
+        findsNothing);
+  });
+
+  testWidgets(
+      'UX-2: a refused read shows a "RISK HIDDEN" badge, told to a screen '
+      'reader — the header slot is not silently empty', (t) async {
+    final handle = t.ensureSemantics();
+    server.rpc = _Rpc.denied;
+    await _pumpPage(t);
+    expect(find.text('RISK HIDDEN'), findsOneWidget);
+    expect(find.bySemanticsLabel(_hiddenSemantics), findsOneWidget);
+    expect(find.text('NOT ASSESSED'), findsNothing);
+    expect(find.text('RISK UNKNOWN'), findsNothing,
+        reason: 'a refusal is an answer, not a failed read');
+    handle.dispose();
+  });
+
+  testWidgets(
+      'UX-3: RISK UNKNOWN has its own semantics label and does not look like '
+      'NOT ASSESSED', (t) async {
+    final handle = t.ensureSemantics();
+    server.rpc = _Rpc.http500;
+    await _pumpPage(t);
+    expect(find.text('RISK UNKNOWN'), findsOneWidget);
+    expect(find.bySemanticsLabel(_unknownSemantics), findsOneWidget);
+    final label = t.widget<Text>(find.text('RISK UNKNOWN'));
+    // NOT ASSESSED is drawn in the muted text colour; UNKNOWN must not be.
+    expect(label.style?.color, isNot(const Color(0xFFCFC2D6)));
+    expect(find.text('RISK HIDDEN'), findsNothing);
+    handle.dispose();
+  });
+
+  for (final state in [_Rpc.http500, _Rpc.denied]) {
+    testWidgets(
+        'UX-3: at 2x text on a 320dp screen the ${state.name} badge neither '
+        'overflows nor squeezes the name column', (t) async {
+      // Other cards on this page (score ring, Action Center rows) already
+      // overflow at 2x on 320dp; that is outside this package. Their overflow
+      // reports are collected here so they do not fail THIS test, and the
+      // header row is checked by geometry: an overflowing Row lays its last
+      // child out past its own right edge. Anything that is not an overflow
+      // report is rethrown.
+      final previous = FlutterError.onError;
+      final others = <FlutterErrorDetails>[];
+      FlutterError.onError = (d) {
+        if (d.exceptionAsString().contains('overflowed')) return;
+        others.add(d);
+      };
+      try {
+        server.rpc = state;
+        await _pumpPage(t, width: 320, textScale: 2);
+      } finally {
+        FlutterError.onError = previous;
+      }
+      expect(others.map((d) => d.exceptionAsString()), isEmpty);
+
+      final badge = state == _Rpc.http500 ? 'RISK UNKNOWN' : 'RISK HIDDEN';
+      expect(find.text(badge), findsOneWidget);
+      final header = find
+          .ancestor(of: find.text('Jordan Test'), matching: find.byType(Row))
+          .first;
+      final badgeBox = find
+          .ancestor(of: find.text(badge), matching: find.byType(Container))
+          .first;
+      expect(find.descendant(of: header, matching: badgeBox), findsOneWidget,
+          reason: 'the badge sits in the header row');
+      final row = t.getRect(header);
+      final b = t.getRect(badgeBox);
+      expect(b.right, lessThanOrEqualTo(row.right + 0.01),
+          reason: 'the header row overflows: badge ends at ${b.right}, '
+              'row at ${row.right}');
+      // The name's column (the Expanded beside the avatar), not the text run.
+      final name = t.getSize(find
+          .ancestor(of: find.text('Jordan Test'), matching: find.byType(Column))
+          .first);
+      expect(name.width, greaterThanOrEqualTo(b.width),
+          reason: 'the client name keeps at least as much room as the badge '
+              '(name ${name.width}, badge ${b.width})');
+    });
+  }
+
+  for (final state in [_Rpc.http500, _Rpc.network, _Rpc.denied]) {
+    testWidgets(
+        'SEC S-4: a ${state.name} assessment read says in the Action Center '
+        'that risk actions are unavailable', (t) async {
+      server.rpc = state;
+      await _pumpPage(t);
+      expect(find.text(_riskActionsGap), findsOneWidget);
+      expect(find.text('Review High-Risk PAR-Q'), findsNothing,
+          reason: 'no action is invented from data that did not load');
+      expect(find.text('Review Injury Details'), findsNothing);
+    });
+  }
+
+  testWidgets(
+      'SEC S-4: a loaded assessment shows its risk actions and no gap line; '
+      'nor is the gap line shown while the read is in flight', (t) async {
+    server.holdRpc = Completer<void>();
+    await _pumpPage(t);
+    expect(find.text("Loading this client's assessment…"), findsOneWidget);
+    expect(find.text(_riskActionsGap), findsNothing, reason: 'still loading');
+    server.holdRpc!.complete();
+    await _io(t);
+    expect(find.text('Review High-Risk PAR-Q'), findsOneWidget);
+    expect(find.text('Review Injury Details'), findsOneWidget);
+    expect(find.text(_riskActionsGap), findsNothing);
   });
 }
