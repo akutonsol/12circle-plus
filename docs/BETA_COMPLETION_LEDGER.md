@@ -10,7 +10,7 @@ evidence. Nothing is marked complete without it.
 |---|---|
 | `origin/main` | `8f2c8a0` (PR #159), CI run `43792727007` **7/7 success** |
 | Live QA evidence on main | security **1173/1173**, AI **51/51**, ENV-3 L-1..L-5 PASS (ledger 188 rows; frontier 192; 182–186 declared excluded) |
-| Open PRs | #14 (owner's, untouched) · #160–#166, each CI 7/7 on its exact head — **none of this mission's PRs are to be merged without explicit authorization** |
+| Open PRs | #14 (owner's, untouched) · #160–#191, all unmerged. Flutter P0 stack CI 7/7 on each exact head. #183 targets `integration/p0-flutter-stack`; #184–#190 target #183's branch; #191 targets #189's. Combined branch `integration/p0-flutter-stack-c6` @ `6f8918f` CI 7/7. **None to be merged without explicit authorization** |
 | QA migrations | applied through **192** (182–186 excluded). **Pending, not applied:** 193, 194, 195, 196 |
 | QA Edge Functions | **1 of 19 deployed** (`ai-nutrition` v18, deployed ~2026-09-30 from the pre-rename path) |
 | QA function secrets | `ANTHROPIC_API_KEY` + Supabase defaults only. **No Stripe, no email provider, no `APP_URL`, no YouTube** |
@@ -608,6 +608,67 @@ copy decision); group-membership readable by all (decision).
 
 **P0 acceptance after cycle 5: unchanged — 2 of 14 journeys (14%), 0 of 4 beta-ready conditions.**
 
+### Cycle 6: P0-FL-19, P0-FL-37, P0-FL-13/15/18/14/16/17 and the QA migration discrepancy report (2026-11-18/19)
+
+**Base.** Every package starts from #183's head (`2ecd6e2` = `integration/p0-flutter-stack` + the shared `isNetworkFailure`). Each PR **targets `fix/shared-network-failure-and-cleanup`** (#183's branch), so its diff shows one package. P0-FL-17 targets P0-FL-16's branch because they share files. #183 still targets `integration/p0-flutter-stack`, unchanged.
+
+**Do not merge into a PR's own base.** Merging a PR's head into its base branch would make GitHub mark that PR merged.
+
+**Combined evidence branch.** `integration/p0-flutter-stack-c6` = `integration/p0-flutter-stack` (`e606fe5`, unchanged) + #183's head `2ecd6e2` + the eight cycle-6 final heads (`72fed97`, `e3d5636`, `c117cfb`, `ef3d67a`, `b556bca`, `3f357ee`, `beb2a3f`, `d307187`), merged locally. Nothing went into `main` or into any PR base.
+- **@ `6f8918f`:** analyze **287**, **3192** tests pass, static guards 0, CI's 10 negative controls 0 (run locally). CI (push): **7/7** run `44463329197` on `6f8918f`.
+- **It caught a composition defect that per-PR CI could not see:**
+  - FL-14's notification stream re-opens itself on a back-off timer.
+  - FL-15's coach routing test kept its provider container alive past the tree, so the test ended with "A Timer is still pending".
+  - Fixed test-only on FL-15 (`c117cfb`): the test disposes the container with the tree. It passes with and without FL-14.
+
+| PR | Package | Final head | Commits (author) | Independent verdicts at the final head | Lead mutants | Tests (full suite) | CI (exact head) |
+|---|---|---|---|---|---|---|---|
+| #185 | **P0-FL-19** intake: a baseline-photo upload failure keeps the user on the step and says what was and wasn't saved (Try again re-sends only failed slots; "Continue anyway"); a failed resume read shows a retry-only notice and **no save can write blank answers over stored ones**; coach-list failure is not "No coaches" | `e3d5636` | engineer 1646e59, 36fdfce, e3d5636 | UX PASS-WITH-NOTES · security APPROVE · QA **VERIFIED** (first pass NOT VERIFIED: the new copy broke CI's EC-03 negative control; fixed) | all caught (incl. markIncomplete 0-row/throw, double-fire, notice reveal) | 2983 | 7/7 `44446529335` |
+| #187 | **P0-FL-37** the coach reads a client's assessment (PAR-Q, risk, medical, injuries…) only through the logged `get_client_assessment` RPC (writes `assessment_access_log`); the profile read is an explicit non-assessment column list; 42501 / no row / not completed / failure states, with RISK UNKNOWN or RISK HIDDEN, never low risk. Authorization unchanged (live QA: both paths admit exactly `is_active_coach_of`) | `ef3d67a` | engineer 8748c9b, b581580, b5c6c49; lead d9655ad (coordinator now pins one RPC caller; CON-03 memo fact update, decision still PENDING), ef3d67a (EC-04 device probe override) | UX PASS-WITH-NOTES · security APPROVE-WITH-NOTES · QA **VERIFIED** | 7/7 (×3 heads) | 2987 | 7/7 `44451418256` (first run on b5c6c49 failed EC-04, fixed) |
+| #184 | **P0-FL-13** inbox failure is an error state, not "No conversations yet"; a saved message whose preview update fails counts as sent (no false "not sent", no duplicate resend); chat send copy split network/other | `72fed97` | engineer 23eceae, d55791f, f77496d, 8c439b0, 72fed97 | UX PASS · security APPROVE-WITH-NOTES · QA **VERIFIED** | 6/6 | 2988 | 7/7 `44444119951` |
+| #186 | **P0-FL-15** a failed role read after sign-in never routes a coach, admin or vendor to the client `/home`. The login screen shows "Couldn't load your account" with Try again and Sign out, a loading state instead of the credentials form, and an account-switch guard. The router redirect stops guessing. | `c117cfb` | engineer 77bfb49, 3fecf0a, 1ea045c; lead c117cfb (test teardown) | UX PASS-WITH-NOTES · security APPROVE-WITH-NOTES · QA **VERIFIED** (first pass NOT VERIFIED: coverage) | 9/10 + 1 equivalent | 3002 | 7/7 `44459402632` |
+| #188 | **P0-FL-18** five `WorkoutService` reads rethrow; strength, coach J11 and train-hub sections show scoped failures with retry (not "No data yet", "No personal records yet" or "No sessions recorded") | `b556bca` | engineer 7827c94, b556bca | UX PASS-WITH-NOTES · security APPROVE-WITH-NOTES · QA **VERIFIED** | 9/9 | 3002 | 7/7 `44453836812` |
+| #189 | **P0-FL-16** the profile read rethrows. Profile shows a failure, not "Member" defaults. Personal Info, Notifications and Settings units are **locked until the profile loads** (touch, screen reader and handler layers), so no default can be saved over the real profile. | `3f357ee` | engineer 28ad13e, 4db8348, c9dd151, 3f357ee | UX PASS-WITH-NOTES · security APPROVE-WITH-NOTES · QA **VERIFIED** | all single-surface caught; all-layers-off caught; 3 single-layer survivors equivalent (another layer still blocks) | 3005 | 7/7 `44454848750` |
+| #190 | **P0-FL-14** coach notification failures reach the bell (unknown, not 0) and the sheet (retry); the dead stream re-opens with back-off (2 s to 1 min, reset on data). Availability failure is a retry state, with Add slot disabled. A 0-row or thrown slot delete is told. | `beb2a3f` | engineer 86d6610, 5e02026, beb2a3f | UX PASS-WITH-NOTES · security APPROVE-WITH-NOTES · QA **VERIFIED** | all caught (8) | 3000 | 7/7 `44456761740` |
+| #191 | **P0-FL-17** an unknown plan is never shown as "Free": "…" / "—" with retry on five screens; Upgrade marks nothing Current and offers nothing while unknown; entitlements and paywall unchanged | `d307187` | engineer 0b8b8e1 (lead rebase onto 3f357ee → 967a8b2), d307187 | UX PASS · security APPROVE-WITH-NOTES · QA **VERIFIED** | 8/8 | 3044 | 7/7 `44461871147` |
+
+All final heads: flutter analyze **287** (= base), contract guard exit 0 with unseen 31, coordinator 268/268, static guards 0, CI's 10 negative controls 0 (run locally by the lead).
+
+**What the evidence covers:** automated evidence only — widget and unit tests on fakes, lead-run mutants, guards, and CI on each PR and on the combined branch.
+- No device, simulator or live-QA run.
+- Not observed: that a real coach page open writes one `assessment_access_log` row.
+- **Journey completion is unchanged: 2/14, beta-ready conditions 0/4.**
+
+**Silent-error inventory:** the last **P1** (intake baseline photos) is closed by #185. All 21 P2 rows now have a PR (#182, #184–#190, #191). Remaining: ≈111 P3 (P0-FL-20 … P0-FL-36) plus the new follow-ups below.
+
+**QA migration discrepancy report** (`docs/QA_MIGRATION_DISCREPANCY_REPORT.md`, read-only):
+- **QA state:** QA ledger 000–181 + 187–192 (188 rows). 182–186 are absent, and 193–195 are authored but pending.
+- **Main's `expected_applied.json` is accurate** (frontier 192; 182–186 excluded with gates). The cycle-5 claim that it "still says 181" was **false** (read from a stale checkout) and is corrected.
+- **Security exposure:** QAX-SEC-01 (P0, 184) and QAX-SEC-03 (P1, 185) are live on QA. The report lists the exact live predicates, tables, operations and roles.
+- **Proposed sequences, both for Julia to choose:**
+  - **Option S:** 184 → 185 only.
+  - **Option R:** the manifest's 182 → 186 batch.
+  - Both use per-file apply with a ledger row, read-back, live suites alone, then CI. Never `supabase db push`.
+
+**New follow-ups (engineering, decision-free):**
+- **P0-FL-38:** unlogged assessment reads in `coach_copilot_screen.dart` (injuries, goal, experience, location), `coach_dashboard_screen.dart` (roster `risk_level`) and `coach_relationship_service.dart` (`fitness_goal`, `weight_kg`).
+- Notification-sheet write callbacks (mark read, mark all, swipe delete, clear all) and `_cancelSession` voice.
+- `notification _saveToggle` and the avatar/save paths: no 0-row checks.
+- Ten role-gated screens say "Coaches only." when the profile read failed.
+- Manage subscription draws nothing when the subscriptions or coaches reads fail.
+- `train_hub` activeSession failure (EC-G6).
+- Pre-existing 2× overflows: photo step, client page, Profile and Settings headers, notification sheet header.
+- `AuthButton` Semantics when `onTap` is null; the router redirect's own account-switch check.
+
+**New decisions for Julia (not taken):**
+- Server-side enforcement that coach PHI reads go through the RPC (column privileges or a view; a migration).
+- Whether profile basics stay visible when the assessment is gated.
+- Unit preference when the profile read fails (workouts default to lb).
+- "Couldn't refresh" cues for Profile and plan after a good read.
+- Sign out on intake's resume-failure screen.
+- A server trigger for the conversation preview.
+- Brand-button contrast.
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
@@ -683,5 +744,31 @@ exists.
 
 ## Next autonomous action
 
-Phase 3: client/coach journey audit for decision-free defects (cross-sync, false
-success, dead ends), one focused PR each; update this ledger after each.
+**Cycle 7 recommendation (2026-11-19)** — decision-free work, data integrity and security first. Each package goes on #183's
+branch, with the same review, mutant and combined-branch discipline as cycle 6.
+
+1. **P0-FL-38: unlogged PHI reads (security).** Move the coach-side assessment reads onto the logged
+   `get_client_assessment` RPC, or drop them:
+   - `coach_copilot_screen.dart` (injuries, goal, experience, location);
+   - `coach_dashboard_screen.dart` (roster-wide `risk_level`; whether a roster risk count counts as an "assessment view"
+     is a decision; until then, report it rather than change it);
+   - `coach_relationship_service.dart` (`fitness_goal`, `weight_kg`).
+2. **P0-FL-39: false-success writes (data integrity).** Add `.select('id')` 0-row checks and honest failure on:
+   - notification `_saveToggle`;
+   - the Personal Info avatar and save;
+   - notification-sheet mark read, mark all, swipe delete and clear all;
+   - availability `_cancelSession`.
+3. **P0-FL-40: failures shown as false facts.**
+   - Ten role-gated screens say "Coaches only." when the profile read failed.
+   - Manage subscription shows empty subscriptions or coaches on a failed read.
+   - `train_hub` activeSession (EC-G6).
+4. **Later:** cosmetic and accessibility items (2× overflows, `AuthButton` Semantics), and the P3 backlog P0-FL-20 … P0-FL-36.
+
+**Blocked on Julia (stays read-only until authorized):**
+- the QA window for **184/185** (Option S or R in `docs/QA_MIGRATION_DISCREPANCY_REPORT.md`); this is the highest-severity open security item;
+- Decision 19 / F1 (PAR-Q clear) and server-side PHI read enforcement;
+- P0-SB-2 (Decisions 17, 18);
+- P0-SB-3 (Decision 20);
+- member-list access (Decision 22);
+- Decisions 21, 23 and 24;
+- merge order for the open stack #172–#191.
