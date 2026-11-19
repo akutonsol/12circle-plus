@@ -1944,6 +1944,11 @@ bool _settledFailure(AsyncValue<Object?>? previous, AsyncValue<Object?> next) =>
     !next.isLoading &&
     (previous == null || previous.isLoading || !previous.hasError);
 
+/// One of the sheet's writes. A typedef, not an inline `Function()` type: the
+/// ERR-G1 guard reads bool/int/double future declarations with a regex that
+/// cannot see past nested parentheses in the parameter list.
+typedef _SheetWrite = Future<void> Function();
+
 /// A write the server answered with no changed row (P0-FL-39).
 void _expectRows(Object? rows) {
   if (rows is! List || rows.isEmpty) {
@@ -1984,7 +1989,7 @@ class _NotificationsSheetState extends ConsumerState<_NotificationsSheet> {
   /// failure is reported and said here, and the list keeps showing what is
   /// stored (nothing was changed locally).
   Future<bool> _run(String key, String origin, String what,
-      Future<void> Function() write) async {
+      _SheetWrite write) async {
     if (_busy.contains(key)) return false;
     setState(() { _busy.add(key); _failure = null; });
     try {
