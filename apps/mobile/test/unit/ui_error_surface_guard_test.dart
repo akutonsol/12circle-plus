@@ -198,7 +198,8 @@ void main() {
       // even if another was fixed in the same change.
       const recorded = {
         'lib/features/workout/presentation/train_hub_screen.dart',
-        'lib/features/workout/presentation/coach_client_workout_screen.dart',
+        // coach_client_workout_screen.dart closed by P0-FL-18 (PR and session
+        // lists now render SectionLoadFailure with Try again).
       };
       final workoutHits = _silentErrorBranches()
           .where((h) => h.file.startsWith('lib/features/workout/'))
