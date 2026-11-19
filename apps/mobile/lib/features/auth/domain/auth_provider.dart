@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import '../data/auth_service.dart';
 
 final authServiceProvider = Provider<AuthService>((ref) => AuthService());
@@ -99,9 +100,16 @@ final currentUserProfileProvider = FutureProvider<Map<String, dynamic>?>((ref) a
         ''')
         .eq('id', user.id)
         .maybeSingle();
+    // `null` here means only one thing: the read SUCCEEDED and there is no row.
     return data;
-  } catch (e) {
-    return null;
+  } catch (e, st) {
+    // P0-FL-16: this was `return null`, so a failed read looked exactly like
+    // "no profile" — Profile showed "Member" defaults and the edit forms
+    // pre-filled with nothing. The failure is recorded and passed on; consumers
+    // that read `.valueOrNull` still see null, the ones that must tell the two
+    // apart match on AsyncError.
+    reportError('currentUserProfileProvider', e, st);
+    rethrow;
   }
 });
 

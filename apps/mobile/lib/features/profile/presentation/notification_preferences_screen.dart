@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/domain/auth_provider.dart';
+import 'widgets/profile_load_failed_notice.dart';
 
 const _bg   = Color(0xFF0E0E0F);
 const _pri  = Color(0xFFDDB7FF);
@@ -31,23 +32,37 @@ class _NotificationPreferencesScreenState
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadData());
+    // A profile already read (the usual case: Profile or Settings read it
+    // first) is applied before the first frame, so the screen does not flash
+    // a locked "Loading…" state for one frame (UX-F4). A read still in flight
+    // is applied by the listener in build when it lands.
+    _apply(ref.read(currentUserProfileProvider));
   }
 
-  void _loadData() {
-    final p = ref.read(currentUserProfileProvider).valueOrNull;
-    if (p == null) return;
-    setState(() {
-      _workoutReminders = p['notif_workout_reminders'] as bool? ?? true;
-      _checkinReminders = p['notif_checkin_reminders'] as bool? ?? true;
-      _coachMessages    = p['notif_coach_messages']    as bool? ?? true;
-      _progressUpdates  = p['notif_progress_updates']  as bool? ?? true;
-      _challenges       = p['notif_challenges']        as bool? ?? false;
-      _community        = p['notif_community']         as bool? ?? false;
-    });
+  /// True once the toggles show the member's stored preferences (or the read
+  /// answered "no profile row", which keeps the defaults as before).
+  bool _loaded = false;
+
+  /// P0-FL-16: only a successful read fills the toggles. A failed read is an
+  /// AsyncError now (it used to be `null`, which left the defaults showing as
+  /// the member's settings and every toggle live). Returns whether it applied.
+  bool _apply(AsyncValue<Map<String, dynamic>?> state) {
+    if (_loaded || state is! AsyncData<Map<String, dynamic>?>) return false;
+    _loaded = true;
+    final p = state.value;
+    if (p == null) return true;
+    _workoutReminders = p['notif_workout_reminders'] as bool? ?? true;
+    _checkinReminders = p['notif_checkin_reminders'] as bool? ?? true;
+    _coachMessages    = p['notif_coach_messages']    as bool? ?? true;
+    _progressUpdates  = p['notif_progress_updates']  as bool? ?? true;
+    _challenges       = p['notif_challenges']        as bool? ?? false;
+    _community        = p['notif_community']         as bool? ?? false;
+    return true;
   }
 
   Future<void> _saveToggle(String field, bool value) async {
+    // Nothing is written over preferences that have not been read.
+    if (!_loaded) return;
     try {
       final uid = Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) return;
@@ -68,6 +83,20 @@ class _NotificationPreferencesScreenState
 
   @override
   Widget build(BuildContext context) {
+    // Fill the toggles when the read lands (first load, or a successful Try
+    // again). Before, a profile still loading at the first frame was never
+    // applied, so the defaults stayed on screen as if they were stored.
+    ref.listen<AsyncValue<Map<String, dynamic>?>>(
+      currentUserProfileProvider,
+      (_, next) { if (_apply(next)) setState(() {}); },
+    );
+    final profileAsync = ref.watch(currentUserProfileProvider);
+    // Locked until the stored preferences are known: a toggle drawn from a
+    // default is not the member's setting, and flipping it would store the
+    // opposite of what they think they are choosing.
+    final locked = !_loaded;
+    final loadError = locked && profileAsync.hasError ? profileAsync.error : null;
+
     final top    = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
 
@@ -101,6 +130,37 @@ class _NotificationPreferencesScreenState
               child: Text(
                 'Control which notifications you receive. Changes save automatically.',
                 style: TextStyle(color: _out, fontSize: 13, height: 1.5))),
+
+            if (loadError != null) ...[
+              ProfileLoadFailedNotice(
+                error: loadError,
+                busy: profileAsync.isLoading,
+                detail: "Your notification settings can't be changed until "
+                    'they load.',
+                onRetry: () => ref.invalidate(currentUserProfileProvider),
+              ),
+              const SizedBox(height: 20),
+            ] else if (locked) ...[
+              Semantics(
+                liveRegion: true,
+                child: const Row(children: [
+                  SizedBox(width: 14, height: 14,
+                    child: CircularProgressIndicator(color: _pri, strokeWidth: 2)),
+                  SizedBox(width: 10),
+                  Text('Loading your notification settings…',
+                    style: TextStyle(color: _out, fontSize: 12)),
+                ])),
+              const SizedBox(height: 20),
+            ],
+
+            // Locked for touch AND for a screen reader: blocking the pointer
+            // alone left every toggle activatable by TalkBack/VoiceOver, which
+            // WROTE a default over the stored setting (UX-F2).
+            IgnorePointer(ignoring: locked, child: ExcludeSemantics(
+              excluding: locked,
+              child: Opacity(
+              opacity: locked ? 0.45 : 1,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
 
             // ── Training ──
             _sectionLabel('TRAINING'),
@@ -193,6 +253,7 @@ class _NotificationPreferencesScreenState
                   }
                 }),
             ])),
+            ])))),
           ]),
         )),
       ]),
@@ -239,7 +300,11 @@ class _NotificationPreferencesScreenState
           color: _out, fontSize: 12, height: 1.3)),
       ])),
       const SizedBox(width: 12),
-      _PurpleToggle(value: value, onChanged: onChanged),
+      // Every toggle refuses while locked, whatever reached it (UX-F2).
+      _PurpleToggle(value: value, onChanged: (v) {
+        if (!_loaded) return;
+        onChanged(v);
+      }),
     ]));
 }
 
