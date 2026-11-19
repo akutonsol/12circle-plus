@@ -76,3 +76,10 @@ Totals at f4cf7b1: **P1 3, P2 21, P3 ≈111, fine ≈30, Women's Health 1 (noted
 (#182, #184–#191). Combined branch `integration/p0-flutter-stack-c6` @ 6f8918f (all of them together): 3192 tests,
 CI 7/7 (run 44463329197). Automated evidence only — no device or live-QA run; nothing is merged. Remaining: ≈111 P3
 (P0-FL-20 … P0-FL-36) and the cycle-6 follow-ups in the ledger (P0-FL-38 unlogged assessment reads first).
+
+**Status 2026-11-19 (cycle 7).** The cycle-6 follow-ups are now in PRs, all CI 7/7 on their exact heads:
+- **#194 (P0-FL-38):** unlogged coach health reads, the Requests-tab crash on a missing profile, and the copilot injury parse.
+- **#192 (P0-FL-39):** false-success writes in notification preferences, Personal Info, the coach notification sheet and availability cancel.
+- **#193 (P0-FL-40):** role gates and Manage subscription showing a failed read as a fact, and the train-hub active session.
+
+Combined branch `integration/p0-flutter-stack-c7` @ df35d5f: 3335 tests, CI 7/7 (run 44497593361). Remaining: the P3 backlog and the cycle-8 list in the ledger.

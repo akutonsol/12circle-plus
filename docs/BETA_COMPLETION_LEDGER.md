@@ -10,7 +10,7 @@ evidence. Nothing is marked complete without it.
 |---|---|
 | `origin/main` | `8f2c8a0` (PR #159), CI run `43792727007` **7/7 success** |
 | Live QA evidence on main | security **1173/1173**, AI **51/51**, ENV-3 L-1..L-5 PASS (ledger 188 rows; frontier 192; 182–186 declared excluded) |
-| Open PRs | #14 (owner's, untouched) · #160–#191, all unmerged. Flutter P0 stack CI 7/7 on each exact head. #183 targets `integration/p0-flutter-stack`; #184–#190 target #183's branch; #191 targets #189's. Combined branch `integration/p0-flutter-stack-c6` @ `6f8918f` CI 7/7. **None to be merged without explicit authorization** |
+| Open PRs | #14 (owner's, untouched) · #160–#194, all unmerged. Flutter P0 stack CI 7/7 on each exact head. #183 targets `integration/p0-flutter-stack`; #184–#190 target #183's branch; #191 targets #189's; #192–#194 target `integration/p0-flutter-stack-c6`. Combined branches: `-c6` @ `6f8918f` and `-c7` @ `df35d5f`, both CI 7/7. **None to be merged without explicit authorization** |
 | QA migrations | applied through **192** (182–186 excluded). **Pending, not applied:** 193, 194, 195, 196 |
 | QA Edge Functions | **1 of 19 deployed** (`ai-nutrition` v18, deployed ~2026-09-30 from the pre-rename path) |
 | QA function secrets | `ANTHROPIC_API_KEY` + Supabase defaults only. **No Stripe, no email provider, no `APP_URL`, no YouTube** |
@@ -669,6 +669,54 @@ All final heads: flutter analyze **287** (= base), contract guard exit 0 with un
 - A server trigger for the conversation preview.
 - Brand-button contrast.
 
+### Cycle 7: P0-FL-38, P0-FL-39, P0-FL-40 and the 184/185 owner brief (2026-11-19)
+
+**Base.** All three packages start from the cycle-6 combined branch `integration/p0-flutter-stack-c6` @ `6f8918f` and **target it**, so each PR's diff shows one package. They depend on the cycle-6 PRs (#184–#191) being integrated first.
+
+**Combined evidence branch.** `integration/p0-flutter-stack-c7` = `6f8918f` + `a58db40` + `6b82a6d` + `6189d19`.
+- @ `df35d5f`: analyze **287**, **3335** tests pass, static guards 0, CI's 10 negative controls 0 (run locally). CI (push): **7/7** run `44497593361` on `df35d5f`.
+- **Cross-package defect:** FL-38 and FL-40 conflict in `coach_copilot_screen.dart`'s import block only. Both added imports at the same place. Resolved in the combined merge commit by keeping both; the suite passes. **Whichever of #194 and #193 lands second needs the same one-line resolution.**
+
+| PR | Package | Final head | Commits | Independent verdicts at the final head | Lead mutants | Tests (full) | CI (exact head) |
+|---|---|---|---|---|---|---|---|
+| #194 | **P0-FL-38** health data only through the logged route. The copilot reads goal, experience, location and injuries only via the single logged `get_client_assessment` caller, and is blocked only when that read fails (other states warn). Pending requests read `public_profiles` (no health fields or email). **Fixed the Requests-tab crash** under the live policy (every pending request crashed the tab) and the **injury parse bug** (injury areas stored as comma-joined text were never read, so every client reached the engine as uninjured) | `a58db40` | engineer ×5 rounds (4a4e70e … a58db40); lead ade875e (coordinator message) | UX PASS-WITH-NOTES · security APPROVE-WITH-NOTES (no defects; coach reads of client data reduced) · QA **VERIFIED** (crash reproduced on base) | 6/7 + 1 equivalent | 3213 | 7/7 `44492737057` |
+| #192 | **P0-FL-39** writes report success only after the server confirms them: notification preferences (toggle reverted), Personal Info avatar and Save, the coach notification sheet (swipe restored, banner, guards), availability cancel (partial outcome kept visible) | `6b82a6d` | engineer bd5893b, e80ceaf, 6b82a6d | UX PASS-WITH-NOTES · security APPROVE-WITH-NOTES · QA **VERIFIED** | 9/9 | 3242 | 7/7 `44486090822` |
+| #193 | **P0-FL-40** a failed read is never a role or plan fact: nine role-gated screens show loading or a profile-failure notice (fail closed, back control) instead of "Coaches only."; Manage subscription failures shown with retry; train-hub active-session failure scoped | `6189d19` | engineer 1e8bcf6, 6189d19 | UX PASS-WITH-NOTES · security APPROVE-WITH-NOTES (no gate opens on error) · QA **VERIFIED** | 12/12 | 3264 | 7/7 `44488770104` |
+
+All final heads: analyze **287**, contract guard exit 0 (unseen 31), coordinator 268/268, static guards 0, negative controls 0.
+
+**Lead decisions applied (decision-free readings, recorded):**
+- FL-38's first version **blocked** copilot generation for clients with no completed assessment, or an injury without an area. That is a product change, so the lead restored the previous behaviour (generation allowed) with honest notices. **The stricter option is Julia's call.**
+- For not-completed assessments, the answers on file are used, as before.
+
+**Security findings (read-only, no permission or policy change):**
+- After FL-37/FL-38, coach code reads no client health column from `user_profiles` except the dashboard roster's `risk_level` (left unchanged: decision).
+- PHI logging is still enforced **app-side only**. The live `user_profiles` SELECT policy still lets an active coach select every column directly. Closing that needs a migration and approval.
+
+**What the evidence covers:** automated only. No device, simulator or live-QA run. **Journey completion unchanged: 2/14, beta-ready conditions 0/4.**
+
+**Owner decision brief:** `docs/QA_184_185_WINDOW_DECISION_BRIEF.md`.
+- Option S (184 → 185) or Option R (182 → 186).
+- Covers the product consequences, risks (incl. CI's ENV-3 L-2/L-5 failing on every open branch until the manifest change is merged), validation steps and a complete rollback.
+- Nothing executed.
+
+**New decisions for Julia:**
+- Roster `risk_level` logging.
+- Q-H1: may a coach see a pending requester's goal or email?
+- Copilot blocking for incomplete or injury-without-area assessments.
+- Admin copilot defaults.
+- Web deep link onto a gate (no back destination).
+
+**Engineering follow-ups:**
+- `score_service.dart:114`: leaderboard crash class for a missing profile.
+- `generateWorkout` and `predictClient` swallow errors.
+- Sibling `valueOrNull?['role']` reads (`paywall_gate.dart:31`).
+- Six gated screens start fetching before the role is known.
+- The gate helper is duplicated in nine files.
+- Client booking cancel copy and 0-row check.
+- The load-sensitive business-profile photo test.
+- Tighten FL-14's sheet-overflow test allowance (no longer needed).
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
@@ -744,31 +792,22 @@ exists.
 
 ## Next autonomous action
 
-**Cycle 7 recommendation (2026-11-19)** — decision-free work, data integrity and security first. Each package goes on #183's
-branch, with the same review, mutant and combined-branch discipline as cycle 6.
+**Cycle 8 recommendation (2026-11-19).** Cycle 7 is done: P0-FL-38 is #194, P0-FL-39 is #192, P0-FL-40 is #193. Decision-free work, data integrity and security first:
 
-1. **P0-FL-38: unlogged PHI reads (security).** Move the coach-side assessment reads onto the logged
-   `get_client_assessment` RPC, or drop them:
-   - `coach_copilot_screen.dart` (injuries, goal, experience, location);
-   - `coach_dashboard_screen.dart` (roster-wide `risk_level`; whether a roster risk count counts as an "assessment view"
-     is a decision; until then, report it rather than change it);
-   - `coach_relationship_service.dart` (`fitness_goal`, `weight_kg`).
-2. **P0-FL-39: false-success writes (data integrity).** Add `.select('id')` 0-row checks and honest failure on:
-   - notification `_saveToggle`;
-   - the Personal Info avatar and save;
-   - notification-sheet mark read, mark all, swipe delete and clear all;
-   - availability `_cancelSession`.
-3. **P0-FL-40: failures shown as false facts.**
-   - Ten role-gated screens say "Coaches only." when the profile read failed.
-   - Manage subscription shows empty subscriptions or coaches on a failed read.
-   - `train_hub` activeSession (EC-G6).
-4. **Later:** cosmetic and accessibility items (2× overflows, `AuthButton` Semantics), and the P3 backlog P0-FL-20 … P0-FL-36.
+1. **Data integrity.**
+   - The leaderboard crash class: `score_service.dart:114`, an untyped `?? {}` on a missing profile.
+   - Client booking cancel: 0-row check and voice.
+   - `generateWorkout` and `predictClient` swallow errors.
+2. **Role reads.** Sibling `valueOrNull?['role']` reads (`paywall_gate.dart:31` first) treat a failed read as "no role".
+3. **Accessibility and cosmetic.** Shared gate helper (9 copies); 2× overflows; `AuthButton` Semantics; deflake the business-profile photo test.
+4. **P3 backlog:** P0-FL-20 … P0-FL-36.
 
-**Blocked on Julia (stays read-only until authorized):**
-- the QA window for **184/185** (Option S or R in `docs/QA_MIGRATION_DISCREPANCY_REPORT.md`); this is the highest-severity open security item;
+**Blocked on Julia (read-only until authorized):**
+- the **184/185 QA window** (`docs/QA_184_185_WINDOW_DECISION_BRIEF.md`, Option S or R); this is the highest-severity open security item;
 - Decision 19 / F1 (PAR-Q clear) and server-side PHI read enforcement;
 - P0-SB-2 (Decisions 17, 18);
 - P0-SB-3 (Decision 20);
 - member-list access (Decision 22);
 - Decisions 21, 23 and 24;
-- merge order for the open stack #172–#191.
+- roster risk logging, Q-H1 and copilot blocking (cycle 7);
+- merge order for the open stack #172–#194 (FL-38 and FL-40 need a one-line import merge when the second lands).
