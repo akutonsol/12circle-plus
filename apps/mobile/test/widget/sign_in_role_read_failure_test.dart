@@ -727,8 +727,13 @@ void main() {
       await signIn();
       server.role = 'coach';
       accountReadFailureNotifier.value = (userId: _otherUid, error: Exception('x'));
-      final router = await pumpLogin(tester);
+      final router = await pumpLogin(tester, settle: false);
+      // First frame: this account has no result yet — loading, not someone
+      // else's failure.
       expect(find.text(_supportMsg), findsNothing);
+      expect(find.text('Loading your account…'), findsOneWidget);
+      expect(accountReadFailureNotifier.value, isNull, reason: 'taken once');
+      await _settle(tester);
       expect(_path(router), '/coach-dashboard');
       await tester.pumpWidget(const SizedBox());
     });
