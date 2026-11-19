@@ -1107,18 +1107,26 @@ section('16 · CON-03 authority (PD-A22 route b)');
       && !/onChanged:[^\n]*dietaryRestrictions\s*=\s*[^\n]*Ctrl\.text/.test(flow),
     'the lone TextField writes foodAllergies, a separate unsplit scalar');
 
-  // §3 — Option B's cost. No application caller; one exerciser.
+  // §3 — Option B's cost. UPDATED 2026-11-18 (P0-FL-37): the app now has exactly
+  // ONE caller — the coach's client page reads assessment/PAR-Q data only through
+  // this logged RPC (SEC-PHI-AUDIT). The memo's fact "no application caller" is
+  // superseded (addendum in the memo); CON-03 itself is still undecided. Pinned so
+  // a second caller, or the removal of this one, is a reviewed change.
   const appDirs = [path.join(ROOT, 'apps')];
   let rpcCallSites = 0;
+  const rpcCallFiles = [];
   const walkApp = (d) => fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true })
     .flatMap((e) => e.isDirectory() ? walkApp(path.join(d, e.name)) : [path.join(d, e.name)]) : [];
   for (const f of appDirs.flatMap(walkApp)) {
     if (!/\.(dart|ts)$/.test(f) || /[/\\]test[/\\]/.test(f)) continue;
-    if (/rpc\(\s*['"]get_client_assessment/.test(fs.readFileSync(f, 'utf8'))) rpcCallSites++;
+    if (/rpc\(\s*['"]get_client_assessment/.test(fs.readFileSync(f, 'utf8'))) {
+      rpcCallSites++; rpcCallFiles.push(path.basename(f));
+    }
   }
-  check('get_client_assessment still has NO application call site',
-    rpcCallSites === 0,
-    'so Option B\'s 42804 breaks the d09 live suite, not the app');
+  check('get_client_assessment has exactly ONE application call site (the coach client page)',
+    rpcCallSites === 1 && rpcCallFiles[0] === 'coach_ecosystem_provider.dart',
+    'so Option B must recreate the RPC in the SAME migration (memo §7.2) or every coach sees '
+      + '"Couldn\'t load this client\'s assessment" — not only d09; found: ' + rpcCallFiles.join(', '));
   check('…and d09 is still its exerciser',
     fs.existsSync(path.join(ROOT, 'supabase', 'tests', 'security',
       'd09-assessment-access.mjs')),
