@@ -12,6 +12,7 @@ import '../../coach/domain/coach_provider.dart';
 import '../../coaching_mode/domain/coaching_mode_provider.dart';
 import '../../payments/domain/entitlements.dart';
 import '../domain/connected_apps.dart';
+import 'widgets/profile_load_failed_notice.dart';
 
 class _C {
   static const bg                  = Color(0xFF0A0A0B);
@@ -37,6 +38,15 @@ class ProfileScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final profileAsync = ref.watch(currentUserProfileProvider);
     final currentUser  = ref.watch(currentUserProvider);
+    // P0-FL-16: no profile READ yet (first load, or it failed) is not "no
+    // profile". A refresh that fails after a successful read keeps showing the
+    // last real profile (Riverpod keeps the previous value on the error).
+    if (!profileAsync.hasValue) {
+      return _ProfileUnavailable(
+        error: profileAsync.hasError ? profileAsync.error : null,
+        busy: profileAsync.isLoading,
+      );
+    }
     final profile      = profileAsync.valueOrNull;
 
     final firstName = profile?['first_name'] as String?
@@ -529,55 +539,7 @@ class ProfileScreen extends ConsumerWidget {
             ],
             const SizedBox(height: 12),
             // ── Sign Out ──
-            GestureDetector(
-              onTap: () async {
-                final confirmed = await showDialog<bool>(
-                  context: context,
-                  useRootNavigator: true,
-                  builder: (dialogCtx) => AlertDialog(
-                    backgroundColor: const Color(0xFF1E1E20),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                    title: const Text("Sign Out?",
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-                    content: const Text("Are you sure you want to sign out?",
-                      style: TextStyle(color: Colors.white70)),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.of(dialogCtx, rootNavigator: true).pop(false),
-                        child: const Text("Cancel", style: TextStyle(color: Colors.white54))),
-                      TextButton(
-                        onPressed: () => Navigator.of(dialogCtx, rootNavigator: true).pop(true),
-                        child: const Text("Sign Out", style: TextStyle(color: Color(0xFFFFB4AB)))),
-                    ]));
-                if (confirmed == true && context.mounted) {
-                  await ref.read(authNotifierProvider.notifier).signOut();
-                  if (kIsWeb) {
-                    reloadForLogout();
-                  } else if (context.mounted) {
-                    context.go('/login');
-                  }
-                }
-              },
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  color: _C.error.withValues(alpha: 0.05),
-                  border: Border.all(color: _C.error.withValues(alpha: 0.15)),
-                ),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.logout, color: _C.error, size: 20),
-                    SizedBox(width: 8),
-                    Text('Sign Out',
-                      style: TextStyle(color: _C.error, fontSize: 15,
-                        fontWeight: FontWeight.w600)),
-                  ],
-                ),
-              ),
-            ),
+            const _SignOutButton(),
           ],
         ),
       )),
@@ -586,6 +548,128 @@ class ProfileScreen extends ConsumerWidget {
 }
 
 // ── Sub-widgets ───────────────────────────────────────────────────────────────
+
+/// Profile while the member's profile has not been read (P0-FL-16).
+///
+/// Before, a failed read arrived as `null` and the screen rendered "Member",
+/// the email from the session, "client", imperial units and 0 training days —
+/// defaults dressed as the member's own data. Now a failure says so with Try
+/// again, and a first load shows a spinner instead of those placeholders.
+/// Settings and Sign Out stay reachable: neither depends on the profile.
+class _ProfileUnavailable extends ConsumerWidget {
+  const _ProfileUnavailable({required this.error, required this.busy});
+
+  /// null while the first read is still in flight.
+  final Object? error;
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final top = MediaQuery.of(context).padding.top;
+    final bottom = MediaQuery.of(context).padding.bottom;
+    return Scaffold(
+      backgroundColor: _C.bg,
+      body: Column(children: [
+        Container(
+          padding: EdgeInsets.only(left: 20, right: 12, top: top),
+          decoration: const BoxDecoration(
+            color: _C.glassCard,
+            border: Border(bottom: BorderSide(color: Color(0x1A4B444F)))),
+          child: SizedBox(height: 56, child: Row(children: [
+            const Expanded(child: Text('PROFILE',
+              style: TextStyle(color: _C.primary, fontSize: 18,
+                fontWeight: FontWeight.w800, letterSpacing: 2))),
+            IconButton(
+              icon: const Icon(Icons.settings_outlined, color: _C.primary, size: 22),
+              tooltip: 'Settings',
+              onPressed: () => context.push('/settings')),
+          ]))),
+        Expanded(child: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(20, 20, 20, bottom + 120),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (error == null)
+              Semantics(
+                liveRegion: true,
+                label: 'Loading your profile',
+                child: const Center(child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 40),
+                  child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2))))
+            else
+              ProfileLoadFailedNotice(
+                error: error!,
+                busy: busy,
+                onRetry: () => ref.invalidate(currentUserProfileProvider),
+              ),
+            const SizedBox(height: 28),
+            const _SignOutButton(),
+          ]),
+        )),
+      ]),
+    );
+  }
+}
+
+class _SignOutButton extends ConsumerWidget {
+  const _SignOutButton();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return GestureDetector(
+      onTap: () async {
+        // Captured before any await: signing out changes the profile read,
+        // which can swap this button for the one in the other Profile state,
+        // and the go('/login') must still happen.
+        final router = GoRouter.maybeOf(context);
+        final confirmed = await showDialog<bool>(
+          context: context,
+          useRootNavigator: true,
+          builder: (dialogCtx) => AlertDialog(
+            backgroundColor: const Color(0xFF1E1E20),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Text("Sign Out?",
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+            content: const Text("Are you sure you want to sign out?",
+              style: TextStyle(color: Colors.white70)),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogCtx, rootNavigator: true).pop(false),
+                child: const Text("Cancel", style: TextStyle(color: Colors.white54))),
+              TextButton(
+                onPressed: () => Navigator.of(dialogCtx, rootNavigator: true).pop(true),
+                child: const Text("Sign Out", style: TextStyle(color: Color(0xFFFFB4AB)))),
+            ]));
+        if (confirmed == true && context.mounted) {
+          await ref.read(authNotifierProvider.notifier).signOut();
+          if (kIsWeb) {
+            reloadForLogout();
+          } else {
+            router?.go('/login');
+          }
+        }
+      },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          color: _C.error.withValues(alpha: 0.05),
+          border: Border.all(color: _C.error.withValues(alpha: 0.15)),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.logout, color: _C.error, size: 20),
+            SizedBox(width: 8),
+            Text('Sign Out',
+              style: TextStyle(color: _C.error, fontSize: 15,
+                fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SectionLabel extends StatelessWidget {
   final String label;
   const _SectionLabel({required this.label});

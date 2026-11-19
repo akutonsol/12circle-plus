@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../coach/presentation/coach_business_screen.dart';
+import 'widgets/profile_load_failed_notice.dart';
 
 const _bg    = Color(0xFF0E0E0F);
 const _surf  = Color(0xFF201F20);
@@ -135,8 +136,13 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
   }
 
   void _loadData() {
-    final p = ref.read(currentUserProfileProvider).valueOrNull
-        ?? ref.read(currentUserProfileProvider).asData?.value;
+    // P0-FL-16: only a SUCCESSFUL read fills the form. A failed one is an
+    // AsyncError now (it used to arrive as `null`), and an AsyncError that
+    // still carries an older profile is not used either — the form is filled
+    // from what the server just said, or not at all.
+    final state = ref.read(currentUserProfileProvider);
+    if (state is! AsyncData<Map<String, dynamic>?>) return;
+    final p = state.value;
     if (p == null) return;
     _fnCtrl.text     = p['first_name'] as String? ?? '';
     _lnCtrl.text     = p['last_name']  as String? ?? '';
@@ -268,11 +274,23 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Populate fields as soon as profile data arrives (handles async load)
+    // Populate fields as soon as profile data arrives (handles async load,
+    // and a successful Try again after a failed read).
     ref.listen<AsyncValue<Map<String, dynamic>?>>(
       currentUserProfileProvider,
-      (_, next) { if (next.hasValue && !_loaded) _loadData(); },
+      (_, next) { if (next is AsyncData && !_loaded) _loadData(); },
     );
+
+    // P0-FL-16: until the profile has been READ the form holds nothing of the
+    // member's, so it is locked — inputs, photo and both Saves. Typing into it
+    // and then having a successful Try again overwrite (or mix with) those
+    // edits is the FL-12 trap. A read that answered "no profile row" is not a
+    // failure and keeps its existing behaviour (unlocked; Save refuses).
+    final profileAsync = ref.watch(currentUserProfileProvider);
+    final locked = !_loaded && profileAsync is! AsyncData;
+    final loadError =
+        !_loaded && profileAsync.hasError ? profileAsync.error : null;
+    final canSave = !_saving && !locked;
 
     final top    = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
@@ -295,12 +313,12 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
               style: TextStyle(color: _pri, fontSize: 16,
                 fontWeight: FontWeight.w800, letterSpacing: 2)))),
             GestureDetector(
-              onTap: _saving ? null : _save,
+              onTap: canSave ? _save : null,
               child: _saving
                 ? const SizedBox(width: 20, height: 20,
                     child: CircularProgressIndicator(color: _pri, strokeWidth: 2))
-                : const Text('Save',
-                    style: TextStyle(color: _pri, fontSize: 15,
+                : Text('Save',
+                    style: TextStyle(color: locked ? _outV : _pri, fontSize: 15,
                       fontWeight: FontWeight.w700))),
           ])),
         ),
@@ -308,6 +326,33 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
         Expanded(child: SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(20, 24, 20, bottom + 40),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+
+            if (loadError != null) ...[
+              ProfileLoadFailedNotice(
+                error: loadError,
+                busy: profileAsync.isLoading,
+                detail: "You can't save until your details load, so nothing "
+                    "you've saved before is overwritten.",
+                onRetry: () => ref.invalidate(currentUserProfileProvider),
+              ),
+              const SizedBox(height: 24),
+            ] else if (locked) ...[
+              Semantics(
+                liveRegion: true,
+                child: const Row(children: [
+                  SizedBox(width: 14, height: 14,
+                    child: CircularProgressIndicator(color: _pri, strokeWidth: 2)),
+                  SizedBox(width: 10),
+                  Text('Loading your details…',
+                    style: TextStyle(color: _out, fontSize: 12)),
+                ])),
+              const SizedBox(height: 24),
+            ],
+
+            // Locked (inputs, photo, pickers) until the profile is read.
+            AbsorbPointer(absorbing: locked, child: Opacity(
+              opacity: locked ? 0.45 : 1,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
 
             // ── Avatar ──
             Center(child: GestureDetector(
@@ -429,9 +474,14 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
               const SizedBox(height: 32),
             ],
 
+            ]))),
+
             // Save button
-            GestureDetector(
-              onTap: _saving ? null : _save,
+            Semantics(
+              button: true,
+              enabled: canSave,
+              child: GestureDetector(
+              onTap: canSave ? _save : null,
               child: Container(
                 height: 54,
                 decoration: BoxDecoration(
@@ -444,9 +494,11 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
                 child: _saving
                   ? const SizedBox(width: 20, height: 20,
                       child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                  : const Text('Save Changes',
-                      style: TextStyle(color: Colors.white, fontSize: 16,
-                        fontWeight: FontWeight.w700, letterSpacing: 0.3)))),
+                  : Opacity(
+                      opacity: locked ? 0.45 : 1,
+                      child: const Text('Save Changes',
+                        style: TextStyle(color: Colors.white, fontSize: 16,
+                          fontWeight: FontWeight.w700, letterSpacing: 0.3)))))),
           ]),
         )),
       ]),
@@ -481,6 +533,9 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
           child: Text(label, style: const TextStyle(color: _onSV, fontSize: 14))),
         Expanded(child: TextField(
           controller: ctrl,
+          // Locked until the profile is read (P0-FL-16) — disabled, not only
+          // behind the pointer absorber, so focus/keyboard cannot reach it.
+          enabled: _loaded || ref.read(currentUserProfileProvider) is AsyncData,
           keyboardType: keyboard,
           inputFormatters: keyboard == TextInputType.number
             ? [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))]

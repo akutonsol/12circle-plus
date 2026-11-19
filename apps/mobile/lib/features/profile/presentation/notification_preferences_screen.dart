@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/domain/auth_provider.dart';
+import 'widgets/profile_load_failed_notice.dart';
 
 const _bg   = Color(0xFF0E0E0F);
 const _pri  = Color(0xFFDDB7FF);
@@ -34,10 +35,23 @@ class _NotificationPreferencesScreenState
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadData());
   }
 
+  /// True once the toggles show the member's stored preferences (or the read
+  /// answered "no profile row", which keeps the defaults as before).
+  bool _loaded = false;
+
   void _loadData() {
-    final p = ref.read(currentUserProfileProvider).valueOrNull;
-    if (p == null) return;
+    // P0-FL-16: only a successful read fills the toggles. A failed read is an
+    // AsyncError now (it used to be `null`, which left the defaults showing as
+    // the member's settings and every toggle live).
+    final state = ref.read(currentUserProfileProvider);
+    if (state is! AsyncData<Map<String, dynamic>?>) return;
+    final p = state.value;
+    if (p == null) {
+      setState(() => _loaded = true);
+      return;
+    }
     setState(() {
+      _loaded = true;
       _workoutReminders = p['notif_workout_reminders'] as bool? ?? true;
       _checkinReminders = p['notif_checkin_reminders'] as bool? ?? true;
       _coachMessages    = p['notif_coach_messages']    as bool? ?? true;
@@ -68,6 +82,20 @@ class _NotificationPreferencesScreenState
 
   @override
   Widget build(BuildContext context) {
+    // Fill the toggles when the read lands (first load, or a successful Try
+    // again). Before, a profile still loading at the first frame was never
+    // applied, so the defaults stayed on screen as if they were stored.
+    ref.listen<AsyncValue<Map<String, dynamic>?>>(
+      currentUserProfileProvider,
+      (_, next) { if (next is AsyncData && !_loaded) _loadData(); },
+    );
+    final profileAsync = ref.watch(currentUserProfileProvider);
+    // Locked until the stored preferences are known: a toggle drawn from a
+    // default is not the member's setting, and flipping it would store the
+    // opposite of what they think they are choosing.
+    final locked = !_loaded;
+    final loadError = locked && profileAsync.hasError ? profileAsync.error : null;
+
     final top    = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
 
@@ -101,6 +129,32 @@ class _NotificationPreferencesScreenState
               child: Text(
                 'Control which notifications you receive. Changes save automatically.',
                 style: TextStyle(color: _out, fontSize: 13, height: 1.5))),
+
+            if (loadError != null) ...[
+              ProfileLoadFailedNotice(
+                error: loadError,
+                busy: profileAsync.isLoading,
+                detail: "Your notification settings can't be changed until "
+                    'they load.',
+                onRetry: () => ref.invalidate(currentUserProfileProvider),
+              ),
+              const SizedBox(height: 20),
+            ] else if (locked) ...[
+              Semantics(
+                liveRegion: true,
+                child: const Row(children: [
+                  SizedBox(width: 14, height: 14,
+                    child: CircularProgressIndicator(color: _pri, strokeWidth: 2)),
+                  SizedBox(width: 10),
+                  Text('Loading your notification settings…',
+                    style: TextStyle(color: _out, fontSize: 12)),
+                ])),
+              const SizedBox(height: 20),
+            ],
+
+            AbsorbPointer(absorbing: locked, child: Opacity(
+              opacity: locked ? 0.45 : 1,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
 
             // ── Training ──
             _sectionLabel('TRAINING'),
@@ -193,6 +247,7 @@ class _NotificationPreferencesScreenState
                   }
                 }),
             ])),
+            ]))),
           ]),
         )),
       ]),

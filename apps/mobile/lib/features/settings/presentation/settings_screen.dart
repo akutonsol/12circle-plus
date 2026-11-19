@@ -15,6 +15,7 @@ import '../../coaching_mode/domain/coaching_mode_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coach/data/coach_relationship_service.dart';
 import '../../payments/domain/entitlements.dart';
+import '../../profile/presentation/widgets/profile_load_failed_notice.dart';
 
 class _C {
   static const bg                  = Color(0xFF0A0A0B);
@@ -51,17 +52,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String _selectedUnit = 'KG';
   bool _unitLoaded = false;
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (!_unitLoaded) {
-      final profile = ref.read(currentUserProfileProvider).valueOrNull;
-      if (profile != null) {
-        final pref = profile['unit_preference'] as String? ?? 'imperial';
-        _selectedUnit = pref == 'metric' ? 'KG' : 'LB';
-        _unitLoaded = true;
-      }
+  /// Takes the stored unit from a SUCCESSFUL profile read, once (P0-FL-16).
+  ///
+  /// This ran in didChangeDependencies, which Riverpod does not re-run: a
+  /// profile still loading at the first frame was never applied, and a failed
+  /// read (it used to arrive as `null`) left "KG" selected as if stored. Both
+  /// left the toggle live over a guess. It now runs on every build until the
+  /// read lands; until then the toggle shows no unit and is locked.
+  void _syncUnit(AsyncValue<Map<String, dynamic>?> profileAsync) {
+    if (_unitLoaded || profileAsync is! AsyncData<Map<String, dynamic>?>) {
+      return;
     }
+    final profile = profileAsync.value;
+    // No profile row: unchanged — "KG" shows and the toggle is live.
+    if (profile == null) return;
+    final pref = profile['unit_preference'] as String? ?? 'imperial';
+    _selectedUnit = pref == 'metric' ? 'KG' : 'LB';
+    _unitLoaded = true;
   }
 
   /// CORR-2. Returns whether the preference was actually stored.
@@ -122,7 +129,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final profile     = ref.watch(currentUserProfileProvider).valueOrNull;
+    final profileAsync = ref.watch(currentUserProfileProvider);
+    _syncUnit(profileAsync);
+    // The unit is unknown until a read succeeds (or answers "no row").
+    final unitLocked  = !_unitLoaded && profileAsync is! AsyncData;
+    // A failed read with nothing earlier to show: say so instead of "Member",
+    // and do not guess the role (the client-only rows are left out).
+    final profileError =
+        profileAsync.hasError && !profileAsync.hasValue ? profileAsync.error : null;
+    final profile     = profileAsync.valueOrNull;
     final isCoach     = (profile?['role'] as String?) == 'coach';
     final firstName   = profile?['first_name'] as String? ?? '';
     final lastName    = profile?['last_name']  as String? ?? '';
@@ -192,9 +207,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   // ── Account ──
                   _SectionLabel(label: 'Account'),
                   const SizedBox(height: 10),
+                  if (profileError != null) ...[
+                    ProfileLoadFailedNotice(
+                      error: profileError,
+                      busy: profileAsync.isLoading,
+                      detail: "Your units can't be changed until it loads.",
+                      onRetry: () => ref.invalidate(currentUserProfileProvider),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
                   _GlassSection(children: [
-                    // Profile row
-                    _SettingsRow(
+                    // Profile row — not drawn as "Member" over a failed read.
+                    if (profileError == null) _SettingsRow(
                       leading: Container(
                         width: 48, height: 48,
                         decoration: BoxDecoration(
@@ -217,7 +241,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
 
                     // Subscription (client membership only)
-                    if (!isCoach) _SettingsRow(
+                    if (!isCoach && profileError == null) _SettingsRow(
                       icon: Icons.workspace_premium_outlined,
                       iconColor: _C.primary,
                       title: 'Subscription',
@@ -246,7 +270,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
 
                     // Coaching Mode (client preference only)
-                    if (!isCoach) _CoachingModeRow(),
+                    if (!isCoach && profileError == null) _CoachingModeRow(),
                   ]),
                   const SizedBox(height: 28),
 
@@ -272,7 +296,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               // Optimistic, but REVERTED on failure: an
                               // un-reverted toggle shows a preference that was
                               // never stored. One save at a time (U4).
-                              if (_unitSaving) return;
+                              // Nothing to change from until the stored unit
+                              // is known (P0-FL-16).
+                              if (_unitSaving || unitLocked) return;
                               _unitSaving = true;
                               final previous = _selectedUnit;
                               setState(() => _selectedUnit = u);
@@ -293,14 +319,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               duration: const Duration(milliseconds: 200),
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                               decoration: BoxDecoration(
-                                color: _selectedUnit == u
+                                color: !unitLocked && _selectedUnit == u
                                     ? _C.primary.withValues(alpha: 0.2)
                                     : Colors.transparent,
                                 borderRadius: BorderRadius.circular(6),
                               ),
                               child: Text(u,
                                 style: TextStyle(
-                                  color: _selectedUnit == u ? _C.primary : _C.onSurfaceMuted,
+                                  color: !unitLocked && _selectedUnit == u
+                                      ? _C.primary
+                                      : _C.onSurfaceMuted,
                                   fontSize: 11,
                                   fontWeight: FontWeight.w700,
                                   letterSpacing: 1,
