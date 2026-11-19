@@ -85,6 +85,53 @@ void main() {
     await endAndExpectReopenAfter(tester, const Duration(seconds: 2), value: 1);
   });
 
+  // Lead mutant (b), on its own: `delay = delay * 2` without the cap. After
+  // 2, 4, 8, 16, 32 the gaps must be 60, 60, 60 — uncapped they are 64, 128,
+  // 256, so the first capped gap already re-opens 4 s late.
+  testWidgets('cap: after 2, 4, 8, 16, 32 every further failure waits 60 s, '
+      'never 64 or 120', (tester) async {
+    opened = [];
+    final sub = reopenWhenDone<int>(open, origin: 'test.backoff.cap')
+        .listen((_) {}, onError: (_) {});
+    addTearDown(sub.cancel);
+    await tester.pump();
+    for (final s in [2, 4, 8, 16, 32]) {
+      await endAndExpectReopenAfter(tester, Duration(seconds: s), error: true);
+    }
+    for (var i = 0; i < 4; i++) {
+      await endAndExpectReopenAfter(tester, const Duration(minutes: 1),
+          error: true);
+    }
+    expect(opened, hasLength(10));
+  });
+
+  // Lead mutant (a), on its own: drop the `delay = first` reset on data. A
+  // stream that delivers data and THEN fails must be re-opened after 2 s —
+  // a working connection that drops once is not "still failing".
+  testWidgets('reset: failures, then a stream that emits data and then fails, '
+      'is re-opened after 2 s and the doubling starts over', (tester) async {
+    opened = [];
+    final values = <int>[];
+    final errors = <Object>[];
+    final sub = reopenWhenDone<int>(open, origin: 'test.backoff.reset')
+        .listen(values.add, onError: errors.add);
+    addTearDown(sub.cancel);
+    await tester.pump();
+    for (final s in [2, 4, 8, 16, 32, 60]) {
+      await endAndExpectReopenAfter(tester, Duration(seconds: s), error: true);
+    }
+    // Data, then the same stream fails and ends.
+    final c = opened.last;
+    c.add(42);
+    await tester.pump();
+    expect(values, [42]);
+    await endAndExpectReopenAfter(tester, const Duration(seconds: 2),
+        error: true);
+    await endAndExpectReopenAfter(tester, const Duration(seconds: 4),
+        error: true);
+    expect(errors, hasLength(8), reason: 'every failure reaches the consumer');
+  });
+
   testWidgets('control: cancelling stops the re-opens', (tester) async {
     opened = [];
     final sub = reopenWhenDone<int>(open, origin: 'test.backoff')
