@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
@@ -68,30 +69,49 @@ void main() {
   late ProfileReadPostgrest server;
   final reported = <AppFailure>[];
   var pickerCalls = 0;
+  // When set, the gallery picker answers with this image instead of
+  // "cancelled" — so a picker that opens leads on to a real upload attempt.
+  String? pickedImagePath;
+  late Directory tmp;
 
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
     server = ProfileReadPostgrest(_uid);
     await initSignedInSupabase(server);
-    // The gallery picker: counted, and answered "cancelled".
+    tmp = Directory.systemTemp.createTempSync('fl16_avatar_');
+    // The gallery picker: counted, and answered "cancelled" (or with
+    // [pickedImagePath]).
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
             const MethodChannel('plugins.flutter.io/image_picker'), (call) async {
       pickerCalls++;
-      return null;
+      return pickedImagePath;
     });
   });
+  tearDownAll(() => tmp.deleteSync(recursive: true));
 
   setUp(() {
     server.reset();
     reported.clear();
     pickerCalls = 0;
+    pickedImagePath = null;
     setFailureSink(reported.add);
   });
   tearDown(resetFailureSink);
 
-  Widget app(Widget screen, {ProviderContainer? container}) {
-    final child = MaterialApp(home: screen);
+  Widget app(Widget screen,
+      {ProviderContainer? container, bool stacked = false}) {
+    // [stacked]: the screen is pushed over a base route, as in the app, so a
+    // save that pops it (the success path) has somewhere to go back to.
+    final child = stacked
+        ? MaterialApp(
+            home: Navigator(
+                onGenerateInitialRoutes: (_, __) => [
+                      MaterialPageRoute<void>(
+                          builder: (_) => const Scaffold(body: Text('BASE'))),
+                      MaterialPageRoute<void>(builder: (_) => screen),
+                    ]))
+        : MaterialApp(home: screen);
     if (container != null) {
       return UncontrolledProviderScope(container: container, child: child);
     }
@@ -100,11 +120,12 @@ void main() {
 
   /// Opens [screen] with the profile read held in flight (no settle: the
   /// spinner never stops).
-  Future<void> openPending(WidgetTester tester, Widget screen) async {
+  Future<void> openPending(WidgetTester tester, Widget screen,
+      {bool stacked = false}) async {
     await tester.binding.setSurfaceSize(const Size(600, 3200));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     server.readGate = Completer<void>();
-    await tester.pumpWidget(app(screen));
+    await tester.pumpWidget(app(screen, stacked: stacked));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
     expect(server.profileReads, greaterThanOrEqualTo(1),
@@ -118,16 +139,27 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Future<void> openFailed(WidgetTester tester, Widget screen) async {
+  /// [noticePremise]: false checks the failure on the provider instead of
+  /// the on-screen notice — for tests whose point is "no write", so a mutant
+  /// that also hides the notice is caught by the write assertion itself.
+  Future<void> openFailed(WidgetTester tester, Widget screen,
+      {bool stacked = false, bool noticePremise = true}) async {
     await tester.binding.setSurfaceSize(const Size(600, 3200));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     server.profileRead = ProfileRead.network;
-    await tester.pumpWidget(app(screen));
+    await tester.pumpWidget(app(screen, stacked: stacked));
     await tester.pumpAndSettle();
     // postgrest retries a GET that hit a network failure, on timers.
     await tester.pump(const Duration(seconds: 30));
     await tester.pumpAndSettle();
-    expect(find.text(_offline), findsOneWidget, reason: 'premise: it failed');
+    if (noticePremise) {
+      expect(find.text(_offline), findsOneWidget, reason: 'premise: it failed');
+    } else {
+      final container = ProviderScope.containerOf(
+          tester.element(find.byWidget(screen)));
+      expect(container.read(currentUserProfileProvider).hasError, isTrue,
+          reason: 'premise: the profile read failed');
+    }
   }
 
   Future<void> openOk(WidgetTester tester, Widget screen,
@@ -324,6 +356,194 @@ void main() {
               'before the stored values were applied');
       expect((tester.widget(toggles().first) as dynamic).value as bool, isFalse,
           reason: 'the stored value is on the first frame, not the default');
+    });
+  });
+
+  // ── No write over the stored profile, whichever lock layer is gone ───────
+  //
+  // Lead mutation round (P0-FL-16): removing ALL of Personal Info's lock
+  // layers at once — `_isLocked() => false`, `locked = false` in build and the
+  // `if (!_loaded)` refusal in _save — survived, because every earlier test
+  // left the form EMPTY, and an empty form stops at "First name is required"
+  // before any write. These tests put a name (and the other fields) into the
+  // form while the profile is unread, drive every Save, and require that no
+  // PATCH reaches user_profiles. Same for the photo and the notification
+  // toggles. Each test must FAIL with the multi-layer mutant applied.
+
+  List<String> profileWrites() =>
+      server.writes.where((w) => w.contains('/user_profiles')).toList();
+  List<String> storageWrites() =>
+      server.writes.where((w) => w.contains('/storage/')).toList();
+
+  /// Taps, through the semantics tree, the node that carries [widget]'s tap
+  /// action — only if one is offered (a locked control offers none).
+  Future<void> semanticTapIfOffered(WidgetTester tester, Finder widget) async {
+    if (widget.evaluate().isEmpty) return;
+    final node = tester.getSemantics(widget.first);
+    if (!node.getSemanticsData().hasAction(SemanticsAction.tap)) return;
+    tester.semantics.tap(find.semantics.byPredicate((n) => n.id == node.id));
+    await tester.pump();
+  }
+
+  /// Puts a full set of edits into the Personal Info form. The fields are
+  /// disabled while locked (a separate layer, not part of the mutant), so the
+  /// keyboard cannot type into them; the text is set on their controllers —
+  /// what an autofill/IME restore, or a form still holding text from before
+  /// a lock, would leave there.
+  void fillPersonalInfo(WidgetTester tester) {
+    final fields =
+        tester.widgetList<TextField>(find.byType(TextField)).toList();
+    expect(fields.length, greaterThanOrEqualTo(6),
+        reason: 'premise: name, phone and the three body fields are drawn');
+    const values = ['Zed', 'Typed', '555-9999', '199', '99.9', '88.8'];
+    for (var i = 0; i < values.length; i++) {
+      fields[i].controller!.text = values[i];
+    }
+    expect(fields.first.controller!.text, 'Zed',
+        reason: 'premise: the form is NOT empty, so "First name is required" '
+            'cannot be what stops the save');
+  }
+
+  /// Every way to fire Personal Info's Save: the header "Save", the
+  /// "Save Changes" button, by finger and by screen reader.
+  Future<void> driveEverySave(WidgetTester tester) async {
+    await semanticTapIfOffered(tester, find.text('Save Changes'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Save Changes'), warnIfMissed: false);
+    await tester.pump(const Duration(milliseconds: 300));
+    final header = find.text('Save');
+    if (header.evaluate().isNotEmpty) {
+      await tester.tap(header, warnIfMissed: false);
+    }
+    await tester.pump(const Duration(milliseconds: 300));
+  }
+
+  /// Activates the photo control by finger and by screen reader; the picker
+  /// answers with a real image, so an opened picker goes on to upload.
+  Future<void> activateAvatar(WidgetTester tester) async {
+    final img = File('${tmp.path}/avatar.jpg')
+      ..writeAsBytesSync(const [0xFF, 0xD8, 0xFF, 0xD9]);
+    pickedImagePath = img.path;
+    final camera = find.byIcon(Icons.camera_alt);
+    expect(camera, findsOneWidget, reason: 'premise: the photo control');
+    await semanticTapIfOffered(tester, camera);
+    await tester.tap(camera, warnIfMissed: false);
+    // The picked file is read with real I/O before the upload is sent:
+    // alternate fake-time pumps with real-time waits until the chain settles.
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)));
+    }
+    await tester.pump(const Duration(milliseconds: 300));
+  }
+
+  group('No write over the stored profile', () {
+    testWidgets('Personal Info, read FAILED: a filled form + every Save sends '
+        'no user_profiles PATCH', (tester) async {
+      final semantics = tester.ensureSemantics();
+      await openFailed(tester, const PersonalInfoScreen(), stacked: true);
+      fillPersonalInfo(tester);
+      await driveEverySave(tester);
+      expect(profileWrites(), isEmpty,
+          reason: 'THE defect (multi-layer lock mutant): a form that was '
+              'never filled from the stored profile was written over it. '
+              'Writes: ${profileWrites()}');
+      expect(find.text('Profile updated successfully'), findsNothing);
+      expect(find.byType(PersonalInfoScreen), findsOneWidget,
+          reason: 'the screen did not "save" and close');
+      await tester.pumpAndSettle();
+      semantics.dispose();
+    });
+
+    testWidgets('Personal Info, read IN FLIGHT: a filled form + every Save '
+        'sends no user_profiles PATCH; once read, Save writes the stored '
+        'values', (tester) async {
+      final semantics = tester.ensureSemantics();
+      await openPending(tester, const PersonalInfoScreen(), stacked: true);
+      fillPersonalInfo(tester);
+      await driveEverySave(tester);
+      expect(profileWrites(), isEmpty,
+          reason: 'THE defect (multi-layer lock mutant): Save wrote while '
+              'the stored profile was still loading. '
+              'Writes: ${profileWrites()}');
+      expect(find.text('Profile updated successfully'), findsNothing);
+
+      // Control: the read lands, the form shows the STORED values, and Save
+      // now writes them — the test can see a write when there is one.
+      await release(tester, _client);
+      expect(tester.widget<TextField>(find.byType(TextField).first)
+          .controller!.text, 'Ana');
+      await tester.tap(find.text('Save Changes'));
+      await tester.pumpAndSettle();
+      expect(profileWrites(), hasLength(1));
+      expect(profileWrites().single, contains('"first_name":"Ana"'));
+      expect(profileWrites().single, isNot(contains('Zed')));
+      semantics.dispose();
+    });
+
+    testWidgets('Personal Info photo, read FAILED: activating it opens no '
+        'picker and sends no upload or PATCH', (tester) async {
+      final semantics = tester.ensureSemantics();
+      await openFailed(tester, const PersonalInfoScreen(), stacked: true);
+      await activateAvatar(tester);
+      expect(storageWrites(), isEmpty,
+          reason: 'THE defect: a photo was uploaded while the profile was '
+              'unread. Writes: ${server.writes}');
+      expect(profileWrites(), isEmpty,
+          reason: 'avatar_url was written over the unread profile');
+      expect(pickerCalls, 0, reason: 'the photo picker opened while locked');
+      await tester.pumpAndSettle();
+      semantics.dispose();
+    });
+
+    testWidgets('Personal Info photo, read IN FLIGHT: activating it opens no '
+        'picker and sends no upload or PATCH', (tester) async {
+      final semantics = tester.ensureSemantics();
+      await openPending(tester, const PersonalInfoScreen(), stacked: true);
+      await activateAvatar(tester);
+      expect(storageWrites(), isEmpty,
+          reason: 'THE defect: a photo was uploaded while the profile was '
+              'loading. Writes: ${server.writes}');
+      expect(profileWrites(), isEmpty);
+      expect(pickerCalls, 0, reason: 'the photo picker opened while locked');
+      await release(tester, _client);
+      semantics.dispose();
+    });
+
+    Future<void> toggleEverything(WidgetTester tester) async {
+      final n = toggles().evaluate().length;
+      expect(n, 6, reason: 'premise: the six notification toggles are drawn');
+      for (var i = 0; i < n; i++) {
+        await semanticTapIfOffered(tester, toggles().at(i));
+        await tester.tap(toggles().at(i), warnIfMissed: false);
+        await tester.pump(const Duration(milliseconds: 300));
+      }
+    }
+
+    testWidgets('Notifications, read FAILED: toggling every switch sends no '
+        'PATCH', (tester) async {
+      final semantics = tester.ensureSemantics();
+      await openFailed(tester, const NotificationPreferencesScreen(),
+          noticePremise: false);
+      await toggleEverything(tester);
+      expect(profileWrites(), isEmpty,
+          reason: 'THE defect (lock mutant): a default toggle was flipped and '
+              'stored over the unread setting. Writes: ${profileWrites()}');
+      await tester.pumpAndSettle();
+      semantics.dispose();
+    });
+
+    testWidgets('Notifications, read IN FLIGHT: toggling every switch sends '
+        'no PATCH', (tester) async {
+      final semantics = tester.ensureSemantics();
+      await openPending(tester, const NotificationPreferencesScreen());
+      await toggleEverything(tester);
+      expect(profileWrites(), isEmpty,
+          reason: 'THE defect (lock mutant): a toggle wrote while the stored '
+              'settings were loading. Writes: ${profileWrites()}');
+      await release(tester, _client);
+      semantics.dispose();
     });
   });
 
