@@ -595,9 +595,50 @@ void main() {
     });
   }
 
+  testWidgets(
+      'UX re-check: on a 360dp phone a short badge leaves the name column at '
+      'least 60% of the row\'s free width — the badge takes no flex share',
+      (t) async {
+    // As above: overflow reports from OTHER cards are outside this package;
+    // the header row is checked by geometry. Anything else is rethrown.
+    final previous = FlutterError.onError;
+    final others = <FlutterErrorDetails>[];
+    FlutterError.onError = (d) {
+      if (d.exceptionAsString().contains('overflowed')) return;
+      others.add(d);
+    };
+    try {
+      await _pumpPage(t, width: 360);
+    } finally {
+      FlutterError.onError = previous;
+    }
+    expect(others.map((d) => d.exceptionAsString()), isEmpty);
+
+    expect(find.text('HIGH RISK'), findsOneWidget);
+    final header = find
+        .ancestor(of: find.text('Jordan Test'), matching: find.byType(Row))
+        .first;
+    final row = t.getRect(header);
+    final avatar = t.getRect(
+        find.descendant(of: header, matching: find.byType(CircleAvatar)));
+    final nameCol = t.getRect(find
+        .ancestor(of: find.text('Jordan Test'), matching: find.byType(Column))
+        .first);
+    // Free width = what the name column and the badge share: the row to the
+    // right of the avatar and its gap.
+    final free = row.right - nameCol.left;
+    expect(nameCol.left, greaterThan(avatar.right),
+        reason: 'the name column sits right of the avatar');
+    // (The test font draws square glyphs, so HIGH RISK renders ~103dp wide
+    // here; with a 1:1 flex split the name column got ~52% of the room.)
+    expect(nameCol.width, greaterThanOrEqualTo(free * 0.6 - 0.01),
+        reason: 'name column ${nameCol.width} of free width $free '
+            '(${(nameCol.width / free * 100).toStringAsFixed(0)}%)');
+  });
+
   for (final state in [_Rpc.http500, _Rpc.network, _Rpc.denied]) {
     testWidgets(
-        'SEC S-4: a ${state.name} assessment read says in the Action Center '
+        'SEC S-4:a ${state.name} assessment read says in the Action Center '
         'that risk actions are unavailable', (t) async {
       server.rpc = state;
       await _pumpPage(t);

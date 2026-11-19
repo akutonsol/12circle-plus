@@ -282,7 +282,7 @@ class _OverviewTab extends ConsumerWidget {
       padding: const EdgeInsets.all(16),
       children: [
         // ── Client Profile Card ──
-        _cardBox(child: Row(children: [
+        _cardBox(child: LayoutBuilder(builder: (context, header) => Row(children: [
           CircleAvatar(
             radius: 32, backgroundColor: _brd,
             backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
@@ -313,15 +313,18 @@ class _OverviewTab extends ConsumerWidget {
           // flight shows nothing yet; a failed one says the risk is unknown,
           // never "not assessed" (a claim about the client) or low risk.
           // A refused read (42501) says the risk is hidden rather than leaving
-          // the slot empty (UX-2). Flexible: at large text scales on a narrow
-          // screen the badge wraps instead of squeezing the name column.
+          // the slot empty (UX-2). The badge takes no flex — the name column
+          // keeps all the room the badge does not use — and is capped at 40%
+          // of the name+badge room (_badgeSlot), so at large text scales on a
+          // narrow screen it wraps (max 2 lines, ellipsis) instead of
+          // overflowing or squeezing the name.
           if (assessment.hasError && !assessment.isLoading)
-            const Flexible(child: _RiskStateBadge.unknown())
+            _badgeSlot(header, const _RiskStateBadge.unknown())
           else if (_assessmentRefused(assessment))
-            const Flexible(child: _RiskStateBadge.hidden())
+            _badgeSlot(header, const _RiskStateBadge.hidden())
           else if (_assessmentAnswered(assessment))
-            Flexible(child: _riskBadge(riskLevel)),
-        ])),
+            _badgeSlot(header, _riskBadge(riskLevel)),
+        ]))),
         const SizedBox(height: 12),
 
         // ── 12 Circle Score + Compliance ──
@@ -507,6 +510,14 @@ class _OverviewTab extends ConsumerWidget {
   /// this switch does not know — renders "NOT ASSESSED" in the muted colour, visually
   /// distinct from the green of an assessed low. An unrecognised future value is also
   /// safer shown as unassessed than as safe.
+  /// The header's risk-badge slot: intrinsic width, at most 40% of the room
+  /// the name column and badge share (the row minus the 64dp avatar and its
+  /// 16dp gap) — so the name column always keeps at least 60% of it.
+  Widget _badgeSlot(BoxConstraints header, Widget badge) => ConstrainedBox(
+      constraints: BoxConstraints(
+          maxWidth: (header.maxWidth - 64 - 16).clamp(0.0, double.infinity) * 0.4),
+      child: badge);
+
   Widget _riskBadge(String? level) {
     final Color color;
     final String label;
