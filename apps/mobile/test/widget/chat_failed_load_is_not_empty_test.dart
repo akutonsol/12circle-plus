@@ -19,7 +19,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 // conversation · This is a connection problem, not an empty thread · Try
 // again") was never shown for it. EC-13 in docs/QA_WORKSTREAM_B_ERROR_CONTRACT_
 // REPORT.md: "Expected: propagate; the thread shows couldn't load messages —
-// retry." (`getConversations`' swallow is the sanctioned §5.1 one; untouched.)
+// retry." (`getConversations` still records through the sink, §5.1, and since
+// P0-FL-13 it also rethrows: the inbox shows its own failure state.)
 
 const _uid = '00000000-0000-4000-8000-0000000000c5';
 

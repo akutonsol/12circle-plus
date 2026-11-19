@@ -54,14 +54,21 @@ class _FakeMessaging extends Fake implements MessagingService {
   Stream<List<Map<String, dynamic>>> messagesStream(String conversationId) =>
       _stream.stream;
 
+  /// What the real service hands `onNotSent` when the row did not land. A
+  /// connection failure by default, which is what these tests were written
+  /// against; P0-FL-13 sets a server refusal to check the other hint.
+  Object sendError = http.ClientException('Connection refused');
+
   @override
   Future<bool> sendMessage({
     required String conversationId,
     required String content,
     Map<String, dynamic>? metadata,
+    void Function(Object error)? onNotSent,
   }) async {
     sent.add(content);
     await gate?.future;
+    if (!sendResult) onNotSent?.call(sendError);
     return sendResult;
   }
 }
@@ -188,6 +195,31 @@ void main() {
     expect(_http.awardedPoints, isFalse,
         reason: 'no points for a message nobody received');
     expect(reported, isNotEmpty, reason: 'the failure is reported');
+  });
+
+  // P0-FL-13: the connection hint was shown for EVERY failed send, including
+  // a refusal the server answered — sending the coach to check Wi-Fi that was
+  // fine. Only a connection failure gets the connection hint.
+  testWidgets('P0-FL-13 a send the server refused does not blame the connection',
+      (t) async {
+    final svc = _FakeMessaging()
+      ..sendResult = false
+      ..sendError = const PostgrestException(message: 'refused', code: 'XX000');
+    await _openChat(t, svc);
+
+    await _type(t, _text);
+    await _tapSend(t);
+
+    expect(find.text(_sendFailed), findsNothing,
+        reason: 'the server answered: the connection is not the problem');
+    expect(
+        find.text("Couldn't send your message — try again in a moment. "
+            'If it keeps happening, contact support.'),
+        findsOneWidget);
+    expect(find.textContaining('refused'), findsNothing,
+        reason: 'exception text is never shown');
+    expect(_bubble(), findsNothing);
+    expect(_input(t), _text);
   });
 
   testWidgets('a failed send does not overwrite what was typed meanwhile',

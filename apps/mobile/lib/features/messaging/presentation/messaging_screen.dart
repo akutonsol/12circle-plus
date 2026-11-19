@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/observability/network_failure.dart';
 import '../../../core/widgets/named_icon_button.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../coach/domain/coach_provider.dart';
@@ -86,10 +87,15 @@ class MessagingScreen extends ConsumerWidget {
               loading: () => const SizedBox(
                 height: 320,
                 child: Center(child: CircularProgressIndicator(color: _brand))),
-              error: (_, __) => _EmptyState(
-                icon: Icons.wifi_off_outlined,
-                message: "Couldn't load messages",
-                sub: "Tap refresh to try again"),
+              // P0-FL-13: reachable now — `getConversations` used to answer a
+              // failure with `[]`, so the inbox said "No conversations yet".
+              // The service records the failure; here it is said in plain
+              // words, with the connection hint only for a connection failure,
+              // and a busy-aware Try again.
+              error: (err, _) => _LoadFailure(
+                network: isNetworkFailure(err),
+                busy: convsAsync.isLoading,
+                onRetry: () => ref.invalidate(conversationsProvider)),
               data: (convs) {
                 if (convs.isEmpty) {
                   // ── FIT-028 · "/messages · the state that sells the plan
@@ -340,6 +346,71 @@ class _NoCoachState extends StatelessWidget {
             ),
           ]),
         ),
+        ),
+      );
+}
+
+/// P0-FL-13 · the inbox did not load. Never the empty copy: a member told
+/// "No conversations yet" concludes their coach never wrote. Announced when it
+/// appears; Try again is a named 44 dp+ control that cannot fire twice while a
+/// read is already in flight.
+class _LoadFailure extends StatelessWidget {
+  final bool network;
+  final bool busy;
+  final VoidCallback onRetry;
+  const _LoadFailure({required this.network, required this.busy, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        // Bounded because FIT-005 put this inside a scroll view.
+        height: 320,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Semantics(
+              liveRegion: true,
+              container: true,
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.error_outline, color: _brand.withValues(alpha: 0.3), size: 52),
+                const SizedBox(height: 16),
+                Text(
+                  network
+                      ? "Couldn't load your messages — check your connection and try again."
+                      : "Couldn't load your messages — try again in a moment. "
+                          'If it keeps happening, contact support.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: _white, fontSize: 15, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 18),
+                Semantics(
+                  // Its own node, or the label merges into the notice above.
+                  container: true,
+                  button: true,
+                  enabled: !busy,
+                  label: busy ? 'Retrying' : 'Try again',
+                  excludeSemantics: true,
+                  onTap: busy ? null : onRetry,
+                  child: GestureDetector(
+                    onTap: busy ? null : onRetry,
+                    behavior: HitTestBehavior.opaque,
+                    child: Container(
+                      constraints: const BoxConstraints(minHeight: 48, minWidth: 140),
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: busy ? _brand.withValues(alpha: 0.4) : _brand,
+                        borderRadius: BorderRadius.circular(12)),
+                      child: busy
+                          ? const SizedBox(
+                              width: 18, height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: _white))
+                          : const Text('Try again',
+                              style: TextStyle(color: _white, fontSize: 15, fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                ),
+              ]),
+            ),
+          ),
         ),
       );
 }
