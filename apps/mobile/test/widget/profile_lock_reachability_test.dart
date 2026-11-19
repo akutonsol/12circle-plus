@@ -201,8 +201,12 @@ void main() {
                 'activatable while the form held none of the member\'s data. '
                 'Reachable: $reachable');
       }
-      expect(tester.getSemantics(find.text('Save Changes')),
-          isNot(containsSemantics(hasTapAction: true)),
+      expect(
+          tester
+              .getSemantics(find.text('Save Changes'))
+              .getSemanticsData()
+              .hasAction(SemanticsAction.tap),
+          isFalse,
           reason: 'Save Changes must not be activatable while locked');
 
       await activateEverything(tester);
@@ -324,6 +328,17 @@ void main() {
   });
 
   // ── Settings ─────────────────────────────────────────────────────────────
+  /// The button/enabled properties the screen declares for a unit button
+  /// (the nearest Semantics widget above its label that declares `button`).
+  ({bool? button, bool? enabled}) unitSemantics(WidgetTester tester, String u) {
+    final s = tester
+        .widgetList<Semantics>(find.ancestor(
+            of: find.text(u).first, matching: find.byType(Semantics)))
+        .where((s) => s.properties.button != null)
+        .firstOrNull;
+    return (button: s?.properties.button, enabled: s?.properties.enabled);
+  }
+
   group('Settings', () {
     testWidgets('a coach\'s first load draws no "Member" and no client rows',
         (tester) async {
@@ -336,8 +351,14 @@ void main() {
       expect(find.text('Coaching Mode'), findsNothing);
       expect(find.text('Loading your account…'), findsOneWidget);
       // UX-F5: the locked unit toggle is announced as disabled.
-      expect(tester.getSemantics(find.text('LB').first),
-          containsSemantics(isButton: true, hasEnabledState: true, isEnabled: false));
+      expect(unitSemantics(tester, 'LB'), (button: true, enabled: false),
+          reason: 'UX-F5: the lock was colour-only');
+      expect(
+          tester
+              .getSemantics(find.text('LB').first)
+              .getSemanticsData()
+              .hasAction(SemanticsAction.tap),
+          isFalse);
       await tester.tap(find.text('LB').first);
       await tester.tap(find.text('KG').first);
       await tester.pump();
@@ -348,8 +369,8 @@ void main() {
       expect(find.text('Subscription'), findsNothing, reason: 'a coach');
       expect(find.text('Coaching Mode'), findsNothing, reason: 'a coach');
       expect(find.text('Loading your account…'), findsNothing);
-      expect(tester.getSemantics(find.text('KG').first),
-          containsSemantics(isButton: true, isEnabled: true, isSelected: true));
+      expect(unitSemantics(tester, 'KG'), (button: true, enabled: true),
+          reason: 'control: enabled once the stored unit is known');
       semantics.dispose();
     });
 
