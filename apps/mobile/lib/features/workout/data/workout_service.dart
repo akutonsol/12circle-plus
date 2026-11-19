@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import 'models/exercise_model.dart';
 import 'models/workout_model.dart';
 import 'models/workout_log_model.dart';
@@ -285,6 +286,12 @@ class WorkoutService {
   // ── Progression data for a single exercise ────────────────────────────────
 
   /// Returns list of {date, max_weight, total_volume, sets_count} sorted by date asc.
+  ///
+  /// P0-FL-18 — this read and the four below (logged exercise names, own PRs,
+  /// a client's PRs, a client's recent sessions) record a failure and RETHROW
+  /// (F-15's rule). They answered `[]`, so a failed read was drawn as "No data
+  /// yet", "No personal records yet" and "No sessions recorded"; each consumer
+  /// now has an error arm with Try again.
   // Records, progression, volume and the logged-exercise list count only sets
   // the client CONFIRMED (`completed`, 104). Editing a set writes a row with
   // `completed: false` — an empty weight is filled with the prescribed load —
@@ -320,7 +327,10 @@ class WorkoutService {
         grouped[date]!['sets_count'] = (grouped[date]!['sets_count'] as int) + 1;
       }
       return grouped.values.toList()..sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
-    } catch (_) { return []; }
+    } catch (e, st) {
+      reportError('WorkoutService.getExerciseProgression', e, st);
+      rethrow;
+    }
   }
 
   /// Returns all distinct exercise names this user has logged
@@ -336,7 +346,10 @@ class WorkoutService {
       final names = (rows as List).map((r) => r['exercise_name'] as String? ?? '').toSet().toList();
       names.sort();
       return names;
-    } catch (_) { return []; }
+    } catch (e, st) {
+      reportError('WorkoutService.getLoggedExerciseNames', e, st);
+      rethrow;
+    }
   }
 
   // ── Stats ─────────────────────────────────────────────────────────────────
@@ -436,7 +449,10 @@ class WorkoutService {
       }
       return prs.values.toList()
         ..sort((a, b) => (b['weight_kg'] as double).compareTo(a['weight_kg'] as double));
-    } catch (_) { return []; }
+    } catch (e, st) {
+      reportError('WorkoutService.getPersonalRecords', e, st);
+      rethrow;
+    }
   }
 
   Future<double> getTotalVolumeLifted() async {
@@ -487,7 +503,10 @@ class WorkoutService {
       }
       return prs.values.toList()
         ..sort((a, b) => (b['weight_kg'] as double).compareTo(a['weight_kg'] as double));
-    } catch (_) { return []; }
+    } catch (e, st) {
+      reportError('WorkoutService.getClientPersonalRecords', e, st);
+      rethrow;
+    }
   }
 
   Future<List<Map<String, dynamic>>> getClientRecentSessions(String clientId, {int limit = 10}) async {
@@ -500,6 +519,9 @@ class WorkoutService {
           .order('completed_at', ascending: false)
           .limit(limit);
       return List<Map<String, dynamic>>.from(data as List);
-    } catch (_) { return []; }
+    } catch (e, st) {
+      reportError('WorkoutService.getClientRecentSessions', e, st);
+      rethrow;
+    }
   }
 }

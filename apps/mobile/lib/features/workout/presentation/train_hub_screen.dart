@@ -14,6 +14,7 @@ import '../domain/plan_summary.dart';
 import '../domain/week_row.dart' show thisWeeksSessions;
 import 'train_palette.dart';
 import 'widgets/week_row_tile.dart';
+import 'widgets/section_load_failure.dart';
 import '../domain/workout_provider.dart';
 import '../../coach/domain/coach_name.dart';
 import '../../coach/domain/coach_provider.dart';
@@ -326,7 +327,25 @@ class _TrainHubScreenState extends ConsumerState<TrainHubScreen> {
             // ── Personal Records ─────────────────────────────────────────────
             prsAsync.when(
               loading: () => const SizedBox.shrink(),
-              error: (_, __) => const SizedBox.shrink(),
+              // P0-FL-18: a failed read hid the section exactly as "no records
+              // yet" does. Say so here, under the section's own heading; the
+              // rest of the hub is unaffected.
+              error: (e, _) => Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('PERSONAL RECORDS',
+                    style: TextStyle(color: _C.onSurface, fontSize: 16,
+                      fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                  const SizedBox(height: 12),
+                  SectionLoadFailure(
+                    what: 'your personal records',
+                    error: e,
+                    busy: prsAsync.isLoading,
+                    accent: _C.primary,
+                    textColor: _C.onSurface,
+                    mutedColor: _C.onSurfaceVar,
+                    onRetry: () => ref.invalidate(personalRecordsProvider)),
+                ])),
               data: (prs) {
                 if (prs.isEmpty) return const SizedBox.shrink();
                 final top = prs.take(3).toList();

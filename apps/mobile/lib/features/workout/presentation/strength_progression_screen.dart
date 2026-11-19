@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../domain/load_format.dart';
 import '../domain/workout_provider.dart';
 import '../../../core/widgets/named_icon_button.dart';
+import 'widgets/section_load_failure.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const _bg      = Color(0xFF030303);
@@ -55,7 +56,15 @@ class _StrengthProgressionScreenState extends ConsumerState<StrengthProgressionS
 
         Expanded(child: exerciseNames.when(
           loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
-          error: (_, __) => const Center(child: Text('Failed to load exercises', style: TextStyle(color: _muted))),
+          // P0-FL-18: the list of exercises could not be read. Not "No data
+          // yet" — that is the answer for a member who has logged nothing.
+          error: (e, _) => Center(child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: SectionLoadFailure(
+              what: 'your exercises',
+              error: e,
+              busy: exerciseNames.isLoading,
+              onRetry: () => ref.invalidate(loggedExerciseNamesProvider)))),
           data: (names) {
             if (names.isEmpty) {
               return const _EmptyState();
@@ -108,7 +117,15 @@ class _ProgressionChart extends ConsumerWidget {
     final metric = ref.watch(memberPrefersMetricProvider);
     return progression.when(
       loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
-      error: (_, __) => const Center(child: Text('No data yet', style: TextStyle(color: _muted))),
+      // P0-FL-18: this chart's read failed — scoped to the chart, the picker
+      // above stays usable. It said "No data yet", the empty-history answer.
+      error: (e, _) => Center(child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: SectionLoadFailure(
+          what: 'progress for $exerciseName',
+          error: e,
+          busy: progression.isLoading,
+          onRetry: () => ref.invalidate(exerciseProgressionProvider(exerciseName))))),
       data: (data) {
         if (data.isEmpty) {
           return const _EmptyState(message: 'No sets logged yet for this exercise.\nComplete a workout to see progress.');

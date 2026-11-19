@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/workout_day.dart';
 import '../domain/workout_provider.dart';
 import '../../../core/widgets/named_icon_button.dart';
+import 'widgets/section_load_failure.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const _bg      = Color(0xFF030303);
@@ -211,7 +212,13 @@ class _ExpandedDetails extends ConsumerWidget {
           const SizedBox(height: 10),
           prsAsync.when(
             loading: () => const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: _brand, strokeWidth: 2))),
-            error: (_, __) => const SizedBox(),
+            // P0-FL-18: a failed read rendered nothing, and the service turned
+            // it into [] → "No personal records yet". Scoped to this list.
+            error: (e, _) => SectionLoadFailure(
+              what: "$name's personal records",
+              error: e,
+              busy: prsAsync.isLoading,
+              onRetry: () => ref.invalidate(clientPersonalRecordsProvider(clientId))),
             data: (prs) {
               if (prs.isEmpty) {
                 return Text('No personal records yet', style: TextStyle(color: _muted.withValues(alpha: 0.4), fontSize: 12));
@@ -243,7 +250,12 @@ class _ExpandedDetails extends ConsumerWidget {
           const SizedBox(height: 10),
           sessionsAsync.when(
             loading: () => const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: _brand, strokeWidth: 2))),
-            error: (_, __) => const SizedBox(),
+            // P0-FL-18: was "No sessions recorded" for a failed read (J11).
+            error: (e, _) => SectionLoadFailure(
+              what: "$name's recent sessions",
+              error: e,
+              busy: sessionsAsync.isLoading,
+              onRetry: () => ref.invalidate(clientRecentSessionsProvider(clientId))),
             data: (sessions) {
               if (sessions.isEmpty) {
                 return Text('No sessions recorded', style: TextStyle(color: _muted.withValues(alpha: 0.4), fontSize: 12));
