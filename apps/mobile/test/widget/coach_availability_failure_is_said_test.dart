@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -78,6 +79,8 @@ class _Server extends http.BaseClient {
   _Delete deleteMode = _Delete.oneRow;
   final slots = <Map<String, Object?>>[];
   final deletes = <String>[];
+  /// When set, a DELETE waits for it (to see the in-flight state).
+  Completer<void>? deleteGate;
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
@@ -85,6 +88,7 @@ class _Server extends http.BaseClient {
     final q = request.url.queryParameters;
     if (request.method == 'DELETE') {
       deletes.add('${request.url.path}?${request.url.query}');
+      if (deleteGate != null) await deleteGate!.future;
       final asksForRows = q.containsKey('select');
       switch (deleteMode) {
         case _Delete.network:
@@ -149,6 +153,7 @@ void main() {
       ..readsFail = false
       ..readsNetwork = false
       ..deleteMode = _Delete.oneRow
+      ..deleteGate = null
       ..deletes.clear()
       ..slots.clear();
     reported.clear();
@@ -196,6 +201,26 @@ void main() {
       expect(find.text('Strategy Consultation'), findsOneWidget);
     });
 
+    IconButton addSlot(WidgetTester tester) => tester.widget<IconButton>(
+        find.ancestor(of: find.byIcon(Icons.add_circle_outline_rounded),
+            matching: find.byType(IconButton)).first);
+
+    testWidgets('Add slot is disabled while the schedule could not be read, '
+        'and named', (tester) async {
+      server.readsFail = true;
+      await open(tester);
+      expect(addSlot(tester).onPressed, isNull,
+          reason: 'UX-2: the coach cannot see the schedule they would add to');
+      expect(addSlot(tester).tooltip, 'Add slot');
+      expect(find.byTooltip('Add slot'), findsOneWidget);
+
+      // Once the read succeeds it is live again.
+      server.readsFail = false;
+      await tester.tap(find.text('Try again'));
+      await tester.pumpAndSettle();
+      expect(addSlot(tester).onPressed, isNotNull);
+    });
+
     testWidgets('control: a real empty calendar keeps its empty state', (tester) async {
       await open(tester);
       expect(find.text('No availability published'), findsOneWidget);
@@ -218,7 +243,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(server.deletes.single, contains('select=id'),
           reason: 'the delete must ask for its row back to know one went');
-      expect(find.textContaining("Couldn't remove this slot — nothing was changed"),
+      expect(
+          find.text("Couldn't remove this slot — it may already be gone or "
+              'booked. Refreshing your list.'),
           findsOneWidget,
           reason: 'THE defect: a 0-row delete (204) passed as done');
       expect(find.text('Strategy Consultation'), findsOneWidget);
@@ -245,6 +272,33 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.textContaining("Couldn't remove this slot — check your connection"),
           findsOneWidget);
+    });
+
+    testWidgets('a double tap sends ONE delete and shows the spinner while it '
+        'is in flight', (tester) async {
+      await openWithSlot(tester);
+      server.deleteGate = Completer<void>();
+      final del = find.byIcon(Icons.delete_outline_rounded);
+      // Two taps in the same frame: the button has not rebuilt disabled yet,
+      // so only the in-flight guard stops the second delete.
+      await tester.tap(del);
+      await tester.tap(del);
+      await tester.pump();
+      expect(find.byIcon(Icons.delete_outline_rounded), findsNothing);
+      expect(
+          find.descendant(of: find.byTooltip('Remove slot'),
+              matching: find.byType(CircularProgressIndicator)),
+          findsOneWidget,
+          reason: 'the slot shows its delete is in flight');
+      final btn = tester.widget<IconButton>(find.ancestor(
+          of: find.byType(CircularProgressIndicator), matching: find.byType(IconButton)));
+      expect(btn.onPressed, isNull, reason: 'busy: no double fire');
+
+      server.deleteGate!.complete();
+      await tester.pumpAndSettle();
+      expect(server.deletes, hasLength(1),
+          reason: 'a double tap must not send the delete twice');
+      expect(find.textContaining("Couldn't"), findsNothing);
     });
 
     testWidgets('control: a delete that removed the row reloads without a failure',

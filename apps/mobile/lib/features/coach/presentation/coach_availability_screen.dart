@@ -28,9 +28,6 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
   /// Slots whose delete is in flight: their button is disabled (no double fire).
   final Set<String> _deleting = {};
 
-  static const _tryLater =
-      'Try again in a moment. If it keeps happening, contact support.';
-
   /// The next step for a thrown failure; the connection hint only when it IS
   /// the connection.
   static String _nextStep(Object e) => isNetworkFailure(e)
@@ -93,7 +90,8 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
       setState(() => _deleting.remove(id));
       if ((rows as List).isEmpty) {
         messenger.showSnackBar(const SnackBar(content: Text(
-            "Couldn't remove this slot — nothing was changed. $_tryLater")));
+            "Couldn't remove this slot — it may already be gone or booked. "
+            'Refreshing your list.')));
       }
       _load();
     } catch (e, st) {
@@ -182,9 +180,12 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
         title: const Text('Manage Availability',
           style: TextStyle(color: _wht, fontSize: 17, fontWeight: FontWeight.w700)),
         actions: [
+          // P0-FL-14 (UX-2) · while the load has failed the coach cannot see
+          // the schedule, so adding a slot to it is disabled until it loads.
           IconButton(
+            tooltip: 'Add slot',
             icon: const Icon(Icons.add_circle_outline_rounded, color: _tert, size: 24),
-            onPressed: _showAddSheet),
+            onPressed: _loadError != null ? null : _showAddSheet),
         ],
       ),
       body: _loading

@@ -137,6 +137,72 @@ void main() {
     expect(find.byKey(_unknown), findsNothing);
   });
 
+  testWidgets('UX-1: a screen reader hears that the count is unknown, not '
+      'just "Notifications"', (tester) async {
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(_dashboard(() => Stream.error(Exception(_secret))));
+    await _settle(tester);
+    expect(find.bySemanticsLabel("Notifications — couldn't check for new ones"),
+        findsOneWidget,
+        reason: 'the muted dot is visual only; the label must carry it');
+    expect(find.byKey(_unknown), findsOneWidget, reason: 'the key is kept');
+    semantics.dispose();
+  });
+
+  testWidgets('control (UX-1): a healthy bell keeps the label "Notifications"',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(_dashboard(() => Stream.value(const [])));
+    await _settle(tester);
+    expect(find.bySemanticsLabel('Notifications'), findsOneWidget);
+    expect(find.bySemanticsLabel(RegExp("couldn't check")), findsNothing);
+    semantics.dispose();
+  });
+
+  testWidgets('UX-5: the first-load spinner is named "Loading notifications"',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    final pending = StreamController<_Rows>();
+    addTearDown(() => unawaited(pending.close()));
+    await tester.pumpWidget(_dashboard(() => pending.stream));
+    await _settle(tester);
+    await _openSheet(tester);
+    expect(find.byType(CircularProgressIndicator), findsWidgets);
+    expect(find.bySemanticsLabel('Loading notifications'), findsOneWidget);
+    semantics.dispose();
+  });
+
+  testWidgets('an error AFTER a loaded list hides Mark all read / Clear all '
+      'and says the failure', (tester) async {
+    final live = StreamController<_Rows>();
+    addTearDown(() => unawaited(live.close()));
+    await tester.pumpWidget(_dashboard(() => live.stream));
+    await _settle(tester);
+    // One unread and one read: both header actions apply to this list.
+    live.add([_notification('n-1'), _notification('n-2', read: true)]);
+    await _settle(tester);
+    await _openSheet(tester);
+    expect(find.text('Mark all read'), findsOneWidget);
+    expect(find.text('Clear all'), findsOneWidget);
+    // With unread rows the header row overflows the sheet's 600 px cap — the
+    // pre-existing layout issue noted above, not this test's subject. It is
+    // taken here so it is the ONLY exception tolerated.
+    final overflow = tester.takeException();
+    expect(overflow, anyOf(isNull,
+        isA<FlutterError>().having((e) => e.toString(), 'message', contains('overflowed'))));
+
+    live.addError(Exception(_secret));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text("Couldn't load your notifications"), findsOneWidget,
+        reason: 'the list is no longer live: the error wins over the stale rows');
+    expect(find.text('New client n-1'), findsNothing);
+    expect(find.text('Mark all read'), findsNothing,
+        reason: 'acts on a list the coach can no longer see');
+    expect(find.text('Clear all'), findsNothing);
+    expect(find.textContaining('SECRET_TABLE_X'), findsNothing);
+  });
+
   // ── Controls ──────────────────────────────────────────────────────────────
 
   testWidgets('control: a successful empty read keeps today\'s copy and no '

@@ -57,33 +57,49 @@ final coachNotificationsProvider = StreamProvider<List<Map<String, dynamic>>>((r
   ref.watch(currentUserProvider);
   final uid = _supabase.auth.currentUser?.id;
   if (uid == null) return Stream.value([]);
-  late final StreamController<List<Map<String, dynamic>>> out;
-  StreamSubscription<List<Map<String, dynamic>>>? sub;
+  return reopenWhenDone(
+    () => _supabase
+        .from('notifications')
+        .stream(primaryKey: ['id'])
+        .eq('recipient_id', uid)
+        .order('created_at', ascending: false)
+        .map((rows) => List<Map<String, dynamic>>.from(rows)),
+    origin: 'coachNotificationsProvider',
+  );
+});
+
+/// [open]'s stream, opened again each time it ends: after [first], doubling
+/// while it keeps ending without data, capped at [max], and back to [first]
+/// once data arrives. Every error is reported under [origin] and passed on —
+/// never swallowed into an empty value. Cancelling stops the retries.
+@visibleForTesting
+Stream<T> reopenWhenDone<T>(
+  Stream<T> Function() open, {
+  required String origin,
+  Duration first = _notifFirstRetry,
+  Duration max = _notifMaxRetry,
+}) {
+  late final StreamController<T> out;
+  StreamSubscription<T>? sub;
   Timer? retry;
-  var delay = _notifFirstRetry;
+  var delay = first;
   void fail(Object e, StackTrace st) {
-    reportError('coachNotificationsProvider', e, st);
+    reportError(origin, e, st);
     if (!out.isClosed) out.addError(e, st);
   }
 
-  void open() {
+  void subscribe() {
     try {
-      sub = _supabase
-          .from('notifications')
-          .stream(primaryKey: ['id'])
-          .eq('recipient_id', uid)
-          .order('created_at', ascending: false)
-          .map((rows) => List<Map<String, dynamic>>.from(rows))
-          .listen(
-        (list) {
-          delay = _notifFirstRetry;
-          if (!out.isClosed) out.add(list);
+      sub = open().listen(
+        (value) {
+          delay = first;
+          if (!out.isClosed) out.add(value);
         },
         onError: fail,
         onDone: () {
           if (out.isClosed) return;
-          retry = Timer(delay, open);
-          delay = delay * 2 > _notifMaxRetry ? _notifMaxRetry : delay * 2;
+          retry = Timer(delay, subscribe);
+          delay = delay * 2 > max ? max : delay * 2;
         },
       );
     } catch (e, st) {
@@ -91,8 +107,8 @@ final coachNotificationsProvider = StreamProvider<List<Map<String, dynamic>>>((r
     }
   }
 
-  out = StreamController<List<Map<String, dynamic>>>(
-    onListen: open,
+  out = StreamController<T>(
+    onListen: subscribe,
     onCancel: () {
       retry?.cancel();
       out.close();
@@ -100,7 +116,7 @@ final coachNotificationsProvider = StreamProvider<List<Map<String, dynamic>>>((r
     },
   );
   return out.stream;
-});
+}
 
 /// Unread notifications for the bell. `null` = unknown: the read failed, and
 /// a failure must not be shown as "0 unread" (P0-FL-14). While the first read
@@ -408,7 +424,11 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
               const SizedBox(width: 8),
               // Notification bell
               NamedIconButton(
-                label: 'Notifications',
+                // P0-FL-14 (UX-1) · the muted dot is visual only; a screen
+                // reader hears that the unread count is unknown.
+                label: ref.watch(unreadNotificationCountProvider) == null
+                    ? "Notifications — couldn't check for new ones"
+                    : 'Notifications',
                 onTap: () => _showNotificationsSheet(context),
                 child: Stack(
                   clipBehavior: Clip.none,
@@ -2021,7 +2041,9 @@ class _NotificationsSheet extends ConsumerWidget {
                     busy: async.isLoading,
                     onRetry: () => ref.invalidate(coachNotificationsProvider))))
               : !loaded
-              ? const Center(child: CircularProgressIndicator(color: _brand))
+              ? Center(child: Semantics(
+                  label: 'Loading notifications',
+                  child: const CircularProgressIndicator(color: _brand)))
               : notifs.isEmpty
               ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
                   Icon(Icons.notifications_none, color: _brand.withValues(alpha: 0.3), size: 48),
