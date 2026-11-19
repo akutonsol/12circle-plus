@@ -37,6 +37,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 // Against 3bc0a80 (the blocking version) the answered-read tests fail: no
 // request reaches generate_workout. Against c3d5706 the not-completed test
 // fails: the answers on file were dropped for the roster row's defaults.
+// Against 31a9e9e the not-completed + injury-without-area test fails: only the
+// "not completed" notice showed; the injury warning required a COMPLETED row.
 
 const _uid = '00000000-0000-4000-8000-0000000c0f38';
 const _clientId = '00000000-0000-4000-8000-00000000cf38';
@@ -104,7 +106,10 @@ Map<String, Object?> _health({bool injuryArea = true}) => {
       'injury_locations': injuryArea ? 'Knee, Shoulder' : '',
     };
 
-enum _Rpc { row, notCompleted, injuryNoArea, empty, denied, http500, network }
+enum _Rpc {
+  row, notCompleted, notCompletedInjuryNoArea, injuryNoArea, empty, denied,
+  http500, network
+}
 
 class _Server extends http.BaseClient {
   _Rpc rpc = _Rpc.row;
@@ -145,6 +150,14 @@ class _Server extends http.BaseClient {
           return _json(request, 200, [
             {'client_id': _clientId, 'has_assessment': false,
               'fitness_goal': 'lose_fat', 'training_location': 'home'},
+          ]);
+        case _Rpc.notCompletedInjuryNoArea:
+          // Never completed, but the saved answers report an injury with
+          // no area.
+          return _json(request, 200, [
+            {'client_id': _clientId, 'has_assessment': false,
+              'fitness_goal': 'lose_fat', 'has_injuries': true,
+              'injury_locations': ''},
           ]);
         case _Rpc.empty:
           return _json(request, 200, []);
@@ -448,5 +461,33 @@ void main() {
     expect(ctx['experience'], 'beginner');
     expect(find.text(_injuryNoArea), findsOneWidget,
         reason: 'the warning stays visible beside the recommendation');
+  });
+
+  // P0-FL-38 tiny round: an intake never completed can still report an
+  // injury with no area. The coach sees BOTH notices — informational only.
+  testWidgets(
+      'not completed AND injury reported with no area: both notices show in '
+      'live regions and Generate stays ENABLED', (t) async {
+    server.rpc = _Rpc.notCompletedInjuryNoArea;
+    await _pumpAndSelect(t);
+    const notCompleted = "This client hasn't completed their assessment yet.";
+    expect(find.text(notCompleted), findsOneWidget);
+    expect(_inLiveRegion(find.text(notCompleted)), isTrue);
+    expect(find.text(_injuryNoArea), findsOneWidget,
+        reason: 'an injury with no area is reported even when not completed');
+    expect(_inLiveRegion(find.text(_injuryNoArea)), isTrue);
+    expect(find.text(_defaults), findsNothing);
+    expect(find.textContaining("Couldn't"), findsNothing);
+
+    await _tapGenerate(t);
+    expect(server.generateBodies, hasLength(1),
+        reason: 'informational only — generation is not blocked');
+    final ctx = server.generateBodies.single['p_context'] as Map;
+    expect(ctx['goal'], 'fat_loss', reason: 'the answers on file are used');
+    expect(ctx['injuries'], isEmpty, reason: 'no area on file → none');
+    expect(find.text(notCompleted), findsOneWidget);
+    expect(find.text(_injuryNoArea), findsOneWidget,
+        reason: 'both notices stay visible beside the recommendation');
+    expect(server.profileReads, isEmpty);
   });
 }

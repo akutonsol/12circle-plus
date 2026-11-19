@@ -69,8 +69,8 @@ class _State extends ConsumerState<CoachCopilotScreen> {
   /// whether to block a client is a product decision, not this screen's:
   /// - a returned row → that row, completed or not: the answers on file are
   ///   used and [_context] defaults only the missing fields, exactly as the
-  ///   pre-P0-FL-38 `user_profiles` row was (an injury with no area on a
-  ///   completed assessment reaches the engine as no areas; the notice says so);
+  ///   pre-P0-FL-38 `user_profiles` row was (an injury with no area reaches
+  ///   the engine as no areas, completed or not; the notice says so);
   /// - not the active coach (42501) or no row → the roster row, which carries
   ///   no health fields, so the engine uses its defaults (the notice says so).
   static Map<String, dynamic>? _generationSource(
@@ -81,9 +81,10 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     return v.status == ClientAssessmentStatus.loaded ? v.row : client;
   }
 
-  /// A completed assessment reports an injury but names no area.
+  /// The answers on file — completed or not — report an injury but name no
+  /// area.
   static bool _injuryWithoutArea(ClientAssessment v) =>
-      v.hasAssessment &&
+      v.status == ClientAssessmentStatus.loaded &&
       v.row['has_injuries'] == true &&
       _injuries(v.row['injury_locations']).isEmpty;
 
@@ -350,15 +351,16 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     // read (whether to block these clients is the owner's decision).
     const defaults = 'Recommendations use defaults — their goal, experience '
         'and injuries are unknown. Review the session before assigning it.';
-    if (_injuryWithoutArea(v)) {
-      // Prominent: the one case where the client told us something Copilot
-      // cannot act on.
-      return _notice(Icons.healing_outlined, _fail,
-          'This client reported an injury without saying where.',
-          "Copilot can't plan around it — review the session before assigning "
-              'it, or ask them to update their assessment.');
-    }
-    if (v.hasAssessment) return null;
+    // Prominent: the one case where the client told us something Copilot
+    // cannot act on. Shown for a completed assessment and, beside the "not
+    // completed" notice, for one never completed.
+    final injury = _injuryWithoutArea(v)
+        ? _notice(Icons.healing_outlined, _fail,
+            'This client reported an injury without saying where.',
+            "Copilot can't plan around it — review the session before "
+                'assigning it, or ask them to update their assessment.')
+        : null;
+    if (v.hasAssessment) return injury;
     const onFile = 'Recommendations use the answers on file and defaults for '
         'the rest. Review the session before assigning it.';
     final (IconData icon, String title, String detail) = switch (v.status) {
@@ -370,7 +372,11 @@ class _State extends ConsumerState<CoachCopilotScreen> {
       ClientAssessmentStatus.loaded => (Icons.assignment_outlined,
           "This client hasn't completed their assessment yet.", onFile),
     };
-    return _notice(icon, _warn, title, detail);
+    final status = _notice(icon, _warn, title, detail);
+    if (injury == null) return status;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      injury, const SizedBox(height: 8), status,
+    ]);
   }
 
   /// A live region, so a screen reader hears the state change.
