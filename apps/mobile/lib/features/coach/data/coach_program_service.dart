@@ -84,23 +84,35 @@ class CoachProgramService {
   // ── Predictive Intelligence Engine ───────────────────────
   /// Deterministic outlook for a client: goal progress, predicted finish,
   /// confidence, plateau/injury/adherence risk, recovery forecast, alerts.
+  ///
+  /// null = the engine answered with no outlook. **A failed call is recorded
+  /// and rethrown** (P0-FL-43): it used to return null too, so the copilot
+  /// showed a failed prediction as "no outlook".
   Future<Map<String, dynamic>?> predictClient(String subjectId, {String? programId}) async {
     try {
       final res = await _db.rpc('predict_client',
           params: {'p_subject': subjectId, if (programId != null) 'p_program': programId});
       if (res is Map) return res.cast<String, dynamic>();
       return null;
-    } catch (_) { return null; }
+    } catch (e, st) {
+      reportError('CoachProgramService.predictClient', e, st);
+      rethrow;
+    }
   }
 
   /// Compute + persist a prediction (history for prediction-vs-reality).
+  /// Same contract as [predictClient]: a failure is recorded and rethrown,
+  /// never returned as "no prediction".
   Future<Map<String, dynamic>?> recordPrediction(String subjectId, {String? programId}) async {
     try {
       final res = await _db.rpc('record_prediction',
           params: {'p_subject': subjectId, if (programId != null) 'p_program': programId});
       if (res is Map) return res.cast<String, dynamic>();
       return null;
-    } catch (_) { return null; }
+    } catch (e, st) {
+      reportError('CoachProgramService.recordPrediction', e, st);
+      rethrow;
+    }
   }
 
   // ── Continuous Coaching Engine ───────────────────────────

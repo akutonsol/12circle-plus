@@ -10,6 +10,7 @@ import '../../exercise_database/data/custom_exercise_service.dart';
 import '../data/coach_program_service.dart';
 import '../../dashboard/presentation/coach_dashboard_screen.dart' show coachClientsProvider;
 import '../../auth/domain/auth_provider.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
 import '../domain/coach_ecosystem_provider.dart'
     show ClientAssessment, ClientAssessmentStatus, clientAssessmentProvider;
@@ -43,6 +44,8 @@ class _State extends ConsumerState<CoachCopilotScreen> {
   bool _busy = false, _assigning = false;
   Map<String, dynamic>? _rec;       // engine recommendation (+ trace)
   Map<String, dynamic>? _outlook;   // predictive outlook for the client
+  Object? _outlookError;            // the outlook read failed (P0-FL-43)
+  bool _outlookBusy = false;        // an outlook read is in flight
   String? _explanation;
   String? _status;
 
@@ -118,6 +121,9 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     // engine runs, and A's session must never land on B (UX-F4).
     final id = c['id'] as String;
     setState(() { _busy = true; _rec = null; _explanation = null; _status = null; });
+    // generateWorkout records a failure in `lastError` but does not clear it
+    // first; clear it here so an earlier call's error is never reported.
+    _svc.lastError = null;
     final r = await _svc.generateWorkout(_context(source), subjectId: id);
     if (!mounted) return;
     if (_client?['id'] != id) {
@@ -127,13 +133,64 @@ class _State extends ConsumerState<CoachCopilotScreen> {
       return;
     }
     // A failed call used to leave the panel blank — the error went into
-    // `lastError` and nothing said so.
+    // `lastError` and nothing said so. P0-FL-43: it is recorded, and the next
+    // step says "check your connection" only for a network failure. An answer
+    // that is not a recommendation is a failure too, never an empty one.
+    String? failure;
+    if (r == null) {
+      final err = _svc.lastError ??
+          StateError('generate_workout answered without a recommendation');
+      reportError('CoachCopilotScreen.generate', err);
+      failure = "Couldn't generate a recommendation — ${_nextStep(err)}";
+    }
     setState(() {
       _busy = false;
       _rec = r;
-      if (r == null) _status = "Couldn't generate a recommendation — try again.";
+      _status = failure;
     });
   }
+
+  /// The one voice's next step: the connection hint only for a network failure.
+  static String _nextStep(Object? error) => isNetworkFailure(error)
+      ? 'check your connection, then try again.'
+      : 'try again in a moment. If it keeps happening, contact support.';
+
+  /// Loads [id]'s outlook. A late answer (or failure) for a client no longer
+  /// selected is discarded. A failure is shown as one — never as "no outlook"
+  /// (P0-FL-43); a genuine null answer still shows nothing.
+  Future<void> _loadOutlook(String id) async {
+    setState(() { _outlookBusy = true; });
+    try {
+      final o = await _programs.predictClient(id);
+      if (mounted && _client?['id'] == id) {
+        setState(() { _outlook = o; _outlookError = null; _outlookBusy = false; });
+      }
+    } catch (e) {
+      // Recorded by CoachProgramService.predictClient.
+      if (mounted && _client?['id'] == id) {
+        setState(() { _outlook = null; _outlookError = e; _outlookBusy = false; });
+      }
+    }
+  }
+
+  /// The outlook failure notice: a live region with a busy-aware Try again.
+  Widget _outlookFailedNotice(Object error) => _notice(
+      Icons.error_outline, _fail,
+      "Couldn't load this client's outlook — ${_nextStep(error)}", null,
+      retry: Align(alignment: Alignment.centerRight, child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+        child: TextButton(
+          // Disabled while the retry runs: no double fire.
+          onPressed: _outlookBusy
+              ? null
+              : () => _loadOutlook(_client!['id'] as String),
+          child: Text(_outlookBusy ? 'Trying again…' : 'Try again',
+            semanticsLabel: _outlookBusy
+                ? "Trying again, loading this client's outlook"
+                : "Try again, load this client's outlook",
+            style: TextStyle(
+                color: _outlookBusy ? _muted : _brand,
+                fontWeight: FontWeight.w700))))));
 
   Future<void> _explain() async {
     final tid = _rec?['trace_id']?.toString();
@@ -209,6 +266,10 @@ class _State extends ConsumerState<CoachCopilotScreen> {
             const SizedBox(height: 14),
             _outlookCard(_outlook!),
           ],
+          if (_outlookError != null) ...[
+            const SizedBox(height: 14),
+            _outlookFailedNotice(_outlookError!),
+          ],
           if (notice != null) ...[
             const SizedBox(height: 14),
             notice,
@@ -220,10 +281,13 @@ class _State extends ConsumerState<CoachCopilotScreen> {
           if (_rec != null) ..._recommendation(_rec!, injuryWarn: injuryWarn),
           // The status line normally renders inside the recommendation; with no
           // recommendation (a failed call) it needs its own place, or it is lost.
-          if (_rec == null && _status != null) Padding(
+          // A live region, so a screen reader hears the failure.
+          if (_rec == null && _status != null) Semantics(
+            liveRegion: true, container: true,
+            child: Padding(
             padding: const EdgeInsets.only(top: 12),
             child: Text(_status!, style: const TextStyle(
-                color: _fail, fontSize: 13, fontWeight: FontWeight.w700))),
+                color: _fail, fontSize: 13, fontWeight: FontWeight.w700)))),
         ],
       ]),
     );
@@ -243,11 +307,13 @@ class _State extends ConsumerState<CoachCopilotScreen> {
           Future<void> select() async {
             // Selecting the client starts their logged assessment read
             // (watched in build): the health context comes only from there.
-            setState(() { _client = c; _rec = null; _status = null; _explanation = null; _outlook = null; });
+            setState(() {
+              _client = c; _rec = null; _status = null; _explanation = null;
+              _outlook = null; _outlookError = null; _outlookBusy = false;
+            });
             // Predictive outlook for this client (deterministic). A late
             // answer for a client no longer selected is discarded.
-            final o = await _programs.predictClient(c['id'] as String);
-            if (mounted && _client?['id'] == c['id']) setState(() => _outlook = o);
+            await _loadOutlook(c['id'] as String);
           }
           return Semantics(
             button: true, selected: sel, label: name, onTap: select,
