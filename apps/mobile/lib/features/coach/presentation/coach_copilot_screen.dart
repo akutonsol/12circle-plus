@@ -44,8 +44,6 @@ class _State extends ConsumerState<CoachCopilotScreen> {
   bool _busy = false, _assigning = false;
   Map<String, dynamic>? _rec;       // engine recommendation (+ trace)
   Map<String, dynamic>? _outlook;   // predictive outlook for the client
-  Object? _outlookError;            // the outlook read failed (P0-FL-43)
-  bool _outlookBusy = false;        // an outlook read is in flight
   String? _explanation;
   String? _status;
 
@@ -155,43 +153,6 @@ class _State extends ConsumerState<CoachCopilotScreen> {
       ? 'check your connection, then try again.'
       : 'try again in a moment. If it keeps happening, contact support.';
 
-  /// Loads [id]'s outlook. A late answer (or failure) for a client no longer
-  /// selected is discarded. A failure is shown as one — never as "no outlook"
-  /// (P0-FL-43); a genuine null answer still shows nothing.
-  Future<void> _loadOutlook(String id) async {
-    setState(() { _outlookBusy = true; });
-    try {
-      final o = await _programs.predictClient(id);
-      if (mounted && _client?['id'] == id) {
-        setState(() { _outlook = o; _outlookError = null; _outlookBusy = false; });
-      }
-    } catch (e) {
-      // Recorded by CoachProgramService.predictClient.
-      if (mounted && _client?['id'] == id) {
-        setState(() { _outlook = null; _outlookError = e; _outlookBusy = false; });
-      }
-    }
-  }
-
-  /// The outlook failure notice: a live region with a busy-aware Try again.
-  Widget _outlookFailedNotice(Object error) => _notice(
-      Icons.error_outline, _fail,
-      "Couldn't load this client's outlook — ${_nextStep(error)}", null,
-      retry: Align(alignment: Alignment.centerRight, child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
-        child: TextButton(
-          // Disabled while the retry runs: no double fire.
-          onPressed: _outlookBusy
-              ? null
-              : () => _loadOutlook(_client!['id'] as String),
-          child: Text(_outlookBusy ? 'Trying again…' : 'Try again',
-            semanticsLabel: _outlookBusy
-                ? "Trying again, loading this client's outlook"
-                : "Try again, load this client's outlook",
-            style: TextStyle(
-                color: _outlookBusy ? _muted : _brand,
-                fontWeight: FontWeight.w700))))));
-
   Future<void> _explain() async {
     final tid = _rec?['trace_id']?.toString();
     if (tid == null) return;
@@ -266,10 +227,6 @@ class _State extends ConsumerState<CoachCopilotScreen> {
             const SizedBox(height: 14),
             _outlookCard(_outlook!),
           ],
-          if (_outlookError != null) ...[
-            const SizedBox(height: 14),
-            _outlookFailedNotice(_outlookError!),
-          ],
           if (notice != null) ...[
             const SizedBox(height: 14),
             notice,
@@ -307,13 +264,11 @@ class _State extends ConsumerState<CoachCopilotScreen> {
           Future<void> select() async {
             // Selecting the client starts their logged assessment read
             // (watched in build): the health context comes only from there.
-            setState(() {
-              _client = c; _rec = null; _status = null; _explanation = null;
-              _outlook = null; _outlookError = null; _outlookBusy = false;
-            });
+            setState(() { _client = c; _rec = null; _status = null; _explanation = null; _outlook = null; });
             // Predictive outlook for this client (deterministic). A late
             // answer for a client no longer selected is discarded.
-            await _loadOutlook(c['id'] as String);
+            final o = await _programs.predictClient(c['id'] as String);
+            if (mounted && _client?['id'] == c['id']) setState(() => _outlook = o);
           }
           return Semantics(
             button: true, selected: sel, label: name, onTap: select,
