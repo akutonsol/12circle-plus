@@ -397,6 +397,8 @@ void main() {
     }
   });
 
+  // UX-F3: the SnackBar already supplies the live region (this passes on
+  // aa39f77 too); kept as a guard so a custom notice cannot drop it.
   testWidgets('"Session cancelled." is announced (live region)',
       (tester) async {
     await openScreen(tester);

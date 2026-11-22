@@ -315,10 +315,9 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       }
     }
     if (mounted) setState(() => _cancelling.remove(id));
-    // Announced, like the failure notices (live region).
-    messenger.showSnackBar(SnackBar(
-        content: Semantics(
-            liveRegion: true, child: const Text('Session cancelled.'))));
+    // Already announced: the SnackBar itself is a live region (proved by
+    // the FL-42 test). No extra wrapper, which could announce it twice.
+    messenger.showSnackBar(const SnackBar(content: Text('Session cancelled.')));
     _load();
   }
 
