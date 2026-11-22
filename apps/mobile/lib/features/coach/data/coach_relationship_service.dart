@@ -298,8 +298,16 @@ class CoachRelationshipService {
         .from('public_profiles')
         .select('id, first_name, last_name, avatar_url, coach_title, specialties, pricing_monthly')
         .inFilter('id', ids);
-    final byId = {for (final p in profiles as List) p['id'] as String: p};
-    return [for (final r in list) {...r, 'coach': byId[r['coach_id']] ?? {}}];
+    // P0-FL-41: typed, so a coach whose profile row did not come back is an
+    // empty Map<String, dynamic> — settings and manage-subscription cast it.
+    final byId = <String, Map<String, dynamic>>{
+      for (final p in List<Map<String, dynamic>>.from(profiles as List))
+        p['id'] as String: p,
+    };
+    return [
+      for (final r in list)
+        {...r, 'coach': byId[r['coach_id']] ?? const <String, dynamic>{}},
+    ];
   }
 
   // ── Get client's current relationship status ──────────────

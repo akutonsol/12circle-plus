@@ -1472,7 +1472,9 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                 ...atRisk.map((e) {
                   final p = e['profile'] as Map<String, dynamic>? ?? {};
                   final n = '${p['first_name'] ?? ''} ${p['last_name'] ?? ''}'.trim();
-                  return Text('• $n — ${e['total_score'] ?? 0} pts', style: const TextStyle(color: _white, fontSize: 12));
+                  // P0-FL-41: a client whose profile did not come back is
+                  // "Client" here too, as in their row — not a blank.
+                  return Text('• ${n.isEmpty ? 'Client' : n} — ${e['total_score'] ?? 0} pts', style: const TextStyle(color: _white, fontSize: 12));
                 }),
               ]),
             ),

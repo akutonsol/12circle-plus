@@ -108,10 +108,17 @@ class ScoreService {
         .from('user_profiles')
         .select('id, first_name, last_name, avatar_url')
         .inFilter('id', clientIds);
-    final profileMap = {for (final p in (profiles as List)) p['id']: p};
+    // P0-FL-41: typed. An untyped `?? {}` here was a Map<dynamic, dynamic>,
+    // and the Leaderboard tab's `as Map<String, dynamic>?` threw while
+    // building whenever a client's profile row did not come back (deleted, or
+    // not readable). The row is kept; the tab names them "Client".
+    final profileMap = <String, Map<String, dynamic>>{
+      for (final p in List<Map<String, dynamic>>.from(profiles as List))
+        p['id'] as String: p,
+    };
     return scores.map<Map<String, dynamic>>((s) => {
       ...s,
-      'profile': profileMap[s['user_id']] ?? {},
+      'profile': profileMap[s['user_id']] ?? const <String, dynamic>{},
     }).toList();
   }
 
