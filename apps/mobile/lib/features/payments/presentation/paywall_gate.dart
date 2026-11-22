@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../domain/entitlements.dart';
 import '../../../core/widgets/named_icon_button.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../profile/presentation/widgets/profile_load_failed_notice.dart';
 
 const _bg    = Color(0xFF030303);
 const _brand = Color(0xFFA855F7);
@@ -28,7 +29,27 @@ class PaywallGate extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // Coaches always have access to coaching tools (their plan is a coach plan,
     // not a client plan) — never paywall them.
-    final isCoach = ref.watch(currentUserProfileProvider).valueOrNull?['role'] == 'coach';
+    //
+    // P0-FL-44 · only a SUCCESSFUL profile read decides that. The role used to
+    // be `valueOrNull?['role']`, which is null both while the profile loads
+    // and when its read FAILED (P0-FL-16 made the provider rethrow) — so a
+    // coach fell through to the client plan check and could be shown
+    // PaywallLocked, "upgrade your plan": a false fact about their account.
+    // Unknown is now neither locked nor opened. A refresh that fails after a
+    // successful read keeps that read's role (Riverpod keeps the previous
+    // value), so `hasValue` — not `hasError` — is the test.
+    final profileAsync = ref.watch(currentUserProfileProvider);
+    if (!profileAsync.hasValue) {
+      if (profileAsync.hasError) {
+        return _ProfileUnread(
+          error: profileAsync.error!,
+          busy: profileAsync.isLoading,
+          onRetry: () => ref.invalidate(currentUserProfileProvider),
+        );
+      }
+      return const _Loading();
+    }
+    final isCoach = profileAsync.value?['role'] == 'coach';
     if (isCoach) return child;
     final planAsync = ref.watch(clientPlanProvider);
     // Once we know the plan, keep rendering from it even while the provider is
@@ -40,14 +61,62 @@ class PaywallGate extends ConsumerWidget {
       return plan.atLeast(required) ? child : PaywallLocked(required: required, feature: featureName);
     }
     return planAsync.when(
-      loading: () => const Scaffold(
-          backgroundColor: _bg,
-          body: Center(child: CircularProgressIndicator(color: _brand))),
+      loading: () => const _Loading(),
       error: (_, __) => child, // fail open rather than lock a paying user out
       data: (plan) =>
           plan.atLeast(required) ? child : PaywallLocked(required: required, feature: featureName),
     );
   }
+}
+
+/// The gate's one blocking spinner (first load only).
+class _Loading extends StatelessWidget {
+  const _Loading();
+  @override
+  Widget build(BuildContext context) => const Scaffold(
+      backgroundColor: _bg,
+      body: Center(child: CircularProgressIndicator(color: _brand)));
+}
+
+/// P0-FL-44 · the profile could not be read, so it is not known whether this
+/// is a coach (always in) or a client (plan decides). Say so, offer Try again
+/// (busy-aware, via the shared notice) and a way back — neither the feature
+/// nor the upgrade prompt. The failure itself is recorded by
+/// `currentUserProfileProvider` (reportError), so it is not recorded again.
+class _ProfileUnread extends StatelessWidget {
+  const _ProfileUnread(
+      {required this.error, required this.busy, required this.onRetry});
+  final Object error;
+  final bool busy;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        backgroundColor: _bg,
+        appBar: AppBar(
+          backgroundColor: _bg,
+          elevation: 0,
+          iconTheme: const IconThemeData(color: _white),
+          leading: NamedIconButton(
+            label: 'Back',
+            onTap: () => Navigator.of(context).maybePop(),
+            child: const Icon(Icons.arrow_back, color: _white, size: 20),
+          ),
+        ),
+        body: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: ProfileLoadFailedNotice(
+                error: error,
+                busy: busy,
+                detail: 'This feature stays closed until it loads.',
+                onRetry: onRetry,
+              ),
+            ),
+          ),
+        ),
+      );
 }
 
 /// FIT-021 · the entitlement gate.

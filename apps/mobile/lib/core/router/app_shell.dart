@@ -4,10 +4,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../features/auth/domain/auth_provider.dart';
 import '../notifications/notification_watcher.dart';
+import '../observability/network_failure.dart';
 import '../widgets/app_top_nav.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const _surfC   = Color(0xFF171F33);
+const _error   = Color(0xFFFFB4AB);
 const _primary = Color(0xFFDDB7FF);
 const _brand   = Color(0xFFA855F7);
 const _onSurfV = Color(0xFFCFC2D6);
@@ -43,7 +45,12 @@ class _CoachTopBar extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final role = ref.watch(currentUserProfileProvider).valueOrNull?['role'] as String?;
+    // P0-FL-44 · the coach bar only on a role a read has CONFIRMED. Unknown
+    // (loading or failed) shows no top bar — the client's case too, so it
+    // claims nothing; the bottom bar below says the read failed.
+    final profileAsync = ref.watch(currentUserProfileProvider);
+    final String? role =
+        profileAsync.hasValue ? (profileAsync.value?['role'] as String?) : null;
     if (role != 'coach' || location.startsWith('/coach-dashboard')) {
       return const SizedBox.shrink();
     }
@@ -90,7 +97,23 @@ class _PersistentNav extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final bottom = MediaQuery.of(context).padding.bottom;
-    final role = ref.watch(currentUserProfileProvider).valueOrNull?['role'] as String?;
+    final profileAsync = ref.watch(currentUserProfileProvider);
+    // P0-FL-44 · no successful read yet: the role is unknown, and either
+    // role's destinations would be presented as this member's own (the client
+    // five to a coach was what shipped). A refresh that fails after a
+    // successful read keeps that read's role (Riverpod keeps the previous
+    // value), so `hasValue` — not `hasError` — is the test.
+    if (!profileAsync.hasValue) {
+      if (profileAsync.hasError) {
+        return _AccountUnreadBar(
+          error: profileAsync.error!,
+          busy: profileAsync.isLoading,
+          onRetry: () => ref.invalidate(currentUserProfileProvider),
+        );
+      }
+      return const _NavPending();
+    }
+    final role = profileAsync.value?['role'] as String?;
 
     // ── Coach-specific bottom nav (coach-practical destinations) ──
     if (role == 'coach') {
@@ -167,6 +190,95 @@ class _PersistentNav extends ConsumerWidget {
           _NavItem(icon: Icons.check_circle_outline,    label: 'Check-In',  active: idx == 3, onTap: () => context.go('/daily-checkin')),
           _NavItem(icon: Icons.chat_bubble_outline,     label: 'Connect',   active: idx == 4, onTap: () => context.go('/messages')),
         ],
+      ),
+    );
+  }
+}
+
+// ── Unknown role (P0-FL-44) ───────────────────────────────────────────────────
+//
+// The bar is chosen by the signed-in member's role. Until a profile read has
+// SUCCEEDED that role is not known, and showing either role's destinations
+// would present them as the member's own — the client five to a coach was what
+// shipped, because `valueOrNull?['role']` is null both while the read is in
+// flight and when it failed (P0-FL-16 made the provider rethrow).
+
+/// "Couldn't load your account — check your connection and try again."
+const kShellAccountOfflineMessage =
+    "Couldn't load your account — check your connection and try again.";
+
+/// The non-network wording.
+const kShellAccountFailedMessage =
+    "Couldn't load your account — try again in a moment. "
+    'If it keeps happening, contact support.';
+
+/// The read failed: a compact, non-blocking bar in place of the nav — the
+/// screen above stays usable. The message is a live region; Try again is
+/// busy-aware (disabled, "Loading…", while the re-read is in flight), ≥44px
+/// and labelled. The failure is recorded by `currentUserProfileProvider`
+/// itself (reportError), so it is not recorded again here.
+class _AccountUnreadBar extends StatelessWidget {
+  const _AccountUnreadBar(
+      {required this.error, required this.busy, required this.onRetry});
+  final Object error;
+  final bool busy;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).padding.bottom;
+    final message = isNetworkFailure(error)
+        ? kShellAccountOfflineMessage
+        : kShellAccountFailedMessage;
+    return Container(
+      padding: EdgeInsets.only(left: 16, right: 8, top: 6, bottom: bottom + 6),
+      decoration: BoxDecoration(
+        color: _surfC,
+        border: Border(top: BorderSide(color: _error.withValues(alpha: 0.35))),
+      ),
+      child: Row(children: [
+        const Icon(Icons.error_outline, color: _error, size: 18),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Semantics(
+            liveRegion: true,
+            container: true,
+            child: Text(message,
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+          ),
+        ),
+        const SizedBox(width: 8),
+        ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+          child: TextButton(
+            onPressed: busy ? null : onRetry,
+            child: Text(busy ? 'Loading…' : 'Try again',
+                semanticsLabel:
+                    busy ? 'Loading your account' : 'Try again, load your account',
+                style: const TextStyle(color: _primary, fontWeight: FontWeight.w700)),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+/// The first read is still in flight: the bar's frame, no destinations.
+class _NavPending extends StatelessWidget {
+  const _NavPending();
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).padding.bottom;
+    return Semantics(
+      label: 'Loading your account',
+      child: Container(
+        height: 62 + bottom,
+        decoration: BoxDecoration(
+          color: _surfC,
+          border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.07))),
+        ),
       ),
     );
   }
