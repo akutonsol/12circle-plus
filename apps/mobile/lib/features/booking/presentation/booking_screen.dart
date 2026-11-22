@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 import '../../scoring/data/score_engine.dart';
 
 /// Whether a failed booking failed because the slot is no longer free: the
@@ -45,6 +46,9 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
   List<Map<String, dynamic>> _coaches = [];
   List<Map<String, dynamic>> _slots    = [];
   List<Map<String, dynamic>> _booked   = [];
+  /// Calls whose cancel is in flight: their Cancel control is busy (no double
+  /// fire).
+  final Set<String> _cancelling = {};
 
   @override
   void initState() {
@@ -228,7 +232,19 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
     }
   }
 
+  /// The next step for a thrown failure; the connection hint only when it IS
+  /// the connection.
+  static String _nextStep(Object e) => isNetworkFailure(e)
+      ? 'check your connection and try again.'
+      : 'try again in a moment. If it keeps happening, contact support.';
+
+  /// A failure notice: announced (live region), never the exception's text.
+  static SnackBar _failureSnack(String text) => SnackBar(
+      content: Semantics(liveRegion: true, child: Text(text)));
+
   Future<void> _cancelBooking(Map<String, dynamic> call) async {
+    final id = call['id'] as String?;
+    if (id == null || _cancelling.contains(id)) return;
     final messenger = ScaffoldMessenger.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
@@ -245,14 +261,38 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         ],
       ),
     );
-    if (confirmed != true) return;
+    if (confirmed != true || !mounted || _cancelling.contains(id)) return;
+    setState(() => _cancelling.add(id));
+    // P0-FL-42 · cancelled only when the server says the row changed. A 0-row
+    // update (already cancelled, not this client's call, RLS) answers 204 like
+    // a saved one unless the row is asked back. On failure the coach is not
+    // notified.
     try {
       // The slot is reopened by the database (migration 187), not here: a client
       // cannot write coach_availability, so its `is_booked = false` update
       // matched zero rows and reopened nothing.
-      await _db.from('coaching_calls').update({'status': 'cancelled'}).eq('id', call['id']);
-    } catch (_) {
-      messenger.showSnackBar(const SnackBar(content: Text('Could not cancel. Try again.')));
+      final rows = await _db
+          .from('coaching_calls')
+          .update({'status': 'cancelled'})
+          .eq('id', id)
+          .select('id');
+      if ((rows as List).isEmpty) {
+        reportError('BookingScreen._cancelBooking',
+            StateError('coaching_calls update matched no row'));
+        if (!mounted) return;
+        setState(() => _cancelling.remove(id));
+        messenger.showSnackBar(_failureSnack(
+            "Couldn't cancel this session — it may already be cancelled. "
+            'Refreshing your sessions.'));
+        _load();
+        return;
+      }
+    } catch (e, st) {
+      reportError('BookingScreen._cancelBooking', e, st);
+      if (!mounted) return;
+      setState(() => _cancelling.remove(id));
+      messenger.showSnackBar(
+          _failureSnack("Couldn't cancel this session — ${_nextStep(e)}"));
       return;
     }
     // Best-effort, and reported: the cancel above is saved, and a failed
@@ -270,6 +310,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         reportError('BookingScreen._cancelBooking.notify', e);
       }
     }
+    if (mounted) setState(() => _cancelling.remove(id));
     messenger.showSnackBar(const SnackBar(content: Text('Session cancelled.')));
     _load();
   }
@@ -381,6 +422,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         booked: _booked,
         onBook: _book,
         onCancel: _cancelBooking,
+        cancelling: _cancelling,
       ),
     };
 
@@ -745,11 +787,13 @@ class _ReadyState extends StatelessWidget {
   final List<Map<String, dynamic>> booked;
   final Future<void> Function(Map<String, dynamic>) onBook;
   final Future<void> Function(Map<String, dynamic>) onCancel;
+  /// Ids of calls whose cancel is in flight.
+  final Set<String> cancelling;
 
   const _ReadyState({
     required this.coachName, this.coachAvatar,
     required this.slots, required this.booked, required this.onBook,
-    required this.onCancel});
+    required this.onCancel, this.cancelling = const {}});
 
   @override
   Widget build(BuildContext context) => CustomScrollView(
@@ -768,7 +812,10 @@ class _ReadyState extends StatelessWidget {
               style: TextStyle(color: _tert, fontSize: 14, fontWeight: FontWeight.w700)),
           ]))),
         SliverList(delegate: SliverChildBuilderDelegate(
-          (_, i) => _BookedCard(call: booked[i], onCancel: () => onCancel(booked[i])),
+          (_, i) => _BookedCard(
+              call: booked[i],
+              cancelling: cancelling.contains(booked[i]['id']),
+              onCancel: () => onCancel(booked[i])),
           childCount: booked.length)),
         SliverToBoxAdapter(child: const Divider(color: Color(0xFF1A1020), height: 32)),
       ],
@@ -836,7 +883,10 @@ class _CoachHeader extends StatelessWidget {
 class _BookedCard extends StatelessWidget {
   final Map<String, dynamic> call;
   final VoidCallback onCancel;
-  const _BookedCard({required this.call, required this.onCancel});
+  /// The cancel is in flight: the control is busy and cannot fire again.
+  final bool cancelling;
+  const _BookedCard({
+    required this.call, required this.onCancel, this.cancelling = false});
 
   @override
   Widget build(BuildContext context) {
@@ -872,12 +922,36 @@ class _BookedCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(8)),
             child: const Text('Confirmed',
               style: TextStyle(color: _tert, fontSize: 11, fontWeight: FontWeight.w600))),
-          GestureDetector(
-            onTap: onCancel,
-            child: const Padding(
-              padding: EdgeInsets.only(top: 6),
-              child: Text('Cancel',
-                style: TextStyle(color: Color(0xFFFFB4AB), fontSize: 12, fontWeight: FontWeight.w600)))),
+          // P0-FL-42 · a 44px, labelled control that is busy while its
+          // cancel is in flight (it was a bare GestureDetector on 12px text,
+          // live throughout, so a second tap sent a second cancel).
+          if (cancelling)
+            Semantics(
+              container: true,
+              label: 'Cancelling session',
+              child: const SizedBox(width: 44, height: 44, child: Center(
+                child: SizedBox(width: 16, height: 16,
+                  child: CircularProgressIndicator(
+                    color: Color(0xFFFFB4AB), strokeWidth: 2)))))
+          else
+            Semantics(
+              container: true,
+              button: true,
+              label: 'Cancel this session',
+              // The label replaces the button's own "Cancel"; the action
+              // must then be given here, or a screen reader cannot press it.
+              excludeSemantics: true,
+              onTap: onCancel,
+              child: TextButton(
+                onPressed: onCancel,
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFFFFB4AB),
+                  minimumSize: const Size(44, 44),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  tapTargetSize: MaterialTapTargetSize.padded),
+                child: const Text('Cancel',
+                  style: TextStyle(color: Color(0xFFFFB4AB), fontSize: 12,
+                      fontWeight: FontWeight.w600)))),
         ]),
       ]),
     );
