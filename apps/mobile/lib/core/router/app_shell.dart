@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../features/auth/domain/auth_provider.dart';
+import '../../features/payments/presentation/paywall_gate.dart'
+    show confirmedRoleRead;
+import '../../features/profile/presentation/widgets/profile_load_failed_notice.dart'
+    show profileLoadFailedMessage;
 import '../notifications/notification_watcher.dart';
-import '../observability/network_failure.dart';
 import '../widgets/app_top_nav.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -45,12 +48,14 @@ class _CoachTopBar extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // P0-FL-44 · the coach bar only on a role a read has CONFIRMED. Unknown
-    // (loading or failed) shows no top bar — the client's case too, so it
-    // claims nothing; the bottom bar below says the read failed.
-    final profileAsync = ref.watch(currentUserProfileProvider);
-    final String? role =
-        profileAsync.hasValue ? (profileAsync.value?['role'] as String?) : null;
+    // P0-FL-44 · the coach bar only on a role a read has CONFIRMED for the
+    // member signed in now (not a previous member's value Riverpod kept
+    // through a failed re-read). Unknown (loading or failed) shows no top bar
+    // — the client's case too, so it claims nothing; the bottom bar below
+    // says the read failed.
+    final role = confirmedRoleRead(
+            ref.watch(currentUserProfileProvider), ref.watch(currentUserProvider))
+        ?.role;
     if (role != 'coach' || location.startsWith('/coach-dashboard')) {
       return const SizedBox.shrink();
     }
@@ -98,12 +103,15 @@ class _PersistentNav extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final bottom = MediaQuery.of(context).padding.bottom;
     final profileAsync = ref.watch(currentUserProfileProvider);
-    // P0-FL-44 · no successful read yet: the role is unknown, and either
-    // role's destinations would be presented as this member's own (the client
-    // five to a coach was what shipped). A refresh that fails after a
-    // successful read keeps that read's role (Riverpod keeps the previous
-    // value), so `hasValue` — not `hasError` — is the test.
-    if (!profileAsync.hasValue) {
+    // P0-FL-44 · no successful read FOR THIS MEMBER yet: the role is unknown,
+    // and either role's destinations would be presented as this member's own
+    // (the client five to a coach was what shipped). A refresh that fails
+    // after a successful read of the same member keeps that read's role
+    // (Riverpod keeps the previous value); a value kept from a PREVIOUS member
+    // (sign-out, sign-in, failed read) is not this member's role.
+    final confirmed =
+        confirmedRoleRead(profileAsync, ref.watch(currentUserProvider));
+    if (confirmed == null) {
       if (profileAsync.hasError) {
         return _AccountUnreadBar(
           error: profileAsync.error!,
@@ -113,7 +121,7 @@ class _PersistentNav extends ConsumerWidget {
       }
       return const _NavPending();
     }
-    final role = profileAsync.value?['role'] as String?;
+    final role = confirmed.role;
 
     // ── Coach-specific bottom nav (coach-practical destinations) ──
     if (role == 'coach') {
@@ -203,20 +211,18 @@ class _PersistentNav extends ConsumerWidget {
 // shipped, because `valueOrNull?['role']` is null both while the read is in
 // flight and when it failed (P0-FL-16 made the provider rethrow).
 
-/// "Couldn't load your account — check your connection and try again."
-const kShellAccountOfflineMessage =
-    "Couldn't load your account — check your connection and try again.";
-
-/// The non-network wording.
-const kShellAccountFailedMessage =
-    "Couldn't load your account — try again in a moment. "
-    'If it keeps happening, contact support.';
-
 /// The read failed: a compact, non-blocking bar in place of the nav — the
-/// screen above stays usable. The message is a live region; Try again is
-/// busy-aware (disabled, "Loading…", while the re-read is in flight), ≥44px
-/// and labelled. The failure is recorded by `currentUserProfileProvider`
-/// itself (reportError), so it is not recorded again here.
+/// screen above stays usable. One wording for one failure: the shared profile
+/// notice's (`profileLoadFailedMessage` — the connection hint only for a
+/// network failure). The message is a live region; Try again is busy-aware
+/// (disabled, "Loading…", while the re-read is in flight), ≥44px and
+/// labelled. The failure is recorded by `currentUserProfileProvider` itself
+/// (reportError), so it is not recorded again here.
+///
+/// UX-F1 · it keeps ONE destination, Profile: both roles have it, it claims
+/// no role, and it keeps sign-out reachable from a gated route.
+/// UX-F2 · text scale is clamped at 1.3 and the actions sit under the
+/// message, so a large text scale on a narrow phone cannot overflow it.
 class _AccountUnreadBar extends StatelessWidget {
   const _AccountUnreadBar(
       {required this.error, required this.busy, required this.onRetry});
@@ -227,44 +233,71 @@ class _AccountUnreadBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.of(context).padding.bottom;
-    final message = isNetworkFailure(error)
-        ? kShellAccountOfflineMessage
-        : kShellAccountFailedMessage;
-    return Container(
-      padding: EdgeInsets.only(left: 16, right: 8, top: 6, bottom: bottom + 6),
-      decoration: BoxDecoration(
-        color: _surfC,
-        border: Border(top: BorderSide(color: _error.withValues(alpha: 0.35))),
+    return MediaQuery.withClampedTextScaling(
+      maxScaleFactor: 1.3,
+      child: Container(
+        padding: EdgeInsets.only(left: 16, right: 8, top: 8, bottom: bottom + 4),
+        decoration: BoxDecoration(
+          color: _surfC,
+          border: Border(top: BorderSide(color: _error.withValues(alpha: 0.35))),
+        ),
+        child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Padding(
+              padding: EdgeInsets.only(top: 1),
+              child: Icon(Icons.error_outline, color: _error, size: 18),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Semantics(
+                liveRegion: true,
+                container: true,
+                child: Text(profileLoadFailedMessage(error),
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600)),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ]),
+          // A Wrap, not a Row: at a large text scale on a narrow phone the two
+          // actions stack instead of overflowing.
+          Wrap(alignment: WrapAlignment.end, spacing: 4, children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+              child: TextButton(
+                onPressed: () => context.go('/profile'),
+                child: const Text('Profile',
+                    semanticsLabel: 'Go to your profile',
+                    style: TextStyle(color: _onSurfV, fontWeight: FontWeight.w700)),
+              ),
+            ),
+            ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+              child: TextButton(
+                onPressed: busy ? null : onRetry,
+                child: Text(busy ? 'Loading…' : 'Try again',
+                    semanticsLabel: busy
+                        ? 'Loading your profile'
+                        : 'Try again, load your profile',
+                    style: const TextStyle(
+                        color: _primary, fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ]),
+        ]),
       ),
-      child: Row(children: [
-        const Icon(Icons.error_outline, color: _error, size: 18),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Semantics(
-            liveRegion: true,
-            container: true,
-            child: Text(message,
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
-          ),
-        ),
-        const SizedBox(width: 8),
-        ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
-          child: TextButton(
-            onPressed: busy ? null : onRetry,
-            child: Text(busy ? 'Loading…' : 'Try again',
-                semanticsLabel:
-                    busy ? 'Loading your account' : 'Try again, load your account',
-                style: const TextStyle(color: _primary, fontWeight: FontWeight.w700)),
-          ),
-        ),
-      ]),
     );
   }
 }
 
-/// The first read is still in flight: the bar's frame, no destinations.
+/// The first read is still in flight: the bar's frame, no destinations, and a
+/// small progress indicator so it does not read as a blank bar (UX-F5). The
+/// bar keeps its semantic label.
 class _NavPending extends StatelessWidget {
   const _NavPending();
 
@@ -273,11 +306,22 @@ class _NavPending extends StatelessWidget {
     final bottom = MediaQuery.of(context).padding.bottom;
     return Semantics(
       label: 'Loading your account',
+      container: true,
       child: Container(
         height: 62 + bottom,
+        padding: EdgeInsets.only(bottom: bottom),
+        alignment: Alignment.center,
         decoration: BoxDecoration(
           color: _surfC,
           border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.07))),
+        ),
+        child: const ExcludeSemantics(
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(
+                key: Key('nav-pending-progress'), strokeWidth: 2, color: _primary),
+          ),
         ),
       ),
     );

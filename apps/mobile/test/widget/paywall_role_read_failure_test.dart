@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -25,23 +26,41 @@ import 'package:circle_fitness/features/profile/presentation/widgets/profile_loa
 // successful read decides coach vs plan. The plan rules, the plan-error
 // fail-open choice and PaywallLocked are unchanged.
 //
+// Review round (SEC-F1/F2): Riverpod keeps the previous value through a
+// re-read, so after coach A signs out and member B signs in, a FAILED read for
+// B still `hasValue` — A's coach role, and B walked past the paywall. A value
+// now counts only when it was read for the member signed in now (`id` ==
+// current user id). (UX-F1): Back / Not now pop when there is somewhere to
+// go, else go to Profile — `context.go` leaves nothing to pop.
+//
 // HOW TO SEE IT FAIL: `git checkout df35d5f --
 // lib/features/payments/presentation/paywall_gate.dart` — the failed-read
-// tests find PaywallLocked (or the child) and no notice.
+// tests find PaywallLocked (or the child) and no notice; `git checkout HEAD~1
+// -- …` for the review-round tests.
 
 const _child = Text('PAID FEATURE', key: Key('child'));
 
 enum _P { ok, network, server, pending }
 
-/// The profile read, controllable per test.
+User _user(String id) => User(
+      id: id,
+      appMetadata: const {},
+      userMetadata: const {},
+      aud: 'authenticated',
+      createdAt: '2026-11-01T00:00:00Z',
+    );
+
+final _signedIn = StateProvider<User?>((ref) => _user('user-a'));
+
+/// The profile read, controllable per test; each member has their own role.
 class _Profile {
-  _Profile(this.role);
-  String role;
+  _Profile(String role) : roles = {'user-a': role};
+  final Map<String, String> roles;
   _P mode = _P.ok;
   int reads = 0;
   Completer<void>? gate;
 
-  Future<Map<String, dynamic>?> read() async {
+  Future<Map<String, dynamic>?> read(String uid) async {
     reads++;
     if (gate != null) await gate!.future;
     switch (mode) {
@@ -52,17 +71,24 @@ class _Profile {
       case _P.pending:
         return Completer<Map<String, dynamic>?>().future;
       case _P.ok:
-        return <String, dynamic>{'role': role};
+        return <String, dynamic>{'id': uid, 'role': roles[uid]};
     }
   }
 }
 
-Widget _gate(_Profile profile, {required ClientPlan plan}) =>
-    ProviderScope(
-      overrides: [
-        currentUserProfileProvider.overrideWith((ref) => profile.read()),
-        clientPlanProvider.overrideWith((ref) async => plan),
-      ],
+/// The signed-in member (changeable via [_signedIn]) and their profile read.
+List<Override> _overrides(_Profile profile, ClientPlan plan) => [
+      currentUserProvider.overrideWith((ref) => ref.watch(_signedIn)),
+      currentUserProfileProvider.overrideWith((ref) async {
+        final u = ref.watch(currentUserProvider);
+        if (u == null) return null;
+        return profile.read(u.id);
+      }),
+      clientPlanProvider.overrideWith((ref) async => plan),
+    ];
+
+Widget _gate(_Profile profile, {required ClientPlan plan}) => ProviderScope(
+      overrides: _overrides(profile, plan),
       child: const MaterialApp(
         home: PaywallGate(
           required: ClientPlan.coachGuided,
@@ -71,6 +97,41 @@ Widget _gate(_Profile profile, {required ClientPlan plan}) =>
         ),
       ),
     );
+
+/// The gate as the app reaches it: a GoRouter route entered with
+/// `context.go` (nothing beneath to pop), plus `/profile`.
+Future<GoRouter> _routedGate(WidgetTester tester, _Profile profile,
+    {required ClientPlan plan, bool pushed = false}) async {
+  final router = GoRouter(initialLocation: pushed ? '/home' : '/gated', routes: [
+    GoRoute(
+        path: '/home',
+        builder: (context, _) => Scaffold(
+            body: TextButton(
+                onPressed: () => context.push('/gated'),
+                child: const Text('HOME')))),
+    GoRoute(
+        path: '/gated',
+        builder: (_, __) => const PaywallGate(
+              required: ClientPlan.coachGuided,
+              featureName: 'Action Items',
+              child: _child,
+            )),
+    GoRoute(
+        path: '/profile',
+        builder: (_, __) => const Scaffold(body: Text('PROFILE PAGE'))),
+  ]);
+  addTearDown(router.dispose);
+  await tester.pumpWidget(ProviderScope(
+    overrides: _overrides(profile, plan),
+    child: MaterialApp.router(routerConfig: router),
+  ));
+  await tester.pumpAndSettle();
+  if (pushed) {
+    await tester.tap(find.text('HOME'));
+    await tester.pumpAndSettle();
+  }
+  return router;
+}
 
 void main() {
   testWidgets('a coach whose profile read FAILED is not told to upgrade',
@@ -190,10 +251,7 @@ void main() {
     final p = _Profile('coach');
     late WidgetRef captured;
     await tester.pumpWidget(ProviderScope(
-      overrides: [
-        currentUserProfileProvider.overrideWith((ref) => p.read()),
-        clientPlanProvider.overrideWith((ref) async => ClientPlan.free),
-      ],
+      overrides: _overrides(p, ClientPlan.free),
       child: MaterialApp(
         home: Consumer(builder: (context, ref, _) {
           captured = ref;
@@ -211,9 +269,133 @@ void main() {
     p.mode = _P.server;
     captured.invalidate(currentUserProfileProvider);
     await tester.pumpAndSettle();
+    expect(captured.read(currentUserProfileProvider).hasError, isTrue,
+        reason: 'precondition: the refresh really failed');
     expect(find.byKey(const Key('child')), findsOneWidget,
         reason: 'the role came from a real read; a later failed refresh does '
             'not make it unknown');
     expect(find.byType(PaywallLocked), findsNothing);
+  });
+
+  // ── Review round ───────────────────────────────────────────────────────────
+
+  testWidgets(
+      "SEC-F1/F2 · coach A signs out, member B signs in and B's read FAILS: "
+      'no coach bypass — B sees the failure state', (tester) async {
+    final p = _Profile('coach')..roles['user-b'] = 'client';
+    late WidgetRef captured;
+    await tester.pumpWidget(ProviderScope(
+      overrides: _overrides(p, ClientPlan.free),
+      child: MaterialApp(
+        home: Consumer(builder: (context, ref, _) {
+          captured = ref;
+          return const PaywallGate(
+            required: ClientPlan.coachGuided,
+            featureName: 'Action Items',
+            child: _child,
+          );
+        }),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('child')), findsOneWidget,
+        reason: 'A is a coach: always in');
+
+    captured.read(_signedIn.notifier).state = null; // sign out
+    await tester.pumpAndSettle();
+    p.mode = _P.server;
+    captured.read(_signedIn.notifier).state = _user('user-b'); // B signs in
+    await tester.pumpAndSettle();
+
+    expect(captured.read(currentUserProfileProvider).hasValue, isTrue,
+        reason: 'precondition: Riverpod kept a previous value through the '
+            'failed re-read — the leak the fix closes');
+    expect(find.byKey(const Key('child')), findsNothing,
+        reason: "A's coach role must not let B past the paywall");
+    expect(find.byType(PaywallLocked), findsNothing,
+        reason: "B's role is unknown — not a fact either way");
+    expect(find.byType(ProfileLoadFailedNotice), findsOneWidget);
+    expect(find.text('Try again'), findsOneWidget);
+  });
+
+  testWidgets(
+      "SEC-F1/F2 · A's coach value does not open the gate while B's read is "
+      'in flight', (tester) async {
+    final p = _Profile('coach')..roles['user-b'] = 'client';
+    late WidgetRef captured;
+    await tester.pumpWidget(ProviderScope(
+      overrides: _overrides(p, ClientPlan.free),
+      child: MaterialApp(
+        home: Consumer(builder: (context, ref, _) {
+          captured = ref;
+          return const PaywallGate(
+            required: ClientPlan.coachGuided,
+            featureName: 'Action Items',
+            child: _child,
+          );
+        }),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('child')), findsOneWidget);
+
+    p.mode = _P.pending;
+    captured.read(_signedIn.notifier).state = _user('user-b');
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.byKey(const Key('child')), findsNothing);
+    expect(find.byType(PaywallLocked), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+  });
+
+  group('UX-F1 · Back never strands the member', () {
+    testWidgets('failure state reached by context.go: Back goes to Profile',
+        (tester) async {
+      final p = _Profile('coach')..mode = _P.server;
+      await _routedGate(tester, p, plan: ClientPlan.free);
+      expect(find.byType(ProfileLoadFailedNotice), findsOneWidget);
+
+      await tester.tap(find.bySemanticsLabel('Back'));
+      await tester.pumpAndSettle();
+      expect(find.text('PROFILE PAGE'), findsOneWidget,
+          reason: 'nothing to pop after context.go — Back must still leave');
+    });
+
+    testWidgets('failure state pushed over a screen: Back pops to it',
+        (tester) async {
+      final p = _Profile('coach')..mode = _P.server;
+      await _routedGate(tester, p, plan: ClientPlan.free, pushed: true);
+      expect(find.byType(ProfileLoadFailedNotice), findsOneWidget);
+
+      await tester.tap(find.bySemanticsLabel('Back'));
+      await tester.pumpAndSettle();
+      expect(find.text('HOME'), findsOneWidget);
+      expect(find.text('PROFILE PAGE'), findsNothing);
+    });
+
+    testWidgets('locked reached by context.go: Back and Not now go to Profile',
+        (tester) async {
+      for (final control in ['Back', 'Not now']) {
+        await _routedGate(tester, _Profile('client'), plan: ClientPlan.free);
+        expect(find.byType(PaywallLocked), findsOneWidget);
+        await tester.tap(control == 'Back'
+            ? find.bySemanticsLabel('Back')
+            : find.text('Not now'));
+        await tester.pumpAndSettle();
+        expect(find.text('PROFILE PAGE'), findsOneWidget,
+            reason: '"$control" was a no-op after context.go');
+      }
+    });
+
+    testWidgets('locked pushed over a screen: Back pops to it',
+        (tester) async {
+      await _routedGate(tester, _Profile('client'),
+          plan: ClientPlan.free, pushed: true);
+      expect(find.byType(PaywallLocked), findsOneWidget);
+      await tester.tap(find.bySemanticsLabel('Back'));
+      await tester.pumpAndSettle();
+      expect(find.text('HOME'), findsOneWidget);
+    });
   });
 }

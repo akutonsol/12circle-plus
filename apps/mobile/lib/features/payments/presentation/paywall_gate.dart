@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show User;
 import '../domain/entitlements.dart';
 import '../../../core/widgets/named_icon_button.dart';
 import '../../auth/domain/auth_provider.dart';
@@ -38,8 +39,15 @@ class PaywallGate extends ConsumerWidget {
     // Unknown is now neither locked nor opened. A refresh that fails after a
     // successful read keeps that read's role (Riverpod keeps the previous
     // value), so `hasValue` — not `hasError` — is the test.
+    //
+    // P0-FL-44 (SEC-F1/F2) · and only a read of THIS member's profile. Riverpod
+    // keeps the previous value through a re-read, so after a sign-out/sign-in
+    // in the same run a failed read for the new member still `hasValue` — the
+    // PREVIOUS member's role. A value counts only when it was read for the
+    // current user (`id` matches); otherwise the role is unknown.
     final profileAsync = ref.watch(currentUserProfileProvider);
-    if (!profileAsync.hasValue) {
+    final role = confirmedRoleRead(profileAsync, ref.watch(currentUserProvider));
+    if (role == null) {
       if (profileAsync.hasError) {
         return _ProfileUnread(
           error: profileAsync.error!,
@@ -49,7 +57,7 @@ class PaywallGate extends ConsumerWidget {
       }
       return const _Loading();
     }
-    final isCoach = profileAsync.value?['role'] == 'coach';
+    final isCoach = role.role == 'coach';
     if (isCoach) return child;
     final planAsync = ref.watch(clientPlanProvider);
     // Once we know the plan, keep rendering from it even while the provider is
@@ -66,6 +74,43 @@ class PaywallGate extends ConsumerWidget {
       data: (plan) =>
           plan.atLeast(required) ? child : PaywallLocked(required: required, feature: featureName),
     );
+  }
+}
+
+/// P0-FL-44 · the signed-in member's role, only when a profile read has
+/// CONFIRMED it for that member; `null` when it is unknown.
+///
+/// * a value read for another user (Riverpod keeps the previous value through
+///   a re-read — e.g. the previous member's, after a sign-out/sign-in) is not
+///   this member's role;
+/// * a value read for this member survives a later failed refresh (same
+///   member, a real answer);
+/// * a successful read with no row (`null`) stays what it was — an answer
+///   with no role — but a `null` held over a re-read that is still loading or
+///   has failed is not an answer for the new read.
+({String? role})? confirmedRoleRead(
+    AsyncValue<Map<String, dynamic>?> profile, User? user) {
+  if (!profile.hasValue) return null;
+  final value = profile.value;
+  if (value == null) {
+    return (profile.isLoading || profile.hasError) ? null : (role: null);
+  }
+  if (user == null || value['id'] != user.id) return null;
+  return (role: value['role'] as String?);
+}
+
+/// P0-FL-44 (UX-F1) · leave the gate. `context.go` (how most gated routes
+/// are reached) leaves nothing to pop, so Back/Not now would be a no-op and
+/// strand the member: pop when there is somewhere to go, else Profile — a
+/// destination both roles have, which keeps sign-out reachable.
+void leavePaywall(BuildContext context) {
+  final router = GoRouter.maybeOf(context);
+  if (router == null) {
+    Navigator.of(context).maybePop();
+  } else if (router.canPop()) {
+    router.pop();
+  } else {
+    router.go('/profile');
   }
 }
 
@@ -99,7 +144,7 @@ class _ProfileUnread extends StatelessWidget {
           iconTheme: const IconThemeData(color: _white),
           leading: NamedIconButton(
             label: 'Back',
-            onTap: () => Navigator.of(context).maybePop(),
+            onTap: () => leavePaywall(context),
             child: const Icon(Icons.arrow_back, color: _white, size: 20),
           ),
         ),
@@ -140,7 +185,7 @@ class PaywallLocked extends StatelessWidget {
         // Material's default tooltip, not by the package.
         leading: NamedIconButton(
           label: 'Back',
-          onTap: () => Navigator.of(context).maybePop(),
+          onTap: () => leavePaywall(context),
           child: const Icon(Icons.arrow_back, color: _white, size: 20),
         ),
       ),
@@ -198,7 +243,7 @@ class PaywallLocked extends StatelessWidget {
               Semantics(
                 button: true,
                 child: GestureDetector(
-                  onTap: () => Navigator.of(context).maybePop(),
+                  onTap: () => leavePaywall(context),
                   behavior: HitTestBehavior.opaque,
                   child: Container(
                     constraints: const BoxConstraints(minHeight: 44),
