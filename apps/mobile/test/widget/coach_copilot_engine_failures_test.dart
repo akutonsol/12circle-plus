@@ -216,6 +216,7 @@ const _genNetwork = "Couldn't generate a recommendation — $_network";
 void main() {
   final server = _Server();
   final reported = <String>[];
+  final failures = <AppFailure>[];
 
   setUpAll(() async {
     await Supabase.initialize(
@@ -234,7 +235,11 @@ void main() {
   setUp(() {
     server.reset();
     reported.clear();
-    setFailureSink((f) => reported.add(f.origin));
+    failures.clear();
+    setFailureSink((f) {
+      reported.add(f.origin);
+      failures.add(f);
+    });
   });
   tearDown(resetFailureSink);
 
@@ -281,5 +286,64 @@ void main() {
     await _io(t);
     expect(find.text(_genOther), findsOneWidget);
     expect(reported, contains('CoachCopilotScreen.generate'));
+  });
+
+  // ── lead mutant round: stale lastError, one report per tap ──────────
+
+  List<AppFailure> generateFailures() =>
+      failures.where((f) => f.origin == 'CoachCopilotScreen.generate').toList();
+
+  testWidgets(
+      'a stale lastError from an EARLIER failed generate is never used for a '
+      'later failure: network then no-answer → the later copy is the other '
+      'next step and the reported error is the StateError', (t) async {
+    // Kills the mutant "remove `_svc.lastError = null;` before
+    // generateWorkout": generateWorkout sets lastError only in its catch, so
+    // a later null answer would otherwise re-report the earlier
+    // ClientException and show the connection hint.
+    server.generate = _Ans.network;
+    await _pumpAndSelect(t);
+    await t.tap(find.text('Generate recommendation'));
+    await _io(t);
+    expect(find.text(_genNetwork), findsOneWidget);
+    expect(generateFailures().single.error, isA<http.ClientException>());
+
+    server.generate = _Ans.nullBody;
+    await t.tap(find.text('Generate recommendation'));
+    await _io(t);
+    expect(find.text(_genOther), findsOneWidget);
+    expect(find.text(_genNetwork), findsNothing);
+    expect(find.textContaining('connection'), findsNothing);
+    final later = generateFailures();
+    expect(later, hasLength(2));
+    expect(later.last.error, isA<StateError>());
+    expect(later.last.error, isNot(same(later.first.error)));
+  });
+
+  testWidgets('exactly one reportError per failed Generate tap', (t) async {
+    server.generate = _Ans.http500;
+    await _pumpAndSelect(t);
+    expect(generateFailures(), isEmpty, reason: 'selecting reports nothing');
+
+    await t.tap(find.text('Generate recommendation'));
+    await _io(t);
+    expect(generateFailures(), hasLength(1));
+
+    server.generate = _Ans.network;
+    await t.tap(find.text('Generate recommendation'));
+    await _io(t);
+    expect(generateFailures(), hasLength(2));
+
+    server.generate = _Ans.nullBody;
+    await t.tap(find.text('Generate recommendation'));
+    await _io(t);
+    expect(generateFailures(), hasLength(3));
+
+    // A success reports nothing.
+    server.generate = _Ans.ok;
+    await t.tap(find.text('Generate recommendation'));
+    await _io(t);
+    expect(generateFailures(), hasLength(3));
+    expect(find.text('Goblet squat'), findsOneWidget);
   });
 }

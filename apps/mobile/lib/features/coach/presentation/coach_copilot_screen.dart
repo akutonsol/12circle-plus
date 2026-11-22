@@ -267,6 +267,7 @@ class _State extends ConsumerState<CoachCopilotScreen> {
             setState(() { _client = c; _rec = null; _status = null; _explanation = null; _outlook = null; });
             // Predictive outlook for this client (deterministic). A late
             // answer for a client no longer selected is discarded.
+            // A failed prediction intentionally still shows no card: predictClient's swallow is the recorded SEC-R3 / Wave 3B-4 blocker (coordinator §15), awaiting the owner ruling.
             final o = await _programs.predictClient(c['id'] as String);
             if (mounted && _client?['id'] == c['id']) setState(() => _outlook = o);
           }
