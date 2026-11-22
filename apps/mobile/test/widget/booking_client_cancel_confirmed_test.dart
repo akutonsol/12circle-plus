@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/booking/presentation/booking_screen.dart';
@@ -37,11 +38,35 @@ class _Server extends RowCheckingPostgrest {
   _Server() : super(_uid);
   int callReads = 0;
 
+  /// The call's status as the SERVER holds it, when it differs from what the
+  /// screen loaded (e.g. the coach cancelled it meanwhile). When set, a PATCH
+  /// on coaching_calls is answered as PostgREST would: a `status=eq.scheduled`
+  /// filter matches no row; without that filter the row matches (and the
+  /// already-cancelled call is "cancelled" again).
+  String? serverStatus;
+
   @override
-  Future<http.StreamedResponse> send(http.BaseRequest request) {
-    if (request.method == 'GET' &&
-        request.url.path.endsWith('/coaching_calls')) {
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final path = request.url.path;
+    if (request.method == 'GET' && path.endsWith('/coaching_calls')) {
       callReads++;
+    }
+    if (serverStatus != null &&
+        request.method == 'PATCH' &&
+        path.endsWith('/coaching_calls')) {
+      final body = request is http.Request ? request.body : '';
+      writes.add('PATCH $path?${request.url.query} $body');
+      final status = request.url.queryParameters['status'];
+      final matches = status == null || status == 'eq.$serverStatus';
+      return http.StreamedResponse(
+          Stream.value(utf8.encode(jsonEncode(matches
+              ? [
+                  {'id': _callId}
+                ]
+              : []))),
+          200,
+          request: request,
+          headers: {'content-type': 'application/json'});
     }
     return super.send(request);
   }
@@ -104,6 +129,7 @@ void main() {
   setUp(() {
     server.reset();
     server.callReads = 0;
+    server.serverStatus = null;
     _seed(server);
     // Only the call update is failed; the notification (and anything else)
     // behaves normally, so each test sees the cancel's own check.
@@ -274,6 +300,160 @@ void main() {
       await drain(tester);
       semantics.dispose();
     }
+  });
+
+  // ── Review round (UX-F1/SEC-N1, lead mutant, QA, UX-F3, UX-F4) ──────────
+
+  testWidgets(
+      'a call the coach already cancelled is not cancelled again, and the '
+      'coach is not notified twice', (tester) async {
+    await openScreen(tester);
+    // The screen still shows the call as scheduled; the coach has cancelled
+    // it on the server meanwhile.
+    server.serverStatus = 'cancelled';
+    final readsBefore = server.callReads;
+
+    await cancelAndConfirm(tester);
+
+    expect(callPatches(), hasLength(1));
+    expect(callPatches().single, contains('status=eq.scheduled'),
+        reason: 'only a still-scheduled call may be cancelled by the client');
+    expect(find.text('Session cancelled.'), findsNothing,
+        reason: 'THE defect: an already-cancelled call matched the id-only '
+            'update and was reported as cancelled by the client');
+    expect(
+        find.text("Couldn't cancel this session — it may already be "
+            'cancelled. Refreshing your sessions.'),
+        findsOneWidget);
+    expect(notifications(), isEmpty,
+        reason: 'the coach, who cancelled it, is not told the client did');
+    expect(server.callReads, greaterThan(readsBefore));
+    expect(reported, isNotEmpty);
+    await drain(tester);
+  });
+
+  testWidgets(
+      'two Cancel taps that both reach a confirm dialog send ONE update',
+      (tester) async {
+    await openScreen(tester);
+    server.gate = Completer<void>();
+    try {
+      // Two activations of the control in one frame (a fast double tap, or
+      // a pointer tap plus an accessibility action) before the dialog's
+      // barrier is up: two confirm dialogs. Both pass the entry guard —
+      // nothing is in flight yet — so only the guard AFTER the confirm can
+      // stop the second cancel. (Pointer taps cannot model this: the
+      // Navigator absorbs pointers as soon as a route is pushed.)
+      final control = tester.widget<TextButton>(find.ancestor(
+          of: find.text('Cancel'), matching: find.byType(TextButton)));
+      control.onPressed!();
+      control.onPressed!();
+      await tester.pumpAndSettle();
+      expect(find.text('Cancel session'), findsNWidgets(2));
+
+      // Confirm the top dialog: its cancel goes out and is held in flight
+      // (fixed pumps: the busy spinner never settles).
+      await tester.tap(find.text('Cancel session').last);
+      await settle(tester);
+      expect(callPatches(), hasLength(1));
+
+      // Confirm the other one while the first is still in flight.
+      await tester.tap(find.text('Cancel session'));
+      await settle(tester);
+      expect(callPatches(), hasLength(1),
+          reason: 'the post-confirm guard: a cancel already in flight is not '
+              'sent a second time');
+    } finally {
+      server.gate?.complete();
+      await settle(tester);
+    }
+    expect(notifications(), hasLength(1));
+    await drain(tester);
+  });
+
+  testWidgets('after a failed cancel the Cancel control works again',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      server.mode = WriteMode.serverError;
+      await openScreen(tester);
+
+      await cancelAndConfirm(tester);
+      expect(callPatches(), hasLength(1));
+      expect(find.bySemanticsLabel('Cancelling session'), findsNothing,
+          reason: 'a failed cancel does not leave the control busy');
+      expect(find.bySemanticsLabel('Cancel this session'), findsOneWidget);
+
+      // The server recovers; the client tries again from the same control.
+      server.mode = WriteMode.oneRow;
+      await tester.pump(const Duration(seconds: 5)); // let the notice go
+      await cancelAndConfirm(tester);
+      expect(callPatches(), hasLength(2),
+          reason: 'the retry reached the server');
+      expect(find.text('Session cancelled.'), findsOneWidget);
+    } finally {
+      await drain(tester);
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('"Session cancelled." is announced (live region)',
+      (tester) async {
+    await openScreen(tester);
+    await cancelAndConfirm(tester);
+    expect(
+        find.ancestor(
+            of: find.text('Session cancelled.'),
+            matching: find.byWidgetPredicate(
+                (w) => w is Semantics && w.properties.liveRegion == true)),
+        findsWidgets);
+    await drain(tester);
+  });
+
+  testWidgets('a session row with Cancel fits 320px at text scale 2.0',
+      (tester) async {
+    tester.view
+      ..devicePixelRatio = 1
+      ..physicalSize = const Size(320, 2400);
+    addTearDown(tester.view.reset);
+    // Booked calls show only beside at least one open slot, so a slot card
+    // is on screen too. Its own overflow at this size (_SlotCard) is a
+    // separate, recorded follow-up: every overflow is collected, and only
+    // _SlotCard's are tolerated here.
+    final overflows = <String>[];
+    final previous = FlutterError.onError;
+    FlutterError.onError = (details) {
+      // The deep form carries the creator chain (which widget overflowed).
+      final text = details.toDiagnosticsNode().toStringDeep();
+      if (text.contains('overflowed')) {
+        overflows.add(text);
+      } else {
+        previous?.call(details);
+      }
+    };
+    try {
+      await tester.pumpWidget(ProviderScope(
+          child: MaterialApp(
+              builder: (context, child) => MediaQuery(
+                  data: MediaQuery.of(context)
+                      .copyWith(textScaler: const TextScaler.linear(2.0)),
+                  child: child!),
+              home: const BookingScreen())));
+      await settle(tester);
+    } finally {
+      FlutterError.onError = previous;
+    }
+
+    expect(find.text('Cancel'), findsOneWidget);
+    expect(overflows.where((o) => !o.contains('_SlotCard')), isEmpty,
+        reason: 'no RenderFlex overflow in the session row or the section '
+            'headers');
+    // The control stays a whole 44px target inside the 320px viewport.
+    final r = tester.getRect(find.ancestor(
+        of: find.text('Cancel'), matching: find.byType(TextButton)));
+    expect(r.right, lessThanOrEqualTo(320));
+    expect(r.height, greaterThanOrEqualTo(44));
+    await drain(tester);
   });
 
   testWidgets('the Cancel control is labelled and at least 44px',

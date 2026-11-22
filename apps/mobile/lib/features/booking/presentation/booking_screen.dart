@@ -271,10 +271,14 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       // The slot is reopened by the database (migration 187), not here: a client
       // cannot write coach_availability, so its `is_booked = false` update
       // matched zero rows and reopened nothing.
+      // Only a still-scheduled call is cancelled: one the coach already
+      // cancelled (or that is otherwise not scheduled) matches no row and
+      // takes the 0-row path below — no second "cancelled" notification.
       final rows = await _db
           .from('coaching_calls')
           .update({'status': 'cancelled'})
           .eq('id', id)
+          .eq('status', 'scheduled')
           .select('id');
       if ((rows as List).isEmpty) {
         reportError('BookingScreen._cancelBooking',
@@ -311,7 +315,10 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       }
     }
     if (mounted) setState(() => _cancelling.remove(id));
-    messenger.showSnackBar(const SnackBar(content: Text('Session cancelled.')));
+    // Announced, like the failure notices (live region).
+    messenger.showSnackBar(SnackBar(
+        content: Semantics(
+            liveRegion: true, child: const Text('Session cancelled.'))));
     _load();
   }
 
@@ -808,8 +815,9 @@ class _ReadyState extends StatelessWidget {
           child: Row(children: [
             const Icon(Icons.check_circle_rounded, color: _tert, size: 16),
             const SizedBox(width: 6),
-            const Text('Your Upcoming Calls',
-              style: TextStyle(color: _tert, fontSize: 14, fontWeight: FontWeight.w700)),
+            // Flexible: wraps at large text sizes instead of overflowing.
+            const Flexible(child: Text('Your Upcoming Calls',
+              style: TextStyle(color: _tert, fontSize: 14, fontWeight: FontWeight.w700))),
           ]))),
         SliverList(delegate: SliverChildBuilderDelegate(
           (_, i) => _BookedCard(
@@ -824,8 +832,8 @@ class _ReadyState extends StatelessWidget {
       SliverToBoxAdapter(child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
         child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          const Text('Available Slots',
-            style: TextStyle(color: _wht, fontSize: 16, fontWeight: FontWeight.w700)),
+          const Flexible(child: Text('Available Slots',
+            style: TextStyle(color: _wht, fontSize: 16, fontWeight: FontWeight.w700))),
           Text('${slots.length} open',
             style: const TextStyle(color: _mut, fontSize: 12)),
         ]))),
@@ -900,7 +908,8 @@ class _BookedCard extends StatelessWidget {
         color: _tert.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: _tert.withValues(alpha: 0.25))),
-      child: Row(children: [
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+       Row(children: [
         Container(
           width: 40, height: 40,
           decoration: BoxDecoration(
@@ -914,7 +923,15 @@ class _BookedCard extends StatelessWidget {
           Text('${_dayLabel(dt)} · ${_timeLabel(dt)}',
             style: const TextStyle(color: _mut, fontSize: 12)),
         ])),
-        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+       ]),
+        // P0-FL-42 (UX-F4) · the badge and the Cancel control sit on their
+        // own row under the details, and wrap: beside the details they
+        // overflowed a 320px screen at text scale 2.0.
+        Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
+          children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
