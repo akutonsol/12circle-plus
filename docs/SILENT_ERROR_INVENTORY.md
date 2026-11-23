@@ -92,3 +92,18 @@ Combined branch `integration/p0-flutter-stack-c7` @ df35d5f: 3335 tests, CI 7/7 
 
 All are CI 7/7 on their exact heads. Combined branch `integration/p0-flutter-stack-c8` @ 185261e: 3456 tests, CI 7/7 (run 45100790460).
 - **Still blocked:** `predictClient`, `evaluateWeek` and `regenerateProgram` swallow failures; this is the SEC-R3 / Wave 3B-4 owner ruling.
+
+**Status 2026-11-23 (cycle 9):**
+- **#199 (P0-FL-45a):** the nine role-only screens take the role only from a read confirmed for the member signed in now; their loaded state is keyed to that member.
+- **#200 (P0-FL-45b):** profile and role reads elsewhere count only for the current member. This fixes a P0 where Personal Info saved member A's details into member B's row after a switch.
+- **#201 (P0-FL-46):** coach cancel checks the status (no false "Session cancelled" or client notice); `_book` failures are recorded and stated honestly (network / 42501 / other).
+- **#202 (P0-FL-47):** `coachReviewsProvider` no longer turns a failed read into "No reviews yet"; the coach leaderboard ticks on the table it reads.
+- **#203 (P0-FL-48):** accessibility only, with no error-path change.
+
+All are CI 7/7 on their exact heads. Combined branch `integration/p0-flutter-stack-c9` @ 1b94044: 4393 tests, CI 7/7 (run 45132607442).
+- **Still open (decision-free):**
+  - `CustomExerciseService` returns null on failure (63, 87, 250, 266);
+  - `ai_coach_service:177` and `custom_exercise_service:662/916` return [] on failure;
+  - booking `_load` / `_selectCoach` show an error state but don't record it;
+  - staff-screen copy "Assign failed.".
+- **Still blocked:** the SEC-R3 / Wave 3B-4 trio above.
