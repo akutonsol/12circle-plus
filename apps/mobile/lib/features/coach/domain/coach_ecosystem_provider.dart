@@ -143,7 +143,12 @@ final sentInvitesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) asy
 final coachLeaderboardProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
   ref.watch(currentUserProvider);
-  ref.watch(tableTickerProvider('user_scores')); // live: clients' points move it
+  // Live: ticks on the table it READS (P0-FL-47). It watched 'user_scores',
+  // which only the award_points / apply_penalty RPCs write; a client's daily
+  // score is the app's `daily_scores` upsert, so it never moved this tab.
+  // `daily_scores` is published (migration 037) and a coach may read an
+  // active client's rows (migration 100), so realtime delivers the change.
+  ref.watch(tableTickerProvider('daily_scores'));
   final coachId = Supabase.instance.client.auth.currentUser?.id;
   if (coachId == null) return [];
   return _scoreSvc.getCoachLeaderboard(coachId);
