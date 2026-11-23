@@ -173,10 +173,15 @@ void main() {
     await tester.pump(const Duration(seconds: 5));
   }
 
-  Finder liveRegionAround(String text) => find.ancestor(
-      of: find.text(text),
-      matching: find.byWidgetPredicate(
-          (w) => w is Semantics && w.properties.liveRegion == true));
+  // The notice's OWN text is wrapped in a live region. Matching any
+  // live-region ancestor is vacuous: the SnackBar route already supplies one
+  // (an ancestor-only finder passed at 7f935d7, where the coach notices had
+  // no wrapper), so this pins the app's wrapper directly around the Text.
+  Finder liveRegionAround(String text) => find.byWidgetPredicate((w) =>
+      w is Semantics &&
+      w.properties.liveRegion == true &&
+      w.child is Text &&
+      (w.child! as Text).data == text);
 
   testWidgets('a dropped connection says so, is recorded, notifies no one',
       (tester) async {
