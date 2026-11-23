@@ -10,6 +10,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../support/pump_until.dart';
+
 // P0-FL-4: the coach Business Profile said things happened that did not.
 //
 //   A. Save: a 0-row update said "Profile updated!"; an empty or unparseable
@@ -313,6 +315,23 @@ void main() {
     await settle(tester);
   }
 
+  /// Waits for the SnackBar that reports an action's outcome, then settles.
+  /// Used where the action does real-time work a fixed settle() raced under
+  /// load (P0-FL-51): reading the picked photo from disk, or the Functions
+  /// client's JSON isolate (send-invite-email).
+  Future<void> settleOnSnackBar(WidgetTester tester, String what) async {
+    await pumpUntil(tester, () => find.byType(SnackBar).evaluate().isNotEmpty,
+        what: what);
+    await settle(tester);
+  }
+
+  /// Taps Add Photo and waits for its outcome. Every path (saved, 0 rows,
+  /// failed, signed out) ends in a SnackBar.
+  Future<void> addPhoto(WidgetTester tester) async {
+    await tester.tap(find.text('Add Photo'));
+    await settleOnSnackBar(tester, 'the Add Photo outcome (a SnackBar)');
+  }
+
   // ── B. Load ────────────────────────────────────────────────────────────────
   group('B. a profile that did not load is not an editable blank form', () {
     testWidgets('failed read: no form, no Save, a retry that loads it',
@@ -581,11 +600,6 @@ void main() {
 
   // ── D. Transformation photo ────────────────────────────────────────────────
   group('D. transformation photo', () {
-    Future<void> addPhoto(WidgetTester tester) async {
-      await tester.tap(find.text('Add Photo'));
-      await settle(tester);
-    }
-
     testWidgets('a 0-row profile update does not say "Photo added"',
         (tester) async {
       server.patchMode = _Patch.zeroRows;
@@ -633,7 +647,7 @@ void main() {
               of: find.byType(AlertDialog), matching: find.byType(TextField)),
           'assistant@example.com');
       await tester.tap(find.text('Invite'));
-      await settle(tester);
+      await settleOnSnackBar(tester, 'the invite outcome (a SnackBar)');
     }
 
     bool emailed() =>
@@ -835,8 +849,7 @@ void main() {
     testWidgets('a failed photo upload', (tester) async {
       server.storageFails = true;
       await open(tester);
-      await tester.tap(find.text('Add Photo'));
-      await settle(tester);
+      await addPhoto(tester);
       expect(
           find.text("Couldn't add the photo — try again in a moment. "
               'If it keeps happening, contact support.'),
@@ -890,7 +903,7 @@ void main() {
               of: find.byType(AlertDialog), matching: find.byType(TextField)),
           'assistant@example.com');
       await tester.tap(find.text('Invite'));
-      await settle(tester);
+      await settleOnSnackBar(tester, 'the invite outcome (a SnackBar)');
     }
 
     testWidgets('a failed insert is shown in the error style',
@@ -1127,7 +1140,7 @@ void main() {
               of: find.byType(AlertDialog), matching: find.byType(TextField)),
           'assistant@example.com');
       await tester.tap(find.text('Invite'));
-      await settle(tester);
+      await settleOnSnackBar(tester, 'the invite outcome (a SnackBar)');
       expect(server.calls, contains('POST /functions/v1/send-invite-email'),
           reason: 'premise');
       expect(find.text(_inviteEmailNotSent), findsOneWidget);
