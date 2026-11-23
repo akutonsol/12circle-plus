@@ -199,6 +199,38 @@ Runtime (device/simulator/live QA): **not performed**; journey completion unchan
 
 **Runtime evidence:** none (no device, simulator or live QA). Journeys unchanged at 2 of 14.
 
+## Cycle 9 log (2026-11-22/23): P0-FL-45a, P0-FL-45b, P0-FL-46 to P0-FL-48
+
+**How the cycle ran.**
+- Every package started from `integration/p0-flutter-stack-c8` @ `185261e` and targets that branch.
+- Five engineers ran in parallel. Each package then got independent UX, security and QA review, one review round, and narrow re-checks (QA on every package; UX on every package; security on FL-45a/45b).
+- The lead ran mutants twice:
+  - once at the first heads, where the 3 survivors in FL-45b exposed identity-matrix gaps;
+  - once at the final heads, with test lists from each package's diff and a multi-layer mutant where two layers are redundant.
+- The lead also ran CI's negative controls locally and the static guards.
+- Identity changes (FL-45a/45b) carry the full matrix: both switch directions, the new member's read in flight / failed / succeeded, the previous member's late answer, sign-out only, a same-member failed refresh, a mismatched row, and session isolation.
+- **Combined branch `integration/p0-flutter-stack-c9`** @ `1b94044`: 4393 tests, analyze 287, guards 0, negative controls 0, CI ****7/7** run `45132607442` on `1b94044`**. No cross-package defect.
+
+| Package | Agent | Branch, final head, PR | Tests (full) | Independent review (final head) | Lead mutants | CI (exact head) |
+|---|---|---|---|---|---|---|
+| P0-FL-45a member-confirmed role gate, 9 screens | engineer ×2 | `fix/role-gates-member-confirmed` `f980611` → **#199** | 3926 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED (NOT VERIFIED at round 1) | 8/9 + multi-layer 1/1 | 7/7 `45126666339` |
+| P0-FL-45b member-confirmed profile/role reads (fixed P0: A's details saved into B's row) | engineer ×2 | `fix/role-reads-member-confirmed` `991192d` → **#200** | 3891 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED (NOT VERIFIED at round 1) | 10/11 (round 1: 3/6) | 7/7 `45127825008` |
+| P0-FL-46 coach cancel status + booking errors | engineer ×2 | `fix/booking-cancel-and-errors-honest` `0f0c13c` → **#201** | 3468 | UX PASS · sec APPROVE-WITH-NOTES · QA VERIFIED | 5/5 | 7/7 `45129070292` |
+| P0-FL-47 coach reviews failure + leaderboard ticker | engineer ×2 | `fix/coach-reviews-and-leaderboard-truth` `a75650b` → **#202** | 3464 | UX PASS · sec APPROVE · QA VERIFIED | 5/5 | 7/7 `45130262805` |
+| P0-FL-48 accessibility (AuthButton, 44px, 2× overflows) | engineer ×2 | `fix/accessibility-overflows-and-semantics` `03b9369` → **#203** | 3468 | UX PASS · sec APPROVE-WITH-NOTES · QA VERIFIED | 5/6 | 7/7 `45131357900` |
+
+**Runtime evidence:** none (no device, simulator or live QA). Journeys are unchanged at 2 of 14 and beta conditions at 0 of 4.
+
+### Backlog after cycle 9 (decision-free first)
+
+1. **P0-FL-49: remaining member-unconfirmed reads.** `activity_screen` notif_* readers and `messaging_screen:122`. Home's Women's Health gender read is protected and stays untouched.
+2. **P0-FL-50: swallowed reads.** `CustomExerciseService` (null on failure), `ai_coach_service:177` and `custom_exercise_service:250/662/916` ([] on failure). Also the staff-screen error copy: "Assign failed." and empty pickers on a failed read.
+3. **Accessibility and cosmetic.** `_CoachingModePage` 2× overflow; Compliance row 2×; deflake the business-profile and messaging photo tests under load; leaderboard tick on `coach_client_relationships`; then the P3 backlog.
+4. **Needs Julia.**
+   - The SEC-R3 / Wave 3B-4 ruling, which also gates the Copilot `_explain` / `_approve` session guard; the 184/185 QA window.
+   - Decisions 17–24; P0-SB-2; P0-SB-3; member list; server-side PHI read enforcement; client call-status transitions.
+   - New this cycle: the Workout Zone unit lock; `coaching_calls` column authority (011 FOR ALL); the 42501 wording; Action Center density at 1x.
+
 ### Backlog after cycle 8 (decision-free first)
 
 1. **P0-FL-45:** about 15 remaining role reads move to `confirmedRoleRead` (stale-role P2).
