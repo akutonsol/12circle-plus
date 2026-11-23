@@ -13,6 +13,13 @@ import '../../scoring/data/score_engine.dart';
 bool slotWasTaken(Object error) =>
     error is PostgrestException && error.code == '23505';
 
+/// Whether the database refused the booking outright (42501: row-level
+/// security, or migration 195's Coach-Guided check once applied). Retrying
+/// cannot change that answer, and it is not the connection. WHY it was
+/// refused is the server's rule; the app does not restate it.
+bool bookingWasRefused(Object error) =>
+    error is PostgrestException && error.code == '42501';
+
 const _bg    = Color(0xFF030303);
 const _card  = Color(0xFF0E0B16);
 const _brd   = Color(0xFF1A1020);
@@ -338,16 +345,29 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         'call_type'          : slot['type'] ?? 'check_in',
         'status'             : 'scheduled',
       });
-    } catch (e) {
-      if (!mounted) return;
+    } catch (e, st) {
       if (slotWasTaken(e)) {
+        if (!mounted) return;
         _showSnack('That time was just taken — pick another.', Colors.redAccent);
         _load();                       // the list still offers it; show what is free
         return;
       }
-      _showSnack('Could not book — please try again.', Colors.redAccent);
+      // P0-FL-46 · recorded, and said in the house voice: a refusal is
+      // neither "try again" nor the connection.
+      reportError('BookingScreen._book', e, st);
+      if (!mounted) return;
+      final next = bookingWasRefused(e)
+          ? "this booking isn't available for your account. If you think "
+              'this is wrong, contact support.'
+          : _nextStep(e);
+      ScaffoldMessenger.of(context).showSnackBar(
+          _failureSnack("Couldn't book this session — $next"));
       return;
     }
+    // No row check needed here: an INSERT cannot "succeed" with no row the
+    // way a filtered UPDATE can. RLS WITH CHECK and every BEFORE INSERT
+    // trigger on coaching_calls (187, 195) either return the row or raise
+    // (P0-FL-46, item 4).
 
     // Notify the coach about the new booking.
     // Best-effort, and reported: the booking above is saved, and a failed
@@ -1007,6 +1027,14 @@ class _SlotCardState extends State<_SlotCard> {
     final type = widget.slot['type'] as String? ?? 'check_in';
     final mins = widget.slot['duration_minutes'] as int? ?? 30;
 
+    final details = Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(_typeLabel(type),
+        style: const TextStyle(color: _wht, fontSize: 14, fontWeight: FontWeight.w600)),
+      const SizedBox(height: 2),
+      Text('$mins minutes · Video call',
+        style: const TextStyle(color: _mut, fontSize: 12)),
+    ]));
+
     return Container(
       margin: const EdgeInsets.fromLTRB(20, 0, 20, 10),
       padding: const EdgeInsets.all(16),
@@ -1014,20 +1042,38 @@ class _SlotCardState extends State<_SlotCard> {
         color: _card,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: _brd)),
-      child: Row(children: [
-        _DateBadge(dt: dt),
-        const SizedBox(width: 14),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(_typeLabel(type),
-            style: const TextStyle(color: _wht, fontSize: 14, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 2),
-          Text('$mins minutes · Video call',
-            style: const TextStyle(color: _mut, fontSize: 12)),
-        ])),
-        _booking
-            ? const SizedBox(width: 60, child: Center(
+      // P0-FL-46 · at large text on a narrow screen the badge, details and
+      // Book did not fit one row (48px overflow at 2.0x on 320px). There,
+      // Book moves under the details; otherwise the row is unchanged.
+      child: LayoutBuilder(builder: (context, constraints) {
+        final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+        final stacked = scale > 1.3 || constraints.maxWidth < 240;
+        if (!stacked) {
+          return Row(children: [
+            _DateBadge(dt: dt),
+            const SizedBox(width: 14),
+            details,
+            _bookControl(),
+          ]);
+        }
+        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            _DateBadge(dt: dt),
+            const SizedBox(width: 14),
+            details,
+          ]),
+          const SizedBox(height: 12),
+          Align(alignment: Alignment.centerRight, child: _bookControl()),
+        ]);
+      }),
+    );
+  }
+
+  Widget _bookControl() => _booking
+            ? const SizedBox(width: 60, height: 54, child: Center(
                 child: SizedBox(width: 20, height: 20,
-                  child: CircularProgressIndicator(color: _brand, strokeWidth: 2))))
+                  child: CircularProgressIndicator(color: _brand, strokeWidth: 2,
+                    semanticsLabel: 'Booking'))))
             : ElevatedButton(
                 onPressed: () async {
                   setState(() => _booking = true);
@@ -1052,10 +1098,7 @@ class _SlotCardState extends State<_SlotCard> {
                   minimumSize: const Size(0, 54),
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                child: const Text('Book', style: TextStyle(fontWeight: FontWeight.w700))),
-      ]),
-    );
-  }
+                child: const Text('Book', style: TextStyle(fontWeight: FontWeight.w700)));
 
   String _typeLabel(String t) => switch (t) {
     'check_in'         => 'Weekly Check-In',
