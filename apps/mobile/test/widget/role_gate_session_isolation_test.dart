@@ -96,8 +96,10 @@ class _MemberServer extends RowCheckingPostgrest {
 
   String member = 'user-a';
 
-  /// While set for a member, requests sent as that member wait for it.
+  /// While set for a member, requests sent as that member wait for it —
+  /// only those to [holdOnly] when that is set.
   final Map<String, Completer<void>> holds = {};
+  String? holdOnly;
 
   /// `member endpoint` for every request.
   final sent = <String>[];
@@ -105,6 +107,7 @@ class _MemberServer extends RowCheckingPostgrest {
   void clear() {
     member = 'user-a';
     holds.clear();
+    holdOnly = null;
     sent.clear();
   }
 
@@ -122,7 +125,9 @@ class _MemberServer extends RowCheckingPostgrest {
     final endpoint = path.split('/').last;
     sent.add('$who $endpoint');
     final hold = holds[who];
-    if (hold != null) await hold.future;
+    if (hold != null && (holdOnly == null || holdOnly == endpoint)) {
+      await hold.future;
+    }
     final m = _mark(who);
     final Object? body = switch (endpoint) {
       'decision_analytics' => {'most_triggered_rule': m},
@@ -178,7 +183,7 @@ class _MemberServer extends RowCheckingPostgrest {
 
 class _Screen {
   const _Screen(this.title, this.build, this.only, this.allowed,
-      {this.endpoint, this.trigger, this.denies = const []});
+      {this.endpoint, this.trigger, this.markEndpoint, this.denies = const []});
   final String title;
   final Widget Function() build;
   final String only;
@@ -193,6 +198,11 @@ class _Screen {
   /// when it loads only on a tap). Its answer may not be the one that shows
   /// the member's mark — Observability and Content Center read several.
   final String? endpoint;
+
+  /// The request whose answer puts the member's mark on screen, when it is
+  /// not [endpoint] (Observability and Content Center read several in a
+  /// row): the late-answer test holds THIS one.
+  final String? markEndpoint;
 
   /// For screens that load only on a tap: the label to tap, and the endpoint
   /// that tap reads.
@@ -216,13 +226,18 @@ final _screens = <_Screen>[
       endpoint: 'workout_programs'),
   _Screen('Coaching Observability', () => const ObservabilityScreen(),
       'Admins only.', ['admin'],
-      endpoint: 'workout_programs', denies: ['coach', 'content_manager']),
+      endpoint: 'workout_programs',
+      markEndpoint: 'decision_analytics',
+      denies: ['coach', 'content_manager']),
   _Screen('Review Queue', () => const ContentReviewQueueScreen(),
       'Admins & content managers only.', ['admin', 'content_manager'],
-      endpoint: 'exercises', denies: ['coach']),
+      endpoint: 'exercises',
+      denies: ['coach']),
   _Screen('Content Center', () => const ExerciseContentCenterScreen(),
       'Admins & content managers only.', ['admin', 'content_manager'],
-      endpoint: 'exercises', denies: ['coach']),
+      endpoint: 'exercises',
+      markEndpoint: 'movement_graph_stats',
+      denies: ['coach']),
   _Screen('Knowledge Review', () => const IntelligenceReviewScreen(),
       'Admins & content managers only.', ['admin', 'content_manager'],
       endpoint: 'intelligence_review_queue', denies: ['coach']),
@@ -368,11 +383,18 @@ void main() {
               'after the switch, is ignored', (tester) async {
             final p = _Profile(role)..roles['user-b'] = role;
             final aHold = Completer<void>();
-            server.holds['user-a'] = aHold;
+            final held = s.markEndpoint ?? endpointOf(s);
+            server
+              ..holds['user-a'] = aHold
+              ..holdOnly = held;
             final ref = await pumpScreen(tester, s, p);
             await loadAsA(tester, s);
-            expect(server.count('user-a', endpointOf(s)), 1,
+            expect(server.count('user-a', held), 1,
                 reason: "precondition: A's read is on the wire");
+            // (Copilot and Weekly Review show A's roster: one chip.)
+            expect(shows(_markA).evaluate().length,
+                {'Coach Copilot', 'Weekly Review'}.contains(s.title) ? 1 : 0,
+                reason: "precondition: A's answer has not landed yet");
 
             await switchTo(tester, ref, 'user-b', observeSignOut: observe);
             aHold.complete(); // A's answers land now, B signed in
