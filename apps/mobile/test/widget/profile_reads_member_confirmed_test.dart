@@ -249,6 +249,9 @@ void main() {
       ...site.overrides,
     ]);
     addTearDown(container.dispose);
+    // Kept listened whatever the site does (the old Workout Zone only
+    // `ref.read` it), so a refresh really runs and its failure is observed.
+    container.listen(currentUserProfileProvider, (_, __) {});
     final router = GoRouter(routes: [
       GoRoute(path: '/', builder: (_, __) => site.build()),
     ]);
