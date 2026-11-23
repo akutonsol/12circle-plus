@@ -182,9 +182,9 @@ void main() {
       expect(d['decision_traces'], 2);
       expect(d['predictions'], 0, reason: 'a count that answered empty IS 0');
       expect(d['avg_adherence'], isNull);
-      expect(d[CustomExerciseService.observabilityFailedKey],
+      expect(d['failed'],
           unorderedEquals(['programs_generated', 'avg_adherence']));
-      expect(d[CustomExerciseService.observabilityErrorKey], isA<PostgrestException>());
+      expect(d['failed_error'], isA<PostgrestException>());
       expect(
           origins(),
           unorderedEquals([
@@ -198,7 +198,7 @@ void main() {
       final d = await svc.platformObservability();
       expect(d['programs_generated'], 0);
       expect(d['avg_adherence'], isNull, reason: 'no data, not a failure');
-      expect(d[CustomExerciseService.observabilityFailedKey], isEmpty);
+      expect(d['failed'], isEmpty);
       expect(reported, isEmpty);
     });
   });
@@ -252,15 +252,16 @@ void main() {
       final s = _ListSvc(deleteOk: false);
       final n = MyExercisesNotifier(s);
       await Future<void>.delayed(Duration.zero);
-      expect(await n.delete('ex-1'), isFalse);
-      expect(n.state.value!.map((e) => e.id), ['ex-1']);
+      await n.delete('ex-1');
+      expect(n.state.value!.map((e) => e.id), ['ex-1'],
+          reason: 'THE defect: a failed delete dropped the exercise anyway');
     });
 
     test('removes it when the delete happened', () async {
       final s = _ListSvc(deleteOk: true);
       final n = MyExercisesNotifier(s);
       await Future<void>.delayed(Duration.zero);
-      expect(await n.delete('ex-1'), isTrue);
+      await n.delete('ex-1');
       expect(n.state.value, isEmpty);
     });
   });
