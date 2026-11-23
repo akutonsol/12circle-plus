@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../exercise_database/data/custom_exercise_service.dart';
 import '../../exercise_database/data/models/exercise_detail_model.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 const _bg    = Color(0xFF0B0712);
 const _card  = Color(0xFF171026);
@@ -23,13 +24,38 @@ class _ExerciseReviewScreenState extends State<ExerciseReviewScreen> {
   late Future<List<ExerciseDetail>> _future;
   final _busy = <String>{};
 
+  /// The last read's failure (kept while a retry is in flight, so the notice
+  /// stays on screen, busy, instead of blinking to a spinner).
+  Object? _failedWith;
+  bool _retrying = false;
+
   @override
   void initState() {
     super.initState();
-    _future = _svc.getPendingGlobalSubmissions();
+    _future = _read();
   }
 
-  void _reload() => setState(() => _future = _svc.getPendingGlobalSubmissions());
+  Future<List<ExerciseDetail>> _read() {
+    final f = _svc.getPendingGlobalSubmissions();
+    f.then<void>((_) { _failedWith = null; }, onError: (Object e) { _failedWith = e; });
+    return f;
+  }
+
+  /// Re-reads the queue; returns when the read settles. Its failure is shown
+  /// by the builder, not thrown.
+  Future<void> _reload() {
+    final f = _read();
+    setState(() { _future = f; });
+    return f.then((_) {}, onError: (_) {});
+  }
+
+  /// The notice's retry: busy until the read settles, so it can't double fire.
+  Future<void> _retry() async {
+    if (_retrying) return;
+    setState(() => _retrying = true);
+    await _reload();
+    if (mounted) setState(() => _retrying = false);
+  }
 
   Future<void> _moderate(ExerciseDetail ex, bool approve) async {
     setState(() => _busy.add(ex.id));
@@ -38,11 +64,15 @@ class _ExerciseReviewScreenState extends State<ExerciseReviewScreen> {
         : await _svc.rejectGlobalExercise(ex.id);
     if (!mounted) return;
     setState(() => _busy.remove(ex.id));
+    // P0-FL-50a · the service has recorded the failure (a 0-row update
+    // included); the admin is told which action did not happen.
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(ok
           ? (approve ? '"${ex.name}" approved to the global library.'
                      : '"${ex.name}" rejected.')
-          : 'Action failed. Please try again.')));
+          : couldntMessage(
+              approve ? 'approve "${ex.name}"' : 'reject "${ex.name}"',
+              _svc.lastError))));
     if (ok) _reload();
   }
 
@@ -59,7 +89,26 @@ class _ExerciseReviewScreenState extends State<ExerciseReviewScreen> {
       body: FutureBuilder<List<ExerciseDetail>>(
         future: _future,
         builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
+          final waiting = snap.connectionState == ConnectionState.waiting;
+          // P0-FL-50a · a failed read is not "No pending submissions"; while
+          // its retry runs, the notice stays (busy).
+          final failure = snap.hasError
+              ? snap.error
+              : (waiting && _retrying ? _failedWith : null);
+          if (snap.hasError || failure != null) {
+            return Center(child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: SectionLoadFailure(
+                what: 'the submissions',
+                error: failure,
+                busy: _retrying,
+                onRetry: _retry,
+                accent: _brand,
+                textColor: _white,
+                mutedColor: _muted),
+            ));
+          }
+          if (waiting) {
             return const Center(child: CircularProgressIndicator(color: _brand));
           }
           final pending = snap.data ?? [];
