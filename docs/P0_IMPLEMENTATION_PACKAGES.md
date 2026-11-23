@@ -221,6 +221,37 @@ Runtime (device/simulator/live QA): **not performed**; journey completion unchan
 
 **Runtime evidence:** none (no device, simulator or live QA). Journeys are unchanged at 2 of 14 and beta conditions at 0 of 4.
 
+## Cycle 10 log (2026-11-23): P0-FL-49, P0-FL-50a, P0-FL-50b, P0-FL-51, P0-FL-52
+
+**How the cycle ran.**
+- Every package started from `integration/p0-flutter-stack-c9` @ `1b94044` and targets that branch.
+- Five engineers ran in parallel. Each package then got independent UX, security and QA review. Fix rounds and narrow re-checks followed for FL-49 (tests), FL-50a (two rounds), FL-50b and FL-52.
+- The lead ran mutants at the first heads and again at every final head, with test lists from each package's test diff. The first-head survivors (FL-50a held-Save, FL-52 fixed 56px button) became review-round tests, and both are caught at the final heads.
+- The lead ran CI's negative controls locally and the static guards on the combined head.
+- SEC-R3 paths (Copilot, `coach_program_service`, `build_workout`) and Women's Health were not touched. The Copilot late-response issue is documented as an owner proposal, not fixed.
+- **Combined branch `integration/p0-flutter-stack-c10`** @ `b7ec6ef`: 4660 tests (= 4393 + 126 + 69 + 44 + 0 + 28), analyze 287, guards 0, negative controls 0, CI **7/7** run `45240757852`. No cross-package defect; no file is touched by two packages.
+
+| Package | Agent | Branch, final head, PR | Tests (full) | Independent review (final head) | Lead mutants | CI (exact head) |
+|---|---|---|---|---|---|---|
+| P0-FL-49 Activity notif_* + Messages empty state from a member-confirmed read | engineer ×2 | `fix/activity-messaging-member-confirmed` `85d32f0` → **#207** | 4519 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED (re-verified after the test round) | 10/10 | 7/7 `45235853373` |
+| P0-FL-50a CustomExerciseService failures said (fixed: a failed prefill let Save overwrite an exercise with a blank form) | engineer ×3 | `fix/custom-exercise-reads-report-failures` `36fbcd2` → **#208** | 4462 | UX PASS · sec APPROVE-WITH-NOTES · QA VERIFIED (NOT VERIFIED at rounds 1 and 2) | 12/13 | 7/7 `45238824608` |
+| P0-FL-50b AI Coach reads report failures (fixed: a failed read could generate over, or save the default persona over, stored data) | engineer ×2 | `fix/ai-coach-reads-report-failures` `7b8e5fd` → **#205** | 4437 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED (NOT VERIFIED at round 1) | 9/9 | 7/7 `45231184605` |
+| P0-FL-51 flaky tests wait for the outcome (test-only) | engineer ×1 | `fix/flaky-tests-wait-for-the-event` `eed4f60` → **#204** | 4393 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 5/6 (survivor: a pre-existing coverage gap) | 7/7 `45223386821` |
+| P0-FL-52 intake Coaching Mode at large text + Compliance row 2× | engineer ×2 | `fix/intake-coaching-mode-large-text` `e44588d` → **#206** | 4421 | UX PASS-WITH-NOTES · sec APPROVE · QA VERIFIED (NOT VERIFIED at round 1) | 8/8 | 7/7 `45233436801` |
+
+**Runtime evidence:** none (no device, simulator or live QA). Journeys are unchanged at 2 of 14 and beta conditions at 0 of 4.
+
+### Backlog after cycle 10 (decision-free first)
+
+1. **P0-FL-53: remaining same-class swallows.** Coach Focus overlay/media reads (`lastError` unchecked); `createCoachingPack` result; `submitForGlobalLibrary` 0-row; `_enrich` raw error; challenges failure shown as "No active challenges"; intake picker `catch (_) {}`; booking `_load` / `_selectCoach` unrecorded; staff-screen "Assign failed." outside Copilot.
+2. **P0-FL-54: identity follow-up.** `coach_business_screen` profile row keyed to the signed-in coach.
+3. **P0-FL-55: accessibility.** Activity "Enable" / "See All"; AI Coach persona and memory chips (44px, button role, semantic delete); `_IntakeStepBar` at 3×; transformation-photo in-flight guard; a test for a 200 `cancel-subscription` reply without `ok:true`.
+4. **Needs Julia.**
+   - Copilot late-response remediation (`docs/COPILOT_LATE_RESPONSE_REMEDIATION_PROPOSAL.md` on #164) and the SEC-R3 / Wave 3B-4 ruling; the 184/185 QA window.
+   - Action Center density (`docs/ACTION_CENTER_LAYOUT_OPTIONS.md` on #164).
+   - Decisions 17–24; P0-SB-2; P0-SB-3; member list; server-side PHI read enforcement; `coaching_calls` status transitions and column authority.
+   - New this cycle: unconfirmed Activity defaults; observability PGRST202 reading; AI Coach grouped offline banner.
+
 ### Backlog after cycle 9 (decision-free first)
 
 1. **P0-FL-49: remaining member-unconfirmed reads.** `activity_screen` notif_* readers and `messaging_screen:122`. Home's Women's Health gender read is protected and stays untouched.
