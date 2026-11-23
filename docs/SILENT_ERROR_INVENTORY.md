@@ -83,3 +83,12 @@ CI 7/7 (run 44463329197). Automated evidence only — no device or live-QA run; 
 - **#193 (P0-FL-40):** role gates and Manage subscription showing a failed read as a fact, and the train-hub active session.
 
 Combined branch `integration/p0-flutter-stack-c7` @ df35d5f: 3335 tests, CI 7/7 (run 44497593361). Remaining: the P3 backlog and the cycle-8 list in the ledger.
+
+**Status 2026-11-22 (cycle 8):**
+- **#195 (P0-FL-41):** joined-profile crashes (Leaderboard, active coaches, reviews).
+- **#196 (P0-FL-42):** client booking cancel confirmed.
+- **#197 (P0-FL-43):** copilot generate failure recorded and explained.
+- **#198 (P0-FL-44):** paywall and shell never present a failed or stale role read as a role.
+
+All are CI 7/7 on their exact heads. Combined branch `integration/p0-flutter-stack-c8` @ 185261e: 3456 tests, CI 7/7 (run 45100790460).
+- **Still blocked:** `predictClient`, `evaluateWeek` and `regenerateProgram` swallow failures; this is the SEC-R3 / Wave 3B-4 owner ruling.

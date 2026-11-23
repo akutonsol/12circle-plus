@@ -10,7 +10,7 @@ evidence. Nothing is marked complete without it.
 |---|---|
 | `origin/main` | `8f2c8a0` (PR #159), CI run `43792727007` **7/7 success** |
 | Live QA evidence on main | security **1173/1173**, AI **51/51**, ENV-3 L-1..L-5 PASS (ledger 188 rows; frontier 192; 182–186 declared excluded) |
-| Open PRs | #14 (owner's, untouched) · #160–#194, all unmerged. Flutter P0 stack CI 7/7 on each exact head. #183 targets `integration/p0-flutter-stack`; #184–#190 target #183's branch; #191 targets #189's; #192–#194 target `integration/p0-flutter-stack-c6`. Combined branches: `-c6` @ `6f8918f` and `-c7` @ `df35d5f`, both CI 7/7. **None to be merged without explicit authorization** |
+| Open PRs | #14 (owner's, untouched) · #160–#198, all unmerged. Flutter P0 stack CI 7/7 on each exact head. #183 targets `integration/p0-flutter-stack`; #184–#190 target #183's branch; #191 targets #189's; #192–#194 target `-c6`; #195–#198 target `-c7`. Combined branches `-c6` @ `6f8918f`, `-c7` @ `df35d5f`, `-c8` @ `185261e`, all CI 7/7. **None to be merged without explicit authorization** |
 | QA migrations | applied through **192** (182–186 excluded). **Pending, not applied:** 193, 194, 195, 196 |
 | QA Edge Functions | **1 of 19 deployed** (`ai-nutrition` v18, deployed ~2026-09-30 from the pre-rename path) |
 | QA function secrets | `ANTHROPIC_API_KEY` + Supabase defaults only. **No Stripe, no email provider, no `APP_URL`, no YouTube** |
@@ -717,6 +717,40 @@ All final heads: analyze **287**, contract guard exit 0 (unseen 31), coordinator
 - The load-sensitive business-profile photo test.
 - Tighten FL-14's sheet-overflow test allowance (no longer needed).
 
+### Cycle 8: P0-FL-41 to P0-FL-44 (2026-11-22)
+
+**Base.** All four packages start from `integration/p0-flutter-stack-c7` @ `df35d5f` and **target it**, so each PR's diff shows one package.
+
+**Combined evidence branch.** `integration/p0-flutter-stack-c8` = `df35d5f` + `e9fcb30` + `1e5199a` + `d8af61d` + `9cae07a`. All four merge without conflict.
+- @ `185261e`: analyze **287**, **3456** tests pass (= 3335 + 5 + 11 + 5 + 100, so nothing overlaps or is lost), static guards 0, contract exit 0, coordinator 268/268, CI's 10 negative controls 0 (run locally).
+- CI (push): **7/7** run `45100790460` on `185261e`. **No cross-package defect found.**
+
+| PR | Package | Final head | Independent verdicts at the final head | Lead mutants | Tests (full) | CI (exact head) |
+|---|---|---|---|---|---|---|
+| #195 | **P0-FL-41** no crash when a client's profile is missing from a joined list. The coach Leaderboard tab crashed while building; the same crash class was fixed in the active-coaches list and coach reviews | `e9fcb30` | UX PASS-WITH-NOTES · security APPROVE · QA **VERIFIED** | per-site revert caught at all 3 sites (single-layer mutants are equivalent) | 3340 | 7/7 `45076272294` |
+| #196 | **P0-FL-42** a client's booking cancel is confirmed before "Session cancelled.": `.select('id')`, plus `.eq('status','scheduled')` (lead: decision-free). 0 rows → told + reload, no coach notice; throw → reported, split copy; double-tap guarded | `1e5199a` | UX PASS-WITH-NOTES · security APPROVE-WITH-NOTES · QA **VERIFIED** | 4/4 | 3346 | 7/7 `45097658625` |
+| #197 | **P0-FL-43** the copilot's failed recommendation is recorded once and explained (network/other), and a stale `lastError` is never reused. **`predictClient` deliberately unchanged:** coordinator §15 pins its swallow as the SEC-R3 / Wave 3B-4 blocker awaiting the owner ruling, so the lead removed the engineer's change to it | `d8af61d` | UX PASS-WITH-NOTES · security APPROVE-WITH-NOTES (agrees with the scope) · QA NOT VERIFIED → **VERIFIED** after a test round | 3/3 | 3340 | 7/7 `45098982386` |
+| #198 | **P0-FL-44** a failed or stale role read is never a role fact. Paywall and app shell use `confirmedRoleRead`: a role counts only when it is read for the **current** member. Security found a **previous-member role leak** after sign-out/sign-in; fixed. The failure bar keeps Profile; paywall Back falls back to Profile. **70 transition tests:** coach↔client, the new member's read failed / in flight / succeeded, a delayed previous-member response, sign-out only | `9cae07a` | UX PASS-WITH-NOTES · security APPROVE-WITH-NOTES · QA **VERIFIED** (explicit transition matrix) | 4/4 (incl. the member-id check removed) | 3435 | 7/7 `45099911540` |
+
+All final heads: analyze 287, contract exit 0 (unseen 31), coordinator 268/268, static guards 0, negative controls 0.
+
+**What the evidence covers:** automated only. No device, simulator or live-QA run. **Journeys 2/14, beta-ready conditions 0/4, unchanged.**
+
+**New decisions for Julia:**
+- **SEC-R3 / Wave 3B-4 ruling** (§7.10): needed before `predictClient`, `evaluateWeek` and `regenerateProgram` can report failures. A failed copilot outlook shows nothing until then.
+- **Server-side status transitions on a client's own `coaching_calls` row** (FL-42 S-1).
+- **"Couldn't notify your coach" note to the client** after a cancel.
+
+**Engineering follow-ups:**
+- About 15 other screens should take the role via `confirmedRoleRead` (FL-44 F-1, P2).
+- Coach-side cancel: add a status filter.
+- `_SlotCard`: overflows at 320 px and 2× text.
+- `_book`'s error copy.
+- `coachLeaderboardProvider` live ticker mismatch.
+- `coachReviewsProvider` swallows read failures.
+- `coach_focus_section`: initState role race.
+- `train_hub` wrong-role tile.
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
@@ -792,22 +826,19 @@ exists.
 
 ## Next autonomous action
 
-**Cycle 8 recommendation (2026-11-19).** Cycle 7 is done: P0-FL-38 is #194, P0-FL-39 is #192, P0-FL-40 is #193. Decision-free work, data integrity and security first:
+**Cycle 9 recommendation (2026-11-22).** Cycle 8 is done: P0-FL-41 is #195, FL-42 #196, FL-43 #197, FL-44 #198. Decision-free work, data integrity and security first:
 
-1. **Data integrity.**
-   - The leaderboard crash class: `score_service.dart:114`, an untyped `?? {}` on a missing profile.
-   - Client booking cancel: 0-row check and voice.
-   - `generateWorkout` and `predictClient` swallow errors.
-2. **Role reads.** Sibling `valueOrNull?['role']` reads (`paywall_gate.dart:31` first) treat a failed read as "no role".
-3. **Accessibility and cosmetic.** Shared gate helper (9 copies); 2× overflows; `AuthButton` Semantics; deflake the business-profile photo test.
-4. **P3 backlog:** P0-FL-20 … P0-FL-36.
+1. **P0-FL-45: stale-role reads (security, P2).** Move the remaining ~15 role reads to `confirmedRoleRead`: classes, exercise database and detail, create exercise, coach focus (incl. its initState race), observability, the four coach gates, settings, the router fallback, and the train-hub tile.
+2. **P0-FL-46: cancel and booking honesty.** Coach-side cancel status filter; `_book` error copy; `coachReviewsProvider` swallow; `coachLeaderboardProvider` ticker mismatch.
+3. **Accessibility and cosmetic.** `_SlotCard` 2× overflow, shared gate helper, other 2× overflows, `AuthButton` Semantics; then the P3 backlog.
 
-**Blocked on Julia (read-only until authorized):**
-- the **184/185 QA window** (`docs/QA_184_185_WINDOW_DECISION_BRIEF.md`, Option S or R); this is the highest-severity open security item;
-- Decision 19 / F1 (PAR-Q clear) and server-side PHI read enforcement;
-- P0-SB-2 (Decisions 17, 18);
-- P0-SB-3 (Decision 20);
-- member-list access (Decision 22);
+**Blocked on Julia (read-only):**
+- the **184/185 QA window** (`docs/QA_184_185_WINDOW_DECISION_BRIEF.md`);
+- the **SEC-R3 / Wave 3B-4 ruling**, for `predictClient`, `evaluateWeek` and `regenerateProgram` error reporting;
+- Decision 19 / F1;
+- server-side PHI read enforcement;
+- client `coaching_calls` status transitions;
+- P0-SB-2 (Decisions 17, 18), P0-SB-3 (Decision 20) and member list (Decision 22);
 - Decisions 21, 23 and 24;
-- roster risk logging, Q-H1 and copilot blocking (cycle 7);
-- merge order for the open stack #172–#194 (FL-38 and FL-40 need a one-line import merge when the second lands).
+- roster risk logging, Q-H1 and copilot blocking;
+- merge order for the open stack #172–#198.
