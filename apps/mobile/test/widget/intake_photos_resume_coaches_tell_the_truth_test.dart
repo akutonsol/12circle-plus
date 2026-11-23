@@ -546,6 +546,27 @@ void main() {
       handle.dispose();
     });
 
+    testWidgets(
+        'P0-FL-48 1x pin: on an ordinary step (Primary Goal) and on the photo '
+        'step the Continue button is exactly 54px tall at 1x text', (tester) async {
+      // [height] became a floor (minHeight) so the button can grow at large
+      // text; at 1x it must render exactly as the old fixed height did.
+      final gradient = find.byWidgetPredicate(
+          (w) => w.runtimeType.toString() == '_GradientButton');
+      for (final step in [5, _photosPage]) {
+        server.profile = {'id': _uid, 'onboarding_step': step};
+        await open(tester);
+        expect(page(tester), step.toDouble(), reason: 'premise: step $step');
+        final onPage = gradient.hitTestable();
+        expect(onPage, findsOneWidget,
+            reason: 'premise: step $step shows one Continue button');
+        expect(tester.getSize(onPage).height, 54,
+            reason: 'step $step: the 1x button height changed');
+        await tester.pumpWidget(const SizedBox());
+        await settle(tester);
+      }
+    });
+
     testWidgets('control: uploads that all succeed move on as before',
         (tester) async {
       await openPhotos(tester);

@@ -1760,13 +1760,20 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
           style: TextStyle(color: _mut, fontSize: 12, fontWeight: FontWeight.w600))),
         // Keep the generated items; let the coach add their own (once paid).
         if (widget.paidPlan == true)
-          TextButton.icon(
-            onPressed: () => showAssignActionItemSheet(context, ref, widget.clientId),
-            icon: const Icon(Icons.add_rounded, color: _brand, size: 16),
-            label: const Text('Add', style: TextStyle(color: _brand, fontSize: 12, fontWeight: FontWeight.w700)),
-            // 44px floor (P0-FL-48); it was shrink-wrapped to the text.
-            style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6),
-              minimumSize: const Size(44, 44), tapTargetSize: MaterialTapTargetSize.shrinkWrap)),
+          // Screen-reader name starts with the visible "Add" (voice control
+          // still matches it) and says what is added (P0-FL-48 N1).
+          Semantics(
+            button: true,
+            label: 'Add action item',
+            excludeSemantics: true,
+            onTap: () => showAssignActionItemSheet(context, ref, widget.clientId),
+            child: TextButton.icon(
+              onPressed: () => showAssignActionItemSheet(context, ref, widget.clientId),
+              icon: const Icon(Icons.add_rounded, color: _brand, size: 16),
+              label: const Text('Add', style: TextStyle(color: _brand, fontSize: 12, fontWeight: FontWeight.w700)),
+              // 44px floor (P0-FL-48); it was shrink-wrapped to the text.
+              style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6),
+                minimumSize: const Size(44, 44), tapTargetSize: MaterialTapTargetSize.shrinkWrap))),
       ]),
       const SizedBox(height: 10),
       // Not a live region: the assessment's own failure notice on this page

@@ -703,6 +703,40 @@ void main() {
   });
 
   testWidgets(
+      'P0-FL-48 N1: the Action Center Add button has a screen-reader name that '
+      'starts with its visible text and says what it adds', (t) async {
+    final handle = t.ensureSemantics();
+    await _pumpPage(t, width: 360, paid: true);
+    expect(find.text('Add'), findsOneWidget,
+        reason: 'the visible copy is unchanged');
+    final add = find.bySemanticsLabel('Add action item');
+    expect(add, findsOneWidget,
+        reason: 'a bare "Add" does not say what is added');
+    final node = t.getSemantics(add);
+    expect(node.label, startsWith('Add'),
+        reason: 'voice control matches the name by its visible text');
+    expect(node, containsSemantics(isButton: true, hasTapAction: true));
+    expect(find.bySemanticsLabel('Add'), findsNothing,
+        reason: 'one node, not a second bare "Add" beside it');
+    handle.dispose();
+  });
+
+  testWidgets(
+      'P0-FL-48 1x pin: the score ring is still exactly 72dp at 1x text',
+      (t) async {
+    final errors = await pumpCollectingErrors(t, width: 360);
+    expect(errors, isEmpty);
+    final ring = find
+        .ancestor(
+            of: find.text('/100'),
+            matching: find.byWidgetPredicate((w) =>
+                w is SizedBox && w.width != null && w.width == w.height))
+        .first;
+    expect(t.getSize(ring), const Size(72, 72),
+        reason: 'the 2x fix must not change the 1x ring');
+  });
+
+  testWidgets(
       'UX re-check: on a 360dp phone a short badge leaves the name column at '
       'least 60% of the row\'s free width — the badge takes no flex share',
       (t) async {
