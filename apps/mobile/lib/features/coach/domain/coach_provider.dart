@@ -70,6 +70,10 @@ final myCoachesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async
 });
 
 // ── Written reviews for a coach (newest first, with reviewer name) ────────────
+//
+// A failed read is recorded and rethrown (P0-FL-47). It used to return [], so
+// the marketplace reviews sheet told a member "No reviews yet" about a coach
+// whose reviews simply could not be read. Every consumer handles the error.
 final coachReviewsProvider =
     FutureProvider.family<List<Map<String, dynamic>>, String>((ref, coachId) async {
   try {
@@ -96,8 +100,9 @@ final coachReviewsProvider =
       for (final r in list)
         {...r, 'reviewer': byId[r['client_id']] ?? const <String, dynamic>{}}
     ];
-  } catch (_) {
-    return [];
+  } catch (e, st) {
+    reportError('coachReviewsProvider', e, st);
+    rethrow;
   }
 });
 
