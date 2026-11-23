@@ -4378,6 +4378,8 @@ class _CoachingModePageState extends State<_CoachingModePage> {
   @override
   Widget build(BuildContext context) {
     final canContinue = _selected.isNotEmpty;
+    final continueLabel =
+        _selected == 'coach_guided' ? 'Choose My Coach' : 'Build My Plan';
     return SafeArea(
       child: Column(children: [
         _IntakeStepBar(step: 20, total: 24, onBack: widget.onBack),
@@ -4445,15 +4447,32 @@ class _CoachingModePageState extends State<_CoachingModePage> {
                             children: [
                               // P0-FL-52: the title wraps beside the check
                               // circle at large text instead of overflowing
-                              // (was Text + Spacer). No added gap: any title
-                              // that fitted on one line still does, so 1x is
-                              // unchanged.
-                              Row(children: [
+                              // (was Text + Spacer). A title that wraps keeps
+                              // an 8px gap from the circle so it never runs
+                              // into it; a title that fits on one line beside
+                              // the circle lays out exactly as before (the gap
+                              // would only wrap it early), so 1x is unchanged.
+                              LayoutBuilder(builder: (context, box) {
+                              final titleStyle = TextStyle(
+                                color: active ? _primary : _onSurf,
+                                fontSize: 17,
+                                fontWeight: FontWeight.w700);
+                              final probe = TextPainter(
+                                text: TextSpan(
+                                  text: m.label,
+                                  style: DefaultTextStyle.of(context)
+                                      .style
+                                      .merge(titleStyle)),
+                                textDirection: Directionality.of(context),
+                                textScaler: MediaQuery.textScalerOf(context),
+                                maxLines: 1,
+                              )..layout(maxWidth: box.maxWidth - 22);
+                              final wraps = probe.didExceedMaxLines;
+                              probe.dispose();
+                              return Row(children: [
                                 Expanded(child: Text(m.label,
-                                  style: TextStyle(
-                                    color: active ? _primary : _onSurf,
-                                    fontSize: 17,
-                                    fontWeight: FontWeight.w700))),
+                                  style: titleStyle)),
+                                if (wraps) const SizedBox(width: 8),
                                 AnimatedContainer(
                                   duration: const Duration(milliseconds: 200),
                                   width: 22, height: 22,
@@ -4468,7 +4487,8 @@ class _CoachingModePageState extends State<_CoachingModePage> {
                                     ? const Icon(Icons.check, color: Colors.white, size: 14)
                                     : null,
                                 ),
-                              ]),
+                              ]);
+                              }),
                               const SizedBox(height: 4),
                               Text(m.tagline,
                                 style: const TextStyle(
@@ -4510,7 +4530,17 @@ class _CoachingModePageState extends State<_CoachingModePage> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-          child: GestureDetector(
+          // P0-FL-52: announced as one button carrying its visible label and
+          // whether it can be pressed; when it cannot, the hint says why.
+          child: Semantics(
+            container: true,
+            button: true,
+            enabled: canContinue,
+            label: continueLabel,
+            hint: canContinue ? null : 'Choose a coaching mode first',
+            onTap: canContinue ? _handleContinue : null,
+            excludeSemantics: true,
+            child: GestureDetector(
             onTap: canContinue ? _handleContinue : null,
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
@@ -4533,9 +4563,7 @@ class _CoachingModePageState extends State<_CoachingModePage> {
               ),
               alignment: Alignment.center,
               child: Text(
-                _selected == 'coach_guided'
-                  ? 'Choose My Coach'
-                  : 'Build My Plan',
+                continueLabel,
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: canContinue ? Colors.white : _outline,
@@ -4544,7 +4572,7 @@ class _CoachingModePageState extends State<_CoachingModePage> {
                   letterSpacing: 0.3),
               ),
             ),
-          ),
+          )),
         ),
       ]),
     );

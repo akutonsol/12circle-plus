@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:circle_fitness/features/onboarding/presentation/intake_flow_screen.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show SemanticsNode;
+import 'package:flutter/rendering.dart' show RenderParagraph, SemanticsNode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -100,6 +100,9 @@ class _MemoryStore extends GotrueAsyncStorage {
 class _Server extends http.BaseClient {
   int step = _modePage;
 
+  /// The stored coaching_mode; null leaves it unset (the flow's default).
+  String? coachingMode;
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final path = request.url.path;
@@ -115,7 +118,11 @@ class _Server extends http.BaseClient {
     }
     if (path == '/rest/v1/user_profiles') {
       if (request.method == 'GET') {
-        final profile = {'id': _uid, 'onboarding_step': step};
+        final profile = {
+          'id': _uid,
+          'onboarding_step': step,
+          if (coachingMode != null) 'coaching_mode': coachingMode,
+        };
         final single =
             request.headers['Accept']?.contains('vnd.pgrst.object') ?? false;
         return _json(single ? profile : [profile], 200, request);
@@ -152,7 +159,10 @@ void main() {
     );
   });
 
-  setUp(() => server.step = _modePage);
+  setUp(() {
+    server.step = _modePage;
+    server.coachingMode = null;
+  });
 
   Future<void> settle(WidgetTester tester) async {
     for (var i = 0; i < 12; i++) {
@@ -358,6 +368,148 @@ void main() {
       expect(t.topLeft, _titleTopLeft[m], reason: '"$m" title moved at 1x');
       expect(t.height, 24, reason: '"$m" title is one line at 1x');
     }
+  });
+
+  // The rect-inside-rect check above cannot see a FIXED-height button: the
+  // paragraph is squeezed to the button's height and still "fits", while its
+  // second line is cut off. Here the label's full laid-out text height (its
+  // intrinsic height at its own width) is compared with what it was given and
+  // with the button. A 56px button fails at 2x on 320dp, where the label wraps.
+  for (final (mode, text) in [
+    ('Coach Guided', 'Choose My Coach'),
+    ('Self Guided', 'Build My Plan'),
+  ]) {
+    testWidgets(
+        'P0-FL-52: at 2.0x on 320dp the bottom button "$text" wraps and the '
+        'button grows to hold every line (label paragraph not clipped)',
+        (tester) async {
+      await collecting(() async {
+        await open(tester, size: const Size(320, 568), scale: 2);
+        expect(page(tester), _modePage.toDouble());
+        await reveal(tester, find.text(mode));
+        await tester.tap(find.text(mode));
+        await settle(tester);
+      });
+      final label = find.text(text);
+      expect(label, findsOneWidget);
+      final p = tester.renderObject<RenderParagraph>(label);
+      final full = p.getMaxIntrinsicHeight(p.size.width);
+      // One unwrapped line's height, from the paragraph itself.
+      final line = p.getMaxIntrinsicHeight(double.infinity);
+      expect(full, greaterThanOrEqualTo(2 * line - 0.01),
+          reason: 'premise: "$text" wraps to 2+ lines at 2x on 320dp '
+              '(full text height $full)');
+      expect(p.size.height, greaterThanOrEqualTo(full - 0.01),
+          reason: 'the "$text" paragraph was squeezed to ${p.size.height}px; '
+              'its lines need ${full}px — the label is clipped');
+      final button = tester.getRect(find
+          .ancestor(of: label, matching: find.byType(AnimatedContainer))
+          .first);
+      expect(button.height, greaterThanOrEqualTo(full + 16 - 0.01),
+          reason: 'the button ($button) must hold the label ($full) plus its '
+              '8px vertical padding');
+      final r = tester.getRect(label);
+      expect(r.top >= button.top - 0.01 && r.bottom <= button.bottom + 0.01,
+          isTrue);
+    });
+  }
+
+  // UX F1: a wrapped title keeps 8px clear of the 22px check circle.
+  for (final scale in [2.0, 3.0]) {
+    testWidgets(
+        'P0-FL-52: at ${scale}x on 320dp each option title ends at least 8px '
+        'before its check circle', (tester) async {
+      final errors = await collecting(() async {
+        await open(tester, size: const Size(320, 568), scale: scale);
+        expect(page(tester), _modePage.toDouble());
+      });
+      for (final mode in _modes) {
+        errors.addAll(await collecting(() => reveal(tester, find.text(mode))));
+        final title = tester.getRect(find.text(mode));
+        final circle = tester.getRect(find.descendant(
+            of: card(mode),
+            matching: find.byWidgetPredicate((w) =>
+                w is AnimatedContainer &&
+                w.constraints ==
+                    const BoxConstraints.tightFor(width: 22, height: 22))));
+        expect(title.right + 8, lessThanOrEqualTo(circle.left + 0.01),
+            reason: '"$mode" title ($title) must end 8px before its check '
+                'circle ($circle) at ${scale}x');
+      }
+      // At 3x the shared step bar (_IntakeStepBar, "20 / 24") overflows on
+      // 320dp — outside this package, reported separately; the option cards
+      // themselves are checked at 2x by the no-overflow tests above.
+      if (scale <= 2) {
+        expect(errors, isEmpty,
+            reason: 'no overflow at ${scale}x on 320dp:\n${errors.join('\n')}');
+      }
+    });
+  }
+
+  // UX F2: the Continue button is one announced button with its label and
+  // whether it can be pressed.
+  testWidgets(
+      'P0-FL-52: the bottom button is announced as an enabled button with its '
+      'visible label, and follows the selection', (tester) async {
+    final handle = tester.ensureSemantics();
+    await open(tester, size: const Size(390, 1400), scale: 1);
+    expect(page(tester), _modePage.toDouble());
+    expect(
+        tester.getSemantics(find.bySemanticsLabel('Build My Plan')),
+        matchesSemantics(
+          label: 'Build My Plan',
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: true,
+          hasTapAction: true,
+        ));
+    await tester.tap(card('Coach Guided'));
+    await settle(tester);
+    expect(
+        tester.getSemantics(find.bySemanticsLabel('Choose My Coach')),
+        matchesSemantics(
+          label: 'Choose My Coach',
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: true,
+          hasTapAction: true,
+        ));
+    handle.dispose();
+  });
+
+  testWidgets(
+      'P0-FL-52: with no coaching mode chosen the bottom button is announced '
+      'as a disabled button with the hint "Choose a coaching mode first"',
+      (tester) async {
+    server.coachingMode = ''; // a stored answer with no mode chosen
+    final handle = tester.ensureSemantics();
+    await open(tester, size: const Size(390, 1400), scale: 1);
+    expect(page(tester), _modePage.toDouble());
+    expect(find.byIcon(Icons.check), findsNothing,
+        reason: 'premise: no option is selected');
+    expect(
+        tester.getSemantics(find.bySemanticsLabel('Build My Plan')),
+        matchesSemantics(
+          label: 'Build My Plan',
+          hint: 'Choose a coaching mode first',
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: false,
+          hasTapAction: false,
+        ));
+    // Choosing a mode enables it and drops the hint.
+    await tester.tap(card('AI Guided'));
+    await settle(tester);
+    expect(
+        tester.getSemantics(find.bySemanticsLabel('Build My Plan')),
+        matchesSemantics(
+          label: 'Build My Plan',
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: true,
+          hasTapAction: true,
+        ));
+    handle.dispose();
   });
 
   testWidgets(
