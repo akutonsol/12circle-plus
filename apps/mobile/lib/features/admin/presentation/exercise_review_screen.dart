@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import '../../../core/widgets/load_failure_notice.dart';
 import '../../exercise_database/data/custom_exercise_service.dart';
 import '../../exercise_database/data/models/exercise_detail_model.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 const _bg    = Color(0xFF0B0712);
 const _card  = Color(0xFF171026);
@@ -24,18 +24,37 @@ class _ExerciseReviewScreenState extends State<ExerciseReviewScreen> {
   late Future<List<ExerciseDetail>> _future;
   final _busy = <String>{};
 
+  /// The last read's failure (kept while a retry is in flight, so the notice
+  /// stays on screen, busy, instead of blinking to a spinner).
+  Object? _failedWith;
+  bool _retrying = false;
+
   @override
   void initState() {
     super.initState();
-    _future = _svc.getPendingGlobalSubmissions();
+    _future = _read();
   }
 
-  /// Re-reads the queue; returns when the read settles (a retry awaits it, so
-  /// it cannot fire twice). Its failure is shown by the builder, not thrown.
-  Future<void> _reload() {
+  Future<List<ExerciseDetail>> _read() {
     final f = _svc.getPendingGlobalSubmissions();
+    f.then<void>((_) { _failedWith = null; }, onError: (Object e) { _failedWith = e; });
+    return f;
+  }
+
+  /// Re-reads the queue; returns when the read settles. Its failure is shown
+  /// by the builder, not thrown.
+  Future<void> _reload() {
+    final f = _read();
     setState(() { _future = f; });
     return f.then((_) {}, onError: (_) {});
+  }
+
+  /// The notice's retry: busy until the read settles, so it can't double fire.
+  Future<void> _retry() async {
+    if (_retrying) return;
+    setState(() => _retrying = true);
+    await _reload();
+    if (mounted) setState(() => _retrying = false);
   }
 
   Future<void> _moderate(ExerciseDetail ex, bool approve) async {
@@ -70,20 +89,27 @@ class _ExerciseReviewScreenState extends State<ExerciseReviewScreen> {
       body: FutureBuilder<List<ExerciseDetail>>(
         future: _future,
         builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: _brand));
-          }
-          // P0-FL-50a · a failed read is not "No pending submissions".
-          if (snap.hasError) {
+          final waiting = snap.connectionState == ConnectionState.waiting;
+          // P0-FL-50a · a failed read is not "No pending submissions"; while
+          // its retry runs, the notice stays (busy).
+          final failure = snap.hasError
+              ? snap.error
+              : (waiting && _retrying ? _failedWith : null);
+          if (snap.hasError || failure != null) {
             return Center(child: Padding(
               padding: const EdgeInsets.all(24),
-              child: LoadFailureNotice(
-                message: couldntMessage('load the submissions', snap.error),
-                semanticLabel: 'Try loading the submissions again',
-                textColor: _danger,
+              child: SectionLoadFailure(
+                what: 'the submissions',
+                error: failure,
+                busy: _retrying,
+                onRetry: _retry,
                 accent: _brand,
-                onRetry: _reload),
+                textColor: _white,
+                mutedColor: _muted),
             ));
+          }
+          if (waiting) {
+            return const Center(child: CircularProgressIndicator(color: _brand));
           }
           final pending = snap.data ?? [];
           if (pending.isEmpty) {

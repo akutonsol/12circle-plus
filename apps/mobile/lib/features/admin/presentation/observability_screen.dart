@@ -6,8 +6,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../exercise_database/data/custom_exercise_service.dart';
-import '../../../core/widgets/load_failure_notice.dart';
 import '../../../core/widgets/role_gate.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 const _bg     = Color(0xFF0A0A0B);
 const _panel  = Color(0xFF14101E);
@@ -29,12 +29,26 @@ class _State extends ConsumerState<ObservabilityScreen> {
   Map<String, dynamic>? _data;
   bool _loading = true;
 
+  /// The failed-figures notice's retry is in flight: the figures stay on
+  /// screen (their failures as "—") with the notice busy, not a spinner.
+  bool _retrying = false;
+
   // P0-FL-45a: the admin-only read starts once the gate has confirmed this
   // member is an admin (see build), not in initState before the role is known;
   // what it loaded belongs to that member (cleared for the next one).
   final _firstLoad = RoleConfirmedLoad();
 
-  void _resetForMember() { _data = null; _loading = true; }
+  void _resetForMember() { _data = null; _loading = true; _retrying = false; }
+
+  Future<void> _retryFigures() async {
+    if (_retrying) return;
+    setState(() => _retrying = true);
+    try {
+      await _load();
+    } finally {
+      if (mounted) setState(() => _retrying = false);
+    }
+  }
 
   Future<void> _load() async {
     final session = _firstLoad.session;
@@ -61,7 +75,7 @@ class _State extends ConsumerState<ObservabilityScreen> {
       appBar: AppBar(backgroundColor: _bg, foregroundColor: _text,
         title: const Text('Coaching Observability', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
         actions: [IconButton(icon: const Icon(Icons.refresh_rounded), onPressed: _loading ? null : _load)]),
-      body: _loading
+      body: _loading && !_retrying
           ? const Center(child: CircularProgressIndicator(color: _brand))
           : _body(_data ?? {}),
     );
@@ -91,13 +105,15 @@ class _State extends ConsumerState<ObservabilityScreen> {
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(12)),
-          child: LoadFailureNotice(
-            message: '${couldntMessage(failed.length == 1 ? 'load 1 figure' : 'load ${failed.length} figures', d[CustomExerciseService.observabilityErrorKey])}'
-                ' Those show as —.',
-            semanticLabel: 'Try loading the figures again',
-            textColor: _warn,
+          child: SectionLoadFailure(
+            what: failed.length == 1 ? '1 figure' : '${failed.length} figures',
+            error: d[CustomExerciseService.observabilityErrorKey],
+            detail: 'Those show as —.',
+            busy: _retrying,
+            onRetry: _retryFigures,
             accent: _brand,
-            onRetry: _load),
+            textColor: _text,
+            mutedColor: _muted),
         ),
         const SizedBox(height: 14),
       ],
@@ -151,24 +167,40 @@ class _State extends ConsumerState<ObservabilityScreen> {
     crossAxisCount: 2, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
     childAspectRatio: 2.2, crossAxisSpacing: 8, mainAxisSpacing: 8, children: items);
 
-  Widget _kpi(String label, String value, Color color) => Container(
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(14)),
-    child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
-      Text(value, style: TextStyle(color: color, fontSize: 22, fontWeight: FontWeight.w900)),
-      const SizedBox(height: 4),
-      Text(label.toUpperCase(),
-          style: const TextStyle(color: _muted, fontSize: 8.5, fontWeight: FontWeight.w700, letterSpacing: .5)),
-    ]),
-  );
+  /// P0-FL-50a · an unknown figure ("—": failed or no data) is NEUTRAL — never
+  /// the bad-value colour, which would grade a number nobody has — and its
+  /// tile is announced as "<figure>: unavailable".
+  Widget _kpi(String label, String value, Color color) {
+    final unknown = value == '—';
+    final tile = Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(14)),
+      // Large text scales the readout down to the fixed-ratio tile instead of
+      // overflowing it (seen at 320dp, 2.0x).
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text(value, style: TextStyle(color: unknown ? _muted : color, fontSize: 22, fontWeight: FontWeight.w900)),
+          const SizedBox(height: 4),
+          Text(label.toUpperCase(),
+              style: const TextStyle(color: _muted, fontSize: 8.5, fontWeight: FontWeight.w700, letterSpacing: .5)),
+        ]),
+      ),
+    );
+    if (!unknown) return tile;
+    return Semantics(container: true, label: '$label: unavailable', excludeSemantics: true, child: tile);
+  }
 
   Widget _rowFact(String k, String v) => Container(
     margin: const EdgeInsets.only(bottom: 8), padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
     decoration: BoxDecoration(color: _panel, borderRadius: BorderRadius.circular(12)),
+    // Both sides wrap at large text rather than overflow (320dp, 2.0x).
     child: Row(children: [
-      Text(k, style: const TextStyle(color: _muted, fontSize: 12)),
-      const Spacer(),
-      Text(v, style: const TextStyle(color: _text, fontSize: 13, fontWeight: FontWeight.w800)),
+      Expanded(child: Text(k, style: const TextStyle(color: _muted, fontSize: 12))),
+      const SizedBox(width: 8),
+      Flexible(child: Text(v, textAlign: TextAlign.end,
+          style: const TextStyle(color: _text, fontSize: 13, fontWeight: FontWeight.w800))),
     ]),
   );
 }

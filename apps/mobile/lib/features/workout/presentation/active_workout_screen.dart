@@ -1375,7 +1375,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
               loadGlobal: () => CustomExerciseService()
                   .getSubstitutes(we.exercise.name, we.exercise.muscleGroup),
               onPick: (s) { Navigator.pop(ctx); _swapExercise(index, we, s); },
-              text: _white, muted: _muted, accent: _primary, error: _error)),
+              text: _white, muted: _muted, accent: _primary)),
           ])))));
   }
 

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../../../core/widgets/load_failure_notice.dart';
+import 'section_load_failure.dart';
 
 /// The substitutes in the active-workout swap sheet.
 ///
@@ -21,7 +21,6 @@ class SwapSubstitutesList extends StatefulWidget {
     required this.text,
     required this.muted,
     required this.accent,
-    required this.error,
   });
 
   final List<Map<String, dynamic>> librarySubs;
@@ -32,7 +31,6 @@ class SwapSubstitutesList extends StatefulWidget {
   final Color text;
   final Color muted;
   final Color accent;
-  final Color error;
 
   @override
   State<SwapSubstitutesList> createState() => _SwapSubstitutesListState();
@@ -41,6 +39,9 @@ class SwapSubstitutesList extends StatefulWidget {
 class _SwapSubstitutesListState extends State<SwapSubstitutesList> {
   List<Map<String, dynamic>>? _subs;
   Object? _error;
+
+  /// A retry of a failed read is in flight: the notice stays, busy.
+  bool _retrying = false;
 
   @override
   void initState() {
@@ -53,13 +54,19 @@ class _SwapSubstitutesListState extends State<SwapSubstitutesList> {
   }
 
   Future<void> _load() async {
-    if (_error != null) setState(() => _error = null);
     try {
       final subs = await widget.loadGlobal();
-      if (mounted) setState(() => _subs = subs);
+      if (mounted) setState(() { _subs = subs; _error = null; });
     } catch (e) {
       if (mounted) setState(() => _error = e);
     }
+  }
+
+  Future<void> _retry() async {
+    if (_retrying) return;
+    setState(() => _retrying = true);
+    await _load();
+    if (mounted) setState(() => _retrying = false);
   }
 
   @override
@@ -68,12 +75,14 @@ class _SwapSubstitutesListState extends State<SwapSubstitutesList> {
     if (error != null) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
-        child: LoadFailureNotice(
-          message: couldntMessage('load substitutes', error),
-          semanticLabel: 'Try loading substitutes again',
-          textColor: widget.error,
+        child: SectionLoadFailure(
+          what: 'substitutes',
+          error: error,
+          busy: _retrying,
+          onRetry: _retry,
           accent: widget.accent,
-          onRetry: _load,
+          textColor: widget.text,
+          mutedColor: widget.muted,
         ),
       );
     }
@@ -82,10 +91,13 @@ class _SwapSubstitutesListState extends State<SwapSubstitutesList> {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
         child: Center(
-            child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2, color: widget.accent))),
+            child: Semantics(
+                liveRegion: true,
+                label: 'Loading substitutes',
+                child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: widget.accent)))),
       );
     }
     if (subs.isEmpty) {

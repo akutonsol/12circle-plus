@@ -6,9 +6,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/custom_exercise_service.dart';
-import '../../../../core/widgets/load_failure_notice.dart';
 import '../../../auth/domain/auth_provider.dart';
 import '../../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
+import '../../../workout/presentation/widgets/section_load_failure.dart';
 import '../../../workout/presentation/widgets/youtube_embed.dart';
 import 'coach_voice.dart';
 
@@ -209,6 +209,7 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
     // couldn't load them and offers a retry (the service has recorded it).
     var packs = const <Map<String, dynamic>>[];
     Object? packsError;
+    var packsRetrying = false;
     Future<void> loadPacks() async {
       try {
         packs = await _svc.getCoachingPacks();
@@ -274,12 +275,18 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                 style: TextStyle(color: _muted, fontSize: 12)),
             const SizedBox(height: 16),
             if (packsError != null) ...[
-              LoadFailureNotice(
-                message: couldntMessage('load your cue packs', packsError),
-                semanticLabel: 'Try loading your cue packs again',
+              SectionLoadFailure(
+                what: 'your cue packs',
+                error: packsError,
+                busy: packsRetrying,
                 accent: _brand,
+                textColor: _text,
+                mutedColor: _muted,
                 onRetry: () async {
+                  if (packsRetrying) return;
+                  setSheet(() => packsRetrying = true);
                   await loadPacks();
+                  packsRetrying = false;
                   if (ctx.mounted) setSheet(() {});
                 }),
               const SizedBox(height: 14),

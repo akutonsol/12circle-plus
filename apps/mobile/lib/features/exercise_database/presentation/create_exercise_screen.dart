@@ -14,8 +14,8 @@ import '../../../core/observability/network_failure.dart';
 // P0-FL-11: the classifier moved to core; re-exported so importers of this
 // screen keep the name they had (it was this file's @visibleForTesting export).
 export '../../../core/observability/network_failure.dart' show isNetworkFailure;
-import '../../../core/widgets/load_failure_notice.dart';
 import '../../../core/widgets/named_icon_button.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 class _C {
@@ -122,9 +122,11 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   /// P0-FL-50a · the edit prefill (null = not opened to edit a row). A failed
   /// read returned null and left the form BLANK — and once a name was typed,
   /// Save wrote that blank form over the exercise. Until the row has loaded,
-  /// Save is held.
+  /// Save is held, and the form takes no input (a later successful retry
+  /// would overwrite whatever was typed).
   _Prefill? _prefill;
   Object? _prefillError;
+  bool _prefillRetrying = false;
   bool get _prefillPending => _prefill != null && _prefill != _Prefill.loaded;
 
   // Basic info
@@ -184,12 +186,14 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     }
   }
 
-  /// Retry of a failed prefill (awaited by the notice, so it can't double-fire).
-  Future<void> _retryPrefill() {
+  /// Retry of a failed prefill: the notice stays, busy, until the read
+  /// settles, so it can't double-fire.
+  Future<void> _retryPrefill() async {
     final id = _editingId;
-    if (id == null) return Future.value();
-    setState(() => _prefill = _Prefill.loading);
-    return _loadForEdit(id);
+    if (id == null || _prefillRetrying) return;
+    setState(() => _prefillRetrying = true);
+    await _loadForEdit(id);
+    if (mounted) setState(() => _prefillRetrying = false);
   }
 
   /// Load an existing exercise into the form for editing.
@@ -962,16 +966,24 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
                     SizedBox(width: 5),
                     Text('Import JSON', style: TextStyle(color: _C.primary, fontSize: 12, fontWeight: FontWeight.w700)),
                   ]))),
-              GestureDetector(
-                onTap: _saving || _prefillPending ? null : _save,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: _prefillPending ? _C.brand.withValues(alpha: 0.35) : _C.brand,
-                    borderRadius: BorderRadius.circular(20)),
-                  child: _saving
-                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(color: _C.wht, strokeWidth: 2))
-                      : const Text('Save', style: TextStyle(color: _C.wht, fontSize: 13, fontWeight: FontWeight.w700))),
+              // P0-FL-50a · announced as disabled (and given no tap) while a
+              // save runs or the edit prefill hasn't loaded.
+              Semantics(
+                container: true,
+                button: true,
+                enabled: !(_saving || _prefillPending),
+                label: 'Save',
+                child: GestureDetector(
+                  onTap: _saving || _prefillPending ? null : _save,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _prefillPending ? _C.brand.withValues(alpha: 0.35) : _C.brand,
+                      borderRadius: BorderRadius.circular(20)),
+                    child: ExcludeSemantics(child: _saving
+                        ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(color: _C.wht, strokeWidth: 2))
+                        : const Text('Save', style: TextStyle(color: _C.wht, fontSize: 13, fontWeight: FontWeight.w700)))),
+                ),
               ),
             ]),
             const SizedBox(height: 12),
@@ -993,13 +1005,15 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
           _prefillBanner(const Text('Loading the exercise…',
               style: TextStyle(color: _C.mut, fontSize: 12))),
         if (_prefill == _Prefill.failed)
-          _prefillBanner(LoadFailureNotice(
-            message: '${couldntMessage('load this exercise', _prefillError)}'
-                ' Saving is paused until it loads.',
-            semanticLabel: 'Try loading the exercise again',
-            textColor: _C.error,
+          _prefillBanner(SectionLoadFailure(
+            what: 'this exercise',
+            error: _prefillError,
+            detail: 'Saving is paused until it loads.',
+            busy: _prefillRetrying,
+            onRetry: _retryPrefill,
             accent: _C.primary,
-            onRetry: _retryPrefill)),
+            textColor: _C.wht,
+            mutedColor: _C.mut)),
         if (_prefill == _Prefill.missing)
           _prefillBanner(Semantics(
             liveRegion: true,
@@ -1022,14 +1036,19 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
 
         // Content
         Expanded(
-          child: Form(
-            key: _formKey,
-            child: TabBarView(controller: _tabs, children: [
-              _lockable(_BasicsTab(this), locked),
-              _lockable(_CoachingTab(this), locked),
-              _MediaTab(this), // always editable — media is what coaches add
-              _lockable(_SettingsTab(this), locked),
-            ]),
+          // P0-FL-50a · nothing is typed into a form whose exercise hasn't
+          // loaded: a later successful retry would overwrite it.
+          child: IgnorePointer(
+            ignoring: _prefillPending,
+            child: Form(
+              key: _formKey,
+              child: TabBarView(controller: _tabs, children: [
+                _lockable(_BasicsTab(this), locked),
+                _lockable(_CoachingTab(this), locked),
+                _MediaTab(this), // always editable — media is what coaches add
+                _lockable(_SettingsTab(this), locked),
+              ]),
+            ),
           ),
         ),
       ]),
