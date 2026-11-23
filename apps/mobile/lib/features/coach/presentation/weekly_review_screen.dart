@@ -7,8 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/coach_program_service.dart';
 import '../../dashboard/presentation/coach_dashboard_screen.dart' show coachClientsProvider;
-import '../../auth/domain/auth_provider.dart';
-import '../../profile/presentation/widgets/profile_load_failed_notice.dart';
+import '../../../core/widgets/role_gate.dart';
 
 const _bg     = Color(0xFF0A0A0B);
 const _panel  = Color(0xFF14101E);
@@ -38,23 +37,34 @@ class _State extends ConsumerState<WeeklyReviewScreen> {
   final _coachCtl = TextEditingController();
   String? _status;
 
-  @override
-  void initState() { super.initState(); _load(); }
+  // P0-FL-45a: the coach-only read starts once the gate has confirmed this
+  // member's role (see build), not in initState before the role is known;
+  // what it loaded belongs to that member (cleared for the next one, and a
+  // late answer for a member no longer admitted is dropped).
+  final _firstLoad = RoleConfirmedLoad();
   @override
   void dispose() { _clientCtl.dispose(); _coachCtl.dispose(); super.dispose(); }
 
+  void _resetForMember() {
+    _programs = []; _program = null; _clientId = null; _week = 1;
+    _busy = false; _sent = false; _brief = null; _commId = null; _status = null;
+    _clientCtl.clear(); _coachCtl.clear();
+  }
+
   Future<void> _load() async {
+    final session = _firstLoad.session;
     final progs = await _svc.getMyPrograms();
-    if (mounted) setState(() => _programs = progs);
+    if (mounted && _firstLoad.isCurrent(session)) setState(() => _programs = progs);
   }
 
   Future<void> _generate() async {
     final p = _program, cid = _clientId;
     if (p == null || cid == null) { setState(() => _status = 'Pick a program and client.'); return; }
+    final session = _firstLoad.session;
     setState(() { _busy = true; _brief = null; _commId = null; _sent = false; _status = null;
       _clientCtl.clear(); _coachCtl.clear(); });
     final created = await _svc.createWeeklyReview(cid, p['id'] as String, _week);
-    if (!mounted) return;
+    if (!mounted || !_firstLoad.isCurrent(session)) return;
     if (created == null || created['status'] != 'ok') {
       setState(() { _busy = false; _status = 'No feedback for week $_week (or apply migration 096).'; });
       return;
@@ -63,7 +73,7 @@ class _State extends ConsumerState<WeeklyReviewScreen> {
     _commId = created['communication_id'] as String?;
     // Ask the LLM to phrase it (grounded). Degrades to brief-only if not deployed.
     final gen = _commId == null ? null : await _svc.generateCommunication(_commId!);
-    if (!mounted) return;
+    if (!mounted || !_firstLoad.isCurrent(session)) return;
     setState(() {
       _busy = false;
       if (gen != null && gen['client_text'] != null) {
@@ -78,26 +88,25 @@ class _State extends ConsumerState<WeeklyReviewScreen> {
   Future<void> _send() async {
     final id = _commId;
     if (id == null) return;
+    final session = _firstLoad.session;
     setState(() => _busy = true);
     final r = await sendReviewedCommunication(_svc, id, _clientCtl.text, _coachCtl.text);
-    if (!mounted) return;
+    if (!mounted || !_firstLoad.isCurrent(session)) return;
     setState(() { _busy = false; _sent = r.sent; _status = r.status; });
   }
 
   @override
   Widget build(BuildContext context) {
-    // P0-FL-40: an unread role is not a missing one. While the member's own
-    // profile is loading, or its read failed, the gate stays shut (nothing
-    // role-only is shown) and says which — never "… only.". Only a read that
-    // succeeded without the role gets that message.
-    final profileAsync = ref.watch(currentUserProfileProvider);
-    final unread = _unreadRoleGate(ref, profileAsync, 'Weekly Review');
-    if (unread != null) return unread;
-    final role = profileAsync.value?['role'];
-    if (role != 'coach' && role != 'admin') {
-      return const Scaffold(backgroundColor: _bg,
-        body: Center(child: Text('Coaches only.', style: TextStyle(color: _muted))));
-    }
+    // P0-FL-40/45a: the shared gate — only a role confirmed for THIS member
+    // opens (or closes) the screen; unread → loading / failure notice.
+    final gate = _firstLoad.gate(this, ref,
+        title: 'Weekly Review',
+        allowedRoles: const {'coach', 'admin'},
+        detail: 'Coach tools stay closed until it loads.',
+        deniedText: 'Coaches only.',
+        reset: _resetForMember,
+        load: _load);
+    if (gate != null) return gate;
     final clients = ref.watch(coachClientsProvider);
     return Scaffold(
       backgroundColor: _bg,
@@ -220,45 +229,3 @@ Future<({bool sent, String status})> sendReviewedCommunication(
   final ok = await svc.sendCommunication(id);
   return (sent: ok, status: ok ? 'Sent to client ✓' : 'Send failed.');
 }
-
-/// P0-FL-40 · the role gate while the signed-in member's profile is unread:
-/// a neutral loading state, or the shared FL-16 failure notice with a
-/// busy-aware Try again. `null` once the read has succeeded — the gate then
-/// decides on the role exactly as before.
-///
-/// Both states keep the screen's own AppBar (title, normal back control —
-/// no role-only actions) so there is always an in-app way out (UX-1).
-Widget? _unreadRoleGate(WidgetRef ref,
-    AsyncValue<Map<String, dynamic>?> profile, String title) {
-  final appBar = _gateAppBar(title);
-  if (profile.hasError) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: appBar,
-      body: SafeArea(child: Center(child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: ProfileLoadFailedNotice(
-          error: profile.error!,
-          busy: profile.isLoading,
-          detail: 'Coach tools stay closed until it loads.',
-          onRetry: () => ref.invalidate(currentUserProfileProvider),
-        ),
-      ))),
-    );
-  }
-  if (!profile.hasValue) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: appBar,
-      body: const Center(child: CircularProgressIndicator(
-          color: _brand, semanticsLabel: 'Loading your account')),
-    );
-  }
-  return null;
-}
-
-/// The screen's own AppBar style for the unread-role gate.
-PreferredSizeWidget _gateAppBar(String title) => AppBar(
-    backgroundColor: _bg, foregroundColor: _text,
-    title: Text(title,
-        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)));

@@ -6,8 +6,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/custom_exercise_service.dart';
-import '../../auth/domain/auth_provider.dart';
-import '../../profile/presentation/widgets/profile_load_failed_notice.dart';
+import '../../../core/widgets/role_gate.dart';
 
 const _bg     = Color(0xFF0A0A0B);
 const _panel  = Color(0xFF14101E);
@@ -37,16 +36,22 @@ class _State extends ConsumerState<ContentReviewQueueScreen> {
   Map<String, dynamic>? _graph; // movement-graph relationships of the current exercise
   String? _certForId;
 
-  @override
-  void initState() {
-    super.initState();
-    _load();
+  // P0-FL-45a: the content-only read starts once the gate has confirmed this
+  // member's role (see build), not in initState before the role is known;
+  // what it loaded belongs to that member (cleared for the next one, and a
+  // late answer for a member no longer admitted is dropped).
+  final _firstLoad = RoleConfirmedLoad();
+
+  void _resetForMember() {
+    _queue = null; _loading = true; _notMigrated = false; _acting = false;
+    _i = 0; _reviewed = 0; _cert = null; _graph = null; _certForId = null;
   }
 
   Future<void> _load() async {
+    final session = _firstLoad.session;
     setState(() => _loading = true);
     final q = await _svc.reviewQueue(limit: 100);
-    if (!mounted) return;
+    if (!mounted || !_firstLoad.isCurrent(session)) return;
     setState(() {
       _loading = false;
       _notMigrated = q == null;
@@ -57,10 +62,11 @@ class _State extends ConsumerState<ContentReviewQueueScreen> {
 
   Future<void> _act(String status) async {
     if (_acting || _queue == null || _i >= _queue!.length) return;
+    final session = _firstLoad.session;
     setState(() => _acting = true);
     final ex = _queue![_i];
     final ok = await _svc.reviewExercise(ex['id'] as String, status);
-    if (!mounted) return;
+    if (!mounted || !_firstLoad.isCurrent(session)) return;
     setState(() {
       _acting = false;
       if (ok) { _reviewed++; _i++; }
@@ -73,18 +79,16 @@ class _State extends ConsumerState<ContentReviewQueueScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // P0-FL-40: an unread role is not a missing one. While the member's own
-    // profile is loading, or its read failed, the gate stays shut (nothing
-    // role-only is shown) and says which — never "… only.". Only a read that
-    // succeeded without the role gets that message.
-    final profileAsync = ref.watch(currentUserProfileProvider);
-    final unread = _unreadRoleGate(ref, profileAsync, 'Review Queue');
-    if (unread != null) return unread;
-    final role = profileAsync.value?['role'];
-    if (role != 'admin' && role != 'content_manager') {
-      return const Scaffold(backgroundColor: _bg,
-        body: Center(child: Text('Admins & content managers only.', style: TextStyle(color: _muted))));
-    }
+    // P0-FL-40/45a: the shared gate — only a role confirmed for THIS member
+    // opens (or closes) the screen; unread → loading / failure notice.
+    final gate = _firstLoad.gate(this, ref,
+        title: 'Review Queue',
+        allowedRoles: const {'admin', 'content_manager'},
+        detail: 'Content tools stay closed until it loads.',
+        deniedText: 'Admins & content managers only.',
+        reset: _resetForMember,
+        load: _load);
+    if (gate != null) return gate;
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
@@ -109,11 +113,13 @@ class _State extends ConsumerState<ContentReviewQueueScreen> {
     _certForId = id;
     _cert = null;
     _graph = null;
+    final session = _firstLoad.session;
+    bool current() => mounted && _certForId == id && _firstLoad.isCurrent(session);
     _svc.exerciseCertification(id).then((c) {
-      if (mounted && _certForId == id) setState(() => _cert = c);
+      if (current()) setState(() => _cert = c);
     });
     _svc.movementGraph(id).then((g) {
-      if (mounted && _certForId == id) setState(() => _graph = g);
+      if (current()) setState(() => _graph = g);
     });
   }
 
@@ -357,45 +363,3 @@ class _State extends ConsumerState<ContentReviewQueueScreen> {
     ));
   }
 }
-
-/// P0-FL-40 · the role gate while the signed-in member's profile is unread:
-/// a neutral loading state, or the shared FL-16 failure notice with a
-/// busy-aware Try again. `null` once the read has succeeded — the gate then
-/// decides on the role exactly as before.
-///
-/// Both states keep the screen's own AppBar (title, normal back control —
-/// no role-only actions) so there is always an in-app way out (UX-1).
-Widget? _unreadRoleGate(WidgetRef ref,
-    AsyncValue<Map<String, dynamic>?> profile, String title) {
-  final appBar = _gateAppBar(title);
-  if (profile.hasError) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: appBar,
-      body: SafeArea(child: Center(child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: ProfileLoadFailedNotice(
-          error: profile.error!,
-          busy: profile.isLoading,
-          detail: 'Content tools stay closed until it loads.',
-          onRetry: () => ref.invalidate(currentUserProfileProvider),
-        ),
-      ))),
-    );
-  }
-  if (!profile.hasValue) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: appBar,
-      body: const Center(child: CircularProgressIndicator(
-          color: _brand, semanticsLabel: 'Loading your account')),
-    );
-  }
-  return null;
-}
-
-/// The screen's own AppBar style for the unread-role gate.
-PreferredSizeWidget _gateAppBar(String title) => AppBar(
-    backgroundColor: _bg, foregroundColor: _text,
-    title: Text(title,
-        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)));

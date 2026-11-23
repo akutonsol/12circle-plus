@@ -9,12 +9,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../exercise_database/data/custom_exercise_service.dart';
 import '../data/coach_program_service.dart';
 import '../../dashboard/presentation/coach_dashboard_screen.dart' show coachClientsProvider;
-import '../../auth/domain/auth_provider.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
 import '../domain/coach_ecosystem_provider.dart'
     show ClientAssessment, ClientAssessmentStatus, clientAssessmentProvider;
-import '../../profile/presentation/widgets/profile_load_failed_notice.dart';
+import '../../../core/widgets/role_gate.dart';
 
 const _bg     = Color(0xFF0A0A0B);
 const _panel  = Color(0xFF14101E);
@@ -188,20 +187,30 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     }
   }
 
+  // P0-FL-45a: what this screen shows belongs to the member the gate let in.
+  // A different member (coach A → coach B with the screen mounted) starts from
+  // nothing: no selected client, recommendation, outlook or status of A's.
+  // A's late answers are already discarded by the selected-client checks in
+  // select/_run (the selection is cleared here). Generation itself is
+  // unchanged (SEC-R3 / Wave 3B-4).
+  final _member = RoleConfirmedLoad();
+
+  void _resetForMember() {
+    _client = null; _recovery = 75; _busy = false; _assigning = false;
+    _rec = null; _outlook = null; _explanation = null; _status = null;
+  }
+
   @override
   Widget build(BuildContext context) {
-    // P0-FL-40: an unread role is not a missing one. While the member's own
-    // profile is loading, or its read failed, the gate stays shut (nothing
-    // role-only is shown) and says which — never "… only.". Only a read that
-    // succeeded without the role gets that message.
-    final profileAsync = ref.watch(currentUserProfileProvider);
-    final unread = _unreadRoleGate(ref, profileAsync, 'Coach Copilot');
-    if (unread != null) return unread;
-    final role = profileAsync.value?['role'];
-    if (role != 'coach' && role != 'admin') {
-      return const Scaffold(backgroundColor: _bg,
-        body: Center(child: Text('Coaches only.', style: TextStyle(color: _muted))));
-    }
+    // P0-FL-40/45a: the shared gate — only a role confirmed for THIS member
+    // opens (or closes) the screen; unread → loading / failure notice.
+    final gate = _member.gate(this, ref,
+        title: 'Coach Copilot',
+        allowedRoles: const {'coach', 'admin'},
+        detail: 'Coach tools stay closed until it loads.',
+        deniedText: 'Coaches only.',
+        reset: _resetForMember);
+    if (gate != null) return gate;
     final clients = ref.watch(coachClientsProvider);
     final assessment = _watchAssessment();
     final ready = _generationSource(_client, assessment) != null;
@@ -597,45 +606,3 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     ]),
   );
 }
-
-/// P0-FL-40 · the role gate while the signed-in member's profile is unread:
-/// a neutral loading state, or the shared FL-16 failure notice with a
-/// busy-aware Try again. `null` once the read has succeeded — the gate then
-/// decides on the role exactly as before.
-///
-/// Both states keep the screen's own AppBar (title, normal back control —
-/// no role-only actions) so there is always an in-app way out (UX-1).
-Widget? _unreadRoleGate(WidgetRef ref,
-    AsyncValue<Map<String, dynamic>?> profile, String title) {
-  final appBar = _gateAppBar(title);
-  if (profile.hasError) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: appBar,
-      body: SafeArea(child: Center(child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: ProfileLoadFailedNotice(
-          error: profile.error!,
-          busy: profile.isLoading,
-          detail: 'Coach tools stay closed until it loads.',
-          onRetry: () => ref.invalidate(currentUserProfileProvider),
-        ),
-      ))),
-    );
-  }
-  if (!profile.hasValue) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: appBar,
-      body: const Center(child: CircularProgressIndicator(
-          color: _brand, semanticsLabel: 'Loading your account')),
-    );
-  }
-  return null;
-}
-
-/// The screen's own AppBar style for the unread-role gate.
-PreferredSizeWidget _gateAppBar(String title) => AppBar(
-    backgroundColor: _bg, foregroundColor: _text,
-    title: Text(title,
-        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)));

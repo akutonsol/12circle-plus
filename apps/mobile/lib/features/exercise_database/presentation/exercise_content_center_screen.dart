@@ -6,8 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../data/custom_exercise_service.dart';
-import '../../auth/domain/auth_provider.dart';
-import '../../profile/presentation/widgets/profile_load_failed_notice.dart';
+import '../../../core/widgets/role_gate.dart';
 import '../../../core/router/app_router.dart' show kQaToolingEnabled;
 
 const _bg     = Color(0xFF0A0A0B);
@@ -52,13 +51,20 @@ class _State extends ConsumerState<ExerciseContentCenterScreen> {
     'ai_ready': 'AI-ready',
   };
 
-  @override
-  void initState() {
-    super.initState();
-    _refresh();
+  // P0-FL-45a: the content-only read starts once the gate has confirmed this
+  // member's role (see build), not in initState before the role is known;
+  // what it loaded belongs to that member. The next member starts from
+  // nothing, a running batch loop stops, and late answers are dropped.
+  final _firstLoad = RoleConfirmedLoad();
+
+  void _resetForMember() {
+    _total = 0; _filled = {}; _pipeline = null; _cert = null; _graph = null;
+    _intel = null; _graphBusy = false; _intelBusy = false; _loading = true;
+    _running = false; _stop = true; _log.clear();
   }
 
   Future<void> _refresh() async {
+    final session = _firstLoad.session;
     setState(() => _loading = true);
     try {
       final s = await _svc.exerciseContentStats();
@@ -66,13 +72,13 @@ class _State extends ConsumerState<ExerciseContentCenterScreen> {
       final cert = await _svc.certificationSummary();
       final graph = await _svc.movementGraphStats();
       final intel = await _svc.intelligenceStats();
-      if (!mounted) return;
+      if (!mounted || !_firstLoad.isCurrent(session)) return;
       setState(() {
         _total = s.total; _filled = s.filled; _pipeline = p; _cert = cert;
         _graph = graph; _intel = intel; _loading = false;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || !_firstLoad.isCurrent(session)) return;
       setState(() { _loading = false; });
       _addLog('Failed to load stats.');
     }
@@ -85,53 +91,54 @@ class _State extends ConsumerState<ExerciseContentCenterScreen> {
     return sum / keys.length;
   }
 
-  void _addLog(String s) {
+  /// Adds a log line — unless it belongs to [session] and that member is no
+  /// longer admitted (P0-FL-45a).
+  void _addLog(String s, {int? session}) {
     if (!mounted) return;
+    if (session != null && !_firstLoad.isCurrent(session)) return;
     setState(() => _log.insert(0, s));
   }
 
   Future<void> _enrichAll() async {
     if (_running) return;
+    final session = _firstLoad.session;
+    void log(String s) => _addLog(s, session: session);
     setState(() { _running = true; _stop = false; _log.clear(); });
-    _addLog('Starting AI content enrichment…');
+    log('Starting AI content enrichment…');
     var totalUpdated = 0;
     var guard = 0; // safety cap: 601 stubs / ~15 per batch ≈ 45 batches
-    while (!_stop && guard < 80) {
+    while (!_stop && guard < 80 && _firstLoad.isCurrent(session)) {
       guard++;
       final r = await _svc.enrichExerciseContent(limit: 15);
+      if (!_firstLoad.isCurrent(session)) return; // another member now
       if (r == null) {
-        _addLog('✗ Batch failed — check ANTHROPIC_API_KEY / deploy of enrich-exercise-content.');
+        log('✗ Batch failed — check ANTHROPIC_API_KEY / deploy of enrich-exercise-content.');
         break;
       }
       totalUpdated += r.updated;
-      _addLog('Batch $guard: +${r.updated} enriched'
+      log('Batch $guard: +${r.updated} enriched'
           '${r.failed > 0 ? ' · ${r.failed} failed' : ''} · ${r.remaining} stubs left');
       await _refresh();
       if (r.remaining == 0 || (r.updated == 0 && r.failed == 0)) break;
     }
-    _addLog(_stop ? 'Stopped — $totalUpdated enriched this run.'
+    if (!_firstLoad.isCurrent(session)) return;
+    log(_stop ? 'Stopped — $totalUpdated enriched this run.'
                   : 'Done — $totalUpdated exercises enriched this run.');
     if (mounted) setState(() => _running = false);
   }
 
   @override
   Widget build(BuildContext context) {
-    // P0-FL-40: an unread role is not a missing one. While the member's own
-    // profile is loading, or its read failed, the gate stays shut (nothing
-    // role-only is shown) and says which — never "… only.". Only a read that
-    // succeeded without the role gets that message.
-    final profileAsync = ref.watch(currentUserProfileProvider);
-    final unread = _unreadRoleGate(ref, profileAsync, 'Content Center');
-    if (unread != null) return unread;
-    final role = profileAsync.value?['role'];
-    final allowed = role == 'admin' || role == 'content_manager';
-    if (!allowed) {
-      return const Scaffold(
-        backgroundColor: _bg,
-        body: Center(child: Text('Admins & content managers only.',
-            style: TextStyle(color: _muted))),
-      );
-    }
+    // P0-FL-40/45a: the shared gate — only a role confirmed for THIS member
+    // opens (or closes) the screen; unread → loading / failure notice.
+    final gate = _firstLoad.gate(this, ref,
+        title: 'Content Center',
+        allowedRoles: const {'admin', 'content_manager'},
+        detail: 'Content tools stay closed until it loads.',
+        deniedText: 'Admins & content managers only.',
+        reset: _resetForMember,
+        load: _refresh);
+    if (gate != null) return gate;
 
     final stubs = _total - (_filled['instructions'] ?? 0);
     return Scaffold(
@@ -332,13 +339,15 @@ class _State extends ConsumerState<ExerciseContentCenterScreen> {
   Widget _graphSection() {
     final g = _graph;
     Future<void> rebuild() async {
+      final session = _firstLoad.session;
       setState(() => _graphBusy = true);
       final r = await _svc.rebuildMovementGraph();
+      if (!_firstLoad.isCurrent(session)) return; // another member now
       _addLog(r == null
           ? '✗ Graph rebuild failed — apply migration 085 (MIE).'
           : 'Movement graph rebuilt — ${r['nodes']} nodes · ${r['edges']} edges.');
       await _refresh();
-      if (mounted) setState(() => _graphBusy = false);
+      if (mounted && _firstLoad.isCurrent(session)) setState(() => _graphBusy = false);
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
@@ -387,13 +396,15 @@ class _State extends ConsumerState<ExerciseContentCenterScreen> {
         const SizedBox(height: 8),
         GestureDetector(
           onTap: _graphBusy ? null : () async {
+            final session = _firstLoad.session;
             setState(() => _graphBusy = true);
             final r = await _svc.seedWarmupLibrary();
+            if (!_firstLoad.isCurrent(session)) return; // another member now
             _addLog(r == null
                 ? '✗ Warm-up seed failed — apply migrations 085 + 088.'
                 : 'Warm-up library seeded — ${r['warmup_edges']} mobility/activation edges.');
             await _refresh();
-            if (mounted) setState(() => _graphBusy = false);
+            if (mounted && _firstLoad.isCurrent(session)) setState(() => _graphBusy = false);
           },
           child: Container(
             width: double.infinity, alignment: Alignment.center,
@@ -412,13 +423,15 @@ class _State extends ConsumerState<ExerciseContentCenterScreen> {
   Widget _intelSection() {
     final n = _intel;
     Future<void> rebuild() async {
+      final session = _firstLoad.session;
       setState(() => _intelBusy = true);
       final r = await _svc.rebuildExerciseIntelligence();
+      if (!_firstLoad.isCurrent(session)) return; // another member now
       _addLog(r == null
           ? '✗ Intelligence rebuild failed — apply migration 087 (MIE Phase 2).'
           : 'Intelligence profiles derived — ${r['profiles']} exercises.');
       await _refresh();
-      if (mounted) setState(() => _intelBusy = false);
+      if (mounted && _firstLoad.isCurrent(session)) setState(() => _intelBusy = false);
     }
     int v(String k) => (n?[k] as num?)?.toInt() ?? 0;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -477,19 +490,23 @@ class _State extends ConsumerState<ExerciseContentCenterScreen> {
         // AI-enrich full profiles (Phase 2b) — loops the edge fn; lands for review.
         GestureDetector(
           onTap: _intelBusy ? null : () async {
+            final session = _firstLoad.session;
+            void log(String s) => _addLog(s, session: session);
             setState(() => _intelBusy = true);
-            _addLog('Starting AI knowledge enrichment…');
+            log('Starting AI knowledge enrichment…');
             var total = 0; var guard = 0;
-            while (guard < 80) {
+            while (guard < 80 && _firstLoad.isCurrent(session)) {
               guard++;
               final r = await _svc.enrichExerciseIntelligence(limit: 10);
-              if (r == null) { _addLog('✗ Intelligence enrichment failed — set ANTHROPIC_API_KEY + deploy.'); break; }
+              if (!_firstLoad.isCurrent(session)) return; // another member now
+              if (r == null) { log('✗ Intelligence enrichment failed — set ANTHROPIC_API_KEY + deploy.'); break; }
               total += r.updated;
-              _addLog('Batch $guard: +${r.updated} profiled${r.failed > 0 ? ' · ${r.failed} failed' : ''} · ${r.remaining} drafts left');
+              log('Batch $guard: +${r.updated} profiled${r.failed > 0 ? ' · ${r.failed} failed' : ''} · ${r.remaining} drafts left');
               await _refresh();
               if (r.remaining == 0 || (r.updated == 0 && r.failed == 0)) break;
             }
-            _addLog('AI knowledge enrichment done — $total profiles drafted for review.');
+            if (!_firstLoad.isCurrent(session)) return;
+            log('AI knowledge enrichment done — $total profiles drafted for review.');
             if (mounted) setState(() => _intelBusy = false);
           },
           child: Container(
@@ -621,45 +638,3 @@ class _State extends ConsumerState<ExerciseContentCenterScreen> {
     );
   }
 }
-
-/// P0-FL-40 · the role gate while the signed-in member's profile is unread:
-/// a neutral loading state, or the shared FL-16 failure notice with a
-/// busy-aware Try again. `null` once the read has succeeded — the gate then
-/// decides on the role exactly as before.
-///
-/// Both states keep the screen's own AppBar (title, normal back control —
-/// no role-only actions) so there is always an in-app way out (UX-1).
-Widget? _unreadRoleGate(WidgetRef ref,
-    AsyncValue<Map<String, dynamic>?> profile, String title) {
-  final appBar = _gateAppBar(title);
-  if (profile.hasError) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: appBar,
-      body: SafeArea(child: Center(child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: ProfileLoadFailedNotice(
-          error: profile.error!,
-          busy: profile.isLoading,
-          detail: 'Content tools stay closed until it loads.',
-          onRetry: () => ref.invalidate(currentUserProfileProvider),
-        ),
-      ))),
-    );
-  }
-  if (!profile.hasValue) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: appBar,
-      body: const Center(child: CircularProgressIndicator(
-          color: _brand, semanticsLabel: 'Loading your account')),
-    );
-  }
-  return null;
-}
-
-/// The screen's own AppBar style for the unread-role gate.
-PreferredSizeWidget _gateAppBar(String title) => AppBar(
-    backgroundColor: _bg, foregroundColor: _text,
-    title: Text(title,
-        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)));

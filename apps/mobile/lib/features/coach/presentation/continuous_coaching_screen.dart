@@ -6,8 +6,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/coach_program_service.dart';
-import '../../auth/domain/auth_provider.dart';
-import '../../profile/presentation/widgets/profile_load_failed_notice.dart';
+import '../../../core/widgets/role_gate.dart';
 
 const _bg     = Color(0xFF0A0A0B);
 const _panel  = Color(0xFF14101E);
@@ -37,12 +36,22 @@ class _State extends ConsumerState<ContinuousCoachingScreen> {
   Map<String, dynamic>? _applied; // regeneration result
   String? _status;
 
-  @override
-  void initState() { super.initState(); _load(); }
+  // P0-FL-45a: the coach-only read starts once the gate has confirmed this
+  // member's role (see build), not in initState before the role is known;
+  // what it loaded belongs to that member (cleared for the next one, and a
+  // late answer for a member no longer admitted is dropped).
+  final _firstLoad = RoleConfirmedLoad();
+
+  void _resetForMember() {
+    _programs = []; _program = null; _week = 1;
+    _completion = 90; _recovery = 75; _energy = 70; _pain = false;
+    _loading = true; _busy = false; _eval = null; _applied = null; _status = null;
+  }
 
   Future<void> _load() async {
+    final session = _firstLoad.session;
     final progs = await _svc.getMyPrograms();
-    if (!mounted) return;
+    if (!mounted || !_firstLoad.isCurrent(session)) return;
     setState(() {
       _loading = false;
       _programs = progs.where((p) => p['engine_generated'] == true).toList();
@@ -53,23 +62,26 @@ class _State extends ConsumerState<ContinuousCoachingScreen> {
   Future<void> _evaluate() async {
     final p = _program;
     if (p == null) return;
+    final session = _firstLoad.session;
     setState(() { _busy = true; _eval = null; _applied = null; _status = null; });
     final ok = await _svc.submitWeeklyFeedback(p['id'] as String, _week, {
       'completion_pct': _completion, 'recovery': _recovery, 'energy': _energy,
       'pain': _pain ? ['reported'] : [],
     });
+    if (!_firstLoad.isCurrent(session)) return; // another member now
     if (!ok) { if (mounted) setState(() { _busy = false; _status = 'Feedback save failed — apply migration 094.'; }); return; }
     final e = await _svc.evaluateWeek(p['id'] as String, _week);
-    if (!mounted) return;
+    if (!mounted || !_firstLoad.isCurrent(session)) return;
     setState(() { _busy = false; _eval = e; });
   }
 
   Future<void> _apply({required bool approved}) async {
     final p = _program;
     if (p == null) return;
+    final session = _firstLoad.session;
     setState(() { _busy = true; _status = null; });
     final r = await _svc.regenerateProgram(p['id'] as String, _week, approved: approved);
-    if (!mounted) return;
+    if (!mounted || !_firstLoad.isCurrent(session)) return;
     setState(() {
       _busy = false; _applied = r;
       _status = switch (r?['status']) {
@@ -83,18 +95,16 @@ class _State extends ConsumerState<ContinuousCoachingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // P0-FL-40: an unread role is not a missing one. While the member's own
-    // profile is loading, or its read failed, the gate stays shut (nothing
-    // role-only is shown) and says which — never "… only.". Only a read that
-    // succeeded without the role gets that message.
-    final profileAsync = ref.watch(currentUserProfileProvider);
-    final unread = _unreadRoleGate(ref, profileAsync, 'Continuous Coaching');
-    if (unread != null) return unread;
-    final role = profileAsync.value?['role'];
-    if (role != 'coach' && role != 'admin') {
-      return const Scaffold(backgroundColor: _bg,
-        body: Center(child: Text('Coaches only.', style: TextStyle(color: _muted))));
-    }
+    // P0-FL-40/45a: the shared gate — only a role confirmed for THIS member
+    // opens (or closes) the screen; unread → loading / failure notice.
+    final gate = _firstLoad.gate(this, ref,
+        title: 'Continuous Coaching',
+        allowedRoles: const {'coach', 'admin'},
+        detail: 'Coach tools stay closed until it loads.',
+        deniedText: 'Coaches only.',
+        reset: _resetForMember,
+        load: _load);
+    if (gate != null) return gate;
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(backgroundColor: _bg, foregroundColor: _text,
@@ -270,45 +280,3 @@ class _State extends ConsumerState<ContinuousCoachingScreen> {
     ];
   }
 }
-
-/// P0-FL-40 · the role gate while the signed-in member's profile is unread:
-/// a neutral loading state, or the shared FL-16 failure notice with a
-/// busy-aware Try again. `null` once the read has succeeded — the gate then
-/// decides on the role exactly as before.
-///
-/// Both states keep the screen's own AppBar (title, normal back control —
-/// no role-only actions) so there is always an in-app way out (UX-1).
-Widget? _unreadRoleGate(WidgetRef ref,
-    AsyncValue<Map<String, dynamic>?> profile, String title) {
-  final appBar = _gateAppBar(title);
-  if (profile.hasError) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: appBar,
-      body: SafeArea(child: Center(child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: ProfileLoadFailedNotice(
-          error: profile.error!,
-          busy: profile.isLoading,
-          detail: 'Coach tools stay closed until it loads.',
-          onRetry: () => ref.invalidate(currentUserProfileProvider),
-        ),
-      ))),
-    );
-  }
-  if (!profile.hasValue) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: appBar,
-      body: const Center(child: CircularProgressIndicator(
-          color: _brand, semanticsLabel: 'Loading your account')),
-    );
-  }
-  return null;
-}
-
-/// The screen's own AppBar style for the unread-role gate.
-PreferredSizeWidget _gateAppBar(String title) => AppBar(
-    backgroundColor: _bg, foregroundColor: _text,
-    title: Text(title,
-        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)));
