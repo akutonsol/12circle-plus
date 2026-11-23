@@ -57,7 +57,24 @@ class _AICoachScreenState extends ConsumerState<AICoachScreen> {
     super.dispose();
   }
 
+  /// When this screen's FIRST history request started. Every exchange the
+  /// member sends from here is stored server-side (ai_conversations) by the
+  /// ai-coach function, so a history retry that succeeds later reads those
+  /// back too; rows created at/after this moment belong to this session and
+  /// are already on screen.
+  DateTime? _historyRequestedAt;
+
+  /// Exchanges stored before this screen opened. A row whose time cannot be
+  /// read is kept: dropping it would hide a real earlier exchange.
+  bool _isEarlierExchange(Map<String, dynamic> h) {
+    final since = _historyRequestedAt;
+    if (since == null) return true;
+    final at = DateTime.tryParse(h['created_at']?.toString() ?? '');
+    return at == null || at.toUtc().isBefore(since);
+  }
+
   Future<void> _loadHistory() async {
+    _historyRequestedAt ??= DateTime.now().toUtc();
     final List<Map<String, dynamic>> history;
     try {
       history = await _svc.getConversationHistory(limit: 10);
@@ -72,9 +89,10 @@ class _AICoachScreenState extends ConsumerState<AICoachScreen> {
       _historyError = null;
       _historyRetrying = false;
       // Earlier exchanges go BEFORE anything said since the screen opened
-      // (a retry can succeed after the member has already sent a message).
+      // (a retry can succeed after the member has already sent a message),
+      // and this session's own exchanges, read back, are not shown twice.
       _messages.insertAll(0, [
-        for (final h in history) ...[
+        for (final h in history.where(_isEarlierExchange)) ...[
           _Message(h['user_message'] as String, isUser: true),
           _Message(h['ai_response'] as String, isUser: false),
         ],
@@ -559,7 +577,8 @@ class _DailyInsightCardState extends State<_DailyInsightCard> {
           const Text("TODAY'S COACHING BRIEF",
             style: TextStyle(color: _pri, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
           const Spacer(),
-          if (_loading)
+          // The failure notice shows its own busy retry; one spinner only.
+          if (_loading && _loadError == null)
             const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)),
         ]),
         const SizedBox(height: 12),
@@ -723,7 +742,7 @@ class _WeeklyReviewCardState extends State<_WeeklyReviewCard> {
     final wt = (m['weight_change'] as num?);
     return _coachCard(
       icon: Icons.calendar_month_rounded, label: 'WEEKLY REVIEW',
-      trailing: _loading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)) : null,
+      trailing: _loading && _loadError == null ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)) : null,
       child: _loadError != null
           ? SectionLoadFailure(
               what: 'your weekly review', error: _loadError, busy: _loading, onRetry: _retry)
@@ -810,7 +829,7 @@ class _GoalPredictionCardState extends State<_GoalPredictionCard> {
     final conf = (_pred?['confidence'] as num?)?.round();
     return _coachCard(
       icon: Icons.insights_rounded, label: 'GOAL PREDICTION',
-      trailing: _loading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)) : null,
+      trailing: _loading && _loadError == null ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)) : null,
       child: _loadError != null
           ? SectionLoadFailure(
               what: 'your goal prediction', error: _loadError, busy: _loading, onRetry: _retry)
@@ -884,7 +903,7 @@ class _MealIdeasCardState extends State<_MealIdeasCard> {
   @override
   Widget build(BuildContext context) => _coachCard(
     icon: Icons.restaurant_rounded, label: 'MEAL IDEAS',
-    trailing: _loading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)) : null,
+    trailing: _loading && _loadError == null ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)) : null,
     child: _loadError != null
         ? SectionLoadFailure(
             what: 'your meal ideas', error: _loadError, busy: _loading, onRetry: _retry)
@@ -952,7 +971,7 @@ class _ProgressInsightCardState extends State<_ProgressInsightCard> {
   @override
   Widget build(BuildContext context) => _coachCard(
     icon: Icons.trending_up_rounded, label: 'PROGRESS INSIGHT',
-    trailing: _loading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)) : null,
+    trailing: _loading && _loadError == null ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)) : null,
     child: _loadError != null
         ? SectionLoadFailure(
             what: 'your progress insight', error: _loadError, busy: _loading, onRetry: _retry)
@@ -1015,7 +1034,7 @@ class _RiskCardState extends State<_RiskCard> {
     final d = (_it?['data'] as Map?) ?? const {};
     return _coachCard(
       icon: Icons.health_and_safety_rounded, label: 'RISK ASSESSMENT',
-      trailing: _loading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)) : null,
+      trailing: _loading && _loadError == null ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)) : null,
       child: _loadError != null
           ? SectionLoadFailure(
               what: 'your risk assessment', error: _loadError, busy: _loading, onRetry: _retry)
@@ -1212,7 +1231,7 @@ class _CoachingMemoryCardState extends State<_CoachingMemoryCard> {
                       if (!ok && context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
-                            content: Text("Couldn't remove that. Try again."),
+                            content: Text("Couldn't remove that — try again."),
                           ),
                         );
                       }

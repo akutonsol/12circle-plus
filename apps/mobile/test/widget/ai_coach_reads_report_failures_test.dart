@@ -96,6 +96,9 @@ class _Server extends http.BaseClient {
   final writes = <String>[];
   var functionCalls = 0;
 
+  /// When set, the ai-coach function answers 200 with this reply.
+  String? functionReply;
+
   /// While set, every read waits for it — a retry "in flight".
   Completer<void>? gate;
 
@@ -106,6 +109,7 @@ class _Server extends http.BaseClient {
     write = _Write.oneRow;
     writes.clear();
     functionCalls = 0;
+    functionReply = null;
     gate = null;
   }
 
@@ -114,6 +118,8 @@ class _Server extends http.BaseClient {
     final path = request.url.path;
     if (path.contains('/functions/v1/')) {
       functionCalls++;
+      final reply = functionReply;
+      if (reply != null) return _json({'reply': reply}, 200, request);
       return _json({'error': 'unavailable'}, 500, request);
     }
     final table = path.split('/').last;
@@ -313,6 +319,31 @@ void main() {
     });
   });
 
+  testWidgets('a card retrying shows ONE spinner (the retry), not a second in its header', (tester) async {
+    _seedOrdinary(server);
+    server.failing.add('ai_goal_predictions');
+    await pumpScreen(tester);
+    expect(find.text("Couldn't load your goal prediction"), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    final gate = server.gate = Completer<void>();
+    server.failing.clear();
+    await tester.tap(find.widgetWithText(TextButton, 'Try again'));
+    await tester.pump();
+    expect(
+        find.descendant(
+            of: find.byType(TextButton), matching: find.byType(CircularProgressIndicator)),
+        findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget,
+        reason: 'the card header showed a second spinner beside the busy retry');
+
+    gate.complete();
+    server.gate = null;
+    await settle(tester);
+    expect(find.text("Couldn't load your goal prediction"), findsNothing);
+    await drain(tester);
+  });
+
   testWidgets('legitimately nothing: every card keeps today\'s empty copy', (tester) async {
     _seedOrdinary(server);
     await pumpScreen(tester);
@@ -353,6 +384,21 @@ void main() {
       expect(find.text("Couldn't load your weekly review"), findsOneWidget);
       expect(server.functionCalls, 0);
       expect(seen.map((f) => f.origin), ['AICoachService.getLatestReview']);
+      await drain(tester);
+    });
+
+    testWidgets('weekly review: Try again recovers the stored review', (tester) async {
+      _seedOrdinary(server);
+      server.failing.add('ai_reviews');
+      await pumpScreen(tester);
+      expect(find.text("Couldn't load your weekly review"), findsOneWidget);
+
+      server.failing.clear();
+      await tester.tap(find.widgetWithText(TextButton, 'Try again'));
+      await settle(tester);
+      expect(find.text("Couldn't load your weekly review"), findsNothing);
+      expect(find.text('Review summary'), findsOneWidget);
+      expect(server.functionCalls, 0, reason: 'a fresh review was read, not regenerated');
       await drain(tester);
     });
 
@@ -451,6 +497,22 @@ void main() {
       await drain(tester);
     });
 
+    testWidgets('a memory that was not removed says so, in one voice', (tester) async {
+      _seedOrdinary(server);
+      server.reads['ai_memories'] = [
+        {'id': 'm1', 'kind': 'injury', 'content': 'left knee'},
+      ];
+      server.write = _Write.zeroRows;
+      await pumpScreen(tester);
+      await tester.longPress(find.text('left knee'));
+      await settle(tester);
+
+      expect(find.text("Couldn't remove that — try again."), findsOneWidget);
+      expect(find.text('left knee'), findsOneWidget);
+      expect(seen.map((f) => f.origin), ['AICoachService.deleteMemory']);
+      await drain(tester);
+    });
+
     testWidgets('a memory that was not saved says so', (tester) async {
       _seedOrdinary(server);
       server.write = _Write.serverError;
@@ -496,6 +558,69 @@ void main() {
       expect(find.text("Couldn't load your conversation"), findsNothing);
       expect(find.text('earlier question'), findsOneWidget);
       expect(find.text('earlier answer'), findsOneWidget);
+      await drain(tester);
+    });
+
+    // The ai-coach function stores every exchange (ai_conversations), so a
+    // history retry that succeeds AFTER the member has sent a message reads
+    // that exchange back as well.
+    Future<void> failHistoryThenSend(WidgetTester tester) async {
+      _seedOrdinary(server);
+      server.failing.add('ai_conversations');
+      server.functionReply = 'new answer';
+      await pumpScreen(tester);
+      await tester.tap(find.text('Conversation'));
+      await settle(tester);
+      expect(find.text("Couldn't load your conversation"), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField), 'new question');
+      await tester.tap(find.byIcon(Icons.send_rounded));
+      await settle(tester);
+      expect(find.text('new answer'), findsOneWidget);
+      server.failing.clear();
+    }
+
+    const earlier = {
+      'id': 'c1', 'user_message': 'earlier question', 'ai_response': 'earlier answer',
+      'created_at': '2026-11-01T09:00:00Z',
+    };
+
+    testWidgets('retry after a send: the earlier exchange goes ABOVE the new one', (tester) async {
+      await failHistoryThenSend(tester);
+      server.reads['ai_conversations'] = [earlier];
+      await tester.tap(find.widgetWithText(TextButton, 'Try again'));
+      await settle(tester);
+
+      expect(find.text("Couldn't load your conversation"), findsNothing);
+      final order = ['earlier question', 'earlier answer', 'new question', 'new answer']
+          .map((t) => tester.getTopLeft(find.text(t)).dy)
+          .toList();
+      for (var i = 1; i < order.length; i++) {
+        expect(order[i], greaterThan(order[i - 1]),
+            reason: 'the earlier exchange was placed after what was said since '
+                'the screen opened');
+      }
+      await drain(tester);
+    });
+
+    testWidgets('retry after a send: the just-sent exchange, read back, shows once', (tester) async {
+      await failHistoryThenSend(tester);
+      // Newest first, as the read asks for; stored after the screen opened.
+      server.reads['ai_conversations'] = [
+        {'id': 'c2', 'user_message': 'new question', 'ai_response': 'new answer',
+         'created_at': DateTime.now().toUtc().toIso8601String()},
+        earlier,
+      ];
+      await tester.tap(find.widgetWithText(TextButton, 'Try again'));
+      await settle(tester);
+
+      expect(find.text("Couldn't load your conversation"), findsNothing);
+      expect(find.text('earlier question'), findsOneWidget);
+      expect(find.text('new question'), findsOneWidget,
+          reason: 'this session\'s exchange came back from the read and was shown twice');
+      expect(find.text('new answer'), findsOneWidget);
+      expect(tester.getTopLeft(find.text('earlier answer')).dy,
+          lessThan(tester.getTopLeft(find.text('new question')).dy));
       await drain(tester);
     });
 
