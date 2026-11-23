@@ -7,8 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/coach_program_service.dart';
 import '../../dashboard/presentation/coach_dashboard_screen.dart' show coachClientsProvider;
-import '../../auth/domain/auth_provider.dart';
-import '../../profile/presentation/widgets/profile_load_failed_notice.dart';
+import '../../../core/widgets/role_gate.dart';
 
 const _bg     = Color(0xFF0A0A0B);
 const _panel  = Color(0xFF14101E);
@@ -38,8 +37,9 @@ class _State extends ConsumerState<WeeklyReviewScreen> {
   final _coachCtl = TextEditingController();
   String? _status;
 
-  @override
-  void initState() { super.initState(); _load(); }
+  // P0-FL-45a: the coach-only read starts once the gate has confirmed this
+  // member's role (see build), not in initState before the role is known.
+  final _firstLoad = RoleConfirmedLoad();
   @override
   void dispose() { _clientCtl.dispose(); _coachCtl.dispose(); super.dispose(); }
 
@@ -86,18 +86,16 @@ class _State extends ConsumerState<WeeklyReviewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // P0-FL-40: an unread role is not a missing one. While the member's own
-    // profile is loading, or its read failed, the gate stays shut (nothing
-    // role-only is shown) and says which — never "… only.". Only a read that
-    // succeeded without the role gets that message.
-    final profileAsync = ref.watch(currentUserProfileProvider);
-    final unread = _unreadRoleGate(ref, profileAsync, 'Weekly Review');
-    if (unread != null) return unread;
-    final role = profileAsync.value?['role'];
-    if (role != 'coach' && role != 'admin') {
-      return const Scaffold(backgroundColor: _bg,
-        body: Center(child: Text('Coaches only.', style: TextStyle(color: _muted))));
-    }
+    // P0-FL-40/45a: the shared gate — only a role confirmed for THIS member
+    // opens (or closes) the screen; unread → loading / failure notice.
+    final gate = roleGate(ref,
+        title: 'Weekly Review',
+        allowedRoles: const {'coach', 'admin'},
+        detail: 'Coach tools stay closed until it loads.',
+        denied: const Scaffold(backgroundColor: _bg,
+          body: Center(child: Text('Coaches only.', style: TextStyle(color: _muted)))));
+    if (gate != null) return gate;
+    _firstLoad.start(this, _load);
     final clients = ref.watch(coachClientsProvider);
     return Scaffold(
       backgroundColor: _bg,
@@ -220,45 +218,3 @@ Future<({bool sent, String status})> sendReviewedCommunication(
   final ok = await svc.sendCommunication(id);
   return (sent: ok, status: ok ? 'Sent to client ✓' : 'Send failed.');
 }
-
-/// P0-FL-40 · the role gate while the signed-in member's profile is unread:
-/// a neutral loading state, or the shared FL-16 failure notice with a
-/// busy-aware Try again. `null` once the read has succeeded — the gate then
-/// decides on the role exactly as before.
-///
-/// Both states keep the screen's own AppBar (title, normal back control —
-/// no role-only actions) so there is always an in-app way out (UX-1).
-Widget? _unreadRoleGate(WidgetRef ref,
-    AsyncValue<Map<String, dynamic>?> profile, String title) {
-  final appBar = _gateAppBar(title);
-  if (profile.hasError) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: appBar,
-      body: SafeArea(child: Center(child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: ProfileLoadFailedNotice(
-          error: profile.error!,
-          busy: profile.isLoading,
-          detail: 'Coach tools stay closed until it loads.',
-          onRetry: () => ref.invalidate(currentUserProfileProvider),
-        ),
-      ))),
-    );
-  }
-  if (!profile.hasValue) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: appBar,
-      body: const Center(child: CircularProgressIndicator(
-          color: _brand, semanticsLabel: 'Loading your account')),
-    );
-  }
-  return null;
-}
-
-/// The screen's own AppBar style for the unread-role gate.
-PreferredSizeWidget _gateAppBar(String title) => AppBar(
-    backgroundColor: _bg, foregroundColor: _text,
-    title: Text(title,
-        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)));
