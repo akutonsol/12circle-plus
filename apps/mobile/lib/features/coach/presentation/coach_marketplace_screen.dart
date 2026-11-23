@@ -524,8 +524,9 @@ class _CoachReviewsSheet extends ConsumerWidget {
           loading: () => const Padding(padding: EdgeInsets.all(24),
             child: Center(child: CircularProgressIndicator(color: _brand))),
           // P0-FL-47: a failed read is said, never shown as "No reviews yet".
-          // While a retry is in flight `.when` keeps this branch (the error is
-          // kept on refresh) and `isLoading` disables Try again.
+          // While a retry is in flight `.when` keeps this branch: on riverpod
+          // 2.6 an invalidate refreshes seamlessly (AsyncError with isLoading
+          // true; skipLoadingOnRefresh) and `isLoading` disables Try again.
           error: (e, _) => _ReviewsLoadFailed(
             error: e,
             busy: reviewsAsync.isLoading,
@@ -566,7 +567,9 @@ class _ReviewsLoadFailed extends StatelessWidget {
         ? "Couldn't load reviews — check your connection and try again."
         : "Couldn't load reviews — try again in a moment. "
             'If it keeps happening, contact support.';
-    return Padding(
+    // Scrolls: at large text sizes on a small phone the notice is taller than
+    // the sheet (capped at 78% of the screen) and must not overflow.
+    return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(vertical: 16),
       child: Column(
           mainAxisSize: MainAxisSize.min,

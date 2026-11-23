@@ -211,6 +211,16 @@ void main() {
       expect(server.reviewReads, before + 1);
 
       // In flight: the notice stays and the control cannot fire again.
+      // UX F2: on riverpod 2.6.1 an invalidate from outside refreshes
+      // "seamlessly" — the state is AsyncError with isLoading true, so `.when`
+      // (skipLoadingOnRefresh: true) keeps the error branch. Never the empty
+      // copy while the retry is in flight.
+      final container = ProviderScope.containerOf(
+          t.element(find.text(_other)));
+      final inFlight = container.read(coachReviewsProvider(_coach));
+      expect(inFlight.hasError, isTrue);
+      expect(inFlight.isLoading, isTrue);
+      expect(find.text(_emptyCopy), findsNothing);
       expect(find.text(_other), findsOneWidget);
       expect(find.text('Try again'), findsNothing);
       expect(find.bySemanticsLabel('Loading reviews'), findsOneWidget);
@@ -225,6 +235,50 @@ void main() {
           reason: 'the re-read succeeded: the review is shown');
       expect(find.text(_other), findsNothing);
       semantics.dispose();
+    });
+
+    // UX F1 (review round): at 2x text on a 320x568 phone the failure notice
+    // is taller than the sheet (capped at 78% of the screen). It must scroll,
+    // not overflow, and Try again must stay reachable and fire once.
+    testWidgets('2x text on 320x568: the failure scrolls, Try again reachable',
+        (t) async {
+      server.reviewsRead = _Fail.server;
+      t.platformDispatcher.textScaleFactorTestValue = 2.0;
+      addTearDown(t.platformDispatcher.clearTextScaleFactorTestValue);
+      await t.binding.setSurfaceSize(const Size(320, 568));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      await t.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () =>
+                    showCoachReviewsSheet(context, _coach, 'Coach Kim'),
+                child: const Text('Open reviews'),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await t.tap(find.text('Open reviews'));
+      await settle(t);
+
+      expect(t.takeException(), isNull,
+          reason: 'the failure notice overflowed the sheet at 2x text');
+      expect(find.text(_other), findsOneWidget);
+      expect(find.text(_emptyCopy), findsNothing);
+
+      final retry = find.text('Try again');
+      await t.ensureVisible(retry);
+      await t.pump();
+      expect(t.takeException(), isNull);
+      final before = server.reviewReads;
+      await t.tap(retry);
+      await t.pump(const Duration(milliseconds: 50));
+      expect(server.reviewReads, before + 1,
+          reason: 'Try again is reachable and tappable');
+      await settle(t);
+      expect(t.takeException(), isNull);
     });
 
     testWidgets('a coach with no reviews keeps the empty copy', (t) async {
