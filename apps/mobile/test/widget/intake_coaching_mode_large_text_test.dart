@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:ui' show SemanticsFlag;
 
 import 'package:circle_fitness/features/onboarding/presentation/intake_flow_screen.dart';
 import 'package:flutter/material.dart';
@@ -300,7 +299,15 @@ void main() {
     await tester.tap(card('AI Guided'));
     await settle(tester);
     for (final mode in _modes) {
-      expect(node(mode).hasFlag(SemanticsFlag.isSelected), mode == 'AI Guided',
+      expect(
+          node(mode),
+          matchesSemantics(
+            isButton: true,
+            hasTapAction: true,
+            hasSelectedState: true,
+            isSelected: mode == 'AI Guided',
+            isInMutuallyExclusiveGroup: true,
+          ),
           reason: '"$mode" selected state after choosing AI Guided');
     }
     // The announced label carries the option's tagline, not only its title.
