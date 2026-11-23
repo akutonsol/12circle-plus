@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/network_failure.dart';
 import '../data/coach_relationship_service.dart';
 import '../domain/coach_provider.dart';
 import '../../auth/domain/auth_provider.dart';
@@ -522,8 +523,14 @@ class _CoachReviewsSheet extends ConsumerWidget {
         Flexible(child: reviewsAsync.when(
           loading: () => const Padding(padding: EdgeInsets.all(24),
             child: Center(child: CircularProgressIndicator(color: _brand))),
-          error: (_, __) => const Padding(padding: EdgeInsets.all(24),
-            child: Text('Could not load reviews.', style: TextStyle(color: _mut))),
+          // P0-FL-47: a failed read is said, never shown as "No reviews yet".
+          // While a retry is in flight `.when` keeps this branch (the error is
+          // kept on refresh) and `isLoading` disables Try again.
+          error: (e, _) => _ReviewsLoadFailed(
+            error: e,
+            busy: reviewsAsync.isLoading,
+            onRetry: () => ref.invalidate(coachReviewsProvider(coachId)),
+          ),
           data: (reviews) {
             if (reviews.isEmpty) {
               return const Padding(padding: EdgeInsets.symmetric(vertical: 24),
@@ -539,6 +546,54 @@ class _CoachReviewsSheet extends ConsumerWidget {
           },
         )),
       ]),
+    );
+  }
+}
+
+/// The coach's reviews could not be read: say so (a live region, so a screen
+/// reader announces it) with a busy-aware, labelled, >= 44px Try again. The
+/// connection hint only for a network failure.
+class _ReviewsLoadFailed extends StatelessWidget {
+  final Object error;
+  final bool busy;
+  final VoidCallback onRetry;
+  const _ReviewsLoadFailed(
+      {required this.error, required this.busy, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    final message = isNetworkFailure(error)
+        ? "Couldn't load reviews — check your connection and try again."
+        : "Couldn't load reviews — try again in a moment. "
+            'If it keeps happening, contact support.';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Semantics(
+              liveRegion: true,
+              container: true,
+              child: Text(message,
+                  style: const TextStyle(color: _wht, fontSize: 13, height: 1.4)),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+                child: TextButton(
+                  onPressed: busy ? null : onRetry,
+                  child: Text(busy ? 'Loading…' : 'Try again',
+                      semanticsLabel:
+                          busy ? 'Loading reviews' : 'Try again, load reviews',
+                      style: const TextStyle(
+                          color: _pri, fontWeight: FontWeight.w700)),
+                ),
+              ),
+            ),
+          ]),
     );
   }
 }
