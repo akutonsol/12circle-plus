@@ -14,6 +14,7 @@ import 'package:circle_fitness/features/exercise_database/presentation/widgets/c
 import 'package:circle_fitness/features/workout/presentation/widgets/section_load_failure.dart';
 import 'package:circle_fitness/features/workout/presentation/widgets/swap_substitutes_list.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -643,6 +644,94 @@ void main() {
       await tester.pumpAndSettle();
       await unmount(tester);
     });
+  });
+
+  // P0-FL-50a round 3 · large text must make the KPI readouts LARGER. A
+  // FittedBox in a fixed-ratio cell shrank them back (~0.47 at 320dp/2.0x), so
+  // the member's text setting did nothing. "No overflow" alone can't see that.
+  group('Coaching Observability KPI tiles grow with text size', () {
+    const labels = [
+      'PROGRAMS GENERATED', 'DECISION TRACES', 'PREDICTIONS MADE',
+      'WEEKLY REVIEWS SENT', 'AVG CLIENT ADHERENCE', 'AVG GOAL CONFIDENCE',
+      'AVG RECOVERY (TRACED)', 'REVIEWS (ALL STATES)', 'EXERCISE CERTIFICATION',
+      'WORKOUT-READY', 'INTELLIGENCE PROFILED', 'KNOWLEDGE CONFIDENCE',
+    ];
+    Finder column(String upper) =>
+        find.ancestor(of: find.text(upper), matching: find.byType(Column)).first;
+    Finder value(String upper) => find
+        .descendant(
+            of: column(upper),
+            matching: find.byWidgetPredicate((w) => w is Text && w.data != upper))
+        .first;
+    Finder tile(String upper) =>
+        find.ancestor(of: find.text(upper), matching: find.byType(Container)).first;
+
+    // Rendered (on-screen, transform-aware) rects of a tile's value and label,
+    // plus the tile's own size; fails on overflow or on any scale-down.
+    Future<Map<String, Rect>> render(WidgetTester tester, double width, double scale) async {
+      tester.platformDispatcher.textScaleFactorTestValue = scale;
+      await mount(tester, const ObservabilityScreen(),
+          role: 'admin', size: Size(width, 8000));
+      expect(tester.takeException(), isNull, reason: 'no overflow at ${width}dp ${scale}x');
+      for (final l in labels) {
+        for (final f in [value(l), find.text(l)]) {
+          // getRect is transform-aware, getSize is not: equal ⇒ not scaled down.
+          expect(tester.getRect(f).height, closeTo(tester.getSize(f).height, 0.01),
+              reason: '$l at ${width}dp ${scale}x: the readout must not be shrunk');
+        }
+      }
+      // The height of ONE rendered line of text (wrapping differs between the
+      // one- and two-column layouts, so whole-box heights don't compare):
+      // the paragraph's line height × any scale applied on the way to screen.
+      double line(Finder f) {
+        final p = tester.renderObject<RenderParagraph>(
+            find.descendant(of: f, matching: find.byType(RichText)));
+        final lineH = p.getFullHeightForCaret(const TextPosition(offset: 0));
+        return lineH * tester.getRect(f).height / tester.getSize(f).height;
+      }
+      final t = tester.getRect(tile('PROGRAMS GENERATED'));
+      final out = {
+        'value': Rect.fromLTWH(0, 0, 0, line(value('PROGRAMS GENERATED'))),
+        'label': Rect.fromLTWH(0, 0, 0, line(find.text('PROGRAMS GENERATED'))),
+        'tile': t,
+        // The tallest tile content in the first grid (what the row must hold).
+        'content': Rect.fromLTWH(0, 0, 0, [
+          for (final l in labels.take(4)) tester.getSize(column(l)).height
+        ].reduce((a, b) => a > b ? a : b)),
+      };
+      await unmount(tester);
+      return out;
+    }
+
+    for (final width in [320.0, 390.0]) {
+      testWidgets('at ${width.toInt()}dp, 2.0x text renders the value and label >= 1.5x '
+          'their 1.0x size, nothing shrunk at 1.0x/1.3x/2.0x', (tester) async {
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+        final one = await render(tester, width, 1.0);
+        await render(tester, width, 1.3);
+        final two = await render(tester, width, 2.0);
+        expect(two['value']!.height, greaterThanOrEqualTo(one['value']!.height * 1.5),
+            reason: 'THE defect: the value came out no larger than at 1.0x');
+        expect(two['label']!.height, greaterThanOrEqualTo(one['label']!.height * 1.5),
+            reason: 'THE defect: the label came out no larger than at 1.0x');
+        expect(two['tile']!.height, greaterThan(one['tile']!.height),
+            reason: 'the tile grows with the text');
+      });
+
+      testWidgets('at ${width.toInt()}dp, 1.0x keeps the original two-column '
+          'width/2.2 tile (grown only if its content would not fit)', (tester) async {
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+        final out = await render(tester, width, 1.0);
+        // ListView padding 16+16, crossAxisSpacing 8, childAspectRatio 2.2.
+        final cellW = (width - 32 - 8) / 2;
+        expect(out['tile']!.width, closeTo(cellW, 0.01), reason: 'two columns, same width');
+        // Exactly the original height unless the content (+14 padding top and
+        // bottom) is taller — then exactly tall enough, never shrunk.
+        final contentH = (out['content']!.height + 28).ceilToDouble();
+        expect(out['tile']!.height,
+            closeTo(contentH > cellW / 2.2 ? contentH : cellW / 2.2, 0.01));
+      });
+    }
   });
 
   group('Swap substitutes loading', () {
