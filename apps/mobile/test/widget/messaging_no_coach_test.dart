@@ -8,6 +8,7 @@ import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/coach/domain/coach_provider.dart';
 import 'package:circle_fitness/features/messaging/domain/messaging_provider.dart';
 import 'package:circle_fitness/features/messaging/presentation/messaging_screen.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show User;
 
 /// FIT-028 — "/messages · the state that sells the plan honestly".
 ///
@@ -44,6 +45,9 @@ void main() {
 
     return ProviderScope(
       overrides: [
+        // P0-FL-49: the role must be confirmed for the member signed in now,
+        // so these rows are read for a signed-in user and carry their id.
+        currentUserProvider.overrideWithValue(_me),
         pin(conversationsProvider, convs),
         pin(myCoachesProvider, coaches),
         pin(currentUserProfileProvider, profile),
@@ -52,7 +56,8 @@ void main() {
     );
   }
 
-  const member = AsyncData<Map<String, dynamic>?>({'role': 'client'});
+  const member =
+      AsyncData<Map<String, dynamic>?>({'id': 'u1', 'role': 'client'});
   const noConversations = AsyncData<List<Map<String, dynamic>>>([]);
 
   testWidgets('FIT-028 a member with no coach is offered the marketplace',
@@ -124,7 +129,8 @@ void main() {
     await t.pumpWidget(harness(
       convs: noConversations,
       coaches: const AsyncData([]),
-      profile: const AsyncData<Map<String, dynamic>?>({'role': 'coach'}),
+      profile:
+          const AsyncData<Map<String, dynamic>?>({'id': 'u1', 'role': 'coach'}),
     ));
     await t.pump();
 
@@ -216,3 +222,11 @@ void main() {
     handle.dispose();
   });
 }
+
+final _me = User(
+  id: 'u1',
+  appMetadata: const {},
+  userMetadata: const {},
+  aud: 'authenticated',
+  createdAt: '2026-11-01T00:00:00Z',
+);

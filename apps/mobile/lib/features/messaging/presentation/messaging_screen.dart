@@ -6,6 +6,7 @@ import '../../../core/widgets/named_icon_button.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../community/domain/community_provider.dart';
+import '../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
 import '../domain/messaging_provider.dart';
 import 'connect_sections_view.dart';
 
@@ -119,11 +120,23 @@ class MessagingScreen extends ConsumerWidget {
                     message: "No conversations yet",
                     sub: "Your messages with coaches and clients will appear here",
                   );
-                  final isMember = ref.watch(currentUserProfileProvider).maybeWhen(
-                    data: (p) => p?['role'] != 'coach',
-                    orElse: () => false,
-                  );
+                  // P0-FL-49 · the role must be CONFIRMED for the member
+                  // signed in now (`confirmedRoleRead`): never the previous
+                  // member's row held through a re-read, and a failed refresh
+                  // of the same member keeps what was confirmed. Nobody signed
+                  // in is not a member.
+                  final user = ref.watch(currentUserProvider);
+                  final role = confirmedRoleRead(
+                      ref.watch(currentUserProfileProvider), user);
+                  final isMember =
+                      user != null && role != null && role.role != 'coach';
                   if (!isMember) return neutral;
+                  // The coach list follows the signed-in user
+                  // (`myCoachesProvider` watches `currentUserProvider`): a
+                  // switch re-reads it, the held list then counts as loading
+                  // here, a failure as a failure, and the previous member's
+                  // late answer is dropped by Riverpod — so only this member's
+                  // answered list decides the pitch.
                   return ref.watch(myCoachesProvider).maybeWhen(
                     data: (coaches) => coaches.isEmpty ? const _NoCoachState() : neutral,
                     orElse: () => neutral,
