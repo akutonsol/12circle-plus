@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/observability/app_failure.dart';
+
 enum AICoachMode { nutrition, workout, general, checkinAnalysis, riskDetection }
 
 extension AICoachModeExt on AICoachMode {
@@ -88,7 +90,13 @@ class AICoachService {
 
   // ── Coach personality ─────────────────────────────────────────────────────
 
-  /// {name, style, tone}. Defaults to Nova / motivational / supportive.
+  /// {name, style, tone}. Defaults to Nova / motivational / supportive when
+  /// the member has never chosen one (no row, or no persona on it).
+  ///
+  /// A FAILED read is recorded and rethrown, not answered with the default:
+  /// the default shown as the member's setting is a claim the app could not
+  /// make, and the style card would then save it over their real persona the
+  /// moment they touched it (P0-FL-50b).
   Future<Map<String, dynamic>> getPersona() async {
     final uid = _db.auth.currentUser?.id;
     const fallback = {'name': 'Nova', 'style': 'motivational', 'tone': 'supportive'};
@@ -97,20 +105,38 @@ class AICoachService {
       final row = await _db.from('ai_profiles').select('coach_persona').eq('user_id', uid).maybeSingle();
       final p = row?['coach_persona'];
       return p is Map ? Map<String, dynamic>.from(p) : Map.of(fallback);
-    } catch (_) { return Map.of(fallback); }
+    } catch (e, st) {
+      reportError('AICoachService.getPersona', e, st);
+      rethrow;
+    }
   }
 
   Future<bool> setPersona({required String style, required String tone, String name = 'Nova'}) async {
     final uid = _db.auth.currentUser?.id;
     if (uid == null) return false;
     try {
-      await _db.from('ai_profiles').upsert({
+      // Ask for the row back: a write RLS filtered to nothing is a 204 too.
+      final rows = await _db.from('ai_profiles').upsert({
         'user_id': uid,
         'coach_persona': {'name': name, 'style': style, 'tone': tone},
-      });
+      }).select('user_id');
+      if ((rows as List).isEmpty) {
+        reportError('AICoachService.setPersona',
+            StateError('ai_profiles upsert returned no row'));
+        return false;
+      }
       return true;
-    } catch (_) { return false; }
+    } catch (e, st) {
+      reportError('AICoachService.setPersona', e, st);
+      return false;
+    }
   }
+
+  // The four "latest stored artifact" reads below answer null only when there
+  // is none (or nobody is signed in). A failed read is recorded and rethrown:
+  // null here means "none yet", and the cards act on it — the daily brief and
+  // the weekly review GENERATE a new one on null — so a failure answered as
+  // null was shown as "nothing yet" and spent a generation (P0-FL-50b).
 
   /// Today's stored daily insight, if one exists.
   Future<Map<String, dynamic>?> getTodayInsight() async {
@@ -121,7 +147,10 @@ class AICoachService {
       return await _db.from('ai_insights').select()
           .eq('user_id', uid).eq('type', 'daily_insight').eq('for_date', today)
           .maybeSingle();
-    } catch (_) { return null; }
+    } catch (e, st) {
+      reportError('AICoachService.getTodayInsight', e, st);
+      rethrow;
+    }
   }
 
   /// Latest stored ai_insights row of a given type ('risk' | 'progress' | …).
@@ -132,7 +161,10 @@ class AICoachService {
       return await _db.from('ai_insights').select()
           .eq('user_id', uid).eq('type', type)
           .order('created_at', ascending: false).limit(1).maybeSingle();
-    } catch (_) { return null; }
+    } catch (e, st) {
+      reportError('AICoachService.getLatestInsight', e, st, {'type': type});
+      rethrow;
+    }
   }
 
   Future<Map<String, dynamic>?> getLatestReview() async {
@@ -141,7 +173,10 @@ class AICoachService {
     try {
       return await _db.from('ai_reviews').select()
           .eq('user_id', uid).order('period_end', ascending: false).limit(1).maybeSingle();
-    } catch (_) { return null; }
+    } catch (e, st) {
+      reportError('AICoachService.getLatestReview', e, st);
+      rethrow;
+    }
   }
 
   Future<Map<String, dynamic>?> getLatestPrediction() async {
@@ -150,7 +185,10 @@ class AICoachService {
     try {
       return await _db.from('ai_goal_predictions').select()
           .eq('user_id', uid).order('created_at', ascending: false).limit(1).maybeSingle();
-    } catch (_) { return null; }
+    } catch (e, st) {
+      reportError('AICoachService.getLatestPrediction', e, st);
+      rethrow;
+    }
   }
 
   // ── Coaching memory (likes / dislikes / injuries the coach remembers) ──────
@@ -160,13 +198,26 @@ class AICoachService {
     final uid = _db.auth.currentUser?.id;
     if (uid == null) return false;
     try {
-      await _db.from('ai_memories').upsert({
+      final rows = await _db.from('ai_memories').upsert({
         'user_id': uid, 'kind': kind, 'content': content.trim(), 'source': source,
-      }, onConflict: 'user_id,kind,content');
+      }, onConflict: 'user_id,kind,content').select('id');
+      if ((rows as List).isEmpty) {
+        reportError('AICoachService.addMemory',
+            StateError('ai_memories upsert returned no row'));
+        return false;
+      }
       return true;
-    } catch (_) { return false; }
+    } catch (e, st) {
+      reportError('AICoachService.addMemory', e, st);
+      return false;
+    }
   }
 
+  /// What the coach remembers about the member. [] only when there is nothing
+  /// (or nobody is signed in). A failed read is recorded and rethrown: this
+  /// list is the member's only view of the health facts the coach keeps, and
+  /// a failure shown as "nothing remembered" — e.g. the reload after a delete
+  /// — tells them their injuries are gone when they are not (P0-FL-50b).
   Future<List<Map<String, dynamic>>> getMemories() async {
     final uid = _db.auth.currentUser?.id;
     if (uid == null) return [];
@@ -174,7 +225,10 @@ class AICoachService {
       final data = await _db.from('ai_memories').select()
           .eq('user_id', uid).order('created_at', ascending: false);
       return List<Map<String, dynamic>>.from(data as List);
-    } catch (_) { return []; }
+    } catch (e, st) {
+      reportError('AICoachService.getMemories', e, st);
+      rethrow;
+    }
   }
 
   /// Remove one remembered fact. Returns whether it was actually removed.
@@ -192,11 +246,22 @@ class AICoachService {
   /// Authorization is the database's: migration 074 puts `"own ai data"` on
   /// `ai_memories` `FOR ALL ... USING (user_id = auth.uid())`, so the missing
   /// `user_id` predicate here cannot delete another member's row.
+  ///
+  /// RLS filtering the delete to nothing answers 204 like a real delete, so
+  /// the row is asked back and an empty answer is a failure (P0-FL-50b).
   Future<bool> deleteMemory(String id) async {
     try {
-      await _db.from('ai_memories').delete().eq('id', id);
+      final rows = await _db.from('ai_memories').delete().eq('id', id).select('id');
+      if ((rows as List).isEmpty) {
+        reportError('AICoachService.deleteMemory',
+            StateError('ai_memories delete removed no row'));
+        return false;
+      }
       return true;
-    } catch (_) { return false; }
+    } catch (e, st) {
+      reportError('AICoachService.deleteMemory', e, st);
+      return false;
+    }
   }
 
   Future<List<Map<String, dynamic>>> getConversationHistory({int limit = 20}) async {
@@ -213,8 +278,11 @@ class AICoachService {
           .order('created_at', ascending: false)
           .limit(limit);
       return List<Map<String, dynamic>>.from(data as List).reversed.toList();
-    } catch (_) {
-      return [];
+    } catch (e, st) {
+      // Rethrown, not []: [] reopens the chat as a fresh conversation with
+      // the welcome message, as if the member had never talked to the coach.
+      reportError('AICoachService.getConversationHistory', e, st);
+      rethrow;
     }
   }
 }
