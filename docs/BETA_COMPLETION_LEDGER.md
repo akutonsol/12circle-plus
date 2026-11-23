@@ -10,7 +10,7 @@ evidence. Nothing is marked complete without it.
 |---|---|
 | `origin/main` | `8f2c8a0` (PR #159), CI run `43792727007` **7/7 success** |
 | Live QA evidence on main | security **1173/1173**, AI **51/51**, ENV-3 L-1..L-5 PASS (ledger 188 rows; frontier 192; 182–186 declared excluded) |
-| Open PRs | #14 (owner's, untouched) · #160–#203, all unmerged. Flutter P0 stack CI 7/7 on each exact head. #183 targets `integration/p0-flutter-stack`; #184–#190 target #183's branch; #191 targets #189's; #192–#194 target `-c6`; #195–#198 target `-c7`; #199–#203 target `-c8`. Combined branches `-c6` @ `6f8918f`, `-c7` @ `df35d5f`, `-c8` @ `185261e`, `-c9` @ `1b94044`, all CI 7/7. **None to be merged without explicit authorization** |
+| Open PRs | #14 (owner's, untouched) · #160–#208, all unmerged. Flutter P0 stack CI 7/7 on each exact head. #183 targets `integration/p0-flutter-stack`; #184–#190 target #183's branch; #191 targets #189's; #192–#194 target `-c6`; #195–#198 target `-c7`; #199–#203 target `-c8`; #204–#208 target `-c9`. Combined branches `-c6` @ `6f8918f`, `-c7` @ `df35d5f`, `-c8` @ `185261e`, `-c9` @ `1b94044`, `-c10` @ `b7ec6ef`, all CI 7/7. **None to be merged without explicit authorization** |
 | QA migrations | applied through **192** (182–186 excluded). **Pending, not applied:** 193, 194, 195, 196 |
 | QA Edge Functions | **1 of 19 deployed** (`ai-nutrition` v18, deployed ~2026-09-30 from the pre-rename path) |
 | QA function secrets | `ANTHROPIC_API_KEY` + Supabase defaults only. **No Stripe, no email provider, no `APP_URL`, no YouTube** |
@@ -792,6 +792,52 @@ All final heads: analyze 287, contract exit 0 (unseen 31), coordinator 268/268, 
 - Pre-existing error copy on the staff screens: "Assign failed." and empty pickers on a failed read.
 - `business_profile_reports_what_happened_test` and a messaging photo-upload test are flaky under full-suite load; both pass alone.
 
+### Cycle 10: P0-FL-49 to P0-FL-52 (2026-11-23)
+
+**Base.** All five packages start from `integration/p0-flutter-stack-c9` @ `1b94044` and **target it**, so each PR's diff shows one package.
+
+**Combined evidence branch.** `integration/p0-flutter-stack-c10` = `1b94044` + `85d32f0` + `36fbcd2` + `7b8e5fd` + `eed4f60` + `e44588d`. All five merge without conflict, and no file is touched by two packages.
+- @ `b7ec6ef`: analyze **287**, **4660** tests pass. That is 4393 + 126 + 69 + 44 + 0 + 28, so nothing overlaps or is lost. Static guards 0, contract exit 0 (unseen 31), coordinator 268/268, CI's 10 negative controls 0 (run locally).
+- CI (push): ****7/7** run `45240757852` on `b7ec6ef`. **No cross-package defect found.****.
+
+| PR | Package | Final head | Independent verdicts at the final head | Lead mutants | Tests (full) | CI (exact head) |
+|---|---|---|---|---|---|---|
+| #207 | **P0-FL-49**: Activity › Challenges (`notif_challenges` prompt) and Activity › Community (`notif_community` hide) read `confirmedCurrentProfileProvider`. The Messages empty state (plan pitch vs neutral) uses `confirmedRoleRead` and needs a signed-in user. Base defects: signed out with nobody signing in was pitched a plan; a same-member failed refresh dropped the pitch; A's held `notif_*` decided B's Activity. 126-test identity matrix | `85d32f0` | UX PASS-WITH-NOTES · security APPROVE-WITH-NOTES · QA **VERIFIED**; re-verified after a test round (36 regression guards for same-member in-flight refresh and late answers while B's read failed or was in flight) | 10/10 (7 + 3 guard mutants) | 4519 | 7/7 `45235853373` |
+| #208 | **P0-FL-50a**: `CustomExerciseService`, 14 swallow sites. Reads record and rethrow; best-effort reads keep their default but record; observability failed figures are "—" and never 0; deletes and approve/reject treat 0 rows as failure. **Fixed a data-loss path:** a failed Edit Exercise prefill opened a blank form whose Save overwrote the exercise. Save is now held and announced disabled until the exercise loads. One failure component (`SectionLoadFailure` + optional `detail`). KPI tiles grow with large text | `36fbcd2` | security APPROVE-WITH-NOTES ×2 · UX PASS-WITH-NOTES → **PASS** · QA NOT VERIFIED (held-Save loading untested; no positive control) → NOT VERIFIED (FittedBox shrank 2× text) → **VERIFIED** after two rounds | 12/13; the survivor keeps 2 columns at 2× (tiles still grow and the text isn't shrunk; only the 1-column choice is unpinned) | 4462 | 7/7 `45238824608` |
+| #205 | **P0-FL-50b**: the member AI Coach. 7 reads record and rethrow; 3 writes `.select()` and treat 0 rows as failure. Base defects: a failed persona read offered chips that saved the default over the member's real persona; a failed brief or review read **generated** a new one; a failed history read looked like a new chat. History retry orders earlier exchanges first and drops this session's duplicates | `7b8e5fd` | UX PASS-WITH-NOTES ×2 · security APPROVE-WITH-NOTES · QA NOT VERIFIED (retry ordering untested) → **VERIFIED** after a review round | 9/9 | 4437 | 7/7 `45231184605` |
+| #204 | **P0-FL-51**: flaky tests. Root cause: fixed pump/runAsync budgets waited on real `dart:io` reads (`XFile.readAsBytes`) and isolate JSON decoding (`functions.invoke`), which only advance inside runAsync windows. `pumpUntil` (30 s real-time bound, zero-step pumps) waits for the outcome in 7 files. Test-only; no assertion changed | `eed4f60` | UX PASS-WITH-NOTES · security APPROVE-WITH-NOTES · QA **VERIFIED** | 5/6; the survivor is a 200 `cancel-subscription` reply without `ok:true`, which no test before or after sends (pre-existing gap) | 4393 | 7/7 `45223386821` |
+| #206 | **P0-FL-52**: intake Coaching Mode at large text: the option title wraps (overflowed by 33–197px at 1.3×/2×); Continue grows instead of clipping; options and Continue carry button/selected/enabled semantics. **Compliance row at 2×:** no overflow at 1.0/1.3/2.0× on 320/390dp (pinned). Labels broke mid-word at 2×/320dp, so the tiles go 2×2 above 1.5×; each tile is announced as "Workout: 30 of 30". Action Center untouched (44px kept) | `e44588d` | UX PASS-WITH-NOTES ×2 · security APPROVE · QA NOT VERIFIED (button-height check couldn't fail) → **VERIFIED** after a review round | 8/8 (the round-1 survivor, a fixed 56px button, is caught at the final head) | 4421 | 7/7 `45233436801` |
+
+All final heads: analyze 287, contract exit 0 (unseen 31), coordinator 268/268. `reportFailure(` still has 0 callers outside `core/observability`; `valueOrNull` in lib went 116 → 114. Mutant test lists were taken from each package's test diff.
+
+**What the evidence covers:** automated only. No device, simulator or live-QA run. The flake fix is proven by a deterministic reproduction (photo reads held 1 s: 13 base failures → 0; edge-function replies held 600 ms: 9 → 0). Natural load didn't reproduce it within 20 runs, though the FL-49 QA full run (without the fix) hit the business-profile flake once. Real-font fit at 2× (Compliance tiles, KPI tiles, Coaching Mode) needs a device check. **Journeys 2/14, beta-ready conditions 0/4, unchanged.**
+
+**Security and account isolation:**
+- **Copilot late responses** (L1–L4): documented with a screen-only remediation proposal for Julia in `docs/COPILOT_LATE_RESPONSE_REMEDIATION_PROPOSAL.md`. L2 shows A's client explanation (PHI) to B; L3 runs an approval's remaining writes under B's session. **Not implemented**: SEC-R3 / Wave 3B-4 holds Copilot.
+- **`home_screen.dart:817`** is the last decision on a held profile value (Women's Health). Protected; Julia's call.
+- **`coach_business_screen.dart:189`** keeps a `select('*')` profile row in widget state that could outlive a coach switch (P2, follow-up).
+- No database permission was changed and no `coaching_calls` column decision was made.
+
+**Accessibility:** every new retry and button is ≥ 44px. No 44px target was reduced. Action Center layout options for Julia are in `docs/ACTION_CENTER_LAYOUT_OPTIONS.md` (recommended: keep).
+
+**New decisions for Julia:**
+- **Copilot late-response remediation**: option A, B or C, plus Q1 (partly created programs) and Q2 (telling the coach who left).
+- **Action Center density at 1×**: option A (keep), B, C or D.
+- **Unconfirmed Activity defaults** (FL-49 UX, low): while the profile read is unconfirmed, the challenge-alerts prompt is hidden and Community is shown.
+- **Observability sub-reads**: telling "RPC absent" (PGRST202) apart from "failed" for the decision, certification and intelligence figures.
+- **AI Coach offline**: one grouped error banner instead of up to eight section notices.
+
+**Engineering follow-ups:**
+- `getCoachOverlay` / `resolveExerciseMedia` failed reads show "Add your coaching".
+- `createCoachingPack` result is ignored; `submitForGlobalLibrary` has no 0-row check; `_enrich` shows raw `res.error`; `lastError` is shared between overlapping approve and reject calls.
+- A failed challenges read shows "No active challenges"; Activity "Enable" / "See All", persona and memory chips are under 44px with no button role.
+- Keep the add-memory dialog open on failure.
+- The intake picker `catch (_) {}` (~4123) is unrecorded; the business transformation-photo upload has no in-flight guard.
+- No test sends a 200 `cancel-subscription` reply without `ok:true`.
+- `_IntakeStepBar` overflows at 3× on 320dp.
+- `MyExercisesNotifier.delete` has no screen caller.
+- The history dedupe compares the server's `created_at` with the device clock.
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
@@ -867,20 +913,24 @@ exists.
 
 ## Next autonomous action
 
-**Cycle 10 recommendation (2026-11-23).** Cycle 9 is done: P0-FL-45a is #199, FL-45b #200, FL-46 #201, FL-47 #202, FL-48 #203; combined `-c9` @ `1b94044` CI 7/7. Decision-free work, data integrity first:
+**Cycle 11 recommendation (2026-11-23).** Cycle 10 is done:
+- P0-FL-49 is #207, FL-50a #208, FL-50b #205, FL-51 #204, FL-52 #206;
+- combined `-c10` @ `b7ec6ef`, CI 7/7 run `45240757852`.
 
-1. **P0-FL-49: remaining member-unconfirmed reads.** `activity_screen` notif_* readers (661/856) and `messaging_screen:122`, through `confirmedProfileRead` / `confirmedRoleRead`, with the same identity matrix. Home's Women's Health gender read is protected and stays untouched.
-2. **P0-FL-50: swallowed reads.** `CustomExerciseService` (null on failure), `ai_coach_service:177` and `custom_exercise_service:250/662/916` ([] on failure); the staff-screen error copy ("Assign failed.", empty pickers on a failed read).
-3. **Accessibility and test health.** `_CoachingModePage` 2× overflow; Compliance row 2×; deflake the business-profile and messaging photo tests under load; leaderboard tick on `coach_client_relationships`.
+Decision-free work, data integrity first:
+
+1. **P0-FL-53: remaining same-class swallows.** `getCoachOverlay` / `resolveExerciseMedia` (Coach Focus shows "Add your coaching" on a failed read); `createCoachingPack` result; `submitForGlobalLibrary` 0-row; `_enrich` raw error text; challenges failed read shown as "No active challenges"; intake picker `catch (_) {}`; booking `_load` / `_selectCoach` unrecorded; staff-screen "Assign failed." outside Copilot.
+2. **P0-FL-54: identity follow-up.** `coach_business_screen` profile row keyed to the signed-in coach (P2), with the identity matrix.
+3. **P0-FL-55: accessibility.** Activity "Enable" / "See All", AI Coach persona and memory chips (44px, button role, a semantic delete action); `_IntakeStepBar` at 3×; business transformation-photo in-flight guard; a test for a 200 `cancel-subscription` reply without `ok:true`.
 
 **Blocked on Julia (read-only):**
+- the **Copilot late-response remediation** (`docs/COPILOT_LATE_RESPONSE_REMEDIATION_PROPOSAL.md`, options A/B/C);
+- the **SEC-R3 / Wave 3B-4 ruling** for `predictClient`, `evaluateWeek` and `regenerateProgram`;
 - the **184/185 QA window** (`docs/QA_184_185_WINDOW_DECISION_BRIEF.md`);
-- the **SEC-R3 / Wave 3B-4 ruling**, for `predictClient`, `evaluateWeek` and `regenerateProgram` error reporting and the Copilot `_explain` / `_approve` session guard;
-- Decision 19 / F1;
-- server-side PHI read enforcement;
-- client `coaching_calls` status transitions and `coaching_calls` column authority (011 FOR ALL);
-- P0-SB-2 (Decisions 17, 18), P0-SB-3 (Decision 20) and member list (Decision 22);
-- Decisions 21, 23 and 24;
-- roster risk logging, Q-H1 and copilot blocking;
-- new this cycle: the Workout Zone unit lock, the 42501 wording, Action Center density at 1x, the admin/content_manager "Member" label;
-- merge order for the open stack #172–#203.
+- **Action Center density** (`docs/ACTION_CENTER_LAYOUT_OPTIONS.md`);
+- Decision 19 / F1; server-side PHI read enforcement; client `coaching_calls` status transitions and column authority (011 FOR ALL);
+- P0-SB-2 (Decisions 17, 18), P0-SB-3 (Decision 20) and member list (Decision 22); Decisions 21, 23 and 24;
+- cycle 9 questions: the Workout Zone unit lock, the 42501 wording, the admin/content_manager "Member" label;
+- cycle 10 questions: unconfirmed Activity defaults, observability PGRST202 reading, AI Coach grouped offline banner;
+- `home_screen.dart:817` (Women's Health held-profile read);
+- merge order for the open stack #172–#208.

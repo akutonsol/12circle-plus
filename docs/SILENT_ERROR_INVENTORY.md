@@ -107,3 +107,20 @@ All are CI 7/7 on their exact heads. Combined branch `integration/p0-flutter-sta
   - booking `_load` / `_selectCoach` show an error state but don't record it;
   - staff-screen copy "Assign failed.".
 - **Still blocked:** the SEC-R3 / Wave 3B-4 trio above.
+
+**Status 2026-11-23 (cycle 10):**
+- **#208 (P0-FL-50a):** all 14 `CustomExerciseService` swallow sites (63, 87, 250, 266, 584/591, 662, 680, 856, 864, 888, 916, 931, 942). Reads record and rethrow (a real "no row" is still null/[]); best-effort reads keep their default but record; observability failed figures are "—", never 0; deletes and approve/reject treat 0 rows as failure. This fixes a data-loss path: a failed Edit Exercise prefill no longer opens a blank form whose Save overwrote the exercise.
+- **#205 (P0-FL-50b):** `ai_coach_service` 7 reads record and rethrow (177, 216, 124/135/144/153, 100); 3 writes treat 0 rows as failure (112, 167, deleteMemory). Cards no longer generate a brief or review over a failed read, and persona chips can't save the default over the member's real persona.
+- **#207 (P0-FL-49):** identity, not a swallow. The Activity `notif_*` readers and the Messages empty state decide only from a read confirmed for the current member.
+- **#204 (P0-FL-51), #206 (P0-FL-52):** tests and accessibility only, with no error-path change.
+
+All are CI 7/7 on their exact heads. Combined branch `integration/p0-flutter-stack-c10` @ b7ec6ef: 4660 tests, CI 7/7 (run 45240757852).
+- **Still open (decision-free):**
+  - `getCoachOverlay` / `resolveExerciseMedia` set `lastError` and return null, and Coach Focus doesn't check it;
+  - `createCoachingPack` result is ignored; `submitForGlobalLibrary` has no 0-row check; `_enrich` shows raw `res.error`;
+  - a failed challenges read shows "No active challenges";
+  - the intake picker `catch (_) {}` (~4123) is unrecorded;
+  - booking `_load` / `_selectCoach` show an error state but don't record it;
+  - staff-screen copy "Assign failed.".
+- **Needs a ruling:** observability decision, certification and intelligence sub-reads return null for both "RPC absent" and "failed" (PGRST202 reading).
+- **Still blocked:** the SEC-R3 / Wave 3B-4 trio (`predictClient`, `evaluateWeek`, `regenerateProgram`). The Copilot late-response remediation proposal is in `docs/COPILOT_LATE_RESPONSE_REMEDIATION_PROPOSAL.md`.
