@@ -715,7 +715,9 @@ void main() {
     final node = t.getSemantics(add);
     expect(node.label, startsWith('Add'),
         reason: 'voice control matches the name by its visible text');
-    expect(node, containsSemantics(isButton: true, hasTapAction: true));
+    expect(node,
+        matchesSemantics(
+            label: 'Add action item', isButton: true, hasTapAction: true));
     expect(find.bySemanticsLabel('Add'), findsNothing,
         reason: 'one node, not a second bare "Add" beside it');
     handle.dispose();
