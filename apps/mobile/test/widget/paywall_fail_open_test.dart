@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show User;
 
 import 'package:circle_fitness/features/payments/data/payment_service.dart';
 import 'package:circle_fitness/features/payments/domain/entitlements.dart';
@@ -39,8 +40,18 @@ Widget _gate({
 }) =>
     ProviderScope(
       overrides: [
-        currentUserProfileProvider.overrideWith(
-            (ref) async => <String, dynamic>{'role': role}),
+        // P0-FL-44 · the gate takes a role only from a profile read for the
+        // member signed in now, so the fixture is a signed-in member and their
+        // own row (`id` matches).
+        currentUserProvider.overrideWithValue(User(
+          id: 'member-1',
+          appMetadata: const {},
+          userMetadata: const {},
+          aud: 'authenticated',
+          createdAt: '2026-11-01T00:00:00Z',
+        )),
+        currentUserProfileProvider.overrideWith((ref) async =>
+            <String, dynamic>{'id': 'member-1', 'role': role}),
         clientPlanProvider.overrideWith((ref) async => switch (plan) {
               AsyncData(:final value) => value,
               _ => throw Exception('entitlement read failed'),
