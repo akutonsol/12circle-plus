@@ -14,6 +14,7 @@ import '../../../core/observability/network_failure.dart';
 // P0-FL-11: the classifier moved to core; re-exported so importers of this
 // screen keep the name they had (it was this file's @visibleForTesting export).
 export '../../../core/observability/network_failure.dart' show isNetworkFailure;
+import '../../../core/widgets/load_failure_notice.dart';
 import '../../../core/widgets/named_icon_button.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -97,6 +98,9 @@ Widget _chipMulti(String label, List<String> options, List<String> selected,
 /// The gallery picker the Media tab uses (P0-FL-7: a test seam only).
 final exerciseMediaPickerProvider = Provider<ImagePicker>((ref) => ImagePicker());
 
+/// Where the edit form's prefill of an existing exercise stands.
+enum _Prefill { loading, failed, missing, loaded }
+
 class CreateExerciseScreen extends ConsumerStatefulWidget {
   const CreateExerciseScreen({super.key});
   @override
@@ -114,6 +118,14 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   String? _editingCoachId;
   String? _editingContentStatus; // content_status of the exercise being edited
   String? _existingImageUrl;
+
+  /// P0-FL-50a · the edit prefill (null = not opened to edit a row). A failed
+  /// read returned null and left the form BLANK — and once a name was typed,
+  /// Save wrote that blank form over the exercise. Until the row has loaded,
+  /// Save is held.
+  _Prefill? _prefill;
+  Object? _prefillError;
+  bool get _prefillPending => _prefill != null && _prefill != _Prefill.loaded;
 
   // Basic info
   final _nameCtrl    = TextEditingController();
@@ -167,17 +179,39 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
       Future.microtask(() {
         if (mounted) ref.read(editingExerciseProvider.notifier).state = null;
       });
+      _prefill = _Prefill.loading;
       _loadForEdit(editId);
     }
   }
 
+  /// Retry of a failed prefill (awaited by the notice, so it can't double-fire).
+  Future<void> _retryPrefill() {
+    final id = _editingId;
+    if (id == null) return Future.value();
+    setState(() => _prefill = _Prefill.loading);
+    return _loadForEdit(id);
+  }
+
   /// Load an existing exercise into the form for editing.
   Future<void> _loadForEdit(String id) async {
-    final row = await ref.read(customExerciseSvcProvider).getRawById(id);
-    if (row == null || !mounted) return;
+    Map<String, dynamic>? fetched;
+    try {
+      fetched = await ref.read(customExerciseSvcProvider).getRawById(id);
+    } catch (e) {
+      // Recorded by the service; said here, with a retry.
+      if (mounted) setState(() { _prefill = _Prefill.failed; _prefillError = e; });
+      return;
+    }
+    if (!mounted) return;
+    final row = fetched;
+    if (row == null) {
+      setState(() => _prefill = _Prefill.missing);
+      return;
+    }
     // Reuse the import normalizer (map the row's `name` to `exercise_name`).
     _applyNormalized(_normalizeImport({...row, 'exercise_name': row['name']}));
     setState(() {
+      _prefill = _Prefill.loaded;
       _editingCoachId = row['coach_id'] as String?;
       _editingContentStatus = row['content_status'] as String?;
       _visibility = (row['visibility'] as String?) ?? _visibility;
@@ -578,6 +612,8 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     // The SnackBar's "Save again" can be tapped while a save is running; the
     // Save button is disabled then, and so is this.
     if (_saving) return;
+    // P0-FL-50a · never save a form that does not hold the exercise yet.
+    if (_prefillPending) return;
     if (!_formKey.currentState!.validate()) {
       _tabs.animateTo(0);
       return;
@@ -882,6 +918,13 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     );
   }
 
+  Widget _prefillBanner(Widget child) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        color: _C.card,
+        child: Center(child: child),
+      );
+
   @override
   Widget build(BuildContext context) {
     final topPad = MediaQuery.of(context).padding.top;
@@ -920,11 +963,11 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
                     Text('Import JSON', style: TextStyle(color: _C.primary, fontSize: 12, fontWeight: FontWeight.w700)),
                   ]))),
               GestureDetector(
-                onTap: _saving ? null : _save,
+                onTap: _saving || _prefillPending ? null : _save,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   decoration: BoxDecoration(
-                    color: _C.brand,
+                    color: _prefillPending ? _C.brand.withValues(alpha: 0.35) : _C.brand,
                     borderRadius: BorderRadius.circular(20)),
                   child: _saving
                       ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(color: _C.wht, strokeWidth: 2))
@@ -943,6 +986,27 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
             ),
           ]),
         ),
+
+        // P0-FL-50a · the edit prefill: loading, failed (retry) or missing —
+        // never a blank form presented as the exercise.
+        if (_prefill == _Prefill.loading)
+          _prefillBanner(const Text('Loading the exercise…',
+              style: TextStyle(color: _C.mut, fontSize: 12))),
+        if (_prefill == _Prefill.failed)
+          _prefillBanner(LoadFailureNotice(
+            message: '${couldntMessage('load this exercise', _prefillError)}'
+                ' Saving is paused until it loads.',
+            semanticLabel: 'Try loading the exercise again',
+            textColor: _C.error,
+            accent: _C.primary,
+            onRetry: _retryPrefill)),
+        if (_prefill == _Prefill.missing)
+          _prefillBanner(Semantics(
+            liveRegion: true,
+            child: const Text(
+                "This exercise wasn't found — it may have been deleted. "
+                'Go back to the library to pick another.',
+                style: TextStyle(color: _C.amber, fontSize: 12)))),
 
         // Coaches editing an admin/platform exercise can only add media.
         if (_isCoachMediaOnly())

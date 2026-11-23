@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../exercise_database/data/custom_exercise_service.dart';
+import '../../../core/widgets/load_failure_notice.dart';
 import '../../../core/widgets/role_gate.dart';
 
 const _bg     = Color(0xFF0A0A0B);
@@ -71,6 +72,12 @@ class _State extends ConsumerState<ObservabilityScreen> {
     final cert = (d['certification'] as Map?) ?? {};
     final intel = (d['intelligence'] as Map?) ?? {};
     int i(dynamic v) => (v as num?)?.toInt() ?? 0;
+    // P0-FL-50a · a figure that couldn't be read is UNKNOWN ("—"), never 0.
+    final failed = ((d[CustomExerciseService.observabilityFailedKey] as List?) ?? const [])
+        .map((e) => e.toString()).toSet();
+    String count(String key) => failed.contains(key) ? '—' : '${i(d[key])}';
+    String pct(String key) =>
+        failed.contains(key) || d[key] == null ? '—' : '${d[key]}%';
     final certTotal = i(cert['total']);
     final certReady = i(cert['workout_builder']);
     final certPct = certTotal == 0 ? 0 : (certReady / certTotal * 100).round();
@@ -80,23 +87,37 @@ class _State extends ConsumerState<ObservabilityScreen> {
       const Text('Is the platform delivering coaching value?',
           style: TextStyle(color: _muted, fontSize: 12)),
       const SizedBox(height: 14),
+      if (failed.isNotEmpty) ...[
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(color: _panel2, borderRadius: BorderRadius.circular(12)),
+          child: LoadFailureNotice(
+            message: '${couldntMessage(failed.length == 1 ? 'load 1 figure' : 'load ${failed.length} figures', d[CustomExerciseService.observabilityErrorKey])}'
+                ' Those show as —.',
+            semanticLabel: 'Try loading the figures again',
+            textColor: _warn,
+            accent: _brand,
+            onRetry: _load),
+        ),
+        const SizedBox(height: 14),
+      ],
       _section('ENGINE ACTIVITY'),
       _grid([
-        _kpi('Programs generated', '${i(d['programs_generated'])}', _brand),
-        _kpi('Decision traces', '${i(d['decision_traces'])}', _brand),
-        _kpi('Predictions made', '${i(d['predictions'])}', _brand),
-        _kpi('Weekly reviews sent', '${i(d['weekly_reviews_sent'])}', _brand),
+        _kpi('Programs generated', count('programs_generated'), _brand),
+        _kpi('Decision traces', count('decision_traces'), _brand),
+        _kpi('Predictions made', count('predictions'), _brand),
+        _kpi('Weekly reviews sent', count('weekly_reviews_sent'), _brand),
       ]),
       const SizedBox(height: 18),
       _section('OUTCOMES'),
       _grid([
-        _kpi('Avg client adherence', d['avg_adherence'] == null ? '—' : '${d['avg_adherence']}%',
+        _kpi('Avg client adherence', pct('avg_adherence'),
             _adh(i(d['avg_adherence']))),
-        _kpi('Avg goal confidence', d['avg_goal_confidence'] == null ? '—' : '${d['avg_goal_confidence']}%',
+        _kpi('Avg goal confidence', pct('avg_goal_confidence'),
             _adh(i(d['avg_goal_confidence']))),
         _kpi('Avg recovery (traced)', a['avg_recovery'] == null ? '—' : '${a['avg_recovery']}',
             _adh(i(a['avg_recovery']))),
-        _kpi('Reviews (all states)', '${i(d['communications_total'])}', _muted),
+        _kpi('Reviews (all states)', count('communications_total'), _muted),
       ]),
       const SizedBox(height: 18),
       _section('DECISION INTELLIGENCE'),

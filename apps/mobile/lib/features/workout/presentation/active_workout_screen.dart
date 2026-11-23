@@ -16,6 +16,7 @@ import 'widgets/set_tracker_row.dart';
 import 'widgets/rest_timer_widget.dart';
 import 'widgets/zone_action.dart';
 import 'widgets/exercise_guide_sheet.dart';
+import 'widgets/swap_substitutes_list.dart';
 import '../../exercise_database/data/custom_exercise_service.dart';
 import '../../exercise_database/data/exercise_database_service.dart';
 import '../../../core/utils/rest_alarm.dart';
@@ -1352,12 +1353,9 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   Future<void> _showSwapSheet(int index, WorkoutExercise we) async {
     // Prefer the built-in library (reliable same-muscle matches); only if it has
     // nothing do we consult approved global custom exercises.
-    var subs = _librarySubstitutes(we);
-    if (subs.isEmpty) {
-      subs = await CustomExerciseService()
-          .getSubstitutes(we.exercise.name, we.exercise.muscleGroup);
-    }
-    if (!mounted) return;
+    // P0-FL-50a · the global read happens inside the sheet, so a failure is
+    // said there ("Couldn't load substitutes" + retry), not shown as "none".
+    final subs = _librarySubstitutes(we);
     showModalBottomSheet(
       context: context, backgroundColor: _card, isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
@@ -1372,21 +1370,11 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
             Text('Same muscle group · keeps your sets',
               style: TextStyle(color: _muted.withValues(alpha: 0.7), fontSize: 12)),
             const SizedBox(height: 12),
-            if (subs.isEmpty)
-              const Padding(padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text('No substitutes found.', style: TextStyle(color: _muted)))
-            else
-              // Scrollable so a long substitute list never overflows the sheet.
-              Flexible(child: ListView(
-                shrinkWrap: true,
-                padding: EdgeInsets.zero,
-                children: subs.map((s) => ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(s['name']?.toString() ?? '', style: const TextStyle(color: _white, fontSize: 14, fontWeight: FontWeight.w600)),
-                  subtitle: Text('${s['equipment'] ?? ''} · ${s['difficulty'] ?? ''}',
-                    style: TextStyle(color: _muted.withValues(alpha: 0.6), fontSize: 11)),
-                  trailing: const Icon(Icons.swap_horizontal_circle_rounded, color: _primary, size: 22),
-                  onTap: () { Navigator.pop(ctx); _swapExercise(index, we, s); })).toList())),
+            Flexible(child: SwapSubstitutesList(
+              librarySubs: subs,
+              loadGlobal: () => CustomExerciseService()
+                  .getSubstitutes(we.exercise.name, we.exercise.muscleGroup),
+              onPick: (s) { Navigator.pop(ctx); _swapExercise(index, we, s); })),
           ])))));
   }
 

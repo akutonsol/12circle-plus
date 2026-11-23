@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/widgets/load_failure_notice.dart';
 import '../../exercise_database/data/custom_exercise_service.dart';
 import '../../exercise_database/data/models/exercise_detail_model.dart';
 
@@ -29,7 +30,13 @@ class _ExerciseReviewScreenState extends State<ExerciseReviewScreen> {
     _future = _svc.getPendingGlobalSubmissions();
   }
 
-  void _reload() => setState(() => _future = _svc.getPendingGlobalSubmissions());
+  /// Re-reads the queue; returns when the read settles (a retry awaits it, so
+  /// it cannot fire twice). Its failure is shown by the builder, not thrown.
+  Future<void> _reload() {
+    final f = _svc.getPendingGlobalSubmissions();
+    setState(() { _future = f; });
+    return f.then((_) {}, onError: (_) {});
+  }
 
   Future<void> _moderate(ExerciseDetail ex, bool approve) async {
     setState(() => _busy.add(ex.id));
@@ -38,11 +45,15 @@ class _ExerciseReviewScreenState extends State<ExerciseReviewScreen> {
         : await _svc.rejectGlobalExercise(ex.id);
     if (!mounted) return;
     setState(() => _busy.remove(ex.id));
+    // P0-FL-50a · the service has recorded the failure (a 0-row update
+    // included); the admin is told which action did not happen.
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(ok
           ? (approve ? '"${ex.name}" approved to the global library.'
                      : '"${ex.name}" rejected.')
-          : 'Action failed. Please try again.')));
+          : couldntMessage(
+              approve ? 'approve "${ex.name}"' : 'reject "${ex.name}"',
+              _svc.lastError))));
     if (ok) _reload();
   }
 
@@ -61,6 +72,18 @@ class _ExerciseReviewScreenState extends State<ExerciseReviewScreen> {
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator(color: _brand));
+          }
+          // P0-FL-50a · a failed read is not "No pending submissions".
+          if (snap.hasError) {
+            return Center(child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: LoadFailureNotice(
+                message: couldntMessage('load the submissions', snap.error),
+                semanticLabel: 'Try loading the submissions again',
+                textColor: _danger,
+                accent: _brand,
+                onRetry: _reload),
+            ));
           }
           final pending = snap.data ?? [];
           if (pending.isEmpty) {
