@@ -3,6 +3,7 @@ import '../domain/coach_surface.dart';
 import 'widgets/coach_surface_tabs.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/ai_coach_service.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const _bg    = Color(0xFF030303);
@@ -38,6 +39,11 @@ class _AICoachScreenState extends ConsumerState<AICoachScreen> {
   AICoachMode _mode = AICoachMode.general;
   bool _loading = false;
 
+  /// The history read failed: the conversation says so (with a retry) instead
+  /// of reopening as a brand-new chat with the welcome message.
+  Object? _historyError;
+  bool _historyRetrying = false;
+
   @override
   void initState() {
     super.initState();
@@ -52,19 +58,40 @@ class _AICoachScreenState extends ConsumerState<AICoachScreen> {
   }
 
   Future<void> _loadHistory() async {
-    final history = await _svc.getConversationHistory(limit: 10);
+    final List<Map<String, dynamic>> history;
+    try {
+      history = await _svc.getConversationHistory(limit: 10);
+    } catch (e) {
+      // Recorded by the service. No welcome: this is not a new conversation.
+      if (!mounted) return;
+      setState(() { _historyError = e; _historyRetrying = false; });
+      return;
+    }
     if (!mounted) return;
     setState(() {
-      for (final h in history) {
-        _messages.add(_Message(h['user_message'] as String, isUser: true));
-        _messages.add(_Message(h['ai_response'] as String, isUser: false));
-      }
+      _historyError = null;
+      _historyRetrying = false;
+      // Earlier exchanges go BEFORE anything said since the screen opened
+      // (a retry can succeed after the member has already sent a message).
+      _messages.insertAll(0, [
+        for (final h in history) ...[
+          _Message(h['user_message'] as String, isUser: true),
+          _Message(h['ai_response'] as String, isUser: false),
+        ],
+      ]);
+      if (_messages.isEmpty) _addWelcome();
     });
-    if (_messages.isEmpty) {
-      _addWelcome();
-    }
     _scrollToBottom();
   }
+
+  void _retryHistory() {
+    if (_historyRetrying) return;
+    setState(() => _historyRetrying = true);
+    _loadHistory();
+  }
+
+  /// One leading row (the failure notice) while the history read has failed.
+  int get _historyLead => _historyError != null ? 1 : 0;
 
   void _addWelcome() {
     _messages.add(const _Message(
@@ -210,10 +237,22 @@ class _AICoachScreenState extends ConsumerState<AICoachScreen> {
               : ListView.builder(
                   controller: _scroll,
                   padding: const EdgeInsets.all(16),
-                  itemCount: _messages.length + (_loading ? 1 : 0),
+                  itemCount: _historyLead + _messages.length + (_loading ? 1 : 0),
                   itemBuilder: (_, i) {
-                    if (i == _messages.length) return const _TypingIndicator();
-                    return _Bubble(msg: _messages[i]);
+                    if (_historyLead == 1 && i == 0) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: SectionLoadFailure(
+                          what: 'your conversation',
+                          error: _historyError,
+                          busy: _historyRetrying,
+                          onRetry: _retryHistory,
+                        ),
+                      );
+                    }
+                    final j = i - _historyLead;
+                    if (j == _messages.length) return const _TypingIndicator();
+                    return _Bubble(msg: _messages[j]);
                   },
                 ),
         ),
@@ -445,6 +484,7 @@ class _DailyInsightCardState extends State<_DailyInsightCard> {
   final _svc = AICoachService();
   Map<String, dynamic>? _insight;
   bool _loading = true;
+  Object? _loadError;
 
   @override
   void initState() {
@@ -452,9 +492,23 @@ class _DailyInsightCardState extends State<_DailyInsightCard> {
     _load();
   }
 
+  void _retry() {
+    if (_loading) return;
+    setState(() => _loading = true);
+    _load();
+  }
+
   Future<void> _load() async {
-    final today = await _svc.getTodayInsight();
+    final Map<String, dynamic>? today;
+    try {
+      today = await _svc.getTodayInsight();
+    } catch (e) {
+      // Not "no brief yet": never generate over a brief that may exist.
+      if (mounted) setState(() { _loadError = e; _loading = false; });
+      return;
+    }
     if (!mounted) return;
+    _loadError = null;
     // Auto-generate today's brief on open if it doesn't exist yet (bounded to
     // once per day by the per-date dedup), so it's just there each morning.
     if (today == null) { await _generate(); return; }
@@ -509,7 +563,10 @@ class _DailyInsightCardState extends State<_DailyInsightCard> {
             const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)),
         ]),
         const SizedBox(height: 12),
-        if (_insight == null && !_loading) ...[
+        if (_loadError != null)
+          SectionLoadFailure(
+            what: "today's brief", error: _loadError, busy: _loading, onRetry: _retry)
+        else if (_insight == null && !_loading) ...[
           const Text('Get a personalized brief from your data — recovery, adherence, and goals.',
             style: TextStyle(color: _mut, fontSize: 13, height: 1.4)),
           const SizedBox(height: 12),
@@ -617,11 +674,25 @@ class _WeeklyReviewCardState extends State<_WeeklyReviewCard> {
   final _svc = AICoachService();
   Map<String, dynamic>? _review;
   bool _loading = true;
+  Object? _loadError;
 
   @override void initState() { super.initState(); _load(); }
+  void _retry() {
+    if (_loading) return;
+    setState(() => _loading = true);
+    _load();
+  }
   Future<void> _load() async {
-    final r = await _svc.getLatestReview();
+    final Map<String, dynamic>? r;
+    try {
+      r = await _svc.getLatestReview();
+    } catch (e) {
+      // Not "no recent review": never generate one on a failed read.
+      if (mounted) setState(() { _loadError = e; _loading = false; });
+      return;
+    }
     if (!mounted) return;
+    _loadError = null;
     // Auto-generate weekly if there's no review from the last 7 days.
     final stale = r == null || _staleEnd(r['period_end']?.toString());
     if (stale) { await _generate(); return; }
@@ -653,7 +724,10 @@ class _WeeklyReviewCardState extends State<_WeeklyReviewCard> {
     return _coachCard(
       icon: Icons.calendar_month_rounded, label: 'WEEKLY REVIEW',
       trailing: _loading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)) : null,
-      child: _review == null && !_loading
+      child: _loadError != null
+          ? SectionLoadFailure(
+              what: 'your weekly review', error: _loadError, busy: _loading, onRetry: _retry)
+          : _review == null && !_loading
           ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('Recap your week — workouts, habits, and progress toward your goal.',
                 style: TextStyle(color: _mut, fontSize: 13, height: 1.4)),
@@ -703,11 +777,21 @@ class _GoalPredictionCardState extends State<_GoalPredictionCard> {
   final _svc = AICoachService();
   Map<String, dynamic>? _pred;
   bool _loading = true;
+  Object? _loadError;
 
   @override void initState() { super.initState(); _load(); }
+  void _retry() {
+    if (_loading) return;
+    setState(() => _loading = true);
+    _load();
+  }
   Future<void> _load() async {
-    final p = await _svc.getLatestPrediction();
-    if (mounted) setState(() { _pred = p; _loading = false; });
+    try {
+      final p = await _svc.getLatestPrediction();
+      if (mounted) setState(() { _pred = p; _loadError = null; _loading = false; });
+    } catch (e) {
+      if (mounted) setState(() { _loadError = e; _loading = false; });
+    }
   }
   Future<void> _generate() async {
     setState(() => _loading = true);
@@ -727,7 +811,10 @@ class _GoalPredictionCardState extends State<_GoalPredictionCard> {
     return _coachCard(
       icon: Icons.insights_rounded, label: 'GOAL PREDICTION',
       trailing: _loading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)) : null,
-      child: _pred == null && !_loading
+      child: _loadError != null
+          ? SectionLoadFailure(
+              what: 'your goal prediction', error: _loadError, busy: _loading, onRetry: _retry)
+          : _pred == null && !_loading
           ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('Project your goal date from your current pace.',
                 style: TextStyle(color: _mut, fontSize: 13, height: 1.4)),
@@ -772,11 +859,21 @@ class _MealIdeasCardState extends State<_MealIdeasCard> {
   final _svc = AICoachService();
   List<dynamic> _meals = [];
   bool _loading = true;
+  Object? _loadError;
   @override void initState() { super.initState(); _load(); }
+  void _retry() {
+    if (_loading) return;
+    setState(() => _loading = true);
+    _load();
+  }
   Future<void> _load() async {
-    final i = await _svc.getLatestInsight('meal_suggestion');
-    final m = (i?['data'] as Map?)?['meals'];
-    if (mounted) setState(() { _meals = m is List ? m : []; _loading = false; });
+    try {
+      final i = await _svc.getLatestInsight('meal_suggestion');
+      final m = (i?['data'] as Map?)?['meals'];
+      if (mounted) setState(() { _meals = m is List ? m : []; _loadError = null; _loading = false; });
+    } catch (e) {
+      if (mounted) setState(() { _loadError = e; _loading = false; });
+    }
   }
   Future<void> _gen() async {
     setState(() => _loading = true);
@@ -788,7 +885,10 @@ class _MealIdeasCardState extends State<_MealIdeasCard> {
   Widget build(BuildContext context) => _coachCard(
     icon: Icons.restaurant_rounded, label: 'MEAL IDEAS',
     trailing: _loading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)) : null,
-    child: _meals.isEmpty && !_loading
+    child: _loadError != null
+        ? SectionLoadFailure(
+            what: 'your meal ideas', error: _loadError, busy: _loading, onRetry: _retry)
+        : _meals.isEmpty && !_loading
         ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Get meals that fit your remaining macros for today.',
               style: TextStyle(color: _mut, fontSize: 13, height: 1.4)),
@@ -828,10 +928,20 @@ class _ProgressInsightCardState extends State<_ProgressInsightCard> {
   final _svc = AICoachService();
   Map<String, dynamic>? _it;
   bool _loading = true;
+  Object? _loadError;
   @override void initState() { super.initState(); _load(); }
+  void _retry() {
+    if (_loading) return;
+    setState(() => _loading = true);
+    _load();
+  }
   Future<void> _load() async {
-    final i = await _svc.getLatestInsight('progress');
-    if (mounted) setState(() { _it = i; _loading = false; });
+    try {
+      final i = await _svc.getLatestInsight('progress');
+      if (mounted) setState(() { _it = i; _loadError = null; _loading = false; });
+    } catch (e) {
+      if (mounted) setState(() { _loadError = e; _loading = false; });
+    }
   }
   Future<void> _gen() async {
     setState(() => _loading = true);
@@ -843,7 +953,10 @@ class _ProgressInsightCardState extends State<_ProgressInsightCard> {
   Widget build(BuildContext context) => _coachCard(
     icon: Icons.trending_up_rounded, label: 'PROGRESS INSIGHT',
     trailing: _loading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)) : null,
-    child: _it == null && !_loading
+    child: _loadError != null
+        ? SectionLoadFailure(
+            what: 'your progress insight', error: _loadError, busy: _loading, onRetry: _retry)
+        : _it == null && !_loading
         ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Surface your biggest win from the data — strength, streaks, trends.',
               style: TextStyle(color: _mut, fontSize: 13, height: 1.4)),
@@ -869,10 +982,20 @@ class _RiskCardState extends State<_RiskCard> {
   final _svc = AICoachService();
   Map<String, dynamic>? _it;
   bool _loading = true;
+  Object? _loadError;
   @override void initState() { super.initState(); _load(); }
+  void _retry() {
+    if (_loading) return;
+    setState(() => _loading = true);
+    _load();
+  }
   Future<void> _load() async {
-    final i = await _svc.getLatestInsight('risk');
-    if (mounted) setState(() { _it = i; _loading = false; });
+    try {
+      final i = await _svc.getLatestInsight('risk');
+      if (mounted) setState(() { _it = i; _loadError = null; _loading = false; });
+    } catch (e) {
+      if (mounted) setState(() { _loadError = e; _loading = false; });
+    }
   }
   Future<void> _gen() async {
     setState(() => _loading = true);
@@ -893,7 +1016,10 @@ class _RiskCardState extends State<_RiskCard> {
     return _coachCard(
       icon: Icons.health_and_safety_rounded, label: 'RISK ASSESSMENT',
       trailing: _loading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)) : null,
-      child: _it == null && !_loading
+      child: _loadError != null
+          ? SectionLoadFailure(
+              what: 'your risk assessment', error: _loadError, busy: _loading, onRetry: _retry)
+          : _it == null && !_loading
           ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('Spot plateau, drop-off, and injury risk before they happen.',
                 style: TextStyle(color: _mut, fontSize: 13, height: 1.4)),
@@ -943,10 +1069,24 @@ class _CoachPersonaCardState extends State<_CoachPersonaCard> {
   String _style = 'motivational';
   bool _loading = true;
 
+  /// The persona read failed. Until a read is confirmed the member's real
+  /// style is unknown, so no style is shown as theirs and no chip is offered:
+  /// one tap would otherwise save a default over the persona they chose.
+  Object? _loadError;
+
   @override void initState() { super.initState(); _load(); }
+  void _retry() {
+    if (_loading) return;
+    setState(() => _loading = true);
+    _load();
+  }
   Future<void> _load() async {
-    final p = await _svc.getPersona();
-    if (mounted) setState(() { _style = (p['style']?.toString() ?? 'motivational'); _loading = false; });
+    try {
+      final p = await _svc.getPersona();
+      if (mounted) setState(() { _style = (p['style']?.toString() ?? 'motivational'); _loadError = null; _loading = false; });
+    } catch (e) {
+      if (mounted) setState(() { _loadError = e; _loading = false; });
+    }
   }
   Future<void> _select(String style, String tone) async {
     final previous = _style;
@@ -962,7 +1102,10 @@ class _CoachPersonaCardState extends State<_CoachPersonaCard> {
   Widget build(BuildContext context) {
     return _coachCard(
       icon: Icons.tune_rounded, label: 'COACH STYLE',
-      child: _loading
+      child: _loadError != null
+          ? SectionLoadFailure(
+              what: 'your coach style', error: _loadError, busy: _loading, onRetry: _retry)
+          : _loading
           ? const SizedBox(height: 20)
           : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('Same advice, your preferred delivery.',
@@ -1002,18 +1145,35 @@ class _CoachingMemoryCardState extends State<_CoachingMemoryCard> {
     ('injury', 'Injury', Color(0xFFF59E0B)),
   ];
 
+  /// The read failed: never "nothing remembered" — that tells the member the
+  /// health facts the coach keeps (injuries included) are gone.
+  Object? _loadError;
+
   @override void initState() { super.initState(); _load(); }
+  void _retry() {
+    if (_loading) return;
+    setState(() => _loading = true);
+    _load();
+  }
   Future<void> _load() async {
-    final m = await _svc.getMemories();
-    if (mounted) setState(() { _memories = m; _loading = false; });
+    try {
+      final m = await _svc.getMemories();
+      if (mounted) setState(() { _memories = m; _loadError = null; _loading = false; });
+    } catch (e) {
+      if (mounted) setState(() { _loadError = e; _loading = false; });
+    }
   }
 
   Future<void> _add() async {
     final res = await showDialog<(String, String)>(
       context: context, builder: (_) => const _AddMemoryDialog());
     if (res == null) return;
-    await _svc.addMemory(res.$1, res.$2);
+    final ok = await _svc.addMemory(res.$1, res.$2);
     await _load();
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text("Couldn't save that for your coach — try again.")));
+    }
   }
 
   Color _kindColor(String kind) {
@@ -1031,7 +1191,10 @@ class _CoachingMemoryCardState extends State<_CoachingMemoryCard> {
           Icon(Icons.add_rounded, color: _pri, size: 16),
           Text('Add', style: TextStyle(color: _pri, fontSize: 12, fontWeight: FontWeight.w700)),
         ])),
-      child: _loading
+      child: _loadError != null
+          ? SectionLoadFailure(
+              what: 'what your coach remembers', error: _loadError, busy: _loading, onRetry: _retry)
+          : _loading
           ? const SizedBox(height: 20)
           : _memories.isEmpty
               ? const Text('Tell your coach what you like, dislike, and any injuries — it remembers and adapts your plan.',
