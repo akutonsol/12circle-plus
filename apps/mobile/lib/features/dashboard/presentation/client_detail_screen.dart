@@ -356,7 +356,9 @@ class _OverviewTab extends ConsumerWidget {
           Row(children: [
             const Icon(Icons.auto_awesome, color: _brand, size: 16),
             const SizedBox(width: 6),
-            const Text('AI Client Summary', style: TextStyle(color: _mut, fontSize: 12, fontWeight: FontWeight.w600)),
+            // Flexible: at 2x text on a narrow phone the title wraps instead
+            // of overflowing (P0-FL-48).
+            const Flexible(child: Text('AI Client Summary', style: TextStyle(color: _mut, fontSize: 12, fontWeight: FontWeight.w600))),
           ]),
           const SizedBox(height: 10),
           // Built from the assessment. Without one it would read "No specific
@@ -1752,17 +1754,19 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
     final visible = widget.actions.where((a) => !_cleared.contains(_key(a))).toList();
     return _cardBox(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
-        const Text('Coach Action Center',
-          style: TextStyle(color: _mut, fontSize: 12, fontWeight: FontWeight.w600)),
-        const Spacer(),
+        // Expanded (was Text + Spacer): the title wraps at large text instead
+        // of pushing Add off the card (P0-FL-48).
+        const Expanded(child: Text('Coach Action Center',
+          style: TextStyle(color: _mut, fontSize: 12, fontWeight: FontWeight.w600))),
         // Keep the generated items; let the coach add their own (once paid).
         if (widget.paidPlan == true)
           TextButton.icon(
             onPressed: () => showAssignActionItemSheet(context, ref, widget.clientId),
             icon: const Icon(Icons.add_rounded, color: _brand, size: 16),
             label: const Text('Add', style: TextStyle(color: _brand, fontSize: 12, fontWeight: FontWeight.w700)),
+            // 44px floor (P0-FL-48); it was shrink-wrapped to the text.
             style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6),
-              minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap)),
+              minimumSize: const Size(44, 44), tapTargetSize: MaterialTapTargetSize.shrinkWrap)),
       ]),
       const SizedBox(height: 10),
       // Not a live region: the assessment's own failure notice on this page
@@ -1785,30 +1789,46 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
     ]));
   }
 
+  // P0-FL-48: the item's text and its three actions shared one Row, so at
+  // large text (and on a 360dp phone with the test font even at 1x) the
+  // buttons pushed the row past the card. The text now has the full width
+  // and wraps; the actions sit under it, right-aligned, and wrap if needed.
   Widget _row(Map<String, String> a) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
     decoration: BoxDecoration(
       color: _brand.withValues(alpha: 0.06),
       borderRadius: BorderRadius.circular(10),
       border: Border.all(color: _brand.withValues(alpha: 0.15))),
-    child: Row(children: [
-      Icon(_iconFor(a['icon'] ?? ''), color: _brand, size: 16),
-      const SizedBox(width: 10),
-      Expanded(child: Text(_text(a),
-        style: const TextStyle(color: _wht, fontSize: 13, fontWeight: FontWeight.w600))),
-      _miniBtn('Approve', _tert, () => _approve(a), bold: true),
-      _miniBtn('Edit', _pri, () => _edit(a)),
-      _miniBtn('Dismiss', _mut, () => _dismiss(a)),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(_iconFor(a['icon'] ?? ''), color: _brand, size: 16),
+        const SizedBox(width: 10),
+        Expanded(child: Text(_text(a),
+          style: const TextStyle(color: _wht, fontSize: 13, fontWeight: FontWeight.w600))),
+      ]),
+      Wrap(alignment: WrapAlignment.end, spacing: 4, children: [
+        _miniBtn('Approve', _text(a), _tert, () => _approve(a), bold: true),
+        _miniBtn('Edit', _text(a), _pri, () => _edit(a)),
+        _miniBtn('Dismiss', _text(a), _mut, () => _dismiss(a)),
+      ]),
     ]));
 
-  Widget _miniBtn(String label, Color color, VoidCallback onTap, {bool bold = false}) => TextButton(
-    onPressed: onTap,
-    style: TextButton.styleFrom(
-      foregroundColor: color,
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-      minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-    child: Text(label, style: TextStyle(fontSize: 11,
-      fontWeight: bold ? FontWeight.w700 : FontWeight.w400)));
+  /// 44px floor (they were shrink-wrapped to ~11px text), and a screen-reader
+  /// name that says WHICH item the action is for — every row has its own
+  /// Approve / Edit / Dismiss, which were otherwise indistinguishable.
+  Widget _miniBtn(String label, String item, Color color, VoidCallback onTap, {bool bold = false}) => Semantics(
+    button: true,
+    label: '$label: $item',
+    excludeSemantics: true,
+    onTap: onTap,
+    child: TextButton(
+      onPressed: onTap,
+      style: TextButton.styleFrom(
+        foregroundColor: color,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        minimumSize: const Size(44, 44), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+      child: Text(label, style: TextStyle(fontSize: 11,
+        fontWeight: bold ? FontWeight.w700 : FontWeight.w400))));
 
   IconData _iconFor(String key) => switch (key) {
     'fitness'  => Icons.fitness_center,
@@ -1827,18 +1847,24 @@ class _ScoreRing extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pct = total / 100;
+    // P0-FL-48: the readout overflowed the fixed 72dp box at 2x text. The box
+    // now grows with the text scale (72dp at 1x, as before; capped at 112 so
+    // the breakdown beside it keeps room), and the readout is scaled down
+    // only if it still would not fit.
+    final d = MediaQuery.textScalerOf(context).scale(72).clamp(72.0, 112.0);
     return SizedBox(
-      width: 72, height: 72,
+      width: d, height: d,
       child: Stack(alignment: Alignment.center, children: [
         CircularProgressIndicator(
           value: pct, strokeWidth: 7,
           backgroundColor: _brd,
           valueColor: AlwaysStoppedAnimation(
             total >= 80 ? _green : total >= 50 ? _pri : _red)),
-        Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Text('$total', style: const TextStyle(color: _wht, fontSize: 18, fontWeight: FontWeight.w800)),
-          const Text('/100', style: TextStyle(color: _mut, fontSize: 9)),
-        ]),
+        FittedBox(fit: BoxFit.scaleDown,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('$total', style: const TextStyle(color: _wht, fontSize: 18, fontWeight: FontWeight.w800)),
+            const Text('/100', style: TextStyle(color: _mut, fontSize: 9)),
+          ])),
       ]));
   }
 }
@@ -1878,11 +1904,12 @@ class _ActionButton extends StatelessWidget {
         color: _brand.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: _brand.withValues(alpha: 0.2))),
+      // Expanded (was Text + Spacer): a long label wraps at large text instead
+      // of overflowing the row (P0-FL-48).
       child: Row(children: [
         Icon(icon, color: _brand, size: 18),
         const SizedBox(width: 12),
-        Text(label, style: const TextStyle(color: _wht, fontSize: 13, fontWeight: FontWeight.w600)),
-        const Spacer(),
+        Expanded(child: Text(label, style: const TextStyle(color: _wht, fontSize: 13, fontWeight: FontWeight.w600))),
         const Icon(Icons.arrow_forward_ios, color: _mut, size: 14),
       ])));
 }

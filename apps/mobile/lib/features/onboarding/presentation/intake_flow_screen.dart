@@ -1000,7 +1000,12 @@ class _GradientButton extends StatelessWidget {
       onTap: enabled ? onTap : null,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        height: height,
+        // P0-FL-48: [height] is a floor, not a fixed height. At 1x every label
+        // is one line and the button is exactly [height] tall, as before; at
+        // large text the label wraps and the button grows instead of
+        // overflowing its row.
+        constraints: BoxConstraints(minHeight: height),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
         decoration: BoxDecoration(
           color: enabled ? _btnPurple : _surfCH,
           borderRadius: BorderRadius.circular(999),
@@ -1012,11 +1017,12 @@ class _GradientButton extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(label,
+            Flexible(child: Text(label,
+              textAlign: TextAlign.center,
               style: TextStyle(
                 color: enabled ? Colors.white : _onSurfV.withValues(alpha: 0.5),
                 fontSize: 16, fontWeight: FontWeight.w700,
-              )),
+              ))),
             if (icon != null) ...[
               const SizedBox(width: 8),
               Icon(icon, color: enabled ? Colors.white : _onSurfV.withValues(alpha: 0.5), size: 20),
@@ -4034,11 +4040,21 @@ class _Step8PageState extends State<_Step8Page> {
                   onTap: _uploadAndContinue,
                 ),
               ),
-              const SizedBox(height: 12),
-              GestureDetector(
-                onTap: widget.onSkip,
-                child: const Text('Skip for now',
-                  style: TextStyle(color: _onSurfV, fontSize: 14)),
+              // P0-FL-48: was a bare text-height tap target with no button
+              // role. Now a >= 44px button; the 12px gap above it is folded
+              // into the target's own padding so the bar barely grows.
+              Semantics(
+                button: true,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: widget.onSkip,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+                    child: const Center(widthFactor: 1, heightFactor: 1,
+                      child: Text('Skip for now',
+                        style: TextStyle(color: _onSurfV, fontSize: 14))),
+                  ),
+                ),
               ),
             ],
           ),
@@ -4120,8 +4136,10 @@ class _PhotoUploadCardState extends State<_PhotoUploadCard> {
       backgroundColor: _surfC,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      // P0-FL-48: scrollable, so at large text on a small phone every row
+      // stays reachable instead of being pushed off the bottom of the sheet.
       builder: (ctx) => SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -4132,6 +4150,7 @@ class _PhotoUploadCardState extends State<_PhotoUploadCard> {
                 decoration: BoxDecoration(
                   color: _outlineV, borderRadius: BorderRadius.circular(2))),
               Text('Add ${widget.label}',
+                textAlign: TextAlign.center,
                 style: const TextStyle(color: _onSurf, fontSize: 17, fontWeight: FontWeight.w700)),
               const SizedBox(height: 16),
               _PickerRow(
@@ -4183,7 +4202,11 @@ class _PhotoUploadCardState extends State<_PhotoUploadCard> {
     return GestureDetector(
       onTap: () => _showOptions(context),
       child: Container(
-        height: 140,
+        // P0-FL-48: a picked photo fills a fixed 140px frame as before; the
+        // empty card's 140px is a floor, so its label, hint and "Tap to add"
+        // are never cut off by the frame at large text.
+        height: hasAnyPhoto ? 140 : null,
+        constraints: const BoxConstraints(minHeight: 140),
         clipBehavior: Clip.hardEdge,
         decoration: BoxDecoration(
           color: hasAnyPhoto ? Colors.transparent : Colors.white.withValues(alpha: 0.03),
@@ -4213,8 +4236,10 @@ class _PhotoUploadCardState extends State<_PhotoUploadCard> {
                           : Icons.check_circle,
                         color: _tertiary, size: 16),
                       const SizedBox(width: 6),
-                      Text(widget.label, style: const TextStyle(
-                        color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                      // Flexible: wraps at large text instead of pushing the
+                      // row past the card (P0-FL-48).
+                      Flexible(child: Text(widget.label, style: const TextStyle(
+                        color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600))),
                       const SizedBox(width: 10),
                       Flexible(child: Text(
                         hasNetworkPhoto || widget.uploaded
@@ -4227,8 +4252,12 @@ class _PhotoUploadCardState extends State<_PhotoUploadCard> {
                 ),
               ),
             ])
-          : Column(
+          : Padding(
+              // Breathing room once the content outgrows the 140px floor.
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
                   width: 48, height: 48,
@@ -4238,15 +4267,16 @@ class _PhotoUploadCardState extends State<_PhotoUploadCard> {
                   child: Icon(widget.icon, color: _primary, size: 24),
                 ),
                 const SizedBox(height: 10),
-                Text(widget.label, style: const TextStyle(
+                Text(widget.label, textAlign: TextAlign.center, style: const TextStyle(
                   color: _onSurf, fontSize: 15, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 4),
-                Text(widget.hint, style: const TextStyle(color: _onSurfV, fontSize: 12)),
+                Text(widget.hint, textAlign: TextAlign.center,
+                  style: const TextStyle(color: _onSurfV, fontSize: 12)),
                 const SizedBox(height: 6),
-                const Text('Tap to add',
+                const Text('Tap to add', textAlign: TextAlign.center,
                   style: TextStyle(color: _priCont, fontSize: 11, fontWeight: FontWeight.w600)),
               ],
-            ),
+            )),
       ),
     );
   }
@@ -4270,8 +4300,9 @@ class _PickerRow extends StatelessWidget {
       child: Row(children: [
         Icon(icon, color: color, size: 22),
         const SizedBox(width: 14),
-        Text(label, style: TextStyle(
-          color: color, fontSize: 16, fontWeight: FontWeight.w600)),
+        // Expanded: the label wraps at large text (P0-FL-48).
+        Expanded(child: Text(label, style: TextStyle(
+          color: color, fontSize: 16, fontWeight: FontWeight.w600))),
       ]),
     ),
   );

@@ -243,13 +243,16 @@ class AuthButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // P0-FL-48: a button with no handler is as dead as a loading one. Before,
+    // `enabled: !loading` announced a null-onTap button as active.
+    final enabled = onTap != null && !loading;
     return Semantics(
       button: true,
-      enabled: !loading,
+      enabled: enabled,
       // The Text child supplies the name. Adding `label:` as well produced
       // "Sign in\nSign in" in the on-device semantics tree.
       child: GestureDetector(
-        onTap: loading ? null : onTap,
+        onTap: enabled ? onTap : null,
         child: Container(
           height: 52, width: double.infinity,
           decoration: BoxDecoration(
@@ -325,11 +328,21 @@ class AuthFooterLink extends StatelessWidget {
   final VoidCallback onTap;
   const AuthFooterLink({super.key, required this.prefix, required this.action, required this.onTap});
   @override
-  Widget build(BuildContext context) => Center(child: GestureDetector(
-    onTap: onTap,
-    child: Text.rich(TextSpan(children: [
-      TextSpan(text: '$prefix ', style: const TextStyle(color: AuthColors.sub, fontSize: 14)),
-      TextSpan(text: action, style: const TextStyle(color: AuthColors.purpleLight, fontSize: 14, fontWeight: FontWeight.w800)),
-    ])),
+  // P0-FL-48: was a bare text-height (~17px) tap target with no button role.
+  // Now a button whose whole 44px band answers a tap; the text is its name.
+  Widget build(BuildContext context) => Center(child: Semantics(
+    button: true,
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+        child: Center(widthFactor: 1, heightFactor: 1,
+          child: Text.rich(TextSpan(children: [
+            TextSpan(text: '$prefix ', style: const TextStyle(color: AuthColors.sub, fontSize: 14)),
+            TextSpan(text: action, style: const TextStyle(color: AuthColors.purpleLight, fontSize: 14, fontWeight: FontWeight.w800)),
+          ]))),
+      ),
+    ),
   ));
 }

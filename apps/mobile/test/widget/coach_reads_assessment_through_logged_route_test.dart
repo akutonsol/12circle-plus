@@ -245,10 +245,13 @@ Future<void> _io(WidgetTester t) async {
 }
 
 Future<void> _pumpPage(WidgetTester t,
-    {double width = 1200, double textScale = 1}) async {
+    {double width = 1200,
+    double height = 4000,
+    double textScale = 1,
+    bool paid = false}) async {
   t.view
     ..devicePixelRatio = 1
-    ..physicalSize = Size(width, 4000);
+    ..physicalSize = Size(width, height);
   addTearDown(t.view.reset);
   t.platformDispatcher.textScaleFactorTestValue = textScale;
   addTearDown(t.platformDispatcher.clearTextScaleFactorTestValue);
@@ -256,7 +259,7 @@ Future<void> _pumpPage(WidgetTester t,
     overrides: [
       // Only reads unrelated to the assessment are substituted; the page's
       // profile read and assessment read are REAL, against the fake server.
-      clientHasPaidPlanProvider(_clientId).overrideWith((ref) async => false),
+      clientHasPaidPlanProvider(_clientId).overrideWith((ref) async => paid),
       clientScheduleProvider(_clientId).overrideWith((ref) async => null),
       clientScoreProvider(_clientId).overrideWith((ref) async => null),
       myProgramsProvider
@@ -546,29 +549,38 @@ void main() {
     handle.dispose();
   });
 
+  /// Pumps the page with every FlutterError — overflow reports included —
+  /// collected (first line of each) rather than aborting at the first, so a
+  /// failing expectation lists every overflow on the page.
+  Future<List<String>> pumpCollectingErrors(WidgetTester t,
+      {required double width, double textScale = 1, bool paid = false}) async {
+    // Tall enough that the ListView builds EVERY card at 2x (at 4000 the
+    // Coaching services rows were never built, so their overflow went unseen).
+    final height = textScale > 1 ? 16000.0 : 4000.0;
+    final previous = FlutterError.onError;
+    final errors = <String>[];
+    FlutterError.onError = (d) =>
+        errors.add(d.exceptionAsString().split('\n').first);
+    try {
+      await _pumpPage(t,
+          width: width, height: height, textScale: textScale, paid: paid);
+    } finally {
+      FlutterError.onError = previous;
+    }
+    return errors;
+  }
+
   for (final state in [_Rpc.http500, _Rpc.denied]) {
     testWidgets(
         'UX-3: at 2x text on a 320dp screen the ${state.name} badge neither '
-        'overflows nor squeezes the name column', (t) async {
-      // Other cards on this page (score ring, Action Center rows) already
-      // overflow at 2x on 320dp; that is outside this package. Their overflow
-      // reports are collected here so they do not fail THIS test, and the
-      // header row is checked by geometry: an overflowing Row lays its last
-      // child out past its own right edge. Anything that is not an overflow
-      // report is rethrown.
-      final previous = FlutterError.onError;
-      final others = <FlutterErrorDetails>[];
-      FlutterError.onError = (d) {
-        if (d.exceptionAsString().contains('overflowed')) return;
-        others.add(d);
-      };
-      try {
-        server.rpc = state;
-        await _pumpPage(t, width: 320, textScale: 2);
-      } finally {
-        FlutterError.onError = previous;
-      }
-      expect(others.map((d) => d.exceptionAsString()), isEmpty);
+        'overflows nor squeezes the name column — and (P0-FL-48) nothing '
+        'else on the page overflows either', (t) async {
+      // P0-FL-37 tolerated overflow reports from the score ring and the
+      // Action Center here; P0-FL-48 fixed those, so NONE is tolerated now.
+      server.rpc = state;
+      final errors = await pumpCollectingErrors(t, width: 320, textScale: 2);
+      expect(errors, isEmpty,
+          reason: 'P0-FL-48: no overflow anywhere at 2x on 320dp');
 
       final badge = state == _Rpc.http500 ? 'RISK UNKNOWN' : 'RISK HIDDEN';
       expect(find.text(badge), findsOneWidget);
@@ -595,24 +607,107 @@ void main() {
     });
   }
 
+  // ── P0-FL-48: 2x text on 320dp, with every Overview card populated ──────
+
+  for (final paid in [false, true]) {
+    testWidgets(
+        'P0-FL-48: a loaded assessment (Action Center items present, '
+        '${paid ? "paid plan: Add shown" : "no paid plan"}) lays out at 2x '
+        'text on 320dp with NO overflow', (t) async {
+      final errors =
+          await pumpCollectingErrors(t, width: 320, textScale: 2, paid: paid);
+      expect(find.text('Review High-Risk PAR-Q'), findsOneWidget,
+          reason: 'premise: Action Center items are on the page');
+      expect(find.text('AI Client Summary'), findsOneWidget);
+      expect(find.text('Coach Action Center'), findsOneWidget);
+      expect(find.text('Add'), paid ? findsOneWidget : findsNothing);
+      expect(find.text('Assigned Program'), findsOneWidget,
+          reason: 'premise: the cards below the Action Center were built');
+      expect(find.text('Private Notes'), findsOneWidget,
+          reason: 'premise: the last action rows were built');
+      if (paid) {
+        expect(find.text('Assign / Change Program'), findsOneWidget,
+            reason: 'premise: the paid Coaching services rows were built');
+      }
+      expect(errors, isEmpty,
+          reason: 'P0-FL-48: the score ring, the AI Client Summary header, '
+              'the Action Center header and each Action Center row must fit '
+              'at 2x text on a 320dp phone');
+
+      // Content is unchanged: every item still shows its whole text and all
+      // three actions.
+      for (final item in ['Review High-Risk PAR-Q', 'Review Injury Details']) {
+        final text = t.widget<Text>(find.text(item));
+        expect(text.overflow, isNot(TextOverflow.ellipsis),
+            reason: '"$item" must wrap, not be cut off');
+      }
+      final rows = find.text('Edit').evaluate().length;
+      expect(rows, greaterThanOrEqualTo(2));
+      expect(find.text('Approve'), findsNWidgets(rows));
+      expect(find.text('Dismiss'), findsNWidgets(rows));
+    });
+  }
+
+  testWidgets(
+      'P0-FL-48: the score ring readout stays inside the ring at 2x text',
+      (t) async {
+    final errors = await pumpCollectingErrors(t, width: 320, textScale: 2);
+    expect(errors, isEmpty);
+    final ring = find
+        .ancestor(
+            of: find.text('/100'),
+            matching: find.byWidgetPredicate((w) =>
+                w is SizedBox && w.width != null && w.width == w.height))
+        .first;
+    final box = t.getRect(ring);
+    final readout = find.ancestor(
+        of: find.text('/100'), matching: find.byType(Column)).first;
+    final r = t.getRect(readout);
+    expect(
+        r.left >= box.left - 0.01 &&
+            r.top >= box.top - 0.01 &&
+            r.right <= box.right + 0.01 &&
+            r.bottom <= box.bottom + 0.01,
+        isTrue,
+        reason: 'readout $r spills out of the ring $box');
+  });
+
+  testWidgets(
+      'P0-FL-48: Action Center controls are >= 44px and name the item they act '
+      'on for a screen reader', (t) async {
+    final handle = t.ensureSemantics();
+    await _pumpPage(t, width: 360, paid: true);
+    const item = 'Review High-Risk PAR-Q';
+    // The item's own card: the nearest decorated Container around its text.
+    final row = find
+        .ancestor(
+            of: find.text(item),
+            matching: find.byWidgetPredicate(
+                (w) => w is Container && w.decoration != null))
+        .first;
+    for (final action in ['Approve', 'Edit', 'Dismiss']) {
+      final btn = find.descendant(
+          of: row, matching: find.widgetWithText(TextButton, action));
+      expect(btn, findsOneWidget, reason: '$action sits in the item card');
+      expect(find.bySemanticsLabel('$action: $item'), findsOneWidget,
+          reason: 'every row has its own Approve / Edit / Dismiss: without '
+              'the item they act on a screen reader cannot tell them apart');
+      final size = t.getSize(btn);
+      expect(size.height, greaterThanOrEqualTo(44), reason: '$action height');
+      expect(size.width, greaterThanOrEqualTo(44), reason: '$action width');
+    }
+    final add = find.widgetWithText(TextButton, 'Add');
+    expect(t.getSize(add).height, greaterThanOrEqualTo(44));
+    expect(t.getSize(add).width, greaterThanOrEqualTo(44));
+    handle.dispose();
+  });
+
   testWidgets(
       'UX re-check: on a 360dp phone a short badge leaves the name column at '
       'least 60% of the row\'s free width — the badge takes no flex share',
       (t) async {
-    // As above: overflow reports from OTHER cards are outside this package;
-    // the header row is checked by geometry. Anything else is rethrown.
-    final previous = FlutterError.onError;
-    final others = <FlutterErrorDetails>[];
-    FlutterError.onError = (d) {
-      if (d.exceptionAsString().contains('overflowed')) return;
-      others.add(d);
-    };
-    try {
-      await _pumpPage(t, width: 360);
-    } finally {
-      FlutterError.onError = previous;
-    }
-    expect(others.map((d) => d.exceptionAsString()), isEmpty);
+    final errors = await pumpCollectingErrors(t, width: 360);
+    expect(errors, isEmpty, reason: 'P0-FL-48: no overflow is tolerated');
 
     expect(find.text('HIGH RISK'), findsOneWidget);
     final header = find
