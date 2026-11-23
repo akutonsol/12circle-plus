@@ -177,10 +177,10 @@ void main() {
   //
   // FlutterTest font note: its glyphs are one em wide (a 9pt label at 2x is
   // 18px a letter), so "Nutrition" (162px) cannot sit on one line even in a
-  // half-width tile here, though the real font (~0.55em) does. What IS
-  // asserted: the 2x2 geometry (equal halves, 8px gaps), that each label's
-  // longest word is broken into at most 2 lines (single row on 1b94044:
-  // "Nutrition" took 4), and each tile is at least twice its single-row width.
+  // half-width tile here; with the real font (~0.55em a letter, ~90px) it
+  // should fit, but that is a device check. What IS asserted: the 2x2 geometry
+  // (equal halves, 8px gaps), each tile at least twice its single-row width,
+  // and each label in at most 2 lines in this font.
   for (final width in [320.0, 390.0]) {
     testWidgets(
         'P0-FL-52: at 2.0x on ${width.toInt()}dp the Compliance tiles lay out '
