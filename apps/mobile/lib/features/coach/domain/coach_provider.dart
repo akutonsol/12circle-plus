@@ -86,9 +86,15 @@ final coachReviewsProvider =
         .from('public_profiles')
         .select('id, first_name, last_name, avatar_url')
         .inFilter('id', ids);
-    final byId = {for (final p in profiles as List) p['id'] as String: p};
+    // P0-FL-41: typed, so a reviewer whose profile row did not come back is an
+    // empty Map<String, dynamic> — the marketplace review item casts it.
+    final byId = <String, Map<String, dynamic>>{
+      for (final p in List<Map<String, dynamic>>.from(profiles as List))
+        p['id'] as String: p,
+    };
     return [
-      for (final r in list) {...r, 'reviewer': byId[r['client_id']] ?? {}}
+      for (final r in list)
+        {...r, 'reviewer': byId[r['client_id']] ?? const <String, dynamic>{}}
     ];
   } catch (_) {
     return [];
