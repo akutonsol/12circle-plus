@@ -377,7 +377,13 @@ void main() {
               body: Column(children: [
         Flexible(
             child: SwapSubstitutesList(
-                librarySubs: library, loadGlobal: load, onPick: (_) {})),
+                librarySubs: library,
+                loadGlobal: load,
+                onPick: (_) {},
+                text: Colors.white,
+                muted: Colors.grey,
+                accent: Colors.purple,
+                error: Colors.red)),
       ]))));
       await tester.pumpAndSettle();
     }

@@ -2,11 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/widgets/load_failure_notice.dart';
 
-const _white   = Colors.white;
-const _muted   = Color(0xFFCFC2D6);
-const _primary = Color(0xFFDDB7FF);
-const _errorColor = Color(0xFFFFB4AB);
-
 /// The substitutes in the active-workout swap sheet.
 ///
 /// [librarySubs] (the built-in library's same-muscle matches) are shown when
@@ -23,11 +18,21 @@ class SwapSubstitutesList extends StatefulWidget {
     required this.librarySubs,
     required this.loadGlobal,
     required this.onPick,
+    required this.text,
+    required this.muted,
+    required this.accent,
+    required this.error,
   });
 
   final List<Map<String, dynamic>> librarySubs;
   final Future<List<Map<String, dynamic>>> Function() loadGlobal;
   final void Function(Map<String, dynamic> sub) onPick;
+
+  /// The sheet's own palette (handed in, so this widget adds none — H-D2).
+  final Color text;
+  final Color muted;
+  final Color accent;
+  final Color error;
 
   @override
   State<SwapSubstitutesList> createState() => _SwapSubstitutesListState();
@@ -66,27 +71,27 @@ class _SwapSubstitutesListState extends State<SwapSubstitutesList> {
         child: LoadFailureNotice(
           message: couldntMessage('load substitutes', error),
           semanticLabel: 'Try loading substitutes again',
-          textColor: _errorColor,
-          accent: _primary,
+          textColor: widget.error,
+          accent: widget.accent,
           onRetry: _load,
         ),
       );
     }
     final subs = _subs;
     if (subs == null) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 12),
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
         child: Center(
             child: SizedBox(
                 width: 20,
                 height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2, color: _primary))),
+                child: CircularProgressIndicator(strokeWidth: 2, color: widget.accent))),
       );
     }
     if (subs.isEmpty) {
-      return const Padding(
-          padding: EdgeInsets.symmetric(vertical: 12),
-          child: Text('No substitutes found.', style: TextStyle(color: _muted)));
+      return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Text('No substitutes found.', style: TextStyle(color: widget.muted)));
     }
     // Scrollable so a long substitute list never overflows the sheet.
     return ListView(
@@ -96,12 +101,12 @@ class _SwapSubstitutesListState extends State<SwapSubstitutesList> {
           .map((s) => ListTile(
               contentPadding: EdgeInsets.zero,
               title: Text(s['name']?.toString() ?? '',
-                  style: const TextStyle(
-                      color: _white, fontSize: 14, fontWeight: FontWeight.w600)),
+                  style: TextStyle(
+                      color: widget.text, fontSize: 14, fontWeight: FontWeight.w600)),
               subtitle: Text('${s['equipment'] ?? ''} · ${s['difficulty'] ?? ''}',
-                  style: TextStyle(color: _muted.withValues(alpha: 0.6), fontSize: 11)),
-              trailing: const Icon(Icons.swap_horizontal_circle_rounded,
-                  color: _primary, size: 22),
+                  style: TextStyle(color: widget.muted.withValues(alpha: 0.6), fontSize: 11)),
+              trailing: Icon(Icons.swap_horizontal_circle_rounded,
+                  color: widget.accent, size: 22),
               onTap: () => widget.onPick(s)))
           .toList(),
     );
