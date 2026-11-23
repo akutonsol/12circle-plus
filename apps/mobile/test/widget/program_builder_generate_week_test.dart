@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show User;
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/coach/data/coach_program_service.dart';
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
@@ -62,7 +63,14 @@ Future<_FakeSvc> _pump(WidgetTester t, List<Object> outcomes, {bool flag = true}
   addTearDown(t.view.reset);
   await t.pumpWidget(ProviderScope(
     overrides: [
-      currentUserProfileProvider.overrideWith((ref) async => {'role': 'coach'}),
+      // P0-FL-45a: the role gate takes the role only from a profile row read
+      // for the member signed in now, so the fixture signs a coach in and
+      // answers with THAT member's row.
+      currentUserProvider.overrideWithValue(User(
+          id: 'coach-1', appMetadata: const {}, userMetadata: const {},
+          aud: 'authenticated', createdAt: '2026-11-01T00:00:00Z')),
+      currentUserProfileProvider
+          .overrideWith((ref) async => {'id': 'coach-1', 'role': 'coach'}),
       coachProgramServiceProvider.overrideWithValue(svc),
     ],
     child: MaterialApp(home: DynamicProgramBuilderScreen(engineWeekGeneration: flag)),
