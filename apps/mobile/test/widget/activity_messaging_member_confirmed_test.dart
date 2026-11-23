@@ -169,8 +169,8 @@ void main() {
     }
   }
 
-  Future<ProviderContainer> pump(WidgetTester tester, Widget screen,
-      _Profile p, _Coaches coaches) async {
+  Future<ProviderContainer> pump(
+      WidgetTester tester, Widget screen, _Profile p, _Coaches coaches) async {
     tester.view
       ..devicePixelRatio = 1
       ..physicalSize = const Size(900, 6000);
@@ -292,7 +292,8 @@ void main() {
 
     testWidgets("A signs out, nobody signs in: none of A's preferences remain",
         (tester) async {
-      final p = _Profile(const _Row('client', challenges: false, community: false),
+      final p = _Profile(
+          const _Row('client', challenges: false, community: false),
           const _Row('client'));
       final c = await pump(
           tester, const ActivityScreen(), p, _Coaches(const [], const []));
@@ -323,20 +324,66 @@ void main() {
         _expectActivity(p, 'user-a');
         await unmount(tester);
       });
+
+      // QA gap 1 · a SAME-member refresh still IN FLIGHT keeps the confirmed
+      // preferences (no flash to the unconfirmed default), and after it lands.
+      testWidgets(
+          'a refresh of the SAME member still IN FLIGHT keeps their '
+          'preferences, then after it lands (challenges ${row.challenges}, '
+          'community ${row.community})', (tester) async {
+        const lag = Duration(seconds: 5);
+        final p = _Profile(row, const _Row('client'));
+        final c = await pump(
+            tester, const ActivityScreen(), p, _Coaches(const [], const []));
+        _expectActivity(p, 'user-a');
+        p.delays['user-a'] = lag;
+        c.invalidate(currentUserProfileProvider);
+        await settle(tester);
+        expect(c.read(currentUserProfileProvider).isLoading, isTrue,
+            reason: 'precondition: the refresh is really in flight');
+        expect(p.answered.length, 1,
+            reason: 'precondition: only the first read has answered');
+        _expectActivity(p, 'user-a');
+        await tester.pump(lag);
+        await settle(tester);
+        expect(p.answered.length, 2,
+            reason: 'precondition: the refresh really landed');
+        expect(c.read(currentUserProfileProvider).isLoading, isFalse);
+        _expectActivity(p, 'user-a');
+        await unmount(tester);
+      });
     }
   });
 
   // ── Messages › the empty state ────────────────────────────────────────────
   group('Messages empty state', () {
     // (A's role, A's coaches) → (B's role, B's coaches)
-    final pairs = <String, (_Row, List<Map<String, dynamic>>, _Row,
-        List<Map<String, dynamic>>)>{
-      'member→coach': (const _Row('client'), const [], const _Row('coach'), const []),
-      'coach→member': (const _Row('coach'), const [], const _Row('client'), const []),
-      'member A (has a coach)→member B (none)':
-          (const _Row('client'), const [_coach], const _Row('client'), const []),
-      'member A (none)→member B (has a coach)':
-          (const _Row('client'), const [], const _Row('client'), const [_coach]),
+    final pairs = <String,
+        (_Row, List<Map<String, dynamic>>, _Row, List<Map<String, dynamic>>)>{
+      'member→coach': (
+        const _Row('client'),
+        const [],
+        const _Row('coach'),
+        const []
+      ),
+      'coach→member': (
+        const _Row('coach'),
+        const [],
+        const _Row('client'),
+        const []
+      ),
+      'member A (has a coach)→member B (none)': (
+        const _Row('client'),
+        const [_coach],
+        const _Row('client'),
+        const []
+      ),
+      'member A (none)→member B (has a coach)': (
+        const _Row('client'),
+        const [],
+        const _Row('client'),
+        const [_coach]
+      ),
     };
 
     for (final observe in [true, false]) {
@@ -349,8 +396,7 @@ void main() {
             final v = pair.value;
             final p = _Profile(v.$1, v.$3)..modes['user-b'] = bMode;
             final coaches = _Coaches(v.$2, v.$4);
-            final c =
-                await pump(tester, const MessagingScreen(), p, coaches);
+            final c = await pump(tester, const MessagingScreen(), p, coaches);
             _expectMessaging(p, coaches, 'user-a');
             await switchTo(tester, c, 'user-b', observeSignOut: observe);
             _expectMessaging(p, coaches, bMode == _P.ok ? 'user-b' : null);
@@ -365,8 +411,7 @@ void main() {
             final v = pair.value;
             final p = _Profile(v.$1, v.$3);
             final coaches = _Coaches(v.$2, v.$4)..modes['user-b'] = cMode;
-            final c =
-                await pump(tester, const MessagingScreen(), p, coaches);
+            final c = await pump(tester, const MessagingScreen(), p, coaches);
             _expectMessaging(p, coaches, 'user-a');
             await switchTo(tester, c, 'user-b', observeSignOut: observe);
             _expectMessaging(p, coaches, 'user-b', coachesKnown: false);
@@ -390,8 +435,7 @@ void main() {
             final coaches = _Coaches(v.$2, v.$4);
             final delays = slow == 'profile' ? p.delays : coaches.delays;
             if (phase == 'first') delays['user-a'] = lag;
-            final c =
-                await pump(tester, const MessagingScreen(), p, coaches);
+            final c = await pump(tester, const MessagingScreen(), p, coaches);
             if (phase == 'first') {
               _expectMessaging(p, coaches, null);
             } else {
@@ -413,6 +457,122 @@ void main() {
             await unmount(tester);
           });
         }
+      }
+    }
+
+    // QA gap 2 · A's LATE answer (profile or coach list) lands after the
+    // switch while B's read of the same kind has FAILED or is still IN FLIGHT:
+    // B never gets A's decision (pitch or neutral) — B's view is neutral.
+    for (final pair in pairs.entries) {
+      for (final slow in const ['profile', 'coaches']) {
+        if (slow == 'coaches' && pair.value.$1.role == 'coach') continue;
+        for (final phase in const ['first', 'refresh']) {
+          for (final bMode in const [_P.server, _P.pending]) {
+            testWidgets(
+                "${pair.key}: A's slow $phase $slow read lands after B "
+                "signed in while B's $slow read is ${bMode.name}: never A's "
+                'decision', (tester) async {
+              const lag = Duration(seconds: 5);
+              final v = pair.value;
+              final p = _Profile(v.$1, v.$3);
+              final coaches = _Coaches(v.$2, v.$4);
+              final delays = slow == 'profile' ? p.delays : coaches.delays;
+              final modes = slow == 'profile' ? p.modes : coaches.modes;
+              if (phase == 'first') delays['user-a'] = lag;
+              final c = await pump(tester, const MessagingScreen(), p, coaches);
+              if (phase == 'first') {
+                _expectMessaging(p, coaches, null);
+              } else {
+                _expectMessaging(p, coaches, 'user-a');
+                delays['user-a'] = lag;
+                c.invalidate(slow == 'profile'
+                    ? currentUserProfileProvider
+                    : myCoachesProvider);
+                await settle(tester);
+              }
+              modes['user-b'] = bMode;
+              await switchTo(tester, c, 'user-b', observeSignOut: false);
+              void expectB() {
+                if (slow == 'profile') {
+                  _expectMessaging(p, coaches, null);
+                } else {
+                  _expectMessaging(p, coaches, 'user-b', coachesKnown: false);
+                }
+              }
+
+              expectB();
+              final provider = slow == 'profile'
+                  ? currentUserProfileProvider
+                  : myCoachesProvider;
+              await tester.pump(lag);
+              await settle(tester);
+              final answered =
+                  slow == 'profile' ? p.answered : coaches.answered;
+              expect(answered.where((u) => u == 'user-a'), isNotEmpty,
+                  reason: "precondition: A's late answer really arrived");
+              expect(answered.where((u) => u == 'user-b'), isEmpty,
+                  reason: "precondition: B's $slow read never answered");
+              final state = c.read(provider);
+              if (bMode == _P.server) {
+                expect(state.hasError, isTrue,
+                    reason: "precondition: B's $slow read really failed");
+              } else {
+                expect(state.isLoading, isTrue,
+                    reason: "precondition: B's $slow read is still in flight");
+              }
+              expectB();
+              await unmount(tester);
+            });
+          }
+        }
+      }
+    }
+
+    // QA gap 1 · a SAME-member refresh still IN FLIGHT keeps the confirmed
+    // decision (no flash to the neutral default), and after it lands.
+    for (final what in const ['profile', 'coaches', 'profile+coaches']) {
+      for (final row in const [_Row('client'), _Row('coach')]) {
+        testWidgets(
+            'a SAME-member $what refresh still IN FLIGHT keeps the confirmed '
+            '${row.role} decision, then after it lands', (tester) async {
+          const lag = Duration(seconds: 5);
+          final p = _Profile(row, const _Row('client'));
+          final coaches = _Coaches(const [], const [_coach]);
+          final c = await pump(tester, const MessagingScreen(), p, coaches);
+          _expectMessaging(p, coaches, 'user-a');
+          final profileToo = what.contains('profile');
+          final coachesToo = what.contains('coaches');
+          if (profileToo) {
+            p.delays['user-a'] = lag;
+            c.invalidate(currentUserProfileProvider);
+          }
+          if (coachesToo) {
+            coaches.delays['user-a'] = lag;
+            c.invalidate(myCoachesProvider);
+          }
+          await settle(tester);
+          if (profileToo) {
+            expect(c.read(currentUserProfileProvider).isLoading, isTrue,
+                reason: 'precondition: the profile refresh is in flight');
+          }
+          if (coachesToo && row.role != 'coach') {
+            expect(c.read(myCoachesProvider).isLoading, isTrue,
+                reason: 'precondition: the coach refresh is in flight');
+          }
+          _expectMessaging(p, coaches, 'user-a');
+          await tester.pump(lag);
+          await settle(tester);
+          if (profileToo) {
+            expect(p.answered.length, 2,
+                reason: 'precondition: the profile refresh landed');
+          }
+          if (coachesToo && row.role != 'coach') {
+            expect(coaches.answered.length, 2,
+                reason: 'precondition: the coach refresh landed');
+          }
+          _expectMessaging(p, coaches, 'user-a');
+          await unmount(tester);
+        });
       }
     }
 
