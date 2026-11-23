@@ -4397,7 +4397,14 @@ class _CoachingModePageState extends State<_CoachingModePage> {
                 const SizedBox(height: 28),
                 ..._modes.map((m) {
                   final active = _selected == m.value;
-                  return GestureDetector(
+                  // P0-FL-52: one announced control per option — a button in a
+                  // single-choice group whose selected state is read out. Its
+                  // label is the option's own texts, merged.
+                  return MergeSemantics(child: Semantics(
+                    button: true,
+                    selected: active,
+                    inMutuallyExclusiveGroup: true,
+                    child: GestureDetector(
                     onTap: () => setState(() => _selected = m.value),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
@@ -4436,13 +4443,17 @@ class _CoachingModePageState extends State<_CoachingModePage> {
                           Expanded(child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
+                              // P0-FL-52: the title wraps beside the check
+                              // circle at large text instead of overflowing
+                              // (was Text + Spacer). No added gap: any title
+                              // that fitted on one line still does, so 1x is
+                              // unchanged.
                               Row(children: [
-                                Text(m.label,
+                                Expanded(child: Text(m.label,
                                   style: TextStyle(
                                     color: active ? _primary : _onSurf,
                                     fontSize: 17,
-                                    fontWeight: FontWeight.w700)),
-                                const Spacer(),
+                                    fontWeight: FontWeight.w700))),
                                 AnimatedContainer(
                                   duration: const Duration(milliseconds: 200),
                                   width: 22, height: 22,
@@ -4472,7 +4483,7 @@ class _CoachingModePageState extends State<_CoachingModePage> {
                         ],
                       ),
                     ),
-                  );
+                  )));
                 }),
                 const SizedBox(height: 8),
                 Container(
@@ -4503,7 +4514,13 @@ class _CoachingModePageState extends State<_CoachingModePage> {
             onTap: canContinue ? _handleContinue : null,
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
-              height: 56,
+              // P0-FL-52: 56 is a floor, not a fixed height — at large text the
+              // label wraps and the button grows instead of clipping it. At 1x
+              // the label is one line and the button is 56px as before. Only
+              // vertical padding is added, so the label's width (and where it
+              // breaks) is unchanged.
+              constraints: const BoxConstraints(minHeight: 56),
+              padding: const EdgeInsets.symmetric(vertical: 8),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(999),
                 gradient: canContinue
@@ -4519,6 +4536,7 @@ class _CoachingModePageState extends State<_CoachingModePage> {
                 _selected == 'coach_guided'
                   ? 'Choose My Coach'
                   : 'Build My Plan',
+                textAlign: TextAlign.center,
                 style: TextStyle(
                   color: canContinue ? Colors.white : _outline,
                   fontSize: 16,
