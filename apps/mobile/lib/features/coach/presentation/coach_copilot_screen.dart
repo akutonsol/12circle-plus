@@ -10,6 +10,7 @@ import '../../exercise_database/data/custom_exercise_service.dart';
 import '../data/coach_program_service.dart';
 import '../../dashboard/presentation/coach_dashboard_screen.dart' show coachClientsProvider;
 import '../../auth/domain/auth_provider.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
 import '../domain/coach_ecosystem_provider.dart'
     show ClientAssessment, ClientAssessmentStatus, clientAssessmentProvider;
@@ -118,6 +119,9 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     // engine runs, and A's session must never land on B (UX-F4).
     final id = c['id'] as String;
     setState(() { _busy = true; _rec = null; _explanation = null; _status = null; });
+    // generateWorkout records a failure in `lastError` but does not clear it
+    // first; clear it here so an earlier call's error is never reported.
+    _svc.lastError = null;
     final r = await _svc.generateWorkout(_context(source), subjectId: id);
     if (!mounted) return;
     if (_client?['id'] != id) {
@@ -127,13 +131,27 @@ class _State extends ConsumerState<CoachCopilotScreen> {
       return;
     }
     // A failed call used to leave the panel blank — the error went into
-    // `lastError` and nothing said so.
+    // `lastError` and nothing said so. P0-FL-43: it is recorded, and the next
+    // step says "check your connection" only for a network failure. An answer
+    // that is not a recommendation is a failure too, never an empty one.
+    String? failure;
+    if (r == null) {
+      final err = _svc.lastError ??
+          StateError('generate_workout answered without a recommendation');
+      reportError('CoachCopilotScreen.generate', err);
+      failure = "Couldn't generate a recommendation — ${_nextStep(err)}";
+    }
     setState(() {
       _busy = false;
       _rec = r;
-      if (r == null) _status = "Couldn't generate a recommendation — try again.";
+      _status = failure;
     });
   }
+
+  /// The one voice's next step: the connection hint only for a network failure.
+  static String _nextStep(Object? error) => isNetworkFailure(error)
+      ? 'check your connection, then try again.'
+      : 'try again in a moment. If it keeps happening, contact support.';
 
   Future<void> _explain() async {
     final tid = _rec?['trace_id']?.toString();
@@ -220,10 +238,13 @@ class _State extends ConsumerState<CoachCopilotScreen> {
           if (_rec != null) ..._recommendation(_rec!, injuryWarn: injuryWarn),
           // The status line normally renders inside the recommendation; with no
           // recommendation (a failed call) it needs its own place, or it is lost.
-          if (_rec == null && _status != null) Padding(
+          // A live region, so a screen reader hears the failure.
+          if (_rec == null && _status != null) Semantics(
+            liveRegion: true, container: true,
+            child: Padding(
             padding: const EdgeInsets.only(top: 12),
             child: Text(_status!, style: const TextStyle(
-                color: _fail, fontSize: 13, fontWeight: FontWeight.w700))),
+                color: _fail, fontSize: 13, fontWeight: FontWeight.w700)))),
         ],
       ]),
     );
@@ -246,6 +267,7 @@ class _State extends ConsumerState<CoachCopilotScreen> {
             setState(() { _client = c; _rec = null; _status = null; _explanation = null; _outlook = null; });
             // Predictive outlook for this client (deterministic). A late
             // answer for a client no longer selected is discarded.
+            // A failed prediction intentionally still shows no card: predictClient's swallow is the recorded SEC-R3 / Wave 3B-4 blocker (coordinator §15), awaiting the owner ruling.
             final o = await _programs.predictClient(c['id'] as String);
             if (mounted && _client?['id'] == c['id']) setState(() => _outlook = o);
           }
