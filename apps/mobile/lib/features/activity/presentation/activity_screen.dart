@@ -658,8 +658,14 @@ class _MotivationalQuoteCard extends ConsumerWidget {
 class _ChallengeSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final profile       = ref.watch(currentUserProfileProvider).valueOrNull;
-    final notifEnabled  = profile?['notif_challenges'] as bool? ?? false;
+    // P0-FL-49 · the preference of the member signed in NOW. Riverpod keeps the
+    // previous member's row through a re-read, so the held value showed (or
+    // hid) the prompt on A's `notif_challenges` while B's read was in flight
+    // or had failed. Unconfirmed (loading / failed / another member's row)
+    // claims nothing: no prompt, the challenges show as for an enabled member.
+    final profile       = ref.watch(confirmedCurrentProfileProvider);
+    final showPrompt    =
+        profile != null && (profile['notif_challenges'] as bool?) != true;
     final challengesAsync = ref.watch(liveChallengesProvider);
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -673,7 +679,7 @@ class _ChallengeSection extends ConsumerWidget {
       ]),
       const SizedBox(height: 12),
 
-      if (!notifEnabled)
+      if (showPrompt)
         _GlassCard(
           padding: const EdgeInsets.all(18),
           child: Row(children: [
@@ -853,7 +859,11 @@ class _CommunitySection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Respect the user's Community notification/visibility preference.
-    final profile = ref.watch(currentUserProfileProvider).valueOrNull;
+    // P0-FL-49 · only a preference CONFIRMED for the member signed in now
+    // hides the section — never the previous member's (Riverpod holds A's row
+    // while B's read is in flight or has failed). Unconfirmed shows it, as
+    // with no preference.
+    final profile = ref.watch(confirmedCurrentProfileProvider);
     if (profile != null && profile['notif_community'] == false) {
       return const SizedBox.shrink();
     }
