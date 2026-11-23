@@ -60,10 +60,22 @@ class _Profile {
   int reads = 0;
   Completer<void>? gate;
 
+  /// Per-member overrides of [mode]; a member without one uses [mode].
+  final Map<String, _P> modes = {};
+
+  /// Per-member response delay (fake-async clock): a slow server.
+  final Map<String, Duration> delays = {};
+
+  /// Members whose read actually produced a row, in arrival order — proves a
+  /// late response really arrived (and was then not applied).
+  final List<String> answered = [];
+
   Future<Map<String, dynamic>?> read(String uid) async {
     reads++;
+    final delay = delays[uid];
+    if (delay != null) await Future<void>.delayed(delay);
     if (gate != null) await gate!.future;
-    switch (mode) {
+    switch (modes[uid] ?? mode) {
       case _P.network:
         throw http.ClientException('Connection refused');
       case _P.server:
@@ -71,6 +83,7 @@ class _Profile {
       case _P.pending:
         return Completer<Map<String, dynamic>?>().future;
       case _P.ok:
+        answered.add(uid);
         return <String, dynamic>{'id': uid, 'role': roles[uid]};
     }
   }
@@ -397,5 +410,254 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('HOME'), findsOneWidget);
     });
+  });
+
+  // ── Test-only round: member switches in both directions ───────────────────
+  //
+  // Two ways the sign-out can land, and they are protected by different lines
+  // of `confirmedRoleRead`:
+  //  * OBSERVED sign-out (a frame passes while signed out): the profile
+  //    provider answers `null` for nobody, so B's read starts from a `null`
+  //    value — the "null held over a re-read" guard is what stops it.
+  //  * SAME-FRAME switch (sign-out and sign-in land before one rebuild, e.g. an
+  //    account switch): B's read starts from A's ROW — only the SEC-F1 `id`
+  //    check stops A's role being applied to B.
+  // Each scenario runs both ways. Every client here is on the FREE plan, so
+  // "the gate opened" can only mean a coach role was applied.
+
+  Future<void> settle(WidgetTester tester) async {
+    // The spinner animates forever: pump, never settle.
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+  }
+
+  /// The gate with a switchable member; the plan is per member (signed out →
+  /// free), as `client_plan()` answers for `auth.uid()`.
+  Future<WidgetRef> pumpSwitchable(WidgetTester tester, _Profile p,
+      {Map<String, ClientPlan> plans = const {}}) async {
+    late WidgetRef captured;
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        currentUserProvider.overrideWith((ref) => ref.watch(_signedIn)),
+        currentUserProfileProvider.overrideWith((ref) async {
+          final u = ref.watch(currentUserProvider);
+          if (u == null) return null;
+          return p.read(u.id);
+        }),
+        clientPlanProvider.overrideWith((ref) async =>
+            plans[ref.watch(currentUserProvider)?.id] ?? ClientPlan.free),
+      ],
+      child: MaterialApp(
+        home: Consumer(builder: (context, ref, _) {
+          captured = ref;
+          return const PaywallGate(
+            required: ClientPlan.coachGuided,
+            featureName: 'Action Items',
+            child: _child,
+          );
+        }),
+      ),
+    ));
+    await settle(tester);
+    return captured;
+  }
+
+  Future<void> switchTo(WidgetTester tester, WidgetRef ref, String uid,
+      {required bool observeSignOut}) async {
+    ref.read(_signedIn.notifier).state = null; // A signs out
+    if (observeSignOut) await settle(tester);
+    ref.read(_signedIn.notifier).state = _user(uid); // B signs in
+    await settle(tester);
+  }
+
+  /// A coach is let in; a client on the free plan is locked.
+  void expectRole(String role) {
+    if (role == 'coach') {
+      expect(find.byKey(const Key('child')), findsOneWidget,
+          reason: 'a confirmed coach is always in');
+      expect(find.byType(PaywallLocked), findsNothing);
+    } else {
+      expect(find.byKey(const Key('child')), findsNothing,
+          reason: 'a free client must not get a coach bypass');
+      expect(find.byType(PaywallLocked), findsOneWidget,
+          reason: "the client's own (free) plan applies");
+    }
+    expect(find.byType(ProfileLoadFailedNotice), findsNothing);
+  }
+
+  void expectFailure() {
+    expect(find.byKey(const Key('child')), findsNothing,
+        reason: 'unknown role: not opened');
+    expect(find.byType(PaywallLocked), findsNothing,
+        reason: 'unknown role: not locked as a client either');
+    expect(find.byType(ProfileLoadFailedNotice), findsOneWidget);
+    expect(find.text('Try again'), findsOneWidget);
+  }
+
+  void expectPending() {
+    expect(find.byKey(const Key('child')), findsNothing);
+    expect(find.byType(PaywallLocked), findsNothing);
+    expect(find.byType(ProfileLoadFailedNotice), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+  }
+
+  for (final observe in [true, false]) {
+    final how = observe ? 'sign-out observed' : 'same-frame switch';
+
+    // 1 · CLIENT → COACH
+    group('CLIENT A → COACH B ($how)', () {
+      _Profile clientThenCoach() =>
+          _Profile('client')..roles['user-b'] = 'coach';
+
+      testWidgets("1(a) B's read FAILS: the failure state — never "
+          'PaywallLocked-as-client for B', (tester) async {
+        final p = clientThenCoach()..modes['user-b'] = _P.server;
+        final ref = await pumpSwitchable(tester, p);
+        expectRole('client');
+
+        await switchTo(tester, ref, 'user-b', observeSignOut: observe);
+        expect(ref.read(currentUserProfileProvider).hasError, isTrue,
+            reason: "precondition: B's read really failed");
+        expectFailure();
+      });
+
+      testWidgets("1(b) B's read IN FLIGHT: the spinner — never A's client "
+          'role applied to B', (tester) async {
+        final p = clientThenCoach()..modes['user-b'] = _P.pending;
+        final ref = await pumpSwitchable(tester, p);
+        expectRole('client');
+
+        await switchTo(tester, ref, 'user-b', observeSignOut: observe);
+        expectPending();
+      });
+
+      testWidgets("1(c) B's read then SUCCEEDS: the coach passes the paywall",
+          (tester) async {
+        final p = clientThenCoach()
+          ..delays['user-b'] = const Duration(seconds: 2);
+        final ref = await pumpSwitchable(tester, p);
+        expectRole('client');
+
+        await switchTo(tester, ref, 'user-b', observeSignOut: observe);
+        expectPending(); // B's read is still on the wire
+        await tester.pump(const Duration(seconds: 2));
+        await settle(tester);
+        expectRole('coach');
+      });
+    });
+
+    // 2 · COACH → CLIENT, success path: B's own plan applies.
+    group('2 · COACH A → CLIENT B ($how), B\'s read succeeds', () {
+      testWidgets('B on the free plan is locked — no coach bypass from A',
+          (tester) async {
+        final p = _Profile('coach')..roles['user-b'] = 'client';
+        final ref = await pumpSwitchable(tester, p);
+        expectRole('coach');
+
+        await switchTo(tester, ref, 'user-b', observeSignOut: observe);
+        expectRole('client');
+      });
+
+      testWidgets("B on coach-guided is let in by B's plan", (tester) async {
+        final p = _Profile('coach')..roles['user-b'] = 'client';
+        final ref = await pumpSwitchable(tester, p,
+            plans: const {'user-b': ClientPlan.coachGuided});
+        expectRole('coach');
+
+        await switchTo(tester, ref, 'user-b', observeSignOut: observe);
+        expect(find.byKey(const Key('child')), findsOneWidget);
+        expect(find.byType(PaywallLocked), findsNothing);
+        expect(find.byType(ProfileLoadFailedNotice), findsNothing);
+      });
+    });
+
+    // 3 · DELAYED RESPONSE: A's request is slow; B signs in before it lands.
+    for (final dir in const [('coach', 'client'), ('client', 'coach')]) {
+      final (aRole, bRole) = dir;
+      // `first`: A's very first read is the slow one (A never had a role).
+      // `refresh`: A had a role, then A's refresh is the slow one.
+      for (final slow in const ['first', 'refresh']) {
+        for (final bMode in const [_P.ok, _P.server, _P.pending]) {
+          testWidgets(
+              "3 · A=$aRole, B=$bRole ($how): A's slow $slow read lands after "
+              "B signed in; B's read ${bMode.name} — A's late answer is never "
+              "B's role", (tester) async {
+            const lag = Duration(seconds: 5);
+            final p = _Profile(aRole)
+              ..roles['user-b'] = bRole
+              ..modes['user-b'] = bMode;
+            if (slow == 'first') p.delays['user-a'] = lag;
+            final ref = await pumpSwitchable(tester, p);
+            if (slow == 'first') {
+              expectPending();
+            } else {
+              expectRole(aRole);
+              p.delays['user-a'] = lag;
+              ref.invalidate(currentUserProfileProvider); // A's slow refresh
+              await settle(tester);
+              expectRole(aRole); // same member: the kept role is real
+            }
+            expect(p.answered.where((u) => u == 'user-a').length,
+                slow == 'first' ? 0 : 1,
+                reason: "precondition: A's slow answer has not arrived yet");
+
+            await switchTo(tester, ref, 'user-b', observeSignOut: observe);
+
+            void expectB() {
+              switch (bMode) {
+                case _P.ok:
+                  expectRole(bRole);
+                case _P.server:
+                  expectFailure();
+                case _P.pending:
+                case _P.network:
+                  expectPending();
+              }
+            }
+
+            expectB(); // before A's answer lands
+            await tester.pump(lag);
+            await settle(tester);
+            expect(p.answered.where((u) => u == 'user-a').length,
+                slow == 'first' ? 1 : 2,
+                reason: "precondition: A's late answer really arrived");
+            expectB(); // and after: still B's state, not A's role
+          });
+        }
+      }
+    }
+  }
+
+  // 4 · SIGN-OUT ONLY
+  testWidgets('4 · coach A signs out, nobody signs in: no coach bypass remains '
+      'from A', (tester) async {
+    final ref = await pumpSwitchable(tester, _Profile('coach'));
+    expectRole('coach');
+
+    ref.read(_signedIn.notifier).state = null;
+    await settle(tester);
+    expect(find.byKey(const Key('child')), findsNothing,
+        reason: "A's coach bypass must not outlive A's session");
+  });
+
+  testWidgets("4 · coach A signs out while A's refresh is slow; the late "
+      'answer lands with nobody signed in: still no coach bypass',
+      (tester) async {
+    final p = _Profile('coach');
+    final ref = await pumpSwitchable(tester, p);
+    expectRole('coach');
+    p.delays['user-a'] = const Duration(seconds: 5);
+    ref.invalidate(currentUserProfileProvider);
+    await settle(tester);
+
+    ref.read(_signedIn.notifier).state = null;
+    await settle(tester);
+    await tester.pump(const Duration(seconds: 5));
+    await settle(tester);
+    expect(p.answered.where((u) => u == 'user-a').length, 2,
+        reason: "precondition: A's late refresh really arrived");
+    expect(find.byKey(const Key('child')), findsNothing,
+        reason: "A's coach bypass must not outlive A's session");
   });
 }

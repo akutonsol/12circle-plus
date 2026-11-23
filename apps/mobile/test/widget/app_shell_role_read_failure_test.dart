@@ -65,10 +65,22 @@ class _Profile {
   int reads = 0;
   Completer<void>? gate;
 
+  /// Per-member overrides of [mode]; a member without one uses [mode].
+  final Map<String, _P> modes = {};
+
+  /// Per-member response delay (fake-async clock): a slow server.
+  final Map<String, Duration> delays = {};
+
+  /// Members whose read actually produced a row, in arrival order — proves a
+  /// late response really arrived (and was then not applied).
+  final List<String> answered = [];
+
   Future<Map<String, dynamic>?> read(String uid) async {
     reads++;
+    final delay = delays[uid];
+    if (delay != null) await Future<void>.delayed(delay);
     if (gate != null) await gate!.future;
-    switch (mode) {
+    switch (modes[uid] ?? mode) {
       case _P.network:
         throw http.ClientException('Connection refused');
       case _P.server:
@@ -76,6 +88,7 @@ class _Profile {
       case _P.pending:
         return Completer<Map<String, dynamic>?>().future;
       case _P.ok:
+        answered.add(uid);
         return <String, dynamic>{'id': uid, 'role': roles[uid]};
     }
   }
@@ -408,6 +421,218 @@ void main() {
       expect(r.right, lessThanOrEqualTo(320));
       expect(r.left, greaterThanOrEqualTo(0));
     }
+    await unmount(tester);
+  });
+
+  // ── Test-only round: member switches in both directions ───────────────────
+  //
+  // Two ways the sign-out can land, and they are protected by different lines
+  // of `confirmedRoleRead`:
+  //  * OBSERVED sign-out (a frame passes while signed out): the profile
+  //    provider answers `null` for nobody, so B's read starts from a `null`
+  //    value — the "null held over a re-read" guard is what stops it.
+  //  * SAME-FRAME switch (sign-out and sign-in land before one rebuild, e.g. an
+  //    account switch): B's read starts from A's ROW — only the SEC-F1 `id`
+  //    check stops A's role being applied to B.
+  // Each scenario runs both ways.
+
+  Future<void> switchTo(WidgetTester tester, ProviderContainer c, String uid,
+      {required bool observeSignOut}) async {
+    c.read(_signedIn.notifier).state = null; // A signs out
+    if (observeSignOut) await settle(tester);
+    c.read(_signedIn.notifier).state = _user(uid); // B signs in
+    await settle(tester);
+  }
+
+  void expectRoleNav(String role) {
+    final mine = role == 'coach' ? _coachTabs : _clientTabs;
+    final other = role == 'coach' ? _clientTabs : _coachTabs;
+    for (final t in mine) {
+      expect(find.text(t), findsOneWidget, reason: '$role nav: "$t"');
+    }
+    for (final t in other) {
+      expect(find.text(t), findsNothing,
+          reason: '"$t" belongs to the other role');
+    }
+    // Every scenario below runs on /compliance, where a coach also gets the
+    // coach top bar — so it must be there for a coach and only for a coach.
+    expect(find.byType(AppTopNav), role == 'coach' ? findsOneWidget : findsNothing,
+        reason: 'coach top bar iff coach');
+    expect(find.textContaining("Couldn't load"), findsNothing);
+  }
+
+  void expectFailureBar() {
+    expectNoRoleNav();
+    expect(find.byType(AppTopNav), findsNothing,
+        reason: 'no coach top bar on an unknown role');
+    expect(find.text(_failedMsg), findsOneWidget);
+    expect(find.text('Try again'), findsOneWidget);
+  }
+
+  void expectPendingBar() {
+    expectNoRoleNav();
+    expect(find.byType(AppTopNav), findsNothing,
+        reason: 'no coach top bar on an unknown role');
+    expect(find.byKey(const Key('nav-pending-progress')), findsOneWidget);
+    expect(find.text('Try again'), findsNothing,
+        reason: 'loading is not a failure');
+  }
+
+  for (final observe in [true, false]) {
+    final how = observe ? 'sign-out observed' : 'same-frame switch';
+
+    // 1 · CLIENT → COACH
+    group('CLIENT A → COACH B ($how)', () {
+      _Profile clientThenCoach() =>
+          _Profile('client')..roles['user-b'] = 'coach';
+
+      testWidgets("1(a) B's read FAILS: the failure state, never A's client "
+          'nav', (tester) async {
+        final p = clientThenCoach()..modes['user-b'] = _P.server;
+        final c = await pumpShell(tester, p, location: '/compliance');
+        expectRoleNav('client');
+
+        await switchTo(tester, c, 'user-b', observeSignOut: observe);
+        expect(c.read(currentUserProfileProvider).hasError, isTrue,
+            reason: "precondition: B's read really failed");
+        expectFailureBar();
+        await unmount(tester);
+      });
+
+      testWidgets("1(b) B's read IN FLIGHT: the pending bar, never A's client "
+          'nav', (tester) async {
+        final p = clientThenCoach()..modes['user-b'] = _P.pending;
+        final c = await pumpShell(tester, p, location: '/compliance');
+        expectRoleNav('client');
+
+        await switchTo(tester, c, 'user-b', observeSignOut: observe);
+        expectPendingBar();
+        await unmount(tester);
+      });
+
+      testWidgets("1(c) B's read then SUCCEEDS: the coach nav and coach top "
+          'bar', (tester) async {
+        final p = clientThenCoach()
+          ..delays['user-b'] = const Duration(seconds: 2);
+        final c = await pumpShell(tester, p, location: '/compliance');
+        expectRoleNav('client');
+
+        await switchTo(tester, c, 'user-b', observeSignOut: observe);
+        expectPendingBar(); // B's read is still on the wire
+        await tester.pump(const Duration(seconds: 2));
+        await settle(tester);
+        expectRoleNav('coach');
+        await unmount(tester);
+      });
+    });
+
+    // 2 · COACH → CLIENT, success path
+    testWidgets("2 · COACH A → CLIENT B ($how), B's read succeeds: the client "
+        'nav, no coach top bar', (tester) async {
+      final p = _Profile('coach')..roles['user-b'] = 'client';
+      final c = await pumpShell(tester, p, location: '/compliance');
+      expectRoleNav('coach');
+
+      await switchTo(tester, c, 'user-b', observeSignOut: observe);
+      expectRoleNav('client');
+      await unmount(tester);
+    });
+
+    // 3 · DELAYED RESPONSE: A's request is slow; B signs in before it lands.
+    for (final dir in const [('coach', 'client'), ('client', 'coach')]) {
+      final (aRole, bRole) = dir;
+      // `first`: A's very first read is the slow one (A never had a role).
+      // `refresh`: A had a role, then A's refresh is the slow one.
+      for (final slow in const ['first', 'refresh']) {
+        for (final bMode in const [_P.ok, _P.server, _P.pending]) {
+          testWidgets(
+              "3 · A=$aRole, B=$bRole ($how): A's slow $slow read lands after "
+              "B signed in; B's read ${bMode.name} — A's late answer is never "
+              "B's role", (tester) async {
+            const lag = Duration(seconds: 5);
+            final p = _Profile(aRole)
+              ..roles['user-b'] = bRole
+              ..modes['user-b'] = bMode;
+            if (slow == 'first') p.delays['user-a'] = lag;
+            final c = await pumpShell(tester, p, location: '/compliance');
+            if (slow == 'first') {
+              expectPendingBar();
+            } else {
+              expectRoleNav(aRole);
+              p.delays['user-a'] = lag;
+              c.invalidate(currentUserProfileProvider); // A's slow refresh
+              await settle(tester);
+              expectRoleNav(aRole); // same member: the kept role is real
+            }
+            expect(p.answered.where((u) => u == 'user-a').length,
+                slow == 'first' ? 0 : 1,
+                reason: "precondition: A's slow answer has not arrived yet");
+
+            await switchTo(tester, c, 'user-b', observeSignOut: observe);
+
+            void expectB() {
+              switch (bMode) {
+                case _P.ok:
+                  expectRoleNav(bRole);
+                case _P.server:
+                  expectFailureBar();
+                case _P.pending:
+                case _P.network:
+                  expectPendingBar();
+              }
+            }
+
+            expectB(); // before A's answer lands
+            await tester.pump(lag);
+            await settle(tester);
+            expect(p.answered.where((u) => u == 'user-a').length,
+                slow == 'first' ? 1 : 2,
+                reason: "precondition: A's late answer really arrived");
+            expectB(); // and after: still B's state, not A's role
+            await unmount(tester);
+          });
+        }
+      }
+    }
+  }
+
+  // 4 · SIGN-OUT ONLY
+  testWidgets('4 · coach A signs out, nobody signs in: no coach nav or coach '
+      'top bar remains from A', (tester) async {
+    final p = _Profile('coach');
+    final c = await pumpShell(tester, p, location: '/compliance');
+    expectRoleNav('coach');
+
+    c.read(_signedIn.notifier).state = null;
+    await settle(tester);
+    for (final t in _coachTabs) {
+      expect(find.text(t), findsNothing, reason: "A's coach tab \"$t\"");
+    }
+    expect(find.byType(AppTopNav), findsNothing,
+        reason: "A's coach top bar");
+    await unmount(tester);
+  });
+
+  testWidgets('4 · coach A signs out while A\'s refresh is slow; the late '
+      'answer lands with nobody signed in: still no coach nav', (tester) async {
+    final p = _Profile('coach');
+    final c = await pumpShell(tester, p, location: '/compliance');
+    expectRoleNav('coach');
+    p.delays['user-a'] = const Duration(seconds: 5);
+    c.invalidate(currentUserProfileProvider);
+    await settle(tester);
+
+    c.read(_signedIn.notifier).state = null;
+    await settle(tester);
+    await tester.pump(const Duration(seconds: 5));
+    await settle(tester);
+    expect(p.answered.where((u) => u == 'user-a').length, 2,
+        reason: "precondition: A's late refresh really arrived");
+    for (final t in _coachTabs) {
+      expect(find.text(t), findsNothing, reason: "A's coach tab \"$t\"");
+    }
+    expect(find.byType(AppTopNav), findsNothing,
+        reason: "A's coach top bar");
     await unmount(tester);
   });
 }
