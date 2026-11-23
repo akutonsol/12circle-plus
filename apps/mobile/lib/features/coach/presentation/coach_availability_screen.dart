@@ -147,9 +147,11 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
             StateError('coaching_calls update matched no row'));
         if (!mounted) return;
         setState(() => _cancelling.remove(id));
-        messenger.showSnackBar(const SnackBar(content: Text(
-            "Couldn't cancel this session — it may already be cancelled. "
-            'Refreshing your sessions.')));
+        // P0-FL-46 review N2 · a failure notice is announced (live region).
+        messenger.showSnackBar(SnackBar(
+            content: Semantics(liveRegion: true, child: const Text(
+                "Couldn't cancel this session — it may already be cancelled. "
+                'Refreshing your sessions.'))));
         _load();
         return;
       }
@@ -157,8 +159,9 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
       reportError('CoachAvailabilityScreen._cancelSession', e, st);
       if (!mounted) return;
       setState(() => _cancelling.remove(id));
-      messenger.showSnackBar(SnackBar(content: Text(
-          "Couldn't cancel this session — ${_nextStep(e)}")));
+      messenger.showSnackBar(SnackBar(
+          content: Semantics(liveRegion: true, child: Text(
+              "Couldn't cancel this session — ${_nextStep(e)}"))));
       return;
     }
     // Step 2, the slot. The call IS cancelled from here on, so a slot that

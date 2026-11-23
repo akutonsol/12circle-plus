@@ -246,8 +246,15 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       : 'try again in a moment. If it keeps happening, contact support.';
 
   /// A failure notice: announced (live region), never the exception's text.
-  static SnackBar _failureSnack(String text) => SnackBar(
-      content: Semantics(liveRegion: true, child: Text(text)));
+  static SnackBar _failureSnack(String text,
+          {Duration duration = const Duration(milliseconds: 4000)}) =>
+      SnackBar(
+          duration: duration,
+          content: Semantics(liveRegion: true, child: Text(text)));
+
+  /// How long the 42501 refusal stays up: it is long and has no retry, so
+  /// the default 4 s is too short to read it (P0-FL-46 review N5).
+  static const _refusalSnackDuration = Duration(seconds: 8);
 
   Future<void> _cancelBooking(Map<String, dynamic> call) async {
     final id = call['id'] as String?;
@@ -361,7 +368,10 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
               'this is wrong, contact support.'
           : _nextStep(e);
       ScaffoldMessenger.of(context).showSnackBar(
-          _failureSnack("Couldn't book this session — $next"));
+          _failureSnack("Couldn't book this session — $next",
+              duration: bookingWasRefused(e)
+                  ? _refusalSnackDuration
+                  : const Duration(milliseconds: 4000)));
       return;
     }
     // No row check needed here: an INSERT cannot "succeed" with no row the

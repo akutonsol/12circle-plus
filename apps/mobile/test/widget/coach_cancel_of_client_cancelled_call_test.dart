@@ -23,6 +23,10 @@ import '../support/row_checking_postgrest.dart';
 //
 // HOW TO SEE IT FAIL: `git checkout 185261e -- apps/mobile/lib/features/coach/
 // presentation/coach_availability_screen.dart`; the first test fails.
+//
+// Review N2: both cancel failure notices (0-row and caught) are live regions,
+// like Book a Call's. At 7f935d7 neither was; the first and third tests fail
+// there.
 
 const _uid = '00000000-0000-4000-8000-0000000c0046';
 
@@ -40,7 +44,9 @@ class _Server extends RowCheckingPostgrest {
     if (request.method == 'GET' && path.endsWith('/coaching_calls')) {
       callReads++;
     }
-    if (request.method == 'PATCH' && path.endsWith('/coaching_calls')) {
+    if (request.method == 'PATCH' &&
+        path.endsWith('/coaching_calls') &&
+        mode == WriteMode.oneRow) {
       final body = request is http.Request ? request.body : '';
       writes.add('PATCH $path?${request.url.query} $body');
       final status = request.url.queryParameters['status'];
@@ -119,6 +125,11 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  Finder liveRegionAround(String text) => find.ancestor(
+      of: find.text(text),
+      matching: find.byWidgetPredicate(
+          (w) => w is Semantics && w.properties.liveRegion == true));
+
   List<String> callWrites() =>
       server.writes.where((w) => w.contains('/rest/v1/coaching_calls')).toList();
   List<String> slotWrites() => server.writes
@@ -154,6 +165,29 @@ void main() {
     expect(callWrites().single, contains('select=id'));
     expect(readsAfterLoad, greaterThanOrEqualTo(2),
         reason: 'the list is re-read so it shows what the server holds');
+    // Review N2 · announced, like Book a Call's failure notices.
+    expect(
+        liveRegionAround("Couldn't cancel this session — it may already be "
+            'cancelled. Refreshing your sessions.'),
+        findsWidgets);
+  });
+
+  testWidgets(
+      'a cancel the server rejects is said in the house voice and announced '
+      '(review N2)', (tester) async {
+    server.mode = WriteMode.serverError;
+    server.modeAppliesTo = (w) => w.startsWith('PATCH /rest/v1/coaching_calls');
+    await openAndCancel(tester);
+
+    const failed = "Couldn't cancel this session — try again in a moment. If "
+        'it keeps happening, contact support.';
+    expect(find.text(failed), findsOneWidget);
+    expect(liveRegionAround(failed), findsWidgets,
+        reason: 'the catch-path failure notice was not a live region');
+    expect(find.textContaining('Session cancelled'), findsNothing);
+    expect(slotWrites(), isEmpty);
+    expect(notifyWrites(), isEmpty);
+    expect(reported.single.origin, 'CoachAvailabilityScreen._cancelSession');
   });
 
   testWidgets('control: a still-scheduled call is cancelled as before',

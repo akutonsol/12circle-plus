@@ -34,7 +34,8 @@ import '../support/row_checking_postgrest.dart';
 // an expected answer, not a fault; the failure notices are live regions.
 //
 // It also proves _SlotCard fits 320px at text scale 2.0 (it overflowed at
-// 185261e; the FL-42 test tolerated that).
+// 185261e; the FL-42 test tolerated that), and at 1.0, 1.3 and 1.35 — either
+// side of the scale > 1.3 stacking threshold (review N1).
 //
 // HOW TO SEE IT FAIL: `git checkout 185261e -- apps/mobile/lib/features/
 // booking/presentation/booking_screen.dart`; every test but the 23505
@@ -193,6 +194,9 @@ void main() {
         reason: 'a failure notice is announced');
     expect(find.text('Book'), findsOneWidget,
         reason: 'the slot stays bookable; the control is not left busy');
+    expect(tester.widget<SnackBar>(find.byType(SnackBar)).duration,
+        const Duration(seconds: 4),
+        reason: 'control: only the refusal is held longer');
     await drain(tester);
   });
 
@@ -228,6 +232,10 @@ void main() {
     expect(notifications(), isEmpty);
     expect(reported.map((f) => f.origin), contains('BookingScreen._book'));
     expect(liveRegionAround(_refused), findsWidgets);
+    // Review N5 · the refusal is long and offers no retry; the default 4 s
+    // was too short to read it.
+    expect(tester.widget<SnackBar>(find.byType(SnackBar)).duration,
+        const Duration(seconds: 8));
     await drain(tester);
   });
 
@@ -255,44 +263,70 @@ void main() {
     await drain(tester);
   });
 
-  testWidgets('a slot card fits 320px at text scale 2.0 with no overflow',
-      (tester) async {
-    tester.view
-      ..devicePixelRatio = 1
-      ..physicalSize = const Size(320, 2400);
-    addTearDown(tester.view.reset);
-    final overflows = <String>[];
-    final previous = FlutterError.onError;
-    FlutterError.onError = (details) {
-      final text = details.toDiagnosticsNode().toStringDeep();
-      if (text.contains('overflowed')) {
-        overflows.add(text);
-      } else {
-        previous?.call(details);
-      }
-    };
-    try {
-      await tester.pumpWidget(ProviderScope(
-          child: MaterialApp(
-              builder: (context, child) => MediaQuery(
-                  data: MediaQuery.of(context)
-                      .copyWith(textScaler: const TextScaler.linear(2.0)),
-                  child: child!),
-              home: const BookingScreen())));
-      await settle(tester);
-    } finally {
-      FlutterError.onError = previous;
-    }
+  // P0-FL-46 review N1 · 2.0 is far past the stacking threshold (scale >
+  // 1.3). The scales either side of it are pinned too: 1.0 and 1.3 keep the
+  // one-row layout, 1.35 is the first that stacks. None may overflow at 320.
+  for (final scale in [1.0, 1.3, 1.35, 2.0]) {
+    testWidgets('a slot card fits 320px at text scale $scale with no overflow',
+        (tester) async {
+      await expectSlotCardFits(tester, scale);
+    });
+  }
+}
 
-    expect(find.text('Book'), findsOneWidget, reason: 'premise: a slot card');
-    expect(overflows, isEmpty,
-        reason: 'THE defect: _SlotCard overflowed at 2x on 320px');
-    // Book stays a whole target inside the viewport.
-    final r = tester.getRect(find.ancestor(
-        of: find.text('Book'), matching: find.byType(ElevatedButton)));
-    expect(r.right, lessThanOrEqualTo(320));
-    expect(r.height, greaterThanOrEqualTo(44));
-    expect(r.width, greaterThanOrEqualTo(44));
-    await drain(tester);
-  });
+/// Pumps Book a Call at 320 logical px and [scale], and proves the slot card
+/// has no overflow and Book is a whole >= 44px target inside the viewport.
+/// Also pins WHICH layout ran, so a test at 1.35 really covers the stacked one.
+Future<void> expectSlotCardFits(WidgetTester tester, double scale) async {
+  tester.view
+    ..devicePixelRatio = 1
+    ..physicalSize = const Size(320, 2400);
+  addTearDown(tester.view.reset);
+  final overflows = <String>[];
+  final previous = FlutterError.onError;
+  FlutterError.onError = (details) {
+    final text = details.toDiagnosticsNode().toStringDeep();
+    if (text.contains('overflowed')) {
+      overflows.add(text);
+    } else {
+      previous?.call(details);
+    }
+  };
+  try {
+    await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+            builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(context)
+                    .copyWith(textScaler: TextScaler.linear(scale)),
+                child: child!),
+            home: const BookingScreen())));
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+  } finally {
+    FlutterError.onError = previous;
+  }
+
+  expect(find.text('Book'), findsOneWidget, reason: 'premise: a slot card');
+  expect(overflows, isEmpty,
+      reason: 'THE defect: _SlotCard overflowed at 2x on 320px; no scale '
+          'either side of the stacking threshold may overflow');
+  // Book stays a whole target inside the viewport.
+  final r = tester.getRect(find.ancestor(
+      of: find.text('Book'), matching: find.byType(ElevatedButton)));
+  expect(r.left, greaterThanOrEqualTo(0));
+  expect(r.right, lessThanOrEqualTo(320));
+  expect(r.height, greaterThanOrEqualTo(44));
+  expect(r.width, greaterThanOrEqualTo(44));
+  // Which layout: one row up to 1.3, Book under the details past it.
+  final details = tester.getRect(find.text('30 minutes · Video call'));
+  if (scale > 1.3) {
+    expect(r.top, greaterThan(details.bottom),
+        reason: 'past 1.3 Book moves under the details');
+  } else {
+    expect(r.left, greaterThanOrEqualTo(details.right),
+        reason: 'up to 1.3 the row is unchanged: Book beside the details');
+  }
+  await tester.pumpWidget(const SizedBox());
+  await tester.pump(const Duration(seconds: 5));
 }
