@@ -55,7 +55,12 @@ void main() {
       overrides: [
         currentUserProvider
             .overrideWithValue(Supabase.instance.client.auth.currentUser),
-        currentUserProfileProvider.overrideWith((ref) async => {
+        // P0-FL-45b: like the real read — it selects `id` (a row counts
+        // only for the member it was read for), and answers `null` when
+        // nobody is signed in.
+        currentUserProfileProvider.overrideWith((ref) async =>
+            ref.watch(currentUserProvider) == null ? null : {
+              'id': _uid,
               'role': 'client',
               'first_name': 'Ana',
               'last_name': 'Lee',

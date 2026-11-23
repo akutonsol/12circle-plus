@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/custom_exercise_service.dart';
 import '../../../auth/domain/auth_provider.dart';
+import '../../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
 import '../../../workout/presentation/widgets/youtube_embed.dart';
 import 'coach_voice.dart';
 
@@ -52,16 +53,33 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
   bool _loading = true;
   bool _isStaff = false;
 
-  @override
-  void initState() { super.initState(); _load(); }
+  /// P0-FL-45b · which member + view the shown [_overlay] was loaded for.
+  ///
+  /// This read the role ONCE, in initState, with `ref.read(…).valueOrNull`:
+  /// a coach whose profile was still loading got the CLIENT view until the
+  /// screen was reopened, and after a sign-out/sign-in the previous member's
+  /// role chose the view. The role is now WATCHED, confirmed for the member
+  /// signed in now, and the section reloads whenever member or view changes.
+  /// While the role is unknown nothing is shown (neither the editor nor
+  /// another view's overlay).
+  String? _loadedKey;
 
-  Future<void> _load() async {
-    final role = ref.read(currentUserProfileProvider).valueOrNull?['role'];
-    _isStaff = role == 'coach' || role == 'admin';
-    final data = _isStaff
+  /// Loads the overlay for [key] (`uid|staff` or `uid|client`); a response
+  /// that lands after the member or view changed is dropped.
+  Future<void> _loadFor(String key, bool staff) async {
+    _loadedKey = key;
+    final data = staff
         ? await _svc.getCoachOverlay(widget.exerciseId)
         : await _svc.resolveExerciseMedia(widget.exerciseId);
-    if (mounted) setState(() { _overlay = data; _loading = false; });
+    if (!mounted || _loadedKey != key) return;
+    setState(() { _isStaff = staff; _overlay = data; _loading = false; });
+  }
+
+  /// Re-reads for the member and view currently shown (after an edit).
+  void _load() {
+    final key = _loadedKey;
+    if (key == null) return;
+    _loadFor(key, key.endsWith('|staff'));
   }
 
   List<String> _focusOf(Map<String, dynamic>? m) {
@@ -71,6 +89,25 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
 
   @override
   Widget build(BuildContext context) {
+    final user = ref.watch(currentUserProvider);
+    final role =
+        confirmedRoleRead(ref.watch(currentUserProfileProvider), user);
+    if (role == null || user == null) {
+      // Unknown: forget what was shown for whoever was confirmed before.
+      if (_loadedKey != null) {
+        _loadedKey = null;
+        _overlay = null;
+        _loading = true;
+      }
+      return const SizedBox.shrink();
+    }
+    final staff = role.role == 'coach' || role.role == 'admin';
+    final key = '${user.id}|${staff ? 'staff' : 'client'}';
+    if (key != _loadedKey) {
+      _overlay = null;
+      _loading = true;
+      _loadFor(key, staff); // async: its setState lands after this build
+    }
     if (_loading) return const SizedBox.shrink();
 
     // Coach/admin: always show the editor entry (add or edit their overlay).

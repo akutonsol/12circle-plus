@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../../shared/widgets/app_scaffold.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
 import '../domain/exercise_database_provider.dart';
 import '../domain/custom_exercise_provider.dart';
 import '../data/exercise_database_service.dart';
@@ -114,7 +115,12 @@ class _ExerciseDatabaseScreenState extends ConsumerState<ExerciseDatabaseScreen>
     );
 
     final isLoading = myAsync.isLoading || globalAsync.isLoading;
-    final role = ref.watch(currentUserProfileProvider).valueOrNull?['role'];
+    // P0-FL-45b · the role of the member signed in NOW, or null while it is
+    // unknown (read loading/failed, or the held value is another member's).
+    // Unknown → neither staff tool, as for "no role" before.
+    final role = confirmedRoleRead(ref.watch(currentUserProfileProvider),
+            ref.watch(currentUserProvider))
+        ?.role;
     final isStaff = role == 'coach' || role == 'admin';
 
     return AppScaffold(
@@ -282,7 +288,7 @@ class _ExerciseDatabaseScreenState extends ConsumerState<ExerciseDatabaseScreen>
         ]),
 
         // Coach: create a new exercise (with form video, instructions, etc.).
-        if ((ref.watch(currentUserProfileProvider).valueOrNull?['role']) == 'coach')
+        if (role == 'coach')
           Positioned(
             right: 20, bottom: 24,
             child: GestureDetector(

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../../shared/widgets/app_scaffold.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
 import '../../coaching_mode/domain/coaching_mode_provider.dart';
 import '../../exercise_database/data/exercise_database_service.dart';
 import '../../exercise_database/data/models/exercise_detail_model.dart';
@@ -100,8 +101,12 @@ class _TrainHubScreenState extends ConsumerState<TrainHubScreen> {
         mutedColor: _C.onSurfaceVar,
         onRetry: () => ref.invalidate(activeSessionProvider)));
     final completionAsync   = ref.watch(completionRateProvider);
-    final profileAsync      = ref.watch(currentUserProfileProvider);
-    final isCoach           = profileAsync.whenOrNull(data: (p) => p?['role'] == 'coach') ?? false;
+    // P0-FL-45b · the coach tile only for a role confirmed for the member
+    // signed in now; unknown → the client tile, as for "no role" before.
+    final isCoach = confirmedRoleRead(ref.watch(currentUserProfileProvider),
+                ref.watch(currentUserProvider))
+            ?.role ==
+        'coach';
     final mode              = ref.watch(coachingModeProvider);
     // "My Program" origin differs by mode — only coach-guided is coach-assigned.
     final programSub = switch (mode) {

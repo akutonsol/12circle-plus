@@ -102,7 +102,7 @@ void main() {
     await tester.pumpWidget(ProviderScope(
       overrides: [
         // Metric, so the card reads kg (loads show in the member's unit).
-        currentUserProfileProvider.overrideWith((ref) async => {'unit_preference': 'metric'}),
+        currentUserProfileProvider.overrideWith((ref) async => {'id': _uid, 'unit_preference': 'metric'}),
         loggedExerciseNamesProvider.overrideWith((ref) async => ['Deadlift']),
         exerciseProgressionProvider('Deadlift').overrideWith((ref) async => [
               {'date': '2026-11-05', 'max_weight': 100.0, 'total_volume': 500.0, 'sets_count': 1},

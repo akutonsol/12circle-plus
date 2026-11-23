@@ -56,6 +56,12 @@ class _MemoryStore extends GotrueAsyncStorage {
   Future<void> removeItem({required String key}) async => _m.remove(key);
 }
 
+/// The member the profile row belongs to (P0-FL-45b: a unit counts only when
+/// its row is the signed-in member's — the real read always selects `id`).
+final _signedInU1 = currentUserProvider.overrideWithValue(User(
+    id: 'u1', appMetadata: const {}, userMetadata: const {},
+    aud: 'authenticated', createdAt: '2026-01-01T00:00:00Z'));
+
 Override _profile(String? unitPreference) => currentUserProfileProvider
     .overrideWith((ref) async => {'id': 'u1', 'unit_preference': unitPreference});
 
@@ -100,7 +106,7 @@ void main() {
     Future<void> openSession(WidgetTester tester, String? unit) async {
       await tester.pumpWidget(ProviderScope(
         overrides: [
-          _profile(unit),
+          _signedInU1, _profile(unit),
           workoutHistoryProvider.overrideWith((ref) async => [
                 {
                   'id': 's1',
@@ -153,7 +159,7 @@ void main() {
       addTearDown(tester.view.reset);
       await tester.pumpWidget(ProviderScope(
         overrides: [
-          _profile(unit),
+          _signedInU1, _profile(unit),
           loggedExerciseNamesProvider.overrideWith((ref) async => ['Deadlift']),
           exerciseProgressionProvider('Deadlift').overrideWith((ref) async => [
                 {'date': '2026-11-05', 'max_weight': 90.0, 'total_volume': 450.0, 'sets_count': 1},

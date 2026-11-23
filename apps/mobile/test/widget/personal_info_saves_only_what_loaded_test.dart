@@ -122,6 +122,7 @@ void main() {
 
   testWidgets('control: a loaded profile saves what the form shows', (tester) async {
     await open(tester, {
+      'id': _uid, // P0-FL-45b: the real read selects `id`
       'first_name': 'Jordan', 'last_name': 'Lee', 'role': 'client',
       'height_cm': 180, 'weight_kg': 82.5, 'weight_goal_kg': 78.0,
       'gender': 'female', 'training_days_per_week': 4,

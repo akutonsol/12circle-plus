@@ -16,8 +16,13 @@ bool prefersMetric(String? unitPreference) => unitPreference == 'metric';
 /// read the preference. Until the profile has loaded, or if it cannot load,
 /// this is the app's default unit, lb: the rule the workout screen enters by,
 /// so a load is never shown in a unit other than the one it was typed in.
+///
+/// P0-FL-45b: only a profile read for the member signed in NOW. Riverpod kept
+/// the previous member's row through the new member's read, so after a
+/// sign-out/sign-in B's loads were shown — and B's typed weights converted —
+/// in A's unit. Unconfirmed is the same as unread: the default above.
 final memberPrefersMetricProvider = Provider<bool>((ref) => prefersMetric(
-    ref.watch(currentUserProfileProvider).valueOrNull?['unit_preference'] as String?));
+    ref.watch(confirmedCurrentProfileProvider)?['unit_preference'] as String?));
 
 /// "135 lb" / "61.2 kg": converted to the member's unit and rounded to 0.1,
 /// without a trailing ".0". A load entered as 135 lb is stored as 61.23496995 kg

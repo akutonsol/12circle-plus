@@ -46,13 +46,35 @@ class _NotificationPreferencesScreenState
   /// answered "no profile row", which keeps the defaults as before).
   bool _loaded = false;
 
+  /// P0-FL-45b · the member whose stored preferences the toggles show. The
+  /// toggles are State and outlived a sign-out/sign-in: B saw A's settings as
+  /// their own, and a tap stored the opposite of A's value in B's row. When
+  /// another member is signed in the toggles reset and lock until THEIR read
+  /// lands, and a save refuses unless the signed-in id is this one.
+  String? _loadedFor;
+
+  void _forget() {
+    _loaded = false;
+    _loadedFor = null;
+    _workoutReminders = true;
+    _checkinReminders = true;
+    _coachMessages    = true;
+    _progressUpdates  = true;
+    _challenges       = false;
+    _community        = false;
+  }
+
   /// P0-FL-16: only a successful read fills the toggles. A failed read is an
   /// AsyncError now (it used to be `null`, which left the defaults showing as
   /// the member's settings and every toggle live). Returns whether it applied.
   bool _apply(AsyncValue<Map<String, dynamic>?> state) {
     if (_loaded || state is! AsyncData<Map<String, dynamic>?>) return false;
-    _loaded = true;
+    // P0-FL-45b: only a read for the member signed in now.
+    final uid = ref.read(currentUserProvider)?.id;
     final p = state.value;
+    if (uid == null || (p != null && p['id'] != uid)) return false;
+    _loaded = true;
+    _loadedFor = uid;
     if (p == null) return true;
     _workoutReminders = p['notif_workout_reminders'] as bool? ?? true;
     _checkinReminders = p['notif_checkin_reminders'] as bool? ?? true;
@@ -87,6 +109,10 @@ class _NotificationPreferencesScreenState
     try {
       final uid = Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) throw StateError('signed out');
+      // P0-FL-45b: the toggle was drawn from THIS member's stored value.
+      if (_loadedFor != uid) {
+        throw StateError('notification toggles were read for another member');
+      }
       final rows = await Supabase.instance.client
           .from('user_profiles')
           .update({field: value})
@@ -133,11 +159,19 @@ class _NotificationPreferencesScreenState
       currentUserProfileProvider,
       (_, next) { if (_apply(next)) setState(() {}); },
     );
+    // P0-FL-45b: a different member signed in → the previous member's
+    // toggles are dropped; this member's read fills them when it lands.
+    final user = ref.watch(currentUserProvider);
+    if (_loaded && _loadedFor != user?.id) {
+      _forget();
+      _apply(ref.read(currentUserProfileProvider));
+    }
     final profileAsync = ref.watch(currentUserProfileProvider);
     // Locked until the stored preferences are known: a toggle drawn from a
     // default is not the member's setting, and flipping it would store the
     // opposite of what they think they are choosing.
-    final locked = !_loaded;
+    final locked = !_loaded ||
+        _loadedFor != Supabase.instance.client.auth.currentUser?.id;
     final loadError = locked && profileAsync.hasError ? profileAsync.error : null;
 
     final top    = MediaQuery.of(context).padding.top;
@@ -363,7 +397,11 @@ class _NotificationPreferencesScreenState
       Opacity(
         opacity: _saving.contains(field) ? 0.5 : 1,
         child: _PurpleToggle(value: value, onChanged: (v) {
-          if (!_loaded || _saving.contains(field)) return;
+          if (!_loaded ||
+              _loadedFor != Supabase.instance.client.auth.currentUser?.id ||
+              _saving.contains(field)) {
+            return;
+          }
           onChanged(v);
         })),
     ]));

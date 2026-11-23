@@ -10,6 +10,7 @@ import '../data/models/exercise_detail_model.dart';
 import '../../workout/data/models/video_variant_model.dart';
 import '../../workout/presentation/widgets/youtube_embed.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
 import 'widgets/coach_focus_section.dart';
 import '../../../core/widgets/named_icon_button.dart';
 
@@ -430,7 +431,10 @@ class _EditFab extends ConsumerWidget {
   const _EditFab({required this.exercise});
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final role = ref.watch(currentUserProfileProvider).valueOrNull?['role'];
+    // P0-FL-45b · only a role confirmed for the member signed in now.
+    final role = confirmedRoleRead(ref.watch(currentUserProfileProvider),
+            ref.watch(currentUserProvider))
+        ?.role;
     if (role != 'coach' && role != 'admin') return const SizedBox.shrink();
     return FloatingActionButton.extended(
       heroTag: 'ex-edit',
@@ -459,7 +463,10 @@ class _EnrichFabState extends ConsumerState<_EnrichFab> {
   @override
   Widget build(BuildContext context) {
     // AI generation is admin-only; coaches add media via Edit instead.
-    final role = ref.watch(currentUserProfileProvider).valueOrNull?['role'];
+    // P0-FL-45b · only a role confirmed for the member signed in now.
+    final role = confirmedRoleRead(ref.watch(currentUserProfileProvider),
+            ref.watch(currentUserProvider))
+        ?.role;
     if (role != 'admin') return const SizedBox.shrink();
 
     final hasContent = widget.exercise.instructions.isNotEmpty;
