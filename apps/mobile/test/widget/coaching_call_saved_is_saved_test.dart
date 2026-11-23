@@ -284,7 +284,7 @@ void main() {
       await cancel(tester);
 
       expect(server.writes, contains('PATCH /rest/v1/coaching_calls'));
-      expect(find.text('Could not cancel. Try again.'), findsNothing,
+      expect(find.textContaining("Couldn't cancel"), findsNothing,
           reason: 'THE defect: the call IS cancelled; only the notice failed');
       expect(find.text('Session cancelled.'), findsOneWidget);
       expect(find.text('Confirmed'), findsNothing,
@@ -294,7 +294,10 @@ void main() {
     testWidgets('control: a cancel that failed says so', (tester) async {
       server.callWriteFails = true;
       await cancel(tester);
-      expect(find.text('Could not cancel. Try again.'), findsOneWidget);
+      // P0-FL-42: the house voice (a 503 is the server answering, so no
+      // connection hint).
+      expect(find.text("Couldn't cancel this session — try again in a moment. "
+          'If it keeps happening, contact support.'), findsOneWidget);
       expect(posts('notifications'), 0);
     });
   });
