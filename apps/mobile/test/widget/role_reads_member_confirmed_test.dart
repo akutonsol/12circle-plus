@@ -103,11 +103,16 @@ class _Server extends RowCheckingPostgrest {
   _Server() : super('user-a');
   final views = <String>[];
 
+  /// When set, the client view's answer waits for it (a SLOW overlay read).
+  Completer<void>? clientGate;
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final path = request.url.path;
     if (path.endsWith('/rpc/resolve_exercise_media')) {
       views.add('client');
+      final gate = clientGate;
+      if (gate != null) await gate.future;
       return http.StreamedResponse(
           Stream.value(utf8.encode(jsonEncode({
             'has_coach_overlay': true,
@@ -267,6 +272,7 @@ void main() {
   setUp(() {
     server.reset();
     server.views.clear();
+    server.clientGate = null;
   });
 
   Future<void> settle(WidgetTester tester) async {
@@ -449,6 +455,64 @@ void main() {
     await switchTo(tester, c, 'user-b', observeSignOut: false);
     site.expectFor('coach', 'user-b');
     expect(server.views, ['client', 'staff']);
+    await unmount(tester);
+  });
+
+  // The lead's mutant `if (!mounted || _loadedKey != key) return;` ->
+  // `if (!mounted) return;` survived: every overlay answer above was instant.
+  // Here A's (client) overlay answer is HELD until after B (a coach) signed in;
+  // it must not replace what B is shown.
+  for (final bMode in const [_P.ok, _P.pending, _P.server]) {
+    testWidgets("Coach Focus: client A's DELAYED overlay answer lands after "
+        "coach B signed in (B's read ${bMode.name}): never shown to B",
+        (tester) async {
+      final site = _sites.firstWhere((s) => s.name == 'Coach Focus');
+      final gate = Completer<void>();
+      server.clientGate = gate;
+      final p = _Profile('client', 'coach')..modes['user-b'] = bMode;
+      final c = await pump(tester, site, p);
+      expect(server.views, ['client'],
+          reason: "precondition: A's overlay read is in flight");
+      site.expectFor(null, null); // nothing shown before it answers
+      await switchTo(tester, c, 'user-b', observeSignOut: false);
+      final bRole = bMode == _P.ok ? 'coach' : null;
+      site.expectFor(bRole, null);
+      gate.complete(); // A's answer lands now
+      await settle(tester);
+      expect(server.views.first, 'client',
+          reason: "precondition: A's late answer was the client view");
+      site.expectFor(bRole, null);
+      expect(find.textContaining('Slow on the way down'), findsNothing,
+          reason: "A's coach focus shown to B");
+      await unmount(tester);
+    });
+  }
+
+  testWidgets("Coach Focus: A's DELAYED overlay answer lands after A signed "
+      'out and nobody signed in: nothing is shown', (tester) async {
+    final site = _sites.firstWhere((s) => s.name == 'Coach Focus');
+    final gate = Completer<void>();
+    server.clientGate = gate;
+    final c = await pump(tester, site, _Profile('client', 'coach'));
+    c.read(_signedIn.notifier).state = null;
+    await settle(tester);
+    gate.complete();
+    await settle(tester);
+    expect(find.text('COACH FOCUS TODAY'), findsNothing);
+    expect(find.textContaining('Slow on the way down'), findsNothing);
+    await unmount(tester);
+  });
+
+  testWidgets("Coach Focus: the SAME member's delayed answer still lands "
+      '(control)', (tester) async {
+    final site = _sites.firstWhere((s) => s.name == 'Coach Focus');
+    final gate = Completer<void>();
+    server.clientGate = gate;
+    await pump(tester, site, _Profile('client', 'coach'));
+    site.expectFor(null, null);
+    gate.complete();
+    await settle(tester);
+    site.expectFor('client', 'user-a');
     await unmount(tester);
   });
 }

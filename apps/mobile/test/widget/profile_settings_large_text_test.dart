@@ -4,6 +4,7 @@ import 'package:circle_fitness/features/payments/domain/entitlements.dart';
 import 'package:circle_fitness/features/profile/presentation/profile_screen.dart';
 import 'package:circle_fitness/features/settings/presentation/settings_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -17,7 +18,8 @@ import '../support/row_checking_postgrest.dart';
 // not shrink, and Settings' "SETTINGS" title wrapped past its 56px bar: each
 // threw a RenderFlex overflow (yellow-black stripes, clipped content) for a
 // member using large text. Now the chips wrap, the text column flexes, and
-// the title is one ellipsised line.
+// the title is one line, scaled down to fit — shown in full, never "SETT…"
+// (UX F2 of the review: the first fix ellipsised it).
 //
 // The surface is 320dp wide and tall enough that every row is laid out (an
 // overflow below the fold is still an overflow when scrolled to).
@@ -103,6 +105,16 @@ void main() {
       final title = tester.getRect(find.text('SETTINGS'));
       expect(title.height, lessThanOrEqualTo(56), reason: 'one line, in the bar');
       expect(title.right, lessThanOrEqualTo(320));
+      // UX F2: the whole word, not "SETT…" — the line is scaled to fit, never
+      // cut (an ellipsised or clipped paragraph reports it exceeded its lines).
+      final text = tester.widget<Text>(find.text('SETTINGS'));
+      expect(text.overflow, isNot(TextOverflow.ellipsis));
+      final para = tester.renderObject<RenderParagraph>(find.text('SETTINGS'));
+      expect(para.didExceedMaxLines, isFalse,
+          reason: 'the title is shown in full');
+      expect(para.size.width,
+          greaterThanOrEqualTo(para.getMaxIntrinsicWidth(double.infinity) - 0.5),
+          reason: 'laid out at its full width (then scaled), not truncated');
       await unmount(tester);
     });
   }

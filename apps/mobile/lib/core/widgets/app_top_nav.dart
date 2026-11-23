@@ -35,7 +35,9 @@ class AppTopNavRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final profile = ref.watch(currentUserProfileProvider).valueOrNull;
+    // P0-FL-45b: only a row read for the member signed in now; the previous
+    // member's name/avatar were held through the new member's read.
+    final profile = ref.watch(confirmedCurrentProfileProvider);
     // The profile row can be momentarily null (e.g. right after a hot reload),
     // which used to drop the header to "there"/"U". Fall back to the auth user's
     // metadata + email — the same chain the Profile screen uses — so a signed-in

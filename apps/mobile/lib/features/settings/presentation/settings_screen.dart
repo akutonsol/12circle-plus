@@ -41,6 +41,11 @@ const kUnitSaveFailedMessage =
 const kUnitSaveSignedOutMessage =
     "Couldn't save your unit preference — you're signed out. Sign in and try "
     'again.';
+/// P0-FL-45b · the unit on screen was read for another account than the one
+/// signed in now: nothing is stored over a unit this member never saw.
+const kUnitSaveOtherAccountMessage =
+    "Couldn't save your unit preference — you've switched accounts. Check the "
+    'unit shown and try again.';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -109,9 +114,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Future<bool> _persistUnit(String unit) async {
     _unitSaveWasOffline = false;
     _unitSaveSignedOut = false;
+    _unitSaveOtherAccount = false;
     final uid = Supabase.instance.client.auth.currentUser?.id;
     if (uid == null) {
       _unitSaveSignedOut = true;
+      return false;
+    }
+    // P0-FL-45b: the unit shown was read for THIS session's member. The
+    // session can belong to B while the screen still shows A's unit (the app's
+    // member catches up a frame later); the write is filtered by the session.
+    // (A member with no profile row never loaded a unit: unchanged.)
+    if (_unitLoaded && _unitLoadedFor != uid) {
+      reportError('settings.persistUnit',
+          StateError('unit toggle was read for another member'));
+      _unitSaveOtherAccount = true;
       return false;
     }
     try {
@@ -137,6 +153,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   /// Set by a failed [_persistUnit]: true when there was no signed-in user.
   bool _unitSaveSignedOut = false;
+
+  /// Set by a refused [_persistUnit]: the unit shown was another member's.
+  bool _unitSaveOtherAccount = false;
 
   /// True while a unit save is in flight. Taps are ignored meanwhile: two
   /// overlapping saves each captured their own "previous", so a late failure
@@ -216,17 +235,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                   const Expanded(
                     child: Center(
-                      // One line, ellipsised: at 2x text on a 320dp phone the
-                      // title wrapped past the 56px bar (P0-FL-45b).
-                      child: Text('SETTINGS',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: _C.primary,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 2,
-                        )),
+                      // One line, scaled down rather than wrapped past the
+                      // 56px bar or cut to "SETT…" at 2x text on a 320dp phone
+                      // (P0-FL-45b, UX F2). Unchanged at normal sizes.
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text('SETTINGS',
+                          maxLines: 1,
+                          style: TextStyle(
+                            color: _C.primary,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 2,
+                          )),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 40),
@@ -372,9 +394,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(content: Text(_unitSaveSignedOut
                                       ? kUnitSaveSignedOutMessage
-                                      : _unitSaveWasOffline
-                                          ? kUnitSaveOfflineMessage
-                                          : kUnitSaveFailedMessage)),
+                                      : _unitSaveOtherAccount
+                                          ? kUnitSaveOtherAccountMessage
+                                          : _unitSaveWasOffline
+                                              ? kUnitSaveOfflineMessage
+                                              : kUnitSaveFailedMessage)),
                                 );
                               }
                             },

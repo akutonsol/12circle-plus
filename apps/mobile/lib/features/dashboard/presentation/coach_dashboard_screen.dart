@@ -384,7 +384,9 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                       shape: BoxShape.circle, color: Color(0xFF2A1A4E)),
                     child: ClipOval(
                       child: () {
-                        final av = (ref.watch(currentUserProfileProvider).valueOrNull?['avatar_url'] as String?)?.trim();
+                        // P0-FL-45b: this member's row only — never the
+                        // previous member's avatar held through a re-read.
+                        final av = (ref.watch(confirmedCurrentProfileProvider)?['avatar_url'] as String?)?.trim();
                         return (av != null && av.isNotEmpty)
                           ? Image.network(av, fit: BoxFit.cover, width: 40, height: 40,
                               errorBuilder: (_, __, ___) => const Icon(

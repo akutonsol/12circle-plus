@@ -156,16 +156,24 @@ void main() {
   }
 
   Future<ProviderContainer> open(
-      WidgetTester tester, Widget screen, _Profile p) async {
+      WidgetTester tester, Widget screen, _Profile p,
+      {bool alwaysRowOfA = false, String first = 'user-a'}) async {
     tester.view
       ..devicePixelRatio = 1
       ..physicalSize = const Size(800, 3200);
     addTearDown(tester.view.reset);
+    if (first != 'user-a') {
+      await Supabase.instance.client.auth.recoverSession(_session(first));
+    }
     final c = ProviderContainer(overrides: [
+      _signedIn.overrideWith((ref) => _user(first)),
       currentUserProvider.overrideWith((ref) => ref.watch(_signedIn)),
       currentUserProfileProvider.overrideWith((ref) async {
         final u = ref.watch(currentUserProvider);
         if (u == null) return null;
+        // A MISMATCHED row: a completed read (AsyncData) whose row is A's
+        // while someone else is signed in. Only the member check rejects it.
+        if (alwaysRowOfA) return p.read('user-a');
         return p.read(u.id);
       }),
       clientPlanProvider.overrideWith((ref) async => ClientPlan.selfGuided),
@@ -287,6 +295,28 @@ void main() {
       });
     }
 
+    for (final opened in const ['as B', 'as A, then A -> B']) {
+      testWidgets("a completed read whose row is A's while B is signed in "
+          "($opened): never fills B's form, never saved into B's row",
+          (tester) async {
+        final c = await open(tester, const PersonalInfoScreen(), _Profile(),
+            alwaysRowOfA: true,
+            first: opened == 'as B' ? 'user-b' : 'user-a');
+        if (opened != 'as B') {
+          expect(find.text('Alice'), findsOneWidget,
+              reason: "precondition: A's own form");
+          await switchTo(tester, c, 'user-b', observeSignOut: false);
+        }
+        expect(c.read(currentUserProfileProvider).value?['id'], 'user-a',
+            reason: "precondition: the provider holds A's row as data");
+        expectNothingOfA();
+        await tapSave(tester);
+        expect(profileWrites(), isEmpty,
+            reason: "B's details are not known: nothing is saved");
+        await unmount(tester);
+      });
+    }
+
     testWidgets('A signs out, nobody signs in: the form forgets A and saves '
         'nothing', (tester) async {
       final c = await open(tester, const PersonalInfoScreen(), _Profile());
@@ -383,6 +413,34 @@ void main() {
       await unmount(tester);
     });
 
+    for (final bMode in const [_P.ok, _P.server]) {
+      testWidgets("A's slow FIRST read lands after B signed in (B's read "
+          "${bMode.name}): never B's setting", (tester) async {
+        const lag = Duration(seconds: 5);
+        final p = _Profile()
+          ..delays['user-a'] = lag
+          ..modes['user-b'] = bMode;
+        final c = await open(tester, const NotificationPreferencesScreen(), p);
+        await switchTo(tester, c, 'user-b', observeSignOut: false);
+        await tester.pump(lag);
+        await settle(tester);
+        expect(p.answered.where((u) => u == 'user-a').length, 1,
+            reason: "precondition: A's late answer arrived");
+        await tapWorkoutReminders(tester);
+        final writes = profileWrites();
+        if (bMode == _P.ok) {
+          // B's stored value is ON: the tap turns it OFF. With A's (OFF)
+          // applied the tap would store ON.
+          expect(writes, hasLength(1));
+          expect(writes.single, contains('id=eq.user-b'));
+          expect(writes.single, contains('"notif_workout_reminders":false'));
+        } else {
+          expect(writes, isEmpty, reason: "B's settings are not known");
+        }
+        await unmount(tester);
+      });
+    }
+
     testWidgets("A's slow refresh lands after B signed in: B's setting",
         (tester) async {
       final p = _Profile();
@@ -448,6 +506,98 @@ void main() {
         });
       }
     }
+
+    for (final opened in const ['as B', 'as A, then A -> B']) {
+      testWidgets("a completed read whose row is A's while B is signed in "
+          "($opened): A's unit is never shown or saved as B's", (tester) async {
+        final c = await open(tester, const SettingsScreen(), _Profile(),
+            alwaysRowOfA: true,
+            first: opened == 'as B' ? 'user-b' : 'user-a');
+        if (opened != 'as B') {
+          expect(selected(tester, 'LB'), isTrue, reason: "precondition: A's LB");
+          await switchTo(tester, c, 'user-b', observeSignOut: false);
+        }
+        expect(c.read(currentUserProfileProvider).value?['id'], 'user-a',
+            reason: "precondition: the provider holds A's row as data");
+        expect(selected(tester, 'LB'), isFalse, reason: "A's unit");
+        expect(selected(tester, 'KG'), isFalse, reason: "B's unit is unknown");
+        await tester.tap(find.text('KG'), warnIfMissed: false);
+        await settle(tester);
+        await tester.tap(find.text('LB'), warnIfMissed: false);
+        await settle(tester);
+        expect(profileWrites(), isEmpty, reason: 'locked until B is read');
+        await unmount(tester);
+      });
+    }
+
+    for (final slow in const ['first', 'refresh']) {
+      for (final bMode in const [_P.ok, _P.server]) {
+        testWidgets("A's slow $slow read lands after B signed in (B's read "
+            "${bMode.name}): A's unit is never B's", (tester) async {
+          const lag = Duration(seconds: 5);
+          final p = _Profile()..modes['user-b'] = bMode;
+          if (slow == 'first') p.delays['user-a'] = lag;
+          final c = await open(tester, const SettingsScreen(), p);
+          if (slow == 'refresh') {
+            expect(selected(tester, 'LB'), isTrue, reason: "precondition");
+            p.delays['user-a'] = lag;
+            c.invalidate(currentUserProfileProvider);
+            await settle(tester);
+          }
+          await switchTo(tester, c, 'user-b', observeSignOut: false);
+          await tester.pump(lag);
+          await settle(tester);
+          expect(p.answered.where((u) => u == 'user-a').length,
+              slow == 'first' ? 1 : 2,
+              reason: "precondition: A's late answer arrived");
+          expect(selected(tester, 'LB'), isFalse, reason: "A's unit");
+          expect(selected(tester, 'KG'), bMode == _P.ok,
+              reason: "B's stored unit once read, else none");
+          // Tap LB: with B's KG known this stores B's imperial; unknown, nothing.
+          await tester.tap(find.text('LB'), warnIfMissed: false);
+          await settle(tester);
+          final writes = profileWrites();
+          if (bMode == _P.ok) {
+            expect(writes, hasLength(1));
+            expect(writes.single, contains('id=eq.user-b'));
+            expect(writes.single, contains('imperial'));
+          } else {
+            expect(writes, isEmpty, reason: "B's unit is not known");
+          }
+          await unmount(tester);
+        });
+      }
+    }
+
+    testWidgets("the session already belongs to B while A's unit shows: a tap "
+        "stores nothing in B's row and says why", (tester) async {
+      final c = await open(tester, const SettingsScreen(), _Profile());
+      expect(selected(tester, 'LB'), isTrue, reason: "precondition: A's LB");
+      // The Supabase session switched; the app's member has not caught up.
+      await Supabase.instance.client.auth.recoverSession(_session('user-b'));
+      c.invalidate(_signedIn); // a rebuild, same member
+      await settle(tester);
+      await tester.tap(find.text('KG'), warnIfMissed: false);
+      await settle(tester);
+      expect(profileWrites(), isEmpty,
+          reason: "the unit shown is A's; the write would go to B's row");
+      expect(find.text(kUnitSaveOtherAccountMessage), findsOneWidget,
+          reason: 'the refusal is said, in the house voice');
+      expect(selected(tester, 'LB'), isTrue, reason: 'the toggle reverts');
+      await unmount(tester);
+    });
+
+    testWidgets('control: same member, same session — a tap stores the unit',
+        (tester) async {
+      await open(tester, const SettingsScreen(), _Profile());
+      await tester.tap(find.text('KG'), warnIfMissed: false);
+      await settle(tester);
+      expect(profileWrites(), hasLength(1));
+      expect(profileWrites().single, contains('id=eq.user-a'));
+      expect(profileWrites().single, contains('metric'));
+      expect(find.text(kUnitSaveOtherAccountMessage), findsNothing);
+      await unmount(tester);
+    });
 
     testWidgets("A signs out, nobody signs in: A's unit is not shown",
         (tester) async {
