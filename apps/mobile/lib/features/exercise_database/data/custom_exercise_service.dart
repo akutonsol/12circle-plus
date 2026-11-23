@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import 'models/exercise_detail_model.dart';
 import '../../workout/data/models/video_variant_model.dart';
 
@@ -60,7 +61,12 @@ class CustomExerciseService {
           pr: r['supports_pr_tracking'] != false,
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      // P0-FL-50a · best-effort enrichment: the set tracker keeps its safe
+      // default (show RPE/PR) — but a failed read is RECORDED, not silently
+      // the same as "this exercise has no library record". Nothing is cached.
+      reportError('CustomExerciseService.metaForName', e, st);
+    }
     return (rpe: true, pr: true);
   }
 
@@ -84,7 +90,11 @@ class CustomExerciseService {
           if (url != null && url.trim().isNotEmpty) return url.trim();
         }
       }
-    } catch (_) {}
+    } catch (e, st) {
+      // P0-FL-50a · best-effort: the guide falls back to the next video
+      // source (and finally "Watch form video"), but the failure is recorded.
+      reportError('CustomExerciseService.findVideoForName', e, st);
+    }
     return null;
   }
 
@@ -247,7 +257,12 @@ class CustomExerciseService {
           .ilike('muscle_group', '%$mg%')
           .neq('name', name).limit(12);
       return List<Map<String, dynamic>>.from(rows as List);
-    } catch (_) { return []; }
+    } catch (e, st) {
+      // P0-FL-50a · a failed read is not "no substitutes": recorded, and the
+      // swap sheet says it couldn't load them (with a retry).
+      reportError('CustomExerciseService.getSubstitutes', e, st);
+      rethrow;
+    }
   }
 
   /// A YouTube id resolved by the bulk video-enrichment pipeline, keyed by
@@ -263,7 +278,12 @@ class CustomExerciseService {
           .maybeSingle();
       final id = row?['youtube_id'] as String?;
       return (id != null && id.trim().isNotEmpty) ? id : null;
-    } catch (_) { return null; }
+    } catch (e, st) {
+      // P0-FL-50a · best-effort (the curated guide id / external link remains),
+      // but recorded rather than read as "no enriched video".
+      reportError('CustomExerciseService.findEnrichedVideo', e, st);
+      return null;
+    }
   }
 
   /// Coach/admin: run the YouTube video enrichment for a batch of exercise names
@@ -574,35 +594,62 @@ class CustomExerciseService {
 
   /// Coaching-quality observability — a KPI bundle composed from EXISTING data
   /// and analytics RPCs (no new backend). Every piece degrades independently.
+  ///
+  /// P0-FL-50a · a count that FAILED was returned as 0 — an admin KPI showing
+  /// zero was a false fact. A failed count/average is now recorded, left null,
+  /// and its key listed under [observabilityFailedKey] so the screen shows it
+  /// as unknown, never 0 (and an average's "no data" stays distinguishable
+  /// from "couldn't load").
   Future<Map<String, dynamic>> platformObservability() async {
-    Future<int> cnt(String table, [Map<String, String> eq = const {}]) async {
+    final failed = <String>[];
+    Object? firstError;
+    Future<int?> cnt(String key, String table, [Map<String, String> eq = const {}]) async {
       try {
         var q = _db.from(table).select('id');
         eq.forEach((k, v) => q = q.eq(k, v));
         final r = await q.limit(10000);
         return (r as List).length;
-      } catch (_) { return 0; }
+      } catch (e, st) {
+        reportError('CustomExerciseService.platformObservability.$key', e, st);
+        failed.add(key);
+        firstError ??= e;
+        return null;
+      }
     }
-    Future<int?> avgOf(String table, String col) async {
+    Future<int?> avgOf(String key, String table, String col) async {
       try {
         final r = await _db.from(table).select(col).limit(5000);
         final v = (r as List).map((e) => e[col]).whereType<num>().toList();
         return v.isEmpty ? null : (v.reduce((a, b) => a + b) / v.length).round();
-      } catch (_) { return null; }
+      } catch (e, st) {
+        reportError('CustomExerciseService.platformObservability.$key', e, st);
+        failed.add(key);
+        firstError ??= e;
+        return null;
+      }
     }
     final out = <String, dynamic>{};
-    out['programs_generated']  = await cnt('workout_programs', {'engine_generated': 'true'});
-    out['decision_traces']     = await cnt('decision_traces');
-    out['predictions']         = await cnt('predictions');
-    out['weekly_reviews_sent'] = await cnt('communications', {'type': 'weekly_review', 'status': 'sent'});
-    out['communications_total']= await cnt('communications');
-    out['avg_adherence']       = await avgOf('weekly_feedback', 'completion_pct');
-    out['avg_goal_confidence'] = await avgOf('predictions', 'confidence');
+    out['programs_generated']  = await cnt('programs_generated', 'workout_programs', {'engine_generated': 'true'});
+    out['decision_traces']     = await cnt('decision_traces', 'decision_traces');
+    out['predictions']         = await cnt('predictions', 'predictions');
+    out['weekly_reviews_sent'] = await cnt('weekly_reviews_sent', 'communications', {'type': 'weekly_review', 'status': 'sent'});
+    out['communications_total']= await cnt('communications_total', 'communications');
+    out['avg_adherence']       = await avgOf('avg_adherence', 'weekly_feedback', 'completion_pct');
+    out['avg_goal_confidence'] = await avgOf('avg_goal_confidence', 'predictions', 'confidence');
+    out[observabilityFailedKey] = failed;
+    out[observabilityErrorKey] = firstError;
     out['analytics']           = await decisionAnalytics();
     out['certification']       = await certificationSummary();
     out['intelligence']        = await intelligenceStats();
     return out;
   }
+
+  /// Key in [platformObservability]'s result listing the figures that could
+  /// not be read (a `List<String>` of their keys).
+  static const observabilityFailedKey = 'failed';
+
+  /// Key holding the first such failure (to word the notice; never shown).
+  static const observabilityErrorKey = 'failed_error';
 
   /// Aggregate decision analytics across recorded traces. Null if 089 absent.
   Future<Map<String, dynamic>?> decisionAnalytics() async {
@@ -659,7 +706,12 @@ class CustomExerciseService {
       final r = await _db.from('coach_coaching_packs').select()
           .eq('coach_id', uid ?? '').order('created_at', ascending: false);
       return (r as List).cast<Map<String, dynamic>>();
-    } catch (_) { return []; }
+    } catch (e, st) {
+      // P0-FL-50a · a failed read is not "no packs": recorded and rethrown,
+      // so the editor says it couldn't load them (with a retry).
+      reportError('CustomExerciseService.getCoachingPacks', e, st);
+      rethrow;
+    }
   }
 
   /// Save a named cue set for reuse across exercises.
@@ -674,10 +726,22 @@ class CustomExerciseService {
   }
 
   Future<bool> deleteCoachingPack(String id) async {
+    lastError = null; // never report an earlier call's error
     try {
-      await _db.from('coach_coaching_packs').delete().eq('id', id);
+      // P0-FL-50a · .select('id') so an RLS-filtered delete (0 rows, no
+      // error) is a failure, not "deleted".
+      final res = await _db.from('coach_coaching_packs').delete().eq('id', id).select('id');
+      if ((res as List).isEmpty) {
+        lastError = 'No cue pack was deleted';
+        reportError('CustomExerciseService.deleteCoachingPack', lastError!);
+        return false;
+      }
       return true;
-    } catch (_) { return false; }
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.deleteCoachingPack', e, st);
+      return false;
+    }
   }
 
   // ── Coach audio (voice note on an exercise) ───────────────────────────────
@@ -849,19 +913,32 @@ class CustomExerciseService {
   }
 
   /// Raw exercise row by id (for prefilling the edit form with all columns).
+  ///
+  /// null = no such row. P0-FL-50a · a FAILED read throws (after being
+  /// recorded): it returned null, leaving the edit form blank — and once a
+  /// name was typed, Save wrote that blank form over the exercise.
   Future<Map<String, dynamic>?> getRawById(String id) async {
     try {
       final row = await _db.from('custom_exercises').select().eq('id', id).maybeSingle();
       return row;
-    } catch (_) { return null; }
+    } catch (e, st) {
+      reportError('CustomExerciseService.getRawById', e, st);
+      rethrow;
+    }
   }
 
   /// Fetch a single exercise by slug (to refresh the detail after enrichment).
+  ///
+  /// null = no such row. P0-FL-50a · a failed read throws (after being
+  /// recorded) instead of looking like "nothing to refresh".
   Future<ExerciseDetail?> getExerciseBySlug(String slug) async {
     try {
       final row = await _db.from('custom_exercises').select().eq('slug', slug).maybeSingle();
       return row == null ? null : ExerciseDetail.fromJson(row);
-    } catch (_) { return null; }
+    } catch (e, st) {
+      reportError('CustomExerciseService.getExerciseBySlug', e, st);
+      rethrow;
+    }
   }
 
   // ── Update ────────────────────────────────────────────────────────────────
@@ -881,11 +958,24 @@ class CustomExerciseService {
 
   // ── Delete ────────────────────────────────────────────────────────────────
 
+  /// P0-FL-50a · false (with [lastError] set and the failure recorded) when
+  /// the delete failed OR removed nothing — an RLS-filtered delete answers
+  /// with no error and no row, which was reported as deleted.
   Future<bool> deleteExercise(String id) async {
+    lastError = null; // never report an earlier call's error
     try {
-      await _db.from('custom_exercises').delete().eq('id', id);
+      final res = await _db.from('custom_exercises').delete().eq('id', id).select('id');
+      if ((res as List).isEmpty) {
+        lastError = 'No exercise was deleted';
+        reportError('CustomExerciseService.deleteExercise', lastError!);
+        return false;
+      }
       return true;
-    } catch (_) { return false; }
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.deleteExercise', e, st);
+      return false;
+    }
   }
 
   // ── Submit to Global Library ──────────────────────────────────────────────
@@ -913,33 +1003,62 @@ class CustomExerciseService {
           .eq('submission_status', 'pending')
           .order('submitted_at');
       return (rows as List).map((r) => ExerciseDetail.fromJson(r)).toList();
-    } catch (_) { return []; }
+    } catch (e, st) {
+      // P0-FL-50a · a failed read is not "no pending submissions": recorded
+      // and rethrown, so the review queue says it couldn't load.
+      reportError('CustomExerciseService.getPendingGlobalSubmissions', e, st);
+      rethrow;
+    }
   }
 
   /// Admin approves a submission → it becomes globally visible.
+  ///
+  /// P0-FL-50a · false (with [lastError] set and the failure recorded) when
+  /// the update failed or changed no row (RLS filters silently).
   Future<bool> approveGlobalExercise(String exerciseId) async {
+    lastError = null; // never report an earlier call's error
     try {
       // I-COM-03(a) / 3A-9: the reviewer column is `last_reviewed_by` (083);
       // `approved_by` never existed, so this update always 400'd.
-      await _db.from('custom_exercises').update({
+      final res = await _db.from('custom_exercises').update({
         'submission_status': 'approved',
         'visibility': 'global',
         'last_reviewed_by': _uid,
         'approved_at': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', exerciseId);
+      }).eq('id', exerciseId).select('id');
+      if ((res as List).isEmpty) {
+        lastError = 'No exercise was approved';
+        reportError('CustomExerciseService.approveGlobalExercise', lastError!);
+        return false;
+      }
       return true;
-    } catch (_) { return false; }
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.approveGlobalExercise', e, st);
+      return false;
+    }
   }
 
   /// Admin rejects a submission → reverts to the coach's private library.
+  /// P0-FL-50a · false (lastError set, recorded) on a failure or 0-row update.
   Future<bool> rejectGlobalExercise(String exerciseId) async {
+    lastError = null; // never report an earlier call's error
     try {
-      await _db.from('custom_exercises').update({
+      final res = await _db.from('custom_exercises').update({
         'submission_status': 'rejected',
         'visibility': 'private',
-      }).eq('id', exerciseId);
+      }).eq('id', exerciseId).select('id');
+      if ((res as List).isEmpty) {
+        lastError = 'No exercise was rejected';
+        reportError('CustomExerciseService.rejectGlobalExercise', lastError!);
+        return false;
+      }
       return true;
-    } catch (_) { return false; }
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.rejectGlobalExercise', e, st);
+      return false;
+    }
   }
 
   // ── Image / Video Upload ──────────────────────────────────────────────────

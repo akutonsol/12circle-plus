@@ -501,13 +501,25 @@ class _EnrichFabState extends ConsumerState<_EnrichFab> {
         SnackBar(content: Text(res.error ?? 'Enrichment failed')));
       return;
     }
-    final updated = await svc.getExerciseBySlug(slug);
+    // P0-FL-50a · a failed re-read is not "nothing to refresh": the content
+    // WAS generated, and the coach is told this page couldn't show it yet
+    // (the service has recorded the failure).
+    ExerciseDetail? updated;
+    var refreshFailed = false;
+    try {
+      updated = await svc.getExerciseBySlug(slug);
+    } catch (_) {
+      refreshFailed = true;
+    }
     ref.invalidate(globalApprovedExercisesProvider);
     ref.invalidate(myExercisesProvider);
     if (!mounted) return;
     setState(() => _loading = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Coaching content generated ✨')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(refreshFailed
+          ? "Coaching content generated. Couldn't refresh this page — go "
+              'back and reopen the exercise to see it.'
+          : 'Coaching content generated ✨')));
     if (updated != null) {
       ref.read(selectedExerciseDetailProvider.notifier).state = updated;
       context.pushReplacement('/exercise-detail', extra: updated);

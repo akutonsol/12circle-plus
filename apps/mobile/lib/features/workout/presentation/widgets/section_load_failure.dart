@@ -2,6 +2,15 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/observability/network_failure.dart';
 
+/// `Couldn't <do X> — <next step>`: the one voice for a failure said in a
+/// SnackBar (P0-FL-50a). The next step is [SectionLoadFailure]'s own hint, so
+/// the sentences have one source: the connection hint only for a failure that
+/// IS the connection; never the exception's text.
+String couldntMessage(String doWhat, Object? error) {
+  final hint = SectionLoadFailure.hintFor(error);
+  return "Couldn't $doWhat — ${hint[0].toLowerCase()}${hint.substring(1)}";
+}
+
 /// P0-FL-18 · one section's read failed: say so, in the place of that section
 /// only, with the next step and a busy-aware Try again.
 ///
@@ -30,6 +39,10 @@ class SectionLoadFailure extends StatelessWidget {
   final Color textColor;
   final Color mutedColor;
 
+  /// An optional sentence said after the hint (in the text and the live
+  /// region), e.g. "Saving is paused until it loads." (P0-FL-50a).
+  final String? detail;
+
   const SectionLoadFailure({
     super.key,
     required this.what,
@@ -39,15 +52,21 @@ class SectionLoadFailure extends StatelessWidget {
     this.accent = const Color(0xFFDDB7FF),
     this.textColor = Colors.white,
     this.mutedColor = const Color(0xFFCFC2D6),
+    this.detail,
   });
 
   static const otherwiseHint =
       'Try again in a moment. If it keeps happening, contact support.';
   static const networkHint = 'Check your connection and try again.';
 
+  /// The next step for [error]: [networkHint] only for a connection failure.
+  static String hintFor(Object? error) =>
+      isNetworkFailure(error) ? networkHint : otherwiseHint;
+
   @override
   Widget build(BuildContext context) {
-    final hint = isNetworkFailure(error) ? networkHint : otherwiseHint;
+    final d = detail;
+    final hint = d == null ? hintFor(error) : '${hintFor(error)} $d';
     final retry = Semantics(
       button: true,
       label: busy ? 'Retrying' : 'Try again: load $what',

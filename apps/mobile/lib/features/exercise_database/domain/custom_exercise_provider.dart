@@ -69,9 +69,14 @@ class MyExercisesNotifier extends StateNotifier<AsyncValue<List<ExerciseDetail>>
     return id;
   }
 
-  Future<void> delete(String id) async {
-    await _svc.deleteExercise(id);
-    state = state.whenData((list) => list.where((e) => e.id != id).toList());
+  /// P0-FL-50a · true only when the server deleted the row. The exercise was
+  /// dropped from the list whatever happened — a refused or 0-row delete made
+  /// it vanish until the next reload. It now stays; [CustomExerciseService
+  /// .lastError] holds why (already recorded).
+  Future<bool> delete(String id) async {
+    final ok = await _svc.deleteExercise(id);
+    if (ok) state = state.whenData((list) => list.where((e) => e.id != id).toList());
+    return ok;
   }
 
   Future<bool> submitForGlobal(String id) async {

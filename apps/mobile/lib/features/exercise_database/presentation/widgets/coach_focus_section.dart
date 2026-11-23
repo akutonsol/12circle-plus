@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/custom_exercise_service.dart';
 import '../../../auth/domain/auth_provider.dart';
 import '../../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
+import '../../../workout/presentation/widgets/section_load_failure.dart';
 import '../../../workout/presentation/widgets/youtube_embed.dart';
 import 'coach_voice.dart';
 
@@ -204,7 +205,20 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
     final focusCtl = TextEditingController(text: _focusOf(_overlay).join('\n'));
     final noteCtl = TextEditingController(text: _overlay?['note']?.toString() ?? '');
     final videoCtl = TextEditingController(text: _overlay?['video_ref']?.toString() ?? '');
-    var packs = await _svc.getCoachingPacks();
+    // P0-FL-50a · a failed packs read is not "no packs": the editor says it
+    // couldn't load them and offers a retry (the service has recorded it).
+    var packs = const <Map<String, dynamic>>[];
+    Object? packsError;
+    var packsRetrying = false;
+    Future<void> loadPacks() async {
+      try {
+        packs = await _svc.getCoachingPacks();
+        packsError = null;
+      } catch (e) {
+        packsError = e;
+      }
+    }
+    await loadPacks();
     var sheetOverlay = _overlay;
     var expiry = 'never';
     var saving = false;
@@ -235,7 +249,7 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
           final cues = focusCtl.text.split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
           if (name != null && name.isNotEmpty && cues.isNotEmpty) {
             await _svc.createCoachingPack(name, cues);
-            packs = await _svc.getCoachingPacks();
+            await loadPacks();
             setSheet(() {});
           }
         }
@@ -260,7 +274,23 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
             const Text('Overlay your coaching on the official content. One focus per line.',
                 style: TextStyle(color: _muted, fontSize: 12)),
             const SizedBox(height: 16),
-            if (packs.isNotEmpty) ...[
+            if (packsError != null) ...[
+              SectionLoadFailure(
+                what: 'your cue packs',
+                error: packsError,
+                busy: packsRetrying,
+                accent: _brand,
+                textColor: _text,
+                mutedColor: _muted,
+                onRetry: () async {
+                  if (packsRetrying) return;
+                  setSheet(() => packsRetrying = true);
+                  await loadPacks();
+                  packsRetrying = false;
+                  if (ctx.mounted) setSheet(() {});
+                }),
+              const SizedBox(height: 14),
+            ] else if (packs.isNotEmpty) ...[
               Builder(builder: (_) {
                 final scores = _packScores(packs, widget.matchText);
                 final sorted = [...packs]..sort((a, b) =>
