@@ -25,7 +25,7 @@ ProviderContainer _c(User? u, Map<String, dynamic>? profile) {
 
 void main() {
   test('the name the member edited wins over the sign-up name', () async {
-    final c = _c(_user({'first_name': 'Jo'}), {'first_name': 'Joanna'});
+    final c = _c(_user({'first_name': 'Jo'}), {'id': 'u1', 'first_name': 'Joanna'});
     await c.read(currentUserProfileProvider.future);
     expect(c.read(currentFirstNameProvider), 'Joanna',
         reason: 'THE defect: the greeting kept the sign-up name "Jo"');

@@ -113,6 +113,34 @@ final currentUserProfileProvider = FutureProvider<Map<String, dynamic>?>((ref) a
   }
 });
 
+/// P0-FL-45b · the profile row read for the member signed in NOW, or `null`.
+///
+/// Riverpod keeps the previous value through a re-read, so after a
+/// sign-out/sign-in `currentUserProfileProvider` still holds the PREVIOUS
+/// member's row while the new member's read is in flight, and after it fails.
+/// A row counts only when its `id` is the signed-in user's; a later failed
+/// refresh of the SAME member keeps it (a real answer for this member). `null`
+/// means "nothing confirmed for this member" (unread, failed, another
+/// member's, or no row) — callers fall back exactly as they do for no row.
+/// The role-only twin is `confirmedRoleRead` (paywall_gate.dart).
+Map<String, dynamic>? confirmedProfileRead(
+    AsyncValue<Map<String, dynamic>?> profile, User? user) {
+  if (user == null || !profile.hasValue) return null;
+  final value = profile.value;
+  if (value == null || value['id'] != user.id) return null;
+  return value;
+}
+
+/// [confirmedProfileRead] for the signed-in member, as a provider.
+/// The user is watched only when there is a row to check against it (with no
+/// row there is nothing to confirm; the profile read itself already follows
+/// the user).
+final confirmedCurrentProfileProvider = Provider<Map<String, dynamic>?>((ref) {
+  final profile = ref.watch(currentUserProfileProvider);
+  if (!profile.hasValue || profile.value == null) return null;
+  return confirmedProfileRead(profile, ref.watch(currentUserProvider));
+});
+
 /// The signed-in member's first name: the profile's (the one Personal Info
 /// edits), then the sign-up metadata, then the email's local part — the order
 /// the app scaffold already uses.
@@ -122,7 +150,8 @@ final currentUserProfileProvider = FutureProvider<Map<String, dynamic>?>((ref) a
 /// and the scaffold but the greeting kept the sign-up name on those two.
 final currentFirstNameProvider = Provider<String>((ref) {
   final user = ref.watch(currentUserProvider);
-  final profile = ref.watch(currentUserProfileProvider).valueOrNull;
+  // P0-FL-45b: only a row read for this member (never the previous one's).
+  final profile = ref.watch(confirmedCurrentProfileProvider);
   final fromProfile = (profile?['first_name'] as String?)?.trim() ?? '';
   if (fromProfile.isNotEmpty) return fromProfile;
   final fromSignup = (user?.userMetadata?['first_name'] as String?)?.trim() ?? '';

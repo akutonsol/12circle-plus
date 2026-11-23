@@ -14,6 +14,7 @@ import '../../auth/domain/auth_provider.dart';
 import '../../coaching_mode/domain/coaching_mode_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coach/data/coach_relationship_service.dart';
+import '../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
 import '../../payments/presentation/upgrade_screen.dart'
     show PlanChipState, reportPlanReadFailure;
 import '../../profile/presentation/widgets/profile_load_failed_notice.dart';
@@ -40,6 +41,11 @@ const kUnitSaveFailedMessage =
 const kUnitSaveSignedOutMessage =
     "Couldn't save your unit preference — you're signed out. Sign in and try "
     'again.';
+/// P0-FL-45b · the unit on screen was read for another account than the one
+/// signed in now: nothing is stored over a unit this member never saw.
+const kUnitSaveOtherAccountMessage =
+    "Couldn't save your unit preference — you've switched accounts. Check the "
+    'unit shown and try again.';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -53,6 +59,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String _selectedUnit = 'KG';
   bool _unitLoaded = false;
 
+  /// P0-FL-45b · the member whose stored unit [_selectedUnit] shows. When a
+  /// different member is signed in, the toggle forgets it and locks until
+  /// THEIR read lands — the previous member's unit is never shown as theirs.
+  String? _unitLoadedFor;
+
   /// Takes the stored unit from a SUCCESSFUL profile read, once (P0-FL-16).
   ///
   /// This ran in didChangeDependencies, which Riverpod does not re-run: a
@@ -60,16 +71,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// read (it used to arrive as `null`) left "KG" selected as if stored. Both
   /// left the toggle live over a guess. It now runs on every build until the
   /// read lands; until then the toggle shows no unit and is locked.
-  void _syncUnit(AsyncValue<Map<String, dynamic>?> profileAsync) {
+  void _syncUnit(AsyncValue<Map<String, dynamic>?> profileAsync, User? user) {
+    if (_unitLoaded && _unitLoadedFor != user?.id) {
+      // P0-FL-45b: another member is signed in now.
+      _unitLoaded = false;
+      _unitLoadedFor = null;
+      _selectedUnit = 'KG';
+    }
     if (_unitLoaded || profileAsync is! AsyncData<Map<String, dynamic>?>) {
       return;
     }
     final profile = profileAsync.value;
     // No profile row: unchanged — "KG" shows and the toggle is live.
     if (profile == null) return;
+    // Only this member's row (P0-FL-45b).
+    if (user == null || profile['id'] != user.id) return;
     final pref = profile['unit_preference'] as String? ?? 'imperial';
     _selectedUnit = pref == 'metric' ? 'KG' : 'LB';
     _unitLoaded = true;
+    _unitLoadedFor = user.id;
   }
 
   /// CORR-2. Returns whether the preference was actually stored.
@@ -94,9 +114,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Future<bool> _persistUnit(String unit) async {
     _unitSaveWasOffline = false;
     _unitSaveSignedOut = false;
+    _unitSaveOtherAccount = false;
     final uid = Supabase.instance.client.auth.currentUser?.id;
     if (uid == null) {
       _unitSaveSignedOut = true;
+      return false;
+    }
+    // P0-FL-45b: the unit shown was read for THIS session's member. The
+    // session can belong to B while the screen still shows A's unit (the app's
+    // member catches up a frame later); the write is filtered by the session.
+    // (A member with no profile row never loaded a unit: unchanged.)
+    if (_unitLoaded && _unitLoadedFor != uid) {
+      reportError('settings.persistUnit',
+          StateError('unit toggle was read for another member'));
+      _unitSaveOtherAccount = true;
       return false;
     }
     try {
@@ -123,6 +154,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// Set by a failed [_persistUnit]: true when there was no signed-in user.
   bool _unitSaveSignedOut = false;
 
+  /// Set by a refused [_persistUnit]: the unit shown was another member's.
+  bool _unitSaveOtherAccount = false;
+
   /// True while a unit save is in flight. Taps are ignored meanwhile: two
   /// overlapping saves each captured their own "previous", so a late failure
   /// of the first reverted over the second and showed a unit never stored.
@@ -131,11 +165,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final profileAsync = ref.watch(currentUserProfileProvider);
-    _syncUnit(profileAsync);
+    final user = ref.watch(currentUserProvider);
+    _syncUnit(profileAsync, user);
     // Has any read of the profile succeeded (a row, or "no row")? A refresh
     // keeps the earlier answer: Riverpod carries the previous value through a
     // reload and through a failed reload.
-    final profileKnown = profileAsync.hasValue;
+    //
+    // P0-FL-45b: it also carries the PREVIOUS member's value through the new
+    // member's read, so "known" means read for the member signed in NOW — not
+    // A's name, email and coach/client rows drawn for B.
+    final profileKnown = confirmedRoleRead(profileAsync, user) != null;
     // The unit is unknown until a read has succeeded. A refresh that FAILS
     // after a successful read does not lock it: the earlier answer still
     // stands. (Locking on `is! AsyncData` locked the toggle silently after an
@@ -150,7 +189,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     // yet known who this is, so "Member" and the client-only rows would be a
     // guess — wrong for a coach), with a neutral loading row instead (UX-F3).
     final profilePending = !profileKnown && profileError == null;
-    final profile     = profileAsync.valueOrNull;
+    final profile     = profileKnown ? profileAsync.value : null;
     final isCoach     = (profile?['role'] as String?) == 'coach';
     final firstName   = profile?['first_name'] as String? ?? '';
     final lastName    = profile?['last_name']  as String? ?? '';
@@ -196,13 +235,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                   const Expanded(
                     child: Center(
-                      child: Text('SETTINGS',
-                        style: TextStyle(
-                          color: _C.primary,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 2,
-                        )),
+                      // One line, scaled down rather than wrapped past the
+                      // 56px bar or cut to "SETT…" at 2x text on a 320dp phone
+                      // (P0-FL-45b, UX F2). Unchanged at normal sizes.
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text('SETTINGS',
+                          maxLines: 1,
+                          style: TextStyle(
+                            color: _C.primary,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 2,
+                          )),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 40),
@@ -243,8 +289,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           SizedBox(width: 18, height: 18,
                             child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2)),
                           SizedBox(width: 14),
-                          Text('Loading your account…',
-                            style: TextStyle(color: _C.onSurfaceMuted, fontSize: 14)),
+                          Expanded(child: Text('Loading your account…',
+                            style: TextStyle(color: _C.onSurfaceMuted, fontSize: 14))),
                         ]),
                       )),
                     ),
@@ -348,9 +394,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(content: Text(_unitSaveSignedOut
                                       ? kUnitSaveSignedOutMessage
-                                      : _unitSaveWasOffline
-                                          ? kUnitSaveOfflineMessage
-                                          : kUnitSaveFailedMessage)),
+                                      : _unitSaveOtherAccount
+                                          ? kUnitSaveOtherAccountMessage
+                                          : _unitSaveWasOffline
+                                              ? kUnitSaveOfflineMessage
+                                              : kUnitSaveFailedMessage)),
                                 );
                               }
                             },
@@ -1007,7 +1055,17 @@ class _SettingsRow extends StatelessWidget {
                 ],
               ),
             ),
-            if (trailing != null) trailing!,
+            if (trailing != null)
+              // At most 45% of the row, scaled down rather than overflowing
+              // it at large text (P0-FL-45b · 2x text on a 320dp phone).
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                    maxWidth: MediaQuery.sizeOf(context).width * 0.45),
+                child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: trailing),
+              ),
           ],
         ),
       ),

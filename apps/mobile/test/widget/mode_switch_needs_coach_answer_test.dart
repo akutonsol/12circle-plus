@@ -166,8 +166,10 @@ void main() {
       overrides: [
         currentUserProvider
             .overrideWithValue(Supabase.instance.client.auth.currentUser),
+        // P0-FL-45b: the real read selects `id`; a row counts only for the
+        // member it was read for.
         currentUserProfileProvider.overrideWith((ref) async =>
-            {'role': 'client', 'first_name': 'Ana', 'last_name': 'Lee'}),
+            {'id': _uid, 'role': 'client', 'first_name': 'Ana', 'last_name': 'Lee'}),
         clientPlanProvider.overrideWith((ref) async => ClientPlan.coachGuided),
       ],
       child: const MaterialApp(home: SettingsScreen()),

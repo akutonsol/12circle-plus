@@ -4,6 +4,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/named_icon_button.dart';
 import '../../../shared/theme/app_background.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
 import '../domain/class_provider.dart';
 import 'create_class_screen.dart';
 import 'whats_on_view.dart';
@@ -30,10 +31,15 @@ class ClassesScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Coach-only affordance — see OD-15 above. `.valueOrNull` here is the read
-    // that was already in this file; it is not a new one, so EC-G8 is unmoved.
-    final isCoach =
-        ref.watch(currentUserProfileProvider).valueOrNull?['role'] == 'coach';
+    // Coach-only affordance — see OD-15 above. P0-FL-45b: decided from a role
+    // read CONFIRMED for the member signed in now — Riverpod keeps the previous
+    // member's profile through a re-read, so after a sign-out/sign-in that
+    // value was the previous member's role. Unknown (loading/failed) → no FAB,
+    // as for "no role" before.
+    final isCoach = confirmedRoleRead(ref.watch(currentUserProfileProvider),
+                ref.watch(currentUserProvider))
+            ?.role ==
+        'coach';
 
     return AppGradientBackground(
       child: Scaffold(

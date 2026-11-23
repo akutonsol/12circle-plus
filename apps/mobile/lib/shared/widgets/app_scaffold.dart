@@ -43,15 +43,18 @@ class AppScaffold extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final profileAsync  = ref.watch(currentUserProfileProvider);
+    // P0-FL-45b: only a profile row read for the member signed in now — the
+    // previous member's name/avatar were held through the new member's read.
+    // Unconfirmed falls through to THIS session's own metadata, as no row did.
+    final profile       = ref.watch(confirmedCurrentProfileProvider);
     final currentUser   = ref.watch(currentUserProvider);
     // Try profile first, then user metadata, then email prefix
-    final firstName = (profileAsync.valueOrNull?['first_name'] as String?)?.trim().isNotEmpty == true
-        ? profileAsync.valueOrNull!['first_name'] as String
+    final firstName = (profile?['first_name'] as String?)?.trim().isNotEmpty == true
+        ? profile!['first_name'] as String
         : (currentUser?.userMetadata?['first_name'] as String?)?.trim().isNotEmpty == true
             ? currentUser!.userMetadata!['first_name'] as String
             : currentUser?.email?.split('@').first ?? '';
-    final avatarUrl = (profileAsync.valueOrNull?['avatar_url'] as String?)
+    final avatarUrl = (profile?['avatar_url'] as String?)
         ?? (currentUser?.userMetadata?['avatar_url'] as String?);
 
     return AppGradientBackground(

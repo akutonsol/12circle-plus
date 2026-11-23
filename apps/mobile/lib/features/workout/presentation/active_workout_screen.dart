@@ -8,6 +8,7 @@ import '../data/models/workout_model.dart';
 import '../data/models/exercise_model.dart';
 import '../data/workout_service.dart';
 import '../data/workout_session_store.dart';
+import '../domain/load_format.dart' show memberPrefersMetricProvider;
 import '../domain/workout_provider.dart';
 import '../domain/workout_restoration.dart';
 import '../domain/workout_session_manager.dart';
@@ -23,7 +24,6 @@ import '../../scoring/data/score_engine.dart';
 import '../../scoring/domain/score_provider.dart';
 import '../../coach/domain/coach_ecosystem_provider.dart'
     show myAssignedProgramProvider, todaysWorkoutProvider, todayScoreProvider, weekScoresProvider;
-import '../../auth/domain/auth_provider.dart';
 import '../domain/session_complete.dart';
 import '../domain/workout_save.dart';
 
@@ -485,11 +485,14 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       _exerciseAnchors.putIfAbsent(exerciseIndex, GlobalKey.new);
 
   /// Display unit from the user's preference ('lb' for imperial, 'kg' for metric).
-  String get _unit {
-    final pref =
-        ref.read(currentUserProfileProvider).valueOrNull?['unit_preference'] as String?;
-    return pref == 'metric' ? 'kg' : 'lb';
-  }
+  ///
+  /// P0-FL-45b: through [memberPrefersMetricProvider] — a unit read for the
+  /// member signed in now. This read the profile's `valueOrNull`, which after
+  /// a sign-out/sign-in was the PREVIOUS member's row while the new member's
+  /// read was in flight or had failed: B's typed set correction was converted
+  /// with A's unit and stored off by ~2.2x. [build] watches the provider so
+  /// the unit follows the member.
+  String get _unit => ref.read(memberPrefersMetricProvider) ? 'kg' : 'lb';
 
   /// Returns the active session id, creating the session row on demand so set
   /// logs can't be silently dropped when the session insert was delayed/failed.
@@ -853,6 +856,8 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   Widget build(BuildContext context) {
     final workout = ref.watch(selectedWorkoutProvider);
     final activeData = ref.watch(activeWorkoutProvider);
+    // Rebuild when the member's confirmed unit changes ([_unit] reads it).
+    ref.watch(memberPrefersMetricProvider);
 
     // Rest countdown is driven by a wall-clock end time in a provider, so it
     // survives navigating away and resumes at the right remaining time.

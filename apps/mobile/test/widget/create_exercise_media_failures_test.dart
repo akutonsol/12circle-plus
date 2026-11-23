@@ -263,7 +263,10 @@ Widget _screen(_Svc svc, {String? editing, String role = 'coach'}) =>
       overrides: [
         currentUserProvider.overrideWithValue(_user),
         customExerciseSvcProvider.overrideWithValue(svc),
-        currentUserProfileProvider.overrideWith((ref) async => {'role': role}),
+        // P0-FL-45b: the real read selects `id`; a role counts only for the
+        // member it was read for.
+        currentUserProfileProvider
+            .overrideWith((ref) async => {'id': _user.id, 'role': role}),
         editingExerciseProvider.overrideWith((ref) => editing),
         exerciseMediaPickerProvider.overrideWithValue(_Picker()),
       ],
