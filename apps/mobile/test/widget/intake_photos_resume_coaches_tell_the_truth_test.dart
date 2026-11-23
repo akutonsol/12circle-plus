@@ -12,6 +12,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../support/pump_until.dart';
+
 // P0-FL-19 · Intake: baseline photos, resume and the coach list tell the truth.
 //
 // 1. Progress photos: `_uploadAndContinue` wrapped every upload in one
@@ -264,6 +266,33 @@ void main() {
     }
   }
 
+  // P0-FL-51: a pick counts only once the picked file has been read (real
+  // I/O), and an upload run reads every pending file before sending it. A
+  // fixed settle() raced those reads under load; these wait for the outcome.
+
+  /// Waits until [n] photos count as picked.
+  Future<void> waitForPicked(WidgetTester tester, int n) => pumpUntil(
+      tester, () => find.text('Continue ($n/3)').evaluate().isNotEmpty,
+      what: 'photo $n to be read and counted ("Continue ($n/3)")');
+
+  /// Waits until the upload run in flight has finished (the button no longer
+  /// says "Uploading..."), then settles.
+  Future<void> awaitUploadRun(WidgetTester tester) async {
+    await pumpUntil(
+        tester, () => find.text('Uploading...').evaluate().isEmpty,
+        what: 'the photo upload run to finish');
+    await settle(tester);
+  }
+
+  /// Taps [button], which starts an upload run, and waits for it to finish.
+  /// The run marks itself in flight before its first await, so one frame
+  /// shows "Uploading..." before the wait starts.
+  Future<void> tapAndAwaitUpload(WidgetTester tester, Finder button) async {
+    await tester.tap(button);
+    await tester.pump();
+    await awaitUploadRun(tester);
+  }
+
   Future<void> open(WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(430, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -299,10 +328,12 @@ void main() {
     }
 
     Future<void> pickAll(WidgetTester tester) async {
+      var n = 0;
       for (final label in ['Front Photo', 'Side Photo', 'Back Photo']) {
         await tester.tap(find.text(label));
         await settle(tester);
         await tester.tap(find.text('Choose from Library'));
+        await waitForPicked(tester, ++n);
         await settle(tester);
       }
       expect(find.text('Continue (3/3)'), findsOneWidget,
@@ -317,8 +348,7 @@ void main() {
       await openPhotos(tester);
       await pickAll(tester);
       server.failingSlots = {'side', 'back'};
-      await tester.tap(find.text('Continue (3/3)'));
-      await settle(tester);
+      await tapAndAwaitUpload(tester, find.text('Continue (3/3)'));
 
       expect(page(tester), _photosPage.toDouble(),
           reason: 'THE defect: the flow moved on as if the photos were saved');
@@ -345,8 +375,7 @@ void main() {
 
       server.failingSlots = {};
       server.uploads.clear();
-      await tester.tap(tryAgain());
-      await settle(tester);
+      await tapAndAwaitUpload(tester, tryAgain());
       await tester.pump(const Duration(milliseconds: 500));
 
       expect(server.uploads, ['side', 'back'],
@@ -363,8 +392,7 @@ void main() {
       server
         ..failingSlots = {'front', 'side', 'back'}
         ..uploadFailure = _Fail.network;
-      await tester.tap(find.text('Continue (3/3)'));
-      await settle(tester);
+      await tapAndAwaitUpload(tester, find.text('Continue (3/3)'));
 
       expect(page(tester), _photosPage.toDouble());
       expect(find.text(notice(_connection)), findsOneWidget);
@@ -399,7 +427,7 @@ void main() {
       expect(find.text('Uploading...'), findsOneWidget,
           reason: 'premise: the upload is in flight');
       server.uploadGate!.complete();
-      await settle(tester);
+      await awaitUploadRun(tester);
       await tester.pump(const Duration(milliseconds: 500));
 
       expect(server.uploads, ['front', 'side', 'back'],
@@ -455,6 +483,7 @@ void main() {
       // The picker sheet is opened and used AT 2× (it used to be pushed
       // off-screen, so the earlier version of this test picked at 1×).
       await pickVia(tester, 'Front Photo', 'Choose from Library');
+      await waitForPicked(tester, 1);
       expect(find.text('Continue (1/3)'), findsOneWidget,
           reason: 'premise: the photo was picked at 2×');
       // The tallest sheet: a slot that already has a photo adds Remove Photo.
@@ -473,8 +502,7 @@ void main() {
           reason: 'closing the sheet changed nothing');
 
       server.failingSlots = {'front'};
-      await tester.tap(find.text('Continue (1/3)'));
-      await settle(tester);
+      await tapAndAwaitUpload(tester, find.text('Continue (1/3)'));
       await tester.pump(const Duration(milliseconds: 500));
 
       expect(page(tester), _photosPage.toDouble());
@@ -571,8 +599,7 @@ void main() {
         (tester) async {
       await openPhotos(tester);
       await pickAll(tester);
-      await tester.tap(find.text('Continue (3/3)'));
-      await settle(tester);
+      await tapAndAwaitUpload(tester, find.text('Continue (3/3)'));
       await tester.pump(const Duration(milliseconds: 500));
 
       expect(server.uploads, ['front', 'side', 'back']);

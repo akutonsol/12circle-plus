@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
+import '../support/pump_until.dart';
 import '../support/row_checking_postgrest.dart';
 
 // P0-FL-39 · Personal Info: "Profile updated successfully" only when the
@@ -148,18 +149,6 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  /// The picked file is read with real I/O before the upload is sent:
-  /// alternate fake-time pumps with real-time waits until the chain settles.
-  Future<void> changePhoto(WidgetTester tester) async {
-    await tester.tap(find.byIcon(Icons.camera_alt));
-    for (var i = 0; i < 8; i++) {
-      await tester.pump(const Duration(milliseconds: 100));
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 40)));
-    }
-    await tester.pumpAndSettle();
-  }
-
   /// The URL the avatar is drawn from (a NetworkImage), or null.
   String? shownAvatar(WidgetTester tester) {
     for (final w in tester.widgetList<Container>(find.byType(Container))) {
@@ -177,6 +166,25 @@ void main() {
       if (i is NetworkImage) return i.url;
     }
     return null;
+  }
+
+  /// The picked file is read with real I/O before the upload is sent. A fixed
+  /// budget of real-time waits raced that read under load (P0-FL-51): wait
+  /// for the outcome instead — a failure SnackBar, or the avatar now drawn
+  /// from a different URL than the stored one.
+  Future<void> changePhoto(WidgetTester tester) async {
+    final before = shownAvatar(tester);
+    await tester.tap(find.byIcon(Icons.camera_alt));
+    bool newAvatarShown() {
+      final now = shownAvatar(tester); // null while the upload spinner shows
+      return now != null && now != before;
+    }
+
+    await pumpUntil(
+        tester,
+        () => find.byType(SnackBar).evaluate().isNotEmpty || newAvatarShown(),
+        what: 'the photo change outcome (a SnackBar or a new avatar)');
+    await tester.pumpAndSettle();
   }
 
   group('Save', () {
