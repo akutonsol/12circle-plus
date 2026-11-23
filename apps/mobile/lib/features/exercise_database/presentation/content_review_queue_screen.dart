@@ -37,13 +37,21 @@ class _State extends ConsumerState<ContentReviewQueueScreen> {
   String? _certForId;
 
   // P0-FL-45a: the content-only read starts once the gate has confirmed this
-  // member's role (see build), not in initState before the role is known.
+  // member's role (see build), not in initState before the role is known;
+  // what it loaded belongs to that member (cleared for the next one, and a
+  // late answer for a member no longer admitted is dropped).
   final _firstLoad = RoleConfirmedLoad();
 
+  void _resetForMember() {
+    _queue = null; _loading = true; _notMigrated = false; _acting = false;
+    _i = 0; _reviewed = 0; _cert = null; _graph = null; _certForId = null;
+  }
+
   Future<void> _load() async {
+    final session = _firstLoad.session;
     setState(() => _loading = true);
     final q = await _svc.reviewQueue(limit: 100);
-    if (!mounted) return;
+    if (!mounted || !_firstLoad.isCurrent(session)) return;
     setState(() {
       _loading = false;
       _notMigrated = q == null;
@@ -54,10 +62,11 @@ class _State extends ConsumerState<ContentReviewQueueScreen> {
 
   Future<void> _act(String status) async {
     if (_acting || _queue == null || _i >= _queue!.length) return;
+    final session = _firstLoad.session;
     setState(() => _acting = true);
     final ex = _queue![_i];
     final ok = await _svc.reviewExercise(ex['id'] as String, status);
-    if (!mounted) return;
+    if (!mounted || !_firstLoad.isCurrent(session)) return;
     setState(() {
       _acting = false;
       if (ok) { _reviewed++; _i++; }
@@ -72,14 +81,14 @@ class _State extends ConsumerState<ContentReviewQueueScreen> {
   Widget build(BuildContext context) {
     // P0-FL-40/45a: the shared gate — only a role confirmed for THIS member
     // opens (or closes) the screen; unread → loading / failure notice.
-    final gate = roleGate(ref,
+    final gate = _firstLoad.gate(this, ref,
         title: 'Review Queue',
         allowedRoles: const {'admin', 'content_manager'},
         detail: 'Content tools stay closed until it loads.',
-        denied: const Scaffold(backgroundColor: _bg,
-          body: Center(child: Text('Admins & content managers only.', style: TextStyle(color: _muted)))));
+        deniedText: 'Admins & content managers only.',
+        reset: _resetForMember,
+        load: _load);
     if (gate != null) return gate;
-    _firstLoad.start(this, _load);
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
@@ -104,11 +113,13 @@ class _State extends ConsumerState<ContentReviewQueueScreen> {
     _certForId = id;
     _cert = null;
     _graph = null;
+    final session = _firstLoad.session;
+    bool current() => mounted && _certForId == id && _firstLoad.isCurrent(session);
     _svc.exerciseCertification(id).then((c) {
-      if (mounted && _certForId == id) setState(() => _cert = c);
+      if (current()) setState(() => _cert = c);
     });
     _svc.movementGraph(id).then((g) {
-      if (mounted && _certForId == id) setState(() => _graph = g);
+      if (current()) setState(() => _graph = g);
     });
   }
 

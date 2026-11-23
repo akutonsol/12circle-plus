@@ -29,27 +29,32 @@ class _State extends ConsumerState<ObservabilityScreen> {
   bool _loading = true;
 
   // P0-FL-45a: the admin-only read starts once the gate has confirmed this
-  // member is an admin (see build), not in initState before the role is known.
+  // member is an admin (see build), not in initState before the role is known;
+  // what it loaded belongs to that member (cleared for the next one).
   final _firstLoad = RoleConfirmedLoad();
 
+  void _resetForMember() { _data = null; _loading = true; }
+
   Future<void> _load() async {
+    final session = _firstLoad.session;
     setState(() => _loading = true);
     final d = await _svc.platformObservability();
-    if (mounted) setState(() { _data = d; _loading = false; });
+    // A late answer for a member no longer admitted is dropped.
+    if (mounted && _firstLoad.isCurrent(session)) setState(() { _data = d; _loading = false; });
   }
 
   @override
   Widget build(BuildContext context) {
     // P0-FL-40/45a: the shared gate — only a role confirmed for THIS member
     // opens (or closes) the screen; unread → loading / failure notice.
-    final gate = roleGate(ref,
+    final gate = _firstLoad.gate(this, ref,
         title: 'Coaching Observability',
         allowedRoles: const {'admin'},
         detail: 'Admin tools stay closed until it loads.',
-        denied: const Scaffold(backgroundColor: _bg,
-          body: Center(child: Text('Admins only.', style: TextStyle(color: _muted)))));
+        deniedText: 'Admins only.',
+        reset: _resetForMember,
+        load: _load);
     if (gate != null) return gate;
-    _firstLoad.start(this, _load);
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(backgroundColor: _bg, foregroundColor: _text,

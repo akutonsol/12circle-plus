@@ -67,19 +67,34 @@ class _State extends ConsumerState<DynamicProgramBuilderScreen> {
     'primary_focus': _focus, 'progression_model': _progression, 'deload_strategy': 'every_4th',
   };
 
+  // P0-FL-45a: what this screen shows belongs to the member the gate let in.
+  // A different member starts from nothing — no plan, saved programme or
+  // status of A's — and A's late answers are dropped.
+  final _member = RoleConfirmedLoad();
+
+  void _resetForMember() {
+    _type = 'Hypertrophy'; _duration = 12; _frequency = 4;
+    _progression = 'linear'; _focus = 'Full Body';
+    _busy = false; _saving = false; _plan = null; _status = null;
+    _programId = null; _programType = null;
+    _generating = false; _genStatus = null; _genOk = false;
+  }
+
   Future<void> _planIt() async {
+    final session = _member.session;
     setState(() { _busy = true; _status = null; });
     final p = await _svc.planProgram(_strategy);
-    if (!mounted) return;
+    if (!mounted || !_member.isCurrent(session)) return;
     setState(() { _busy = false; _plan = p; });
   }
 
   Future<void> _create() async {
     final plan = _plan;
     if (plan == null) return;
+    final session = _member.session;
     setState(() { _saving = true; _status = null; });
     final id = await _svc.createEngineProgram(_strategy, plan);
-    if (!mounted) return;
+    if (!mounted || !_member.isCurrent(session)) return;
     setState(() {
       _saving = false;
       _programId = id;
@@ -104,11 +119,12 @@ class _State extends ConsumerState<DynamicProgramBuilderScreen> {
   Future<void> _generateWeek({bool replace = false}) async {
     final id = _programId;
     if (id == null || _generating) return;
+    final session = _member.session;
     setState(() { _generating = true; _genStatus = null; });
     try {
       final res = await _svc.materializeWeek(
           id, 1, engineContextFor(programType: _programType ?? _type, replaceExisting: replace));
-      if (!mounted) return;
+      if (!mounted || !_member.isCurrent(session)) return;
       final summary = summarizeMaterialization(res);
       setState(() {
         _generating = false;
@@ -123,11 +139,13 @@ class _State extends ConsumerState<DynamicProgramBuilderScreen> {
       if (failure == EngineFailure.unknown || failure == EngineFailure.noPlan) {
         reportError('DynamicProgramBuilder._generateWeek', e, s);
       }
-      if (!mounted) return;
+      if (!mounted || !_member.isCurrent(session)) return;
       setState(() { _generating = false; _genOk = false; _genStatus = coachMessageFor(failure); });
       if (failure == EngineFailure.weekExists && !replace) {
         final ok = await _confirmReplace();
-        if (ok == true && mounted) await _generateWeek(replace: true);
+        if (ok == true && mounted && _member.isCurrent(session)) {
+          await _generateWeek(replace: true);
+        }
       }
     }
   }
@@ -179,12 +197,12 @@ class _State extends ConsumerState<DynamicProgramBuilderScreen> {
   Widget build(BuildContext context) {
     // P0-FL-40/45a: the shared gate — only a role confirmed for THIS member
     // opens (or closes) the screen; unread → loading / failure notice.
-    final gate = roleGate(ref,
+    final gate = _member.gate(this, ref,
         title: 'Program Builder',
         allowedRoles: const {'coach', 'admin'},
         detail: 'Coach tools stay closed until it loads.',
-        denied: const Scaffold(backgroundColor: _bg,
-          body: Center(child: Text('Coaches only.', style: TextStyle(color: _muted)))));
+        deniedText: 'Coaches only.',
+        reset: _resetForMember);
     if (gate != null) return gate;
     return Scaffold(
       backgroundColor: _bg,

@@ -187,16 +187,29 @@ class _State extends ConsumerState<CoachCopilotScreen> {
     }
   }
 
+  // P0-FL-45a: what this screen shows belongs to the member the gate let in.
+  // A different member (coach A → coach B with the screen mounted) starts from
+  // nothing: no selected client, recommendation, outlook or status of A's.
+  // A's late answers are already discarded by the selected-client checks in
+  // select/_run (the selection is cleared here). Generation itself is
+  // unchanged (SEC-R3 / Wave 3B-4).
+  final _member = RoleConfirmedLoad();
+
+  void _resetForMember() {
+    _client = null; _recovery = 75; _busy = false; _assigning = false;
+    _rec = null; _outlook = null; _explanation = null; _status = null;
+  }
+
   @override
   Widget build(BuildContext context) {
     // P0-FL-40/45a: the shared gate — only a role confirmed for THIS member
     // opens (or closes) the screen; unread → loading / failure notice.
-    final gate = roleGate(ref,
+    final gate = _member.gate(this, ref,
         title: 'Coach Copilot',
         allowedRoles: const {'coach', 'admin'},
         detail: 'Coach tools stay closed until it loads.',
-        denied: const Scaffold(backgroundColor: _bg,
-          body: Center(child: Text('Coaches only.', style: TextStyle(color: _muted)))));
+        deniedText: 'Coaches only.',
+        reset: _resetForMember);
     if (gate != null) return gate;
     final clients = ref.watch(coachClientsProvider);
     final assessment = _watchAssessment();

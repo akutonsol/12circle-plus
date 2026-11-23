@@ -34,13 +34,21 @@ class _State extends ConsumerState<IntelligenceReviewScreen> {
   String? _attrsFor;
 
   // P0-FL-45a: the content-only read starts once the gate has confirmed this
-  // member's role (see build), not in initState before the role is known.
+  // member's role (see build), not in initState before the role is known;
+  // what it loaded belongs to that member (cleared for the next one, and a
+  // late answer for a member no longer admitted is dropped).
   final _firstLoad = RoleConfirmedLoad();
 
+  void _resetForMember() {
+    _queue = null; _loading = true; _notMigrated = false; _busy = false;
+    _i = 0; _reviewed = 0; _attrs = null; _attrsFor = null;
+  }
+
   Future<void> _load() async {
+    final session = _firstLoad.session;
     setState(() => _loading = true);
     final q = await _svc.intelligenceReviewQueue(limit: 100);
-    if (!mounted) return;
+    if (!mounted || !_firstLoad.isCurrent(session)) return;
     setState(() {
       _loading = false; _notMigrated = q == null; _queue = q ?? []; _i = 0;
       _attrs = null; _attrsFor = null;
@@ -50,14 +58,19 @@ class _State extends ConsumerState<IntelligenceReviewScreen> {
   void _ensureAttrs(String id) {
     if (_attrsFor == id) return;
     _attrsFor = id; _attrs = null;
+    final session = _firstLoad.session;
     _svc.attributeReviewState(id).then((a) {
-      if (mounted && _attrsFor == id) setState(() => _attrs = a);
+      if (mounted && _attrsFor == id && _firstLoad.isCurrent(session)) {
+        setState(() => _attrs = a);
+      }
     });
   }
 
   Future<void> _act(String exerciseId, String attribute, String status) async {
+    final session = _firstLoad.session;
     setState(() => _busy = true);
     final ok = await _svc.reviewAttribute(exerciseId, attribute, status);
+    if (!_firstLoad.isCurrent(session)) return; // another member now
     if (ok) { _attrsFor = null; _ensureAttrs(exerciseId); } // refresh state
     if (mounted) setState(() => _busy = false);
     if (!ok && mounted) {
@@ -67,9 +80,10 @@ class _State extends ConsumerState<IntelligenceReviewScreen> {
   }
 
   Future<void> _finalize(String exerciseId) async {
+    final session = _firstLoad.session;
     setState(() => _busy = true);
     final status = await _svc.finalizeIntelligence(exerciseId);
-    if (!mounted) return;
+    if (!mounted || !_firstLoad.isCurrent(session)) return;
     setState(() { _busy = false; if (status != null) { _reviewed++; _i++; _attrsFor = null; _attrs = null; } });
   }
 
@@ -77,14 +91,14 @@ class _State extends ConsumerState<IntelligenceReviewScreen> {
   Widget build(BuildContext context) {
     // P0-FL-40/45a: the shared gate — only a role confirmed for THIS member
     // opens (or closes) the screen; unread → loading / failure notice.
-    final gate = roleGate(ref,
+    final gate = _firstLoad.gate(this, ref,
         title: 'Knowledge Review',
         allowedRoles: const {'admin', 'content_manager'},
         detail: 'Content tools stay closed until it loads.',
-        denied: const Scaffold(backgroundColor: _bg,
-          body: Center(child: Text('Admins & content managers only.', style: TextStyle(color: _muted)))));
+        deniedText: 'Admins & content managers only.',
+        reset: _resetForMember,
+        load: _load);
     if (gate != null) return gate;
-    _firstLoad.start(this, _load);
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(backgroundColor: _bg, foregroundColor: _text,

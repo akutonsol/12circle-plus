@@ -37,12 +37,21 @@ class _State extends ConsumerState<ContinuousCoachingScreen> {
   String? _status;
 
   // P0-FL-45a: the coach-only read starts once the gate has confirmed this
-  // member's role (see build), not in initState before the role is known.
+  // member's role (see build), not in initState before the role is known;
+  // what it loaded belongs to that member (cleared for the next one, and a
+  // late answer for a member no longer admitted is dropped).
   final _firstLoad = RoleConfirmedLoad();
 
+  void _resetForMember() {
+    _programs = []; _program = null; _week = 1;
+    _completion = 90; _recovery = 75; _energy = 70; _pain = false;
+    _loading = true; _busy = false; _eval = null; _applied = null; _status = null;
+  }
+
   Future<void> _load() async {
+    final session = _firstLoad.session;
     final progs = await _svc.getMyPrograms();
-    if (!mounted) return;
+    if (!mounted || !_firstLoad.isCurrent(session)) return;
     setState(() {
       _loading = false;
       _programs = progs.where((p) => p['engine_generated'] == true).toList();
@@ -53,23 +62,26 @@ class _State extends ConsumerState<ContinuousCoachingScreen> {
   Future<void> _evaluate() async {
     final p = _program;
     if (p == null) return;
+    final session = _firstLoad.session;
     setState(() { _busy = true; _eval = null; _applied = null; _status = null; });
     final ok = await _svc.submitWeeklyFeedback(p['id'] as String, _week, {
       'completion_pct': _completion, 'recovery': _recovery, 'energy': _energy,
       'pain': _pain ? ['reported'] : [],
     });
+    if (!_firstLoad.isCurrent(session)) return; // another member now
     if (!ok) { if (mounted) setState(() { _busy = false; _status = 'Feedback save failed — apply migration 094.'; }); return; }
     final e = await _svc.evaluateWeek(p['id'] as String, _week);
-    if (!mounted) return;
+    if (!mounted || !_firstLoad.isCurrent(session)) return;
     setState(() { _busy = false; _eval = e; });
   }
 
   Future<void> _apply({required bool approved}) async {
     final p = _program;
     if (p == null) return;
+    final session = _firstLoad.session;
     setState(() { _busy = true; _status = null; });
     final r = await _svc.regenerateProgram(p['id'] as String, _week, approved: approved);
-    if (!mounted) return;
+    if (!mounted || !_firstLoad.isCurrent(session)) return;
     setState(() {
       _busy = false; _applied = r;
       _status = switch (r?['status']) {
@@ -85,14 +97,14 @@ class _State extends ConsumerState<ContinuousCoachingScreen> {
   Widget build(BuildContext context) {
     // P0-FL-40/45a: the shared gate — only a role confirmed for THIS member
     // opens (or closes) the screen; unread → loading / failure notice.
-    final gate = roleGate(ref,
+    final gate = _firstLoad.gate(this, ref,
         title: 'Continuous Coaching',
         allowedRoles: const {'coach', 'admin'},
         detail: 'Coach tools stay closed until it loads.',
-        denied: const Scaffold(backgroundColor: _bg,
-          body: Center(child: Text('Coaches only.', style: TextStyle(color: _muted)))));
+        deniedText: 'Coaches only.',
+        reset: _resetForMember,
+        load: _load);
     if (gate != null) return gate;
-    _firstLoad.start(this, _load);
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(backgroundColor: _bg, foregroundColor: _text,
