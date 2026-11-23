@@ -339,15 +339,31 @@ class _OverviewTab extends ConsumerWidget {
           const SizedBox(height: 16),
           const Text('Compliance', style: TextStyle(color: _mut, fontSize: 12, fontWeight: FontWeight.w600)),
           const SizedBox(height: 10),
-          Row(children: [
-            _ComplianceCard('Workout', '${score['workout_points'] ?? 0}', 30, Icons.fitness_center_outlined, _tert),
-            const SizedBox(width: 8),
-            _ComplianceCard('Nutrition', '${score['nutrition_points'] ?? 0}', 30, Icons.restaurant_outlined, _pri),
-            const SizedBox(width: 8),
-            _ComplianceCard('Habits', '${score['habits_points'] ?? 0}', 20, Icons.task_alt, const Color(0xFFFFB4AB)),
-            const SizedBox(width: 8),
-            _ComplianceCard('Check-In', '${score['checkin_points'] ?? 0}', 10, Icons.calendar_month_outlined, _amber),
-          ]),
+          // P0-FL-52: above 1.5x text the four tiles go two by two — in one
+          // row on a narrow phone each was ~45px inside at 2x and its label
+          // broke mid-word. Up to 1.5x the single row is unchanged.
+          Builder(builder: (context) {
+            final workout = _ComplianceCard('Workout', '${score['workout_points'] ?? 0}', 30, Icons.fitness_center_outlined, _tert);
+            final nutrition = _ComplianceCard('Nutrition', '${score['nutrition_points'] ?? 0}', 30, Icons.restaurant_outlined, _pri);
+            final habits = _ComplianceCard('Habits', '${score['habits_points'] ?? 0}', 20, Icons.task_alt, const Color(0xFFFFB4AB));
+            final checkin = _ComplianceCard('Check-In', '${score['checkin_points'] ?? 0}', 10, Icons.calendar_month_outlined, _amber);
+            if (MediaQuery.textScalerOf(context).scale(1) > 1.5) {
+              return Column(children: [
+                Row(children: [workout, const SizedBox(width: 8), nutrition]),
+                const SizedBox(height: 8),
+                Row(children: [habits, const SizedBox(width: 8), checkin]),
+              ]);
+            }
+            return Row(children: [
+              workout,
+              const SizedBox(width: 8),
+              nutrition,
+              const SizedBox(width: 8),
+              habits,
+              const SizedBox(width: 8),
+              checkin,
+            ]);
+          }),
         ])),
         const SizedBox(height: 12),
 
@@ -1548,7 +1564,12 @@ class _ComplianceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Expanded(
-    child: Container(
+    // P0-FL-52: one announced tile — "Workout: 30 of 30" — instead of three
+    // fragments ("30", "/30", "Workout").
+    child: MergeSemantics(child: Semantics(
+      label: '$label: $pts of $max',
+      excludeSemantics: true,
+      child: Container(
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.08),
@@ -1561,7 +1582,7 @@ class _ComplianceCard extends StatelessWidget {
         Text('/$max', style: TextStyle(color: color.withValues(alpha: 0.6), fontSize: 9)),
         const SizedBox(height: 2),
         Text(label, style: const TextStyle(color: _mut, fontSize: 9)),
-      ])));
+      ])))));
 }
 
 class _TrendChip extends StatelessWidget {
