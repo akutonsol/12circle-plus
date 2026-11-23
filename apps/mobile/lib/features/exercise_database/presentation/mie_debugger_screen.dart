@@ -5,8 +5,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/custom_exercise_service.dart';
-import '../../auth/domain/auth_provider.dart';
-import '../../profile/presentation/widgets/profile_load_failed_notice.dart';
+import '../../../core/widgets/role_gate.dart';
 
 const _bg     = Color(0xFF0A0A0B);
 const _panel  = Color(0xFF14101E);
@@ -38,14 +37,26 @@ class _State extends ConsumerState<MieDebuggerScreen> {
 
   static const _goals = ['strength', 'hypertrophy', 'power', 'endurance', 'fat_loss'];
 
+  // P0-FL-45a: what this screen shows belongs to the member the gate let in.
+  // A different member starts from nothing — no trace, narration or error of
+  // A's — and A's late answers are dropped.
+  final _member = RoleConfirmedLoad();
+
+  void _resetForMember() {
+    _goal = 'hypertrophy'; _recovery = 75; _experience = 'intermediate';
+    _busy = false; _result = null; _error = null; _explanation = null;
+    _audience = 'client'; _explaining = false;
+  }
+
   Future<void> _generate() async {
+    final session = _member.session;
     setState(() { _busy = true; _error = null; });
     final ctx = {
       'goal': _goal, 'recovery': _recovery, 'experience': _experience,
       'equipment': ['barbell', 'dumbbell', 'cable', 'bodyweight'], 'size': 5,
     };
     final r = await _svc.generateWorkout(ctx);
-    if (!mounted) return;
+    if (!mounted || !_member.isCurrent(session)) return;
     setState(() {
       _busy = false;
       _result = r;
@@ -57,9 +68,10 @@ class _State extends ConsumerState<MieDebuggerScreen> {
   Future<void> _explain() async {
     final tid = _result?['trace_id']?.toString();
     if (tid == null) return;
+    final session = _member.session;
     setState(() { _explaining = true; _explanation = null; });
     final text = await _svc.explainDecision(tid, audience: _audience);
-    if (!mounted) return;
+    if (!mounted || !_member.isCurrent(session)) return;
     setState(() {
       _explaining = false;
       _explanation = text ?? 'Explanation unavailable — set ANTHROPIC_API_KEY + deploy explain-decision.';
@@ -68,18 +80,15 @@ class _State extends ConsumerState<MieDebuggerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // P0-FL-40: an unread role is not a missing one. While the member's own
-    // profile is loading, or its read failed, the gate stays shut (nothing
-    // role-only is shown) and says which — never "… only.". Only a read that
-    // succeeded without the role gets that message.
-    final profileAsync = ref.watch(currentUserProfileProvider);
-    final unread = _unreadRoleGate(ref, profileAsync, 'MIE Debugger');
-    if (unread != null) return unread;
-    final role = profileAsync.value?['role'];
-    if (role != 'admin' && role != 'content_manager') {
-      return const Scaffold(backgroundColor: _bg,
-        body: Center(child: Text('Admins & content managers only.', style: TextStyle(color: _muted))));
-    }
+    // P0-FL-40/45a: the shared gate — only a role confirmed for THIS member
+    // opens (or closes) the screen; unread → loading / failure notice.
+    final gate = _member.gate(this, ref,
+        title: 'MIE Debugger',
+        allowedRoles: const {'admin', 'content_manager'},
+        detail: 'Content tools stay closed until it loads.',
+        deniedText: 'Admins & content managers only.',
+        reset: _resetForMember);
+    if (gate != null) return gate;
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(backgroundColor: _bg, foregroundColor: _text,
@@ -302,45 +311,3 @@ class _State extends ConsumerState<MieDebuggerScreen> {
     );
   }
 }
-
-/// P0-FL-40 · the role gate while the signed-in member's profile is unread:
-/// a neutral loading state, or the shared FL-16 failure notice with a
-/// busy-aware Try again. `null` once the read has succeeded — the gate then
-/// decides on the role exactly as before.
-///
-/// Both states keep the screen's own AppBar (title, normal back control —
-/// no role-only actions) so there is always an in-app way out (UX-1).
-Widget? _unreadRoleGate(WidgetRef ref,
-    AsyncValue<Map<String, dynamic>?> profile, String title) {
-  final appBar = _gateAppBar(title);
-  if (profile.hasError) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: appBar,
-      body: SafeArea(child: Center(child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: ProfileLoadFailedNotice(
-          error: profile.error!,
-          busy: profile.isLoading,
-          detail: 'Content tools stay closed until it loads.',
-          onRetry: () => ref.invalidate(currentUserProfileProvider),
-        ),
-      ))),
-    );
-  }
-  if (!profile.hasValue) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: appBar,
-      body: const Center(child: CircularProgressIndicator(
-          color: _brand, semanticsLabel: 'Loading your account')),
-    );
-  }
-  return null;
-}
-
-/// The screen's own AppBar style for the unread-role gate.
-PreferredSizeWidget _gateAppBar(String title) => AppBar(
-    backgroundColor: _bg, foregroundColor: _text,
-    title: Text(title,
-        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)));
