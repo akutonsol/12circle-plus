@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import '../domain/content_review_submission.dart';
 import '../domain/custom_exercise_provider.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
 import '../../workout/data/models/video_variant_model.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
@@ -215,10 +216,17 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
       ? AbsorbPointer(child: Opacity(opacity: 0.5, child: child))
       : child;
 
+  /// P0-FL-45b · the role of the member signed in NOW, or null while unknown
+  /// (read loading/failed, or the held value is the previous member's).
+  /// Unknown is not admin, so it is media-only — as for "no role" before.
+  String? _confirmedRole() => confirmedRoleRead(
+          ref.read(currentUserProfileProvider), ref.read(currentUserProvider))
+      ?.role;
+
   /// True when a coach is editing an exercise they don't own (media-only).
   bool _isCoachMediaOnly() {
     if (_editingId == null) return false;
-    final role = ref.read(currentUserProfileProvider).valueOrNull?['role'];
+    final role = _confirmedRole();
     final myUid = _myUid();
     return role != 'admin' &&
         !(_editingCoachId != null && _editingCoachId == myUid);
@@ -621,7 +629,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
 
     // Coaches can edit their OWN exercises fully; on platform/other exercises
     // they may only add media (the AI text content is admin-managed).
-    final role = ref.read(currentUserProfileProvider).valueOrNull?['role'];
+    final role = _confirmedRole();
     final myUid = _myUid();
     final mediaOnly = _editingId != null && role != 'admin' &&
         !(_editingCoachId != null && _editingCoachId == myUid);
@@ -662,7 +670,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     Object? reviewSubmitError;
     if (id != null &&
         shouldSubmitForReview(
-          role: role as String?,
+          role: role,
           editingExisting: editingExisting,
           mediaOnly: mediaOnly,
           visibility: _visibility,
@@ -877,6 +885,9 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   @override
   Widget build(BuildContext context) {
     final topPad = MediaQuery.of(context).padding.top;
+    // Rebuild when the role read or the member changes (the lock reads them).
+    ref.watch(currentUserProfileProvider);
+    ref.watch(currentUserProvider);
     final locked = _isCoachMediaOnly();
     return Scaffold(
       backgroundColor: _C.bg,

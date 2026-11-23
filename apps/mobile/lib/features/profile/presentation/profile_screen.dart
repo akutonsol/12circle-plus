@@ -10,6 +10,7 @@ import '../../../core/observability/app_failure.dart';
 import '../../coach/data/coach_relationship_service.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coaching_mode/domain/coaching_mode_provider.dart';
+import '../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
 import '../../payments/presentation/upgrade_screen.dart'
     show PlanChipState, reportPlanReadFailure;
 import '../domain/connected_apps.dart';
@@ -42,13 +43,20 @@ class ProfileScreen extends ConsumerWidget {
     // P0-FL-16: no profile READ yet (first load, or it failed) is not "no
     // profile". A refresh that fails after a successful read keeps showing the
     // last real profile (Riverpod keeps the previous value on the error).
-    if (!profileAsync.hasValue) {
+    //
+    // P0-FL-45b: …but only a profile read for the member signed in NOW.
+    // Riverpod also keeps the PREVIOUS member's value through a re-read, so
+    // after a sign-out/sign-in this screen drew A's name, email, weights and
+    // 'Coach'/'Member' chip for B while B's read was in flight or had failed.
+    // `confirmedRoleRead` is non-null exactly when the held value is this
+    // member's row (or a confirmed "no row").
+    if (confirmedRoleRead(profileAsync, currentUser) == null) {
       return _ProfileUnavailable(
         error: profileAsync.hasError ? profileAsync.error : null,
         busy: profileAsync.isLoading,
       );
     }
-    final profile      = profileAsync.valueOrNull;
+    final profile      = profileAsync.value;
 
     final firstName = profile?['first_name'] as String?
         ?? currentUser?.userMetadata?['first_name'] as String?
@@ -57,9 +65,11 @@ class ProfileScreen extends ConsumerWidget {
     final lastName  = profile?['last_name'] as String? ?? '';
     final displayName = '$firstName $lastName'.trim().isEmpty ? 'Member' : '$firstName $lastName'.trim();
     final email = profile?['email'] as String? ?? currentUser?.email ?? '';
+    // P0-FL-45b: no role on record is not "client" — the chip says nothing
+    // rather than "Member" (a false statement for a coach). The client
+    // sections stay as they were for "no role".
     final role = profile?['role'] as String?
-        ?? currentUser?.userMetadata?['role'] as String?
-        ?? 'client';
+        ?? currentUser?.userMetadata?['role'] as String?;
     final isCoach     = role == 'coach';
     final avatarUrl   = profile?['avatar_url']      as String?;
     // Real effective plan (Coach-Guided / AI / Self / Free) — not the raw
@@ -188,15 +198,17 @@ class ProfileScreen extends ConsumerWidget {
                   Text(email,
                     style: const TextStyle(color: _C.outline, fontSize: 13)),
                   const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  // P0-FL-45b (UX): a Wrap, not a Row — three chips at 2x
+                  // text on a 320dp phone overflowed.
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 8,
+                    runSpacing: 8,
                     children: [
-                      _Chip(label: isCoach ? 'Coach' : 'Member', color: _C.primary),
-                      if (fitnessGoal != null) ...[
-                        const SizedBox(width: 8),
+                      if (role != null)
+                        _Chip(label: isCoach ? 'Coach' : 'Member', color: _C.primary),
+                      if (fitnessGoal != null)
                         _Chip(label: _goalLabel(fitnessGoal), color: _C.tertiary),
-                      ],
-                      const SizedBox(width: 8),
                       _Chip(label: coachingMode.displayName, color: _C.secondary),
                     ],
                   ),
@@ -212,9 +224,11 @@ class ProfileScreen extends ConsumerWidget {
                       child: const Row(mainAxisSize: MainAxisSize.min, children: [
                         Icon(Icons.edit_outlined, color: _C.onSurfaceVar, size: 14),
                         SizedBox(width: 6),
-                        Text('Edit Profile', style: TextStyle(
-                          color: _C.onSurfaceVar, fontSize: 13,
-                          fontWeight: FontWeight.w500)),
+                        Flexible(child: Text('Edit Profile',
+                          maxLines: 1, overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: _C.onSurfaceVar, fontSize: 13,
+                            fontWeight: FontWeight.w500))),
                       ]))),
                 ],
               ),
@@ -243,7 +257,9 @@ class ProfileScreen extends ConsumerWidget {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Column(
+                  // Expanded: at 2x text "82.5 kg / 78.0 kg" is wider than
+                  // the card on a 320dp phone; it wraps instead of overflowing.
+                  Expanded(child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text('WEIGHT GOAL',
@@ -260,7 +276,8 @@ class ProfileScreen extends ConsumerWidget {
                         ]),
                       ),
                     ],
-                  ),
+                  )),
+                  const SizedBox(width: 12),
                   SizedBox(
                     width: 56, height: 56,
                     child: Stack(
@@ -535,9 +552,10 @@ class ProfileScreen extends ConsumerWidget {
                     children: [
                       Icon(Icons.dashboard_outlined, color: Color(0xFFDDB7FF), size: 20),
                       SizedBox(width: 8),
-                      Text("Coach Dashboard",
+                      Flexible(child: Text("Coach Dashboard",
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
                         style: TextStyle(color: Color(0xFFDDB7FF), fontSize: 15,
-                          fontWeight: FontWeight.w600)),
+                          fontWeight: FontWeight.w600))),
                     ]))),
             ],
             const SizedBox(height: 12),
@@ -663,9 +681,10 @@ class _SignOutButton extends ConsumerWidget {
           children: [
             Icon(Icons.logout, color: _C.error, size: 20),
             SizedBox(width: 8),
-            Text('Sign Out',
+            Flexible(child: Text('Sign Out',
+              maxLines: 1, overflow: TextOverflow.ellipsis,
               style: TextStyle(color: _C.error, fontSize: 15,
-                fontWeight: FontWeight.w600)),
+                fontWeight: FontWeight.w600))),
           ],
         ),
       ),
@@ -805,13 +824,29 @@ class _ProfileRow extends StatelessWidget {
                 style: const TextStyle(color: _C.onSurface, fontSize: 15,
                   fontWeight: FontWeight.w500)),
             ),
-            if (trailing != null) trailing!
+            if (trailing != null) _BoundedTrailing(child: trailing!)
             else const Icon(Icons.chevron_right, color: _C.onSurfaceVar, size: 20),
           ],
         ),
       ),
     );
   }
+}
+
+/// A row's trailing value (a plan chip, "METRIC", a badge) at large text:
+/// at most 45% of the row, scaled down rather than overflowing the row
+/// (P0-FL-45b · 2x text on a 320dp phone). At normal sizes it is unchanged.
+class _BoundedTrailing extends StatelessWidget {
+  const _BoundedTrailing({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => ConstrainedBox(
+        constraints: BoxConstraints(
+            maxWidth: MediaQuery.sizeOf(context).width * 0.45),
+        child: FittedBox(
+            fit: BoxFit.scaleDown, alignment: Alignment.centerRight, child: child),
+      );
 }
 
 class _MiniRingPainter extends CustomPainter {

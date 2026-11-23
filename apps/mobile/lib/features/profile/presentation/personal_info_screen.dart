@@ -100,6 +100,16 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
   bool _loaded = false;
   bool _isCoach = false;
 
+  /// P0-FL-45b · the member whose stored profile fills this form.
+  ///
+  /// The form is State, so it outlives a sign-out/sign-in: member A's name,
+  /// date of birth, weights and role stayed in it, `_loaded` stayed true, and
+  /// Save wrote them with `.eq('id', <B's id>)` — A's data into B's row. Now
+  /// the form belongs to [_loadedFor]: when another member is signed in it is
+  /// cleared and locked until THEIR read lands, and every write refuses unless
+  /// the signed-in id is [_loadedFor].
+  String? _loadedFor;
+
   static const _goalOptions = [
     ('lose_fat',           'Lose Fat'),
     ('build_muscle',       'Build Muscle'),
@@ -146,6 +156,10 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
     if (state is! AsyncData<Map<String, dynamic>?>) return;
     final p = state.value;
     if (p == null) return;
+    // P0-FL-45b: only the row of the member signed in now fills the form.
+    final uid = ref.read(currentUserProvider)?.id;
+    if (uid == null || p['id'] != uid) return;
+    _loadedFor = uid;
     _fnCtrl.text     = p['first_name'] as String? ?? '';
     _lnCtrl.text     = p['last_name']  as String? ?? '';
     _phoneCtrl.text  = p['phone']      as String? ?? '';
@@ -168,6 +182,31 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
     setState(() => _loaded = true);
   }
 
+  /// P0-FL-45b · another member is signed in: nothing of the previous
+  /// member's stays in the form, and it locks until this member's read lands.
+  void _forgetForm() {
+    for (final c in [_fnCtrl, _lnCtrl, _phoneCtrl, _heightCtrl, _weightCtrl, _goalCtrl]) {
+      c.clear();
+    }
+    _gender = null;
+    _dob = null;
+    _fitnessGoal = null;
+    _activityLevel = null;
+    _trainingDays = 3;
+    _trainingLocation = null;
+    _nutritionGoal = null;
+    _avatarUrl = null;
+    _isCoach = false;
+    _loaded = false;
+    _loadedFor = null;
+  }
+
+  /// True when the form holds a member's profile who is no longer the one
+  /// signed in (Supabase's session is what every write is filtered by).
+  bool _formIsAnotherMembers() =>
+      _loaded &&
+      _loadedFor != Supabase.instance.client.auth.currentUser?.id;
+
   @override
   void dispose() {
     _fnCtrl.dispose(); _lnCtrl.dispose(); _phoneCtrl.dispose();
@@ -181,7 +220,16 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
   /// but a handler must not rely on its caller having been blocked: every
   /// write path checks this first (P0-FL-16 review, UX-F2).
   bool _isLocked() =>
-      !_loaded && ref.read(currentUserProfileProvider) is! AsyncData;
+      (!_loaded && !_readIsThisMembers(ref.read(currentUserProfileProvider))) ||
+      _formIsAnotherMembers();
+
+  /// A completed read for the member signed in now: their row, or "no row".
+  bool _readIsThisMembers(AsyncValue<Map<String, dynamic>?> s) {
+    if (s is! AsyncData<Map<String, dynamic>?>) return false;
+    final uid = ref.read(currentUserProvider)?.id;
+    final p = s.value;
+    return uid != null && (p == null || p['id'] == uid);
+  }
 
   Future<void> _pickAndUploadAvatar() async {
     if (_isLocked() || _loadingAvatar) return;
@@ -273,6 +321,11 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
     try {
       final uid = Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) throw Exception('Not logged in');
+      // P0-FL-45b: the form must be THIS member's (checked again here, after
+      // every early return, against the id the write is filtered by).
+      if (_loadedFor != uid) {
+        throw StateError('personal info form was filled for another member');
+      }
 
       // P0-FL-39: "updated successfully" only when the server says the row
       // changed; a 0-row update answers like a saved one unless asked back.
@@ -322,6 +375,17 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
       currentUserProfileProvider,
       (_, next) { if (next is AsyncData && !_loaded) _loadData(); },
     );
+    // P0-FL-45b: a different member signed in → drop the previous member's
+    // form; this member's read fills it when it lands (the listener above).
+    final user = ref.watch(currentUserProvider);
+    if (_loaded && _loadedFor != user?.id) {
+      _forgetForm();
+      if (ref.read(currentUserProfileProvider) is AsyncData) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_loaded) _loadData();
+        });
+      }
+    }
 
     // P0-FL-16: until the profile has been READ the form holds nothing of the
     // member's, so it is locked — inputs, photo and both Saves. Typing into it
@@ -329,7 +393,7 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
     // edits is the FL-12 trap. A read that answered "no profile row" is not a
     // failure and keeps its existing behaviour (unlocked; Save refuses).
     final profileAsync = ref.watch(currentUserProfileProvider);
-    final locked = !_loaded && profileAsync is! AsyncData;
+    final locked = _isLocked();
     final loadError =
         !_loaded && profileAsync.hasError ? profileAsync.error : null;
     final canSave = !_saving && !locked;
@@ -586,7 +650,7 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
           controller: ctrl,
           // Locked until the profile is read (P0-FL-16) — disabled, not only
           // behind the pointer absorber, so focus/keyboard cannot reach it.
-          enabled: _loaded || ref.read(currentUserProfileProvider) is AsyncData,
+          enabled: !_isLocked(),
           keyboardType: keyboard,
           inputFormatters: keyboard == TextInputType.number
             ? [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))]

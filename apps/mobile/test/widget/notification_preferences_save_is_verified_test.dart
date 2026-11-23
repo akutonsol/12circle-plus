@@ -58,6 +58,9 @@ void main() {
         currentUserProvider
             .overrideWithValue(Supabase.instance.client.auth.currentUser),
         currentUserProfileProvider.overrideWith((ref) async => {
+              // P0-FL-45b: the real read selects `id`; a row counts only
+              // for the member it was read for.
+              'id': _uid,
               'notif_workout_reminders': true,
               'notif_checkin_reminders': true,
               'notif_coach_messages': true,
