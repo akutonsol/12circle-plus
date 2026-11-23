@@ -182,6 +182,33 @@ Runtime (device/simulator/live QA): **not performed**; journey completion unchan
 
 **Runtime evidence:** none (no device, simulator or live QA). Journeys unchanged at 2 of 14.
 
+## Cycle 8 log (2026-11-22): P0-FL-41 to P0-FL-44
+
+**How the cycle ran.**
+- Every package started from `integration/p0-flutter-stack-c7` @ `df35d5f` and targets that branch.
+- Four engineers ran in parallel, followed by independent UX, security and QA review at the final heads, fix and test rounds, and narrow re-checks.
+- The lead ran mutants (test lists from each package's diff, plus per-site revert mutants where single layers are equivalent), CI's negative controls locally, and the static guards.
+- **Combined branch `integration/p0-flutter-stack-c8`** @ `185261e`: 3456 tests, analyze 287, guards 0, CI **7/7** (`45100790460`). No cross-package defect.
+
+| Package | Agent | Branch, final head, PR | Tests (full) | Independent review (final head) | Lead mutants | CI (exact head) |
+|---|---|---|---|---|---|---|
+| P0-FL-41 joined-profile crashes | `cplus-flutter-engineer` | `fix/leaderboard-missing-profile-never-crashes` `e9fcb30` → **#195** | 3340 | UX PASS-WITH-NOTES · sec APPROVE · QA VERIFIED | per-site reverts 3/3 | 7/7 `45076272294` |
+| P0-FL-42 client cancel confirmed | engineer ×2 | `fix/client-booking-cancel-confirmed` `1e5199a` → **#196** | 3346 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 4/4 | 7/7 `45097658625` |
+| P0-FL-43 copilot generate failure | engineer ×3 + lead scope correction | `fix/copilot-services-report-failures` `d8af61d` → **#197** | 3340 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 3/3 | 7/7 `45098982386` |
+| P0-FL-44 failed or stale role reads | engineer ×3 (incl. 70 transition tests) | `fix/role-read-failure-not-a-role-fact` `9cae07a` → **#198** | 3435 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 4/4 | 7/7 `45099911540` |
+
+**Runtime evidence:** none (no device, simulator or live QA). Journeys unchanged at 2 of 14.
+
+### Backlog after cycle 8 (decision-free first)
+
+1. **P0-FL-45:** about 15 remaining role reads move to `confirmedRoleRead` (stale-role P2).
+2. **P0-FL-46:** coach-side cancel status filter, `_book` copy, `coachReviewsProvider` swallow, leaderboard ticker.
+3. **Accessibility and cosmetic,** then the P3 backlog.
+4. **Needs Julia.**
+   - The SEC-R3 / Wave 3B-4 ruling (`predictClient` and siblings); the 184/185 QA window.
+   - Decisions 17–24; P0-SB-2; P0-SB-3; member list.
+   - Server-side PHI read enforcement; client call-status transitions.
+
 ### Backlog after cycle 7 (decision-free first)
 
 1. **Data integrity.** `score_service.dart:114` leaderboard missing-profile crash; client booking cancel (0-row check and voice); `generateWorkout` and `predictClient` swallow errors.
