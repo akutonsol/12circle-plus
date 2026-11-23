@@ -407,88 +407,164 @@ void main() {
       expect(page(tester), (_photosPage + 1).toDouble());
     });
 
-    testWidgets(
-        'on a 320×568 phone at 2× text the failure notice is scrolled into '
-        'view', (tester) async {
-      // At 2× text the fixed-height photo cards and the Continue button's row
-      // overflow. That is a separate, PRE-EXISTING layout issue (on the base
-      // too; reported for a follow-up). Only that class of error is tolerated
-      // here, so this test judges the notice alone.
-      final original = FlutterError.onError;
-      var overflows = 0;
-      FlutterError.onError = (details) {
-        if (details.exceptionAsString().contains('A RenderFlex overflowed')) {
-          overflows++;
-          return;
-        }
-        original?.call(details);
-      };
-      try {
-        server.profile = {'id': _uid, 'onboarding_step': _photosPage};
-        await tester.binding.setSurfaceSize(const Size(320, 568));
-        addTearDown(() => tester.binding.setSurfaceSize(null));
-        // The picker sheet itself is pushed off-screen at 2× text (same
-        // pre-existing class), so the photo is picked at 1× and the scale is
-        // raised to 2× BEFORE the failing upload — the notice is judged at 2×.
-        final scale = ValueNotifier<double>(1);
-        addTearDown(scale.dispose);
-        await tester.pumpWidget(ProviderScope(
-          child: MaterialApp(
-            builder: (context, child) => ValueListenableBuilder<double>(
-              valueListenable: scale,
-              builder: (context, s, _) => MediaQuery(
-                data: MediaQuery.of(context)
-                    .copyWith(textScaler: TextScaler.linear(s)),
-                child: child!,
-              ),
-            ),
-            home: const IntakeFlowScreen(),
+    /// Opens the photo step on a 320×568 phone at 2× text. No error handler
+    /// is installed: any RenderFlex overflow is reported by the test framework
+    /// and fails the test (P0-FL-19's version tolerated them).
+    Future<void> openPhotosAt2x(WidgetTester tester) async {
+      server.profile = {'id': _uid, 'onboarding_step': _photosPage};
+      await tester.binding.setSurfaceSize(const Size(320, 568));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: const TextScaler.linear(2)),
+            child: child!,
           ),
-        ));
-        await settle(tester);
-        expect(page(tester), _photosPage.toDouble(),
-            reason: 'premise: the flow opened on Progress Photos');
+          home: const IntakeFlowScreen(),
+        ),
+      ));
+      await settle(tester);
+      expect(page(tester), _photosPage.toDouble(),
+          reason: 'premise: the flow opened on Progress Photos');
+    }
 
-        await tester.ensureVisible(find.text('Front Photo'));
-        await settle(tester);
-        await tester.tap(find.text('Front Photo'));
-        await settle(tester);
-        await tester.tap(find.text('Choose from Library'));
-        await settle(tester);
-        scale.value = 2;
-        await settle(tester);
-        await tester.ensureVisible(find.text('Front Photo'));
-        await settle(tester);
-        server.failingSlots = {'front'};
-        await tester.tap(find.text('Continue (1/3)'));
-        await settle(tester);
-        await tester.pump(const Duration(milliseconds: 500));
+    /// Opens [label]'s picker sheet at 2× and taps one of its rows; the row
+    /// must be reachable (scrolled into view inside the sheet if need be).
+    Future<void> pickVia(WidgetTester tester, String label, String row) async {
+      await tester.ensureVisible(find.text(label));
+      await settle(tester);
+      await tester.tap(find.text(label));
+      await settle(tester);
+      final target = find.text(row);
+      expect(target, findsOneWidget, reason: 'premise: the sheet opened');
+      await tester.ensureVisible(target);
+      await settle(tester);
+      expect(target.hitTestable(), findsOneWidget,
+          reason: '"$row" is on screen and tappable at 2× text');
+      await tester.tap(target);
+      await settle(tester);
+    }
 
-        expect(page(tester), _photosPage.toDouble());
-        final message = find.text(notice(_generic));
-        expect(message, findsOneWidget, reason: 'premise: the upload failed');
-        final viewport = tester.getRect(find
-            .ancestor(of: message, matching: find.byType(Scrollable))
-            .first);
-        final rect = tester.getRect(message);
-        // At 2× text the message alone is taller than this viewport, so
-        // "fully inside" is impossible; what matters is that its START —
-        // "Couldn't upload your photos" — is on screen and not under the
-        // bottom bar.
-        expect(
-            viewport.top <= rect.top && rect.top + 60 <= viewport.bottom,
-            isTrue,
-            reason: 'UX-1: the notice is off-screen ($rect, viewport '
-                '$viewport) — a failed upload looks like nothing happened');
-        expect(message.hitTestable(at: const Alignment(0, -0.95)),
-            findsOneWidget,
-            reason: 'the opening line of the notice is the visible, topmost '
-                'thing at its position');
-      } finally {
-        FlutterError.onError = original;
+    testWidgets(
+        'P0-FL-48: on a 320×568 phone at 2× text the photo step, its cards, '
+        'its Continue button and its picker sheet lay out with NO overflow, '
+        'and the failure notice is scrolled into view', (tester) async {
+      await openPhotosAt2x(tester);
+
+      // The picker sheet is opened and used AT 2× (it used to be pushed
+      // off-screen, so the earlier version of this test picked at 1×).
+      await pickVia(tester, 'Front Photo', 'Choose from Library');
+      expect(find.text('Continue (1/3)'), findsOneWidget,
+          reason: 'premise: the photo was picked at 2×');
+      // The tallest sheet: a slot that already has a photo adds Remove Photo.
+      await tester.ensureVisible(find.text('Front Photo'));
+      await settle(tester);
+      await tester.tap(find.text('Front Photo'));
+      await settle(tester);
+      expect(find.text('Remove Photo'), findsOneWidget);
+      await tester.ensureVisible(find.text('Remove Photo'));
+      await settle(tester);
+      expect(find.text('Remove Photo').hitTestable(), findsOneWidget,
+          reason: 'every row of the tallest sheet is reachable at 2×');
+      Navigator.of(tester.element(find.text('Remove Photo'))).pop();
+      await settle(tester);
+      expect(find.text('Continue (1/3)'), findsOneWidget,
+          reason: 'closing the sheet changed nothing');
+
+      server.failingSlots = {'front'};
+      await tester.tap(find.text('Continue (1/3)'));
+      await settle(tester);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(page(tester), _photosPage.toDouble());
+      final message = find.text(notice(_generic));
+      expect(message, findsOneWidget, reason: 'premise: the upload failed');
+      final viewport = tester.getRect(find
+          .ancestor(of: message, matching: find.byType(Scrollable))
+          .first);
+      final rect = tester.getRect(message);
+      // At 2× text the message alone is taller than this viewport, so
+      // "fully inside" is impossible; what matters is that its START —
+      // "Couldn't upload your photos" — is on screen and not under the
+      // bottom bar.
+      expect(
+          viewport.top <= rect.top && rect.top + 60 <= viewport.bottom,
+          isTrue,
+          reason: 'UX-1: the notice is off-screen ($rect, viewport '
+              '$viewport) — a failed upload looks like nothing happened');
+      expect(message.hitTestable(at: const Alignment(0, -0.95)),
+          findsOneWidget,
+          reason: 'the opening line of the notice is the visible, topmost '
+              'thing at its position');
+      // Any overflow during the above fails this test through the
+      // framework's own error reporting (no handler is installed).
+    });
+
+    testWidgets(
+        'P0-FL-48: at 2× text every photo card shows its whole label, hint and '
+        '"Tap to add" inside its border; "Skip for now" is a labelled button '
+        'at least 44px tall', (tester) async {
+      await openPhotosAt2x(tester);
+      for (final (label, hint) in [
+        ('Front Photo', 'Face forward, arms at sides'),
+        ('Side Photo', 'Profile view, 90° turn'),
+        ('Back Photo', 'Straight posture, rear view'),
+      ]) {
+        final card = find
+            .ancestor(of: find.text(label), matching: find.byType(GestureDetector))
+            .first;
+        final box = tester.getRect(card);
+        for (final t in [label, hint]) {
+          final r = tester.getRect(find.text(t));
+          expect(r.top >= box.top - 0.01 && r.bottom <= box.bottom + 0.01, isTrue,
+              reason: '"$t" ($r) is clipped by its card ($box)');
+        }
+        final tap = tester.getRect(find
+            .descendant(of: card, matching: find.text('Tap to add')));
+        expect(tap.bottom, lessThanOrEqualTo(box.bottom + 0.01),
+            reason: '"Tap to add" of $label is clipped by its card');
       }
-      expect(overflows, greaterThan(0),
-          reason: 'premise: this really is the 2× text small-phone layout');
+
+      final handle = tester.ensureSemantics();
+      // Skip sits in the fixed bottom bar, outside the step's scroll view. NOT
+      // ensureVisible: that would scroll the flow's PageView itself and build
+      // the next step (Coaching Mode), which is outside this package.
+      final skip = find.text('Skip for now');
+      expect(skip.hitTestable(), findsOneWidget,
+          reason: 'Skip for now is on screen at 2× text');
+      final target = find
+          .ancestor(of: skip, matching: find.byType(GestureDetector))
+          .first;
+      expect(tester.getSize(target).height, greaterThanOrEqualTo(44),
+          reason: '"Skip for now" was a bare text-height tap target');
+      expect(
+          tester.getSemantics(skip),
+          matchesSemantics(
+              label: 'Skip for now', isButton: true, hasTapAction: true),
+          reason: 'a screen reader announces Skip for now as a button');
+      handle.dispose();
+    });
+
+    testWidgets(
+        'P0-FL-48 1x pin: on an ordinary step (Primary Goal) and on the photo '
+        'step the Continue button is exactly 54px tall at 1x text', (tester) async {
+      // [height] became a floor (minHeight) so the button can grow at large
+      // text; at 1x it must render exactly as the old fixed height did.
+      final gradient = find.byWidgetPredicate(
+          (w) => w.runtimeType.toString() == '_GradientButton');
+      for (final step in [5, _photosPage]) {
+        server.profile = {'id': _uid, 'onboarding_step': step};
+        await open(tester);
+        expect(page(tester), step.toDouble(), reason: 'premise: step $step');
+        final onPage = gradient.hitTestable();
+        expect(onPage, findsOneWidget,
+            reason: 'premise: step $step shows one Continue button');
+        expect(tester.getSize(onPage).height, 54,
+            reason: 'step $step: the 1x button height changed');
+        await tester.pumpWidget(const SizedBox());
+        await settle(tester);
+      }
     });
 
     testWidgets('control: uploads that all succeed move on as before',

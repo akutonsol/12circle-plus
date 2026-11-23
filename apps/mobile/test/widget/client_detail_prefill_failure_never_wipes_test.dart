@@ -282,10 +282,15 @@ bool _inLiveRegion(WidgetTester t, String text) => find
     .evaluate()
     .isNotEmpty;
 
-/// The Approve button on the Action Center row whose text is [rowText].
+/// The Approve button on the Action Center item whose text is [rowText].
+/// The item is its decorated card: since P0-FL-48 the actions sit under the
+/// text (so they fit at large text), not in the same Row as it.
 Finder _approveOn(String rowText) => find.descendant(
     of: find
-        .ancestor(of: find.text(rowText), matching: find.byType(Row))
+        .ancestor(
+            of: find.text(rowText),
+            matching: find.byWidgetPredicate(
+                (w) => w is Container && w.decoration != null))
         .first,
     matching: find.text('Approve'));
 
