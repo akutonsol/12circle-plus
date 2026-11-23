@@ -230,7 +230,7 @@ void main() {
       await book(tester);
 
       expect(posts('coaching_calls'), 1, reason: 'premise: the call was saved');
-      expect(find.text('Could not book — please try again.'), findsNothing,
+      expect(find.textContaining("Couldn't book"), findsNothing,
           reason: 'THE defect: the call IS booked; only the notice failed');
       expect(find.text('Call booked!'), findsOneWidget);
       expect(find.text('Call booked! Your coach has been notified.'), findsNothing,
@@ -259,7 +259,10 @@ void main() {
         (tester) async {
       server.callWriteFails = true;
       await book(tester);
-      expect(find.text('Could not book — please try again.'), findsOneWidget);
+      // P0-FL-46: the house voice (a 503 is the server answering, so no
+      // connection hint).
+      expect(find.text("Couldn't book this session — try again in a moment. "
+          'If it keeps happening, contact support.'), findsOneWidget);
       expect(posts('notifications'), 0);
     });
   });

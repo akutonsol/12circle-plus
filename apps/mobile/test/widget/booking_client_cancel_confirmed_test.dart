@@ -419,9 +419,8 @@ void main() {
       ..physicalSize = const Size(320, 2400);
     addTearDown(tester.view.reset);
     // Booked calls show only beside at least one open slot, so a slot card
-    // is on screen too. Its own overflow at this size (_SlotCard) is a
-    // separate, recorded follow-up: every overflow is collected, and only
-    // _SlotCard's are tolerated here.
+    // is on screen too. Its own overflow at this size (_SlotCard) was
+    // tolerated here until P0-FL-46 fixed it; every overflow now fails.
     final overflows = <String>[];
     final previous = FlutterError.onError;
     FlutterError.onError = (details) {
@@ -447,9 +446,9 @@ void main() {
     }
 
     expect(find.text('Cancel'), findsOneWidget);
-    expect(overflows.where((o) => !o.contains('_SlotCard')), isEmpty,
-        reason: 'no RenderFlex overflow in the session row or the section '
-            'headers');
+    expect(overflows, isEmpty,
+        reason: 'no RenderFlex overflow in the session row, the slot card or '
+            'the section headers');
     // The control stays a whole 44px target inside the 320px viewport.
     final r = tester.getRect(find.ancestor(
         of: find.text('Cancel'), matching: find.byType(TextButton)));

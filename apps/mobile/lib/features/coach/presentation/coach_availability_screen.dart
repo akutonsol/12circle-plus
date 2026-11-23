@@ -131,19 +131,27 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
     // already gone) answers like a saved one unless the row is asked back.
     // On failure nothing else is written and the client is not notified.
     try {
+      // P0-FL-46 · only a still-scheduled call is cancelled (this screen
+      // offers Cancel only for scheduled sessions). One the client already
+      // cancelled matched the id-only filter, so it was "cancelled" again and
+      // the client got a false "your coach cancelled" notice; now it matches
+      // no row and takes the 0-row path below.
       final rows = await _db
           .from('coaching_calls')
           .update({'status': 'cancelled'})
           .eq('id', id)
+          .eq('status', 'scheduled')
           .select('id');
       if ((rows as List).isEmpty) {
         reportError('CoachAvailabilityScreen._cancelSession',
             StateError('coaching_calls update matched no row'));
         if (!mounted) return;
         setState(() => _cancelling.remove(id));
-        messenger.showSnackBar(const SnackBar(content: Text(
-            "Couldn't cancel this session — it may already be cancelled. "
-            'Refreshing your sessions.')));
+        // P0-FL-46 review N2 · a failure notice is announced (live region).
+        messenger.showSnackBar(SnackBar(
+            content: Semantics(liveRegion: true, child: const Text(
+                "Couldn't cancel this session — it may already be cancelled. "
+                'Refreshing your sessions.'))));
         _load();
         return;
       }
@@ -151,8 +159,9 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
       reportError('CoachAvailabilityScreen._cancelSession', e, st);
       if (!mounted) return;
       setState(() => _cancelling.remove(id));
-      messenger.showSnackBar(SnackBar(content: Text(
-          "Couldn't cancel this session — ${_nextStep(e)}")));
+      messenger.showSnackBar(SnackBar(
+          content: Semantics(liveRegion: true, child: Text(
+              "Couldn't cancel this session — ${_nextStep(e)}"))));
       return;
     }
     // Step 2, the slot. The call IS cancelled from here on, so a slot that
