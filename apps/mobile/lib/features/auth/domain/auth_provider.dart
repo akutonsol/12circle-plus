@@ -132,9 +132,14 @@ Map<String, dynamic>? confirmedProfileRead(
 }
 
 /// [confirmedProfileRead] for the signed-in member, as a provider.
-final confirmedCurrentProfileProvider = Provider<Map<String, dynamic>?>((ref) =>
-    confirmedProfileRead(
-        ref.watch(currentUserProfileProvider), ref.watch(currentUserProvider)));
+/// The user is watched only when there is a row to check against it (with no
+/// row there is nothing to confirm; the profile read itself already follows
+/// the user).
+final confirmedCurrentProfileProvider = Provider<Map<String, dynamic>?>((ref) {
+  final profile = ref.watch(currentUserProfileProvider);
+  if (!profile.hasValue || profile.value == null) return null;
+  return confirmedProfileRead(profile, ref.watch(currentUserProvider));
+});
 
 /// The signed-in member's first name: the profile's (the one Personal Info
 /// edits), then the sign-up metadata, then the email's local part — the order
