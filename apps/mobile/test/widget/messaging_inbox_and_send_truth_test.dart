@@ -17,6 +17,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../support/pump_until.dart';
 import '../support/row_checking_postgrest.dart';
 
 // P0-FL-13 · messaging inbox and send tell the truth.
@@ -468,11 +469,12 @@ void main() {
       }
 
       await t.tap(find.byIcon(Icons.image_outlined));
-      for (var i = 0; i < 20; i++) {
-        await t.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 20)));
-        await t.pump(const Duration(milliseconds: 100));
-      }
+      // The picked photo is read from disk (real I/O) before the upload; a
+      // fixed budget of pumps raced it under load (P0-FL-51). Wait for the
+      // outcome — the send settles with a SnackBar either way.
+      await pumpUntil(t, () => find.byType(SnackBar).evaluate().isNotEmpty,
+          what: 'the photo send outcome (a SnackBar)');
+      await t.pump(const Duration(milliseconds: 100));
 
       expect(server.writes.where((w) => w.contains('/storage/v1/object')),
           isNotEmpty, reason: 'the upload was attempted');

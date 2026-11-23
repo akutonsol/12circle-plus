@@ -11,6 +11,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../support/pump_until.dart';
+
 // The coach dashboard's "Invite a Client" sheet said "Invite sent!" whatever
 // happened.
 //
@@ -172,9 +174,15 @@ void main() {
     await tester.enterText(find.byType(TextField).last, 'new.client@example.com');
     await tester.tap(find.text('Send Invite'));
     // The Functions client encodes and decodes JSON on a real isolate, which
-    // the test's fake clock cannot advance; let real time pass for it.
+    // the test's fake clock cannot advance. A fixed budget of real-time waits
+    // raced it under load (P0-FL-51): wait for the outcome the sheet reports.
+    await pumpUntil(
+        tester,
+        () =>
+            find.text(_sent).evaluate().isNotEmpty ||
+            find.text(_failed).evaluate().isNotEmpty,
+        what: 'the invite outcome ("$_sent" or the failure notice)');
     for (var i = 0; i < 6; i++) {
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
       await tester.pump(const Duration(milliseconds: 100));
     }
   }

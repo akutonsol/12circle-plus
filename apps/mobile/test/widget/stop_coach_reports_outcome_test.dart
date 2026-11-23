@@ -11,6 +11,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../support/pump_until.dart';
+
 // "Stop" on /manage-subscription said "Coaching ended. Your coach has been
 // notified." whatever happened.
 //
@@ -208,11 +210,11 @@ void main() {
     await tester.tap(find.text('Yes, stop'));
     // Ending a PAID coach now goes through the cancel-subscription function.
     // The functions client encodes/decodes in an isolate, which does not run
-    // under the widget test's fake clock: give it real time, then settle.
-    for (var i = 0; i < 10; i++) {
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 30)));
-      await tester.pump(const Duration(milliseconds: 50));
-    }
+    // under the widget test's fake clock. A fixed budget of real-time waits
+    // raced it under load (P0-FL-51): wait for the SnackBar every outcome
+    // (ended, continues until, could not end) is reported in, then settle.
+    await pumpUntil(tester, () => find.byType(SnackBar).evaluate().isNotEmpty,
+        what: 'the Stop outcome (a SnackBar)');
     await tester.pumpAndSettle();
   }
 
