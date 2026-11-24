@@ -716,6 +716,22 @@ void main() {
       await close(tester);
     });
 
+    /// What activating [button] calls.
+    VoidCallback handlerOf(WidgetTester tester, String button) => button ==
+            '+ Add'
+        ? tester
+            .widget<GestureDetector>(find
+                .ancestor(
+                    of: find.text(button).first,
+                    matching: find.byType(GestureDetector))
+                .first)
+            .onTap!
+        : tester
+            .widget<OutlinedButton>(find.ancestor(
+                of: find.text(button),
+                matching: find.bySubtype<OutlinedButton>()))
+            .onPressed!;
+
     // QA point 4 (round 2): the route is known before its first frame.
     for (final (tab, button) in const [
       ('Profile', '+ Add'),
@@ -737,13 +753,15 @@ void main() {
         await close(tester);
       });
 
-      testWidgets('$button tapped twice in one frame opens one dialog, and a '
-          'switch leaves none', (tester) async {
+      // Not a second pointer tap: the navigator absorbs those until the next
+      // frame. An activation from assistive technology is not absorbed.
+      testWidgets('$button activated twice in one frame opens one dialog, and '
+          'a switch leaves none', (tester) async {
         await open(tester);
         await showTab(tester, tab);
-        final spot = tester.getCenter(find.text(button).first);
-        await tester.tapAt(spot);
-        await tester.tapAt(spot);
+        final activate = handlerOf(tester, button);
+        activate();
+        activate();
         await settle(tester);
         expect(find.byType(AlertDialog), findsOneWidget);
         await switchTo(tester, _b);
@@ -790,21 +808,7 @@ void main() {
                       : parent.scheduleMicrotask(z, f)));
           await open(tester);
           await showTab(tester, tab);
-          if (action == 'Add') {
-            zone.run(tester
-                .widget<GestureDetector>(find
-                    .ancestor(
-                        of: find.text(button).first,
-                        matching: find.byType(GestureDetector))
-                    .first)
-                .onTap!);
-          } else {
-            zone.run(tester
-                .widget<OutlinedButton>(find.ancestor(
-                    of: find.text(button),
-                    matching: find.bySubtype<OutlinedButton>()))
-                .onPressed!);
-          }
+          zone.run(handlerOf(tester, button));
           await settle(tester);
           await tester.enterText(dialogField(), 'late-from-a');
           await tester.pump();
