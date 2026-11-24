@@ -531,6 +531,8 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
   String _type = 'check_in';
   int _duration = 30;
   bool _saving = false;
+  /// The last publish's failure, said above the button (P0-FL-53b r2).
+  String? _error;
 
   static const _types = [
     ('check_in',         'Weekly Check-In'),
@@ -542,7 +544,7 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
   static const _durations = [30, 45, 60];
 
   Future<void> _save() async {
-    setState(() => _saving = true);
+    setState(() { _saving = true; _error = null; });
     try {
       final uid = _db.auth.currentUser?.id;
       final slotTime = DateTime(_date.year, _date.month, _date.day, _hour, _minute);
@@ -561,10 +563,8 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
       // ERR-2: see coach_video_response_screen. P0-FL-53b · recorded (it was
       // swallowed unseen), and said in the one voice.
       reportError('CoachAvailabilityScreen._AddSlotSheet._save', e, st);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Semantics(liveRegion: true,
-              child: Text(couldntMessage('save this time slot', e))),
-          backgroundColor: Colors.red));
+      // Said inside the sheet: a SnackBar would sit on the Scaffold under it.
+      if (mounted) setState(() => _error = couldntMessage('save this time slot', e));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -678,6 +678,11 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
         )).toList()),
         const SizedBox(height: 24),
 
+        if (_error != null) ...[
+          Semantics(liveRegion: true, child: Text(_error!,
+              style: const TextStyle(color: Color(0xFFFFB4AB), fontSize: 13, height: 1.35))),
+          const SizedBox(height: 12),
+        ],
         SizedBox(width: double.infinity, child: ElevatedButton(
           onPressed: _saving ? null : _save,
           style: ElevatedButton.styleFrom(

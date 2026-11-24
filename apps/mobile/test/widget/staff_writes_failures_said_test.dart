@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -26,6 +27,13 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 //  4. Availability › Publish Slot: a failed insert was said but never
 //     recorded.
 //  5. Availability › delete: a 0-row delete was said but never recorded.
+//
+// Round 2 (fc01f04 → review UX F1/F2/F3):
+//  6. Packages editor / Add-slot sheet: the failure was a SnackBar on the
+//     Scaffold UNDER the modal sheet (likely invisible). It is now said inside
+//     the sheet, above the button, as a live region, cleared on the next try.
+//  7. Video Done view, not notified: no next step, muted colour under a green
+//     check, and not a live region.
 
 const _uid = '00000000-0000-4000-8000-0000000000c0';
 
@@ -80,6 +88,8 @@ class _MemoryStore extends GotrueAsyncStorage {
 class _Server extends http.BaseClient {
   Set<String> failing = {};
   int deletedRows = 1;
+  /// When set, a POST waits for it before answering.
+  Completer<void>? gate;
   final writes = <String>[];
 
   @override
@@ -89,6 +99,7 @@ class _Server extends http.BaseClient {
     var status = 200;
     if (request.method != 'GET') {
       writes.add('${request.method} $table');
+      if (request.method == 'POST') await gate?.future;
       if (failing.contains(table)) {
         body = {'message': 'SECRET_TABLE_X exploded', 'code': 'XX000'};
         status = 500;
@@ -115,6 +126,7 @@ final _server = _Server();
 class _Packages extends PackageService {
   Object? deleteError;
   Object? saveError;
+  Completer<void>? hold;
   int deletes = 0, saves = 0;
   @override
   Future<void> deletePackage(String id) async {
@@ -128,6 +140,7 @@ class _Packages extends PackageService {
       required int sessions, required double price, String? description,
       String? cancellationPolicy}) async {
     saves++;
+    await hold?.future;
     final e = saveError;
     if (e != null) throw e;
   }
@@ -141,6 +154,13 @@ List<AppFailure> _sink() {
   addTearDown(resetFailureSink);
   return reported;
 }
+
+/// [f] is inside the open modal bottom sheet (not on the Scaffold under it).
+Finder _inSheet(Finder f) => find.descendant(of: find.byType(BottomSheet), matching: f);
+
+bool _liveRegion(WidgetTester tester, Finder f) => tester
+    .widgetList<Semantics>(find.ancestor(of: f, matching: find.byType(Semantics)))
+    .any((s) => s.properties.liveRegion ?? false);
 
 void _tall(WidgetTester tester) {
   tester.view
@@ -193,7 +213,14 @@ void main() {
       await send(tester);
       expect(find.text('Video Sent!'), findsOneWidget,
           reason: 'THE defect: the saved response was reported as not sent');
-      expect(find.text("Your response is saved, but Jamie wasn't notified."), findsOneWidget);
+      const line = "Your response is saved, but Jamie wasn't notified — let them know another way.";
+      expect(find.text(line), findsOneWidget, reason: 'r2 F2: a next step');
+      expect(_liveRegion(tester, find.text(line)), isTrue, reason: 'r2 F3: announced');
+      expect(tester.widget<Text>(find.text(line)).style?.color, const Color(0xFFF59E0B),
+          reason: 'r2 F2: the warning colour, not the muted success colour');
+      expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
+      expect(find.byIcon(Icons.check_rounded), findsNothing,
+          reason: 'r2 F2: not under a green check');
       expect(find.textContaining('has been notified'), findsNothing,
           reason: 'notified was claimed regardless');
       expect(reported.map((f) => f.origin), ['CoachVideoResponseScreen._send.notify']);
@@ -216,7 +243,13 @@ void main() {
     testWidgets('positive control: saved and notified', (tester) async {
       final reported = _sink();
       await send(tester);
-      expect(find.text('Jamie has been notified and can watch your response.'), findsOneWidget);
+      const line = 'Jamie has been notified and can watch your response.';
+      expect(find.text(line), findsOneWidget);
+      expect(tester.widget<Text>(find.text(line)).style?.color, const Color(0xFFCFC2D6),
+          reason: 'notified path unchanged');
+      expect(find.byIcon(Icons.check_rounded), findsOneWidget);
+      expect(find.byIcon(Icons.warning_amber_rounded), findsNothing);
+      expect(find.textContaining("wasn't notified"), findsNothing);
       expect(reported, isEmpty);
     });
   });
@@ -237,10 +270,38 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Publish Slot'));
       await tester.pumpAndSettle();
-      expect(find.text("Couldn't save this time slot — $_other"), findsOneWidget);
+      const msg = "Couldn't save this time slot — $_other";
+      expect(_inSheet(find.text(msg)), findsOneWidget,
+          reason: 'r2 F1: said inside the sheet, not on the Scaffold under it');
+      expect(find.byType(SnackBar), findsNothing);
+      expect(_liveRegion(tester, find.text(msg)), isTrue);
+      expect(find.textContaining('SECRET_TABLE_X'), findsNothing);
       expect(find.text('Publish Slot'), findsOneWidget, reason: 'the sheet stays open');
       expect(reported.map((f) => f.origin), ['CoachAvailabilityScreen._AddSlotSheet._save'],
           reason: 'THE defect: the failure was swallowed unrecorded');
+
+      // The next attempt clears it while in flight; a success closes the sheet.
+      _server
+        ..failing = {}
+        ..gate = Completer<void>();
+      await tester.tap(find.text('Publish Slot'));
+      await tester.pump();
+      expect(find.text(msg), findsNothing, reason: 'r2 F1: cleared on the next attempt');
+      _server.gate!.complete();
+      _server.gate = null;
+      await tester.pumpAndSettle();
+      expect(find.text('Publish Slot'), findsNothing);
+      expect(reported, hasLength(1));
+    });
+
+    testWidgets('negative control: a fresh Add-slot sheet says no failure', (tester) async {
+      final reported = _sink();
+      await open(tester);
+      await tester.tap(find.text('Add Slot'));
+      await tester.pumpAndSettle();
+      expect(_inSheet(find.text('Publish Slot')), findsOneWidget);
+      expect(_inSheet(find.textContaining("Couldn't")), findsNothing);
+      expect(reported, isEmpty);
     });
 
     testWidgets('positive control: Publish Slot that saves closes the sheet', (tester) async {
@@ -352,12 +413,42 @@ void main() {
       svc.saveError = PostgrestException(message: 'SECRET_TABLE_X', code: 'XX000');
       await saveNew(tester);
       expect(tester.takeException(), isNull, reason: 'THE defect: it escaped unhandled');
-      expect(find.text("Couldn't save this package — $_other"), findsOneWidget);
+      const msg = "Couldn't save this package — $_other";
+      expect(_inSheet(find.text(msg)), findsOneWidget,
+          reason: 'r2 F1: said inside the sheet, not on the Scaffold under it');
+      expect(find.byType(SnackBar), findsNothing);
+      expect(_liveRegion(tester, find.text(msg)), isTrue);
+      expect(find.textContaining('SECRET_TABLE_X'), findsNothing);
       expect(reported.map((f) => f.origin), ['CoachPackagesScreen._PackageEditor._save']);
       // Still open, not spinning: the Save button is back.
       expect(find.textContaining(RegExp(r'^Save ')), findsOneWidget,
           reason: 'THE defect: the Save button spun for good');
       expect(find.text('Strength Block'), findsOneWidget, reason: 'what was typed stays');
+
+      // The next attempt clears it while in flight; a success closes the sheet.
+      svc
+        ..saveError = null
+        ..hold = Completer<void>();
+      final save = find.textContaining(RegExp(r'^Save '));
+      await tester.ensureVisible(save);
+      await tester.tap(save);
+      await tester.pump();
+      expect(find.text(msg), findsNothing, reason: 'r2 F1: cleared on the next attempt');
+      svc.hold!.complete();
+      await tester.pumpAndSettle();
+      expect(svc.saves, 2);
+      expect(find.textContaining(RegExp(r'^Save ')), findsNothing);
+      expect(reported, hasLength(1));
+    });
+
+    testWidgets('negative control: a fresh editor says no failure', (tester) async {
+      final reported = _sink();
+      await open(tester);
+      await tester.tap(find.text('New Package'));
+      await tester.pumpAndSettle();
+      expect(_inSheet(find.textContaining(RegExp(r'^Save '))), findsOneWidget);
+      expect(_inSheet(find.textContaining("Couldn't")), findsNothing);
+      expect(reported, isEmpty);
     });
 
     testWidgets('positive control: a save that works closes the editor', (tester) async {

@@ -201,6 +201,8 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
     for (final t in PackageService.sessionTiers) t: TextEditingController(),
   };
   bool _saving = false;
+  /// The last save's failure, said above the Save button (P0-FL-53b r2).
+  String? _error;
   bool _tiersLoaded = false;
 
   @override
@@ -243,7 +245,7 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
 
   Future<void> _save() async {
     if (_saving) return;
-    setState(() => _saving = true);
+    setState(() { _saving = true; _error = null; });
     final svc = ref.read(packageServiceProvider);
     // P0-FL-53b · a failed save escaped unhandled: the button spun for good
     // and nothing was said. Now it is recorded and said, and the sheet stays
@@ -278,10 +280,11 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
     } catch (e, st) {
       reportError('CoachPackagesScreen._PackageEditor._save', e, st);
       if (!mounted) return;
-      setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Semantics(
-          liveRegion: true,
-          child: Text(couldntMessage('save this package', e)))));
+      // Said inside the sheet: a SnackBar would sit on the Scaffold under it.
+      setState(() {
+        _saving = false;
+        _error = couldntMessage('save this package', e);
+      });
       return;
     }
     if (mounted) { setState(() => _saving = false); Navigator.pop(context, true); }
@@ -539,6 +542,11 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
             ],
 
             const SizedBox(height: 16),
+            if (_error != null) ...[
+              Semantics(liveRegion: true, child: Text(_error!,
+                  style: const TextStyle(color: Color(0xFFFFB4AB), fontSize: 13, height: 1.35))),
+              const SizedBox(height: 12),
+            ],
             SizedBox(width: double.infinity, child: ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: _brand, foregroundColor: _white,
                   padding: const EdgeInsets.symmetric(vertical: 14),

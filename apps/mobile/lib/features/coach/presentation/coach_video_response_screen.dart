@@ -12,6 +12,7 @@ const _brand = Color(0xFFA855F7);
 const _tert  = Color(0xFF6FFBBE);
 const _wht   = Colors.white;
 const _mut   = Color(0xFFCFC2D6);
+const _warn  = Color(0xFFF59E0B); // AppTheme.warning
 
 // ── UC18: Coach Video Response ────────────────────────────────────────────────
 class CoachVideoResponseScreen extends StatefulWidget {
@@ -270,17 +271,25 @@ class _DoneView extends StatelessWidget {
   Widget build(BuildContext context) => Center(child: Padding(
     padding: const EdgeInsets.all(32),
     child: Column(mainAxisSize: MainAxisSize.min, children: [
+      // P0-FL-53b r2 · not notified: the warning colour and icon, a next step,
+      // and a live region (the Done view replaces the form, so nothing else
+      // would announce it). The notified path is unchanged.
       Container(width: 80, height: 80, decoration: BoxDecoration(
-        color: _tert.withValues(alpha: 0.15), shape: BoxShape.circle),
-        child: const Icon(Icons.check_rounded, color: _tert, size: 44)),
+        color: (notified ? _tert : _warn).withValues(alpha: 0.15), shape: BoxShape.circle),
+        child: notified
+            ? const Icon(Icons.check_rounded, color: _tert, size: 44)
+            : const Icon(Icons.warning_amber_rounded, color: _warn, size: 44)),
       const SizedBox(height: 20),
       const Text('Video Sent!', style: TextStyle(color: _wht, fontSize: 24, fontWeight: FontWeight.w800)),
       const SizedBox(height: 8),
       // P0-FL-53b · "has been notified" only when the notification was sent.
-      Text(notified
-          ? '$clientName has been notified and can watch your response.'
-          : "Your response is saved, but $clientName wasn't notified.",
-        style: const TextStyle(color: _mut, fontSize: 14), textAlign: TextAlign.center),
+      if (notified)
+        Text('$clientName has been notified and can watch your response.',
+          style: const TextStyle(color: _mut, fontSize: 14), textAlign: TextAlign.center)
+      else
+        Semantics(liveRegion: true, child: Text(
+          "Your response is saved, but $clientName wasn't notified — let them know another way.",
+          style: const TextStyle(color: _warn, fontSize: 14), textAlign: TextAlign.center)),
       const SizedBox(height: 32),
       SizedBox(width: double.infinity, child: ElevatedButton(
         onPressed: onDone,
