@@ -429,9 +429,12 @@ void main() {
       await pumpUntil(t, () => server.storage.isNotEmpty, what: 'the upload');
       await signInB(t);
       server.uploadGate!.complete();
-      await recorded(t, cleanup);
+      await pumpUntil(
+          t, () => server.writes.isNotEmpty || origins().contains(cleanup),
+          what: 'the refusal');
       expect(server.writes, isEmpty,
           reason: 'THE defect: a row as B, plus the preview PATCH');
+      await recorded(t, cleanup);
       expect(server.storage, ['POST']);
       expect(origins(), ['ChatScreen._sendPhoto', cleanup]);
       expect((reported.first.error as StateError).message,
