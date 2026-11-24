@@ -389,7 +389,11 @@ void main() {
           find.text("Couldn't prepare this exercise for AI enrichment — $_generic"),
           findsOneWidget);
       expect(find.text('Coaching content generated ✨'), findsNothing);
-      expect(origins(), ['ExerciseDetail.enrich.slug']);
+      // P0-FL-57a · the service records the failed write too.
+      expect(origins(), [
+        'CustomExerciseService.updateExercise',
+        'ExerciseDetail.enrich.slug',
+      ]);
       await unmount(tester);
     });
 

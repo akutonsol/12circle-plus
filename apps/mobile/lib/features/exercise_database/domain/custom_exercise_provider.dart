@@ -1,12 +1,23 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../data/custom_exercise_service.dart';
 import '../data/models/exercise_detail_model.dart';
 
 final customExerciseSvcProvider = Provider<CustomExerciseService>((_) => CustomExerciseService());
 
+/// Who is signed in, by id: a token refresh or a profile edit is the same
+/// coach, so it neither re-reads the list nor drops the exercise being opened.
+final _signedInUid = Provider<String?>(
+    (ref) => ref.watch(currentUserProvider.select((u) => u?.id)));
+
 // Id of the exercise to edit — set before navigating to the create/edit screen.
-final editingExerciseProvider = StateProvider<String?>((ref) => null);
+// P0-FL-57a · cleared when the signed-in coach changes: the next one's "create"
+// opened as an edit of the last one's exercise.
+final editingExerciseProvider = StateProvider<String?>((ref) {
+  ref.watch(_signedInUid);
+  return null;
+});
 
 // Coach's own exercises
 final myExercisesProvider = FutureProvider<List<ExerciseDetail>>((ref) async {
@@ -34,13 +45,21 @@ class MyExercisesNotifier extends StateNotifier<AsyncValue<List<ExerciseDetail>>
     _load();
   }
 
+  int _loadSeq = 0;
+
+  /// P0-FL-57a · only the newest load, for the coach it was started for, is
+  /// shown. A failed re-read keeps the list already shown, beside the error.
   Future<void> _load() async {
-    state = const AsyncValue.loading();
+    final seq = ++_loadSeq;
+    state = const AsyncValue<List<ExerciseDetail>>.loading().copyWithPrevious(state);
     try {
       final list = await _svc.getMyExercises();
+      if (!mounted || seq != _loadSeq) return;
       state = AsyncValue.data(list);
     } catch (e, st) {
-      state = AsyncValue.error(e, st);
+      reportError('MyExercisesNotifier.load', e, st);
+      if (!mounted || seq != _loadSeq) return;
+      state = AsyncValue<List<ExerciseDetail>>.error(e, st).copyWithPrevious(state);
     }
   }
 
@@ -65,7 +84,7 @@ class MyExercisesNotifier extends StateNotifier<AsyncValue<List<ExerciseDetail>>
       visibility: fields['visibility'] as String? ?? 'private',
       extra: fields['extra'] as Map<String, dynamic>?,
     );
-    if (id != null) await _load();
+    if (id != null && mounted) await _load();
     return id;
   }
 
@@ -75,20 +94,38 @@ class MyExercisesNotifier extends StateNotifier<AsyncValue<List<ExerciseDetail>>
   /// .lastError] holds why (already recorded).
   Future<bool> delete(String id) async {
     final ok = await _svc.deleteExercise(id);
-    if (ok) state = state.whenData((list) => list.where((e) => e.id != id).toList());
+    if (!ok || !mounted) return ok;
+    final shown = state;
+    if (shown.hasValue) {
+      final kept = AsyncValue.data(
+          shown.requireValue.where((e) => e.id != id).toList());
+      // (whenData drops the list kept beside a failed re-read.)
+      state = shown is AsyncError<List<ExerciseDetail>>
+          ? AsyncValue<List<ExerciseDetail>>.error(shown.error, shown.stackTrace)
+              .copyWithPrevious(kept)
+          : kept;
+    }
+    // A load that started before the delete may still carry the row.
+    if (shown.isLoading) await _load();
     return ok;
   }
 
   Future<bool> submitForGlobal(String id) async {
     final ok = await _svc.submitForGlobalLibrary(id);
-    if (ok) await _load();
+    if (ok && mounted) await _load();
     return ok;
   }
 
   Future<void> refresh() => _load();
 }
 
+// P0-FL-57a · one notifier per signed-in coach: it was built once for the
+// app's lifetime, so the next coach kept the last one's list. The old one is
+// disposed on a switch, and whatever it still had in flight is dropped.
 final myExercisesNotifierProvider =
     StateNotifierProvider<MyExercisesNotifier, AsyncValue<List<ExerciseDetail>>>(
-  (ref) => MyExercisesNotifier(ref.read(customExerciseSvcProvider)),
+  (ref) {
+    ref.watch(_signedInUid);
+    return MyExercisesNotifier(ref.read(customExerciseSvcProvider));
+  },
 );

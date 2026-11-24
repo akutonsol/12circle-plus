@@ -8,7 +8,17 @@ import '../data/models/challenge_model.dart';
 final challengeServiceProvider = Provider<ChallengeService>((ref) => ChallengeService());
 final liveChallengeServiceProvider = Provider<LiveChallengeService>((ref) => LiveChallengeService());
 
-final selectedChallengeProvider = StateProvider<Challenge?>((ref) => null);
+/// Who is signed in, by id: a token refresh or a profile edit is the same
+/// member, so it neither drops the list nor closes the open challenge.
+final _signedInUid = Provider<String?>(
+    (ref) => ref.watch(currentUserProvider.select((u) => u?.id)));
+
+/// The challenge the member opened (their progress, joined, "You" on the
+/// board). Cleared when the signed-in member changes (P0-FL-57a).
+final selectedChallengeProvider = StateProvider<Challenge?>((ref) {
+  ref.watch(_signedInUid);
+  return null;
+});
 final selectedChallengeTabProvider = StateProvider<int>((ref) => 0);
 
 // ── Live challenges from Supabase ─────────────────────────────────────────────
@@ -40,6 +50,9 @@ class ChallengeNotifier extends StateNotifier<List<Challenge>> {
       lastJoinError = e;
       return false;
     }
+    // P0-FL-57a · the join was made, but another member has signed in since:
+    // this list is gone and theirs is not marked joined.
+    if (!mounted) return true;
     state = state.map((c) {
       if (c.id != challengeId) return c;
       return Challenge(
@@ -56,6 +69,7 @@ class ChallengeNotifier extends StateNotifier<List<Challenge>> {
 
   Future<void> updateProgress(String challengeId, double progress) async {
     await _svc.updateProgress(challengeId, progress);
+    if (!mounted) return; // another member has signed in since
     state = state.map((c) {
       if (c.id != challengeId) return c;
       return Challenge(
@@ -70,7 +84,13 @@ class ChallengeNotifier extends StateNotifier<List<Challenge>> {
   }
 }
 
+/// The signed-in member's challenges. P0-FL-57a · it was built once for the
+/// app's lifetime, so the next member was shown the last one's joined state
+/// and progress until their own read landed — for good if it failed. A
+/// different member (or nobody) gets a new, empty notifier; the old one is
+/// disposed, so nothing still in flight for it can land in the new one.
 final challengeNotifierProvider = StateNotifierProvider<ChallengeNotifier, List<Challenge>>((ref) {
+  ref.watch(_signedInUid);
   final svc = ref.watch(liveChallengeServiceProvider);
   final notifier = ChallengeNotifier([], svc);
   // Populate notifier from live DB data as soon as it loads
