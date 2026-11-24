@@ -1,11 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart' show AsyncData;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
+import '../../auth/domain/auth_provider.dart' show confirmedProfileRead;
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const _bg    = Color(0xFF030303);
@@ -48,15 +50,91 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     'Online Only', 'Powerlifting', 'HIIT', 'Yoga', 'Mobility',
   ];
 
+  /// P0-FL-54 · the coach this screen belongs to: the one whose read is in
+  /// flight or whose profile, team and reviews are shown. Null when signed out.
+  ///
+  /// Everything above is State, so it outlived a sign-out/sign-in: coach A's
+  /// bio, price, certifications and photos stayed on screen for coach B, a
+  /// late A read could land after B signed in, and Save/certifications/photo
+  /// wrote A's state with `.eq('id', <B's id>)` — A's data into B's row.
+  String? _owner;
+
+  /// The coach whose data is in the form, team and reviews ([_owner] once
+  /// their read landed). Every write refuses unless the signed-in id is this.
+  String? _loadedFor;
+
+  /// Bumped by every load and by every account change: a read that answers
+  /// after a newer one started (or after the account changed) is dropped.
+  int _loadSeq = 0;
+  StreamSubscription<AuthState>? _authSub;
+
+  /// True while a transformation photo is on its way: a second tap would copy
+  /// the same list and one of the two photos would be lost.
+  bool _uploadingPhoto = false;
+
   @override
   void initState() {
     super.initState();
     _tab = TabController(length: 4, vsync: this);
     _load();
+    // Follow the session every write is filtered by. Same coach (token
+    // refresh, the stream's replay of the current session) changes nothing.
+    _authSub = _db.auth.onAuthStateChange.listen((_) => _followAccount(),
+        onError: (Object e, StackTrace s) =>
+            reportError('CoachBusinessScreen.onAuthStateChange', e, s));
   }
+
+  void _followAccount() {
+    if (!mounted) return;
+    final uid = _db.auth.currentUser?.id;
+    if (uid == _owner) return;
+    _forget();
+    if (uid == null) {
+      _loadSeq++;
+      setState(() {
+        _loading = false;
+        _loadError = _signedOutBody;
+      });
+      return;
+    }
+    _load();
+  }
+
+  /// Nothing of the previous coach's stays: form, lists, team, reviews.
+  void _forget() {
+    for (final c in [_bioCtrl, _priceCtrl, _yearsCtrl, _taglineCtrl]) {
+      c.clear();
+    }
+    _specialties = [];
+    _certifications = [];
+    _profile = null;
+    _team = [];
+    _reviews = [];
+    _owner = null;
+    _loadedFor = null;
+    _priceErrorText = null;
+    _yearsErrorText = null;
+  }
+
+  /// The signed-in coach's id when the shown data is theirs; otherwise says
+  /// why nothing is written and returns null.
+  String? _requireShownCoach(String what) {
+    final uid = _requireSignedIn();
+    if (uid == null) return null;
+    if (uid != _loadedFor) {
+      _say(_otherAccount(what), error: true);
+      return null;
+    }
+    return uid;
+  }
+
+  /// The shown data belongs to the coach signed in now.
+  bool get _showsSignedInCoach =>
+      _loadedFor != null && _loadedFor == _db.auth.currentUser?.id;
 
   @override
   void dispose() {
+    _authSub?.cancel();
     _tab.dispose();
     _bioCtrl.dispose(); _priceCtrl.dispose();
     _yearsCtrl.dispose(); _taglineCtrl.dispose();
@@ -82,6 +160,14 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
   // unless the server returned the row it changed — RLS filters a refused
   // update to 0 rows without an error.
   static const _signedOutMsg = "You're signed out — sign in again to save.";
+  static const _signedOutBody =
+      "You're signed out — sign in again to see your business profile.";
+
+  /// A write refused because the shown profile is no longer the signed-in
+  /// coach's (another account signed in since it was read).
+  static String _otherAccount(String what) =>
+      "Couldn't $what — you're signed in to a different account now. "
+      'Nothing was changed.';
   static const _priceError = 'Enter a monthly price in dollars, e.g. 150.';
   static const _yearsError = 'Enter years of experience as a whole number, e.g. 5.';
   static const _bothError =
@@ -168,29 +254,46 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
   /// can read which `user_profiles` columns this screen writes.
   bool _changedRow(Object? rows) => (rows as List).isNotEmpty;
 
+  /// True while the read numbered [seq] for [uid] is still the one to apply:
+  /// no newer load started and [uid] is still the signed-in coach.
+  bool _isCurrentLoad(int seq, String uid) =>
+      mounted && seq == _loadSeq && _db.auth.currentUser?.id == uid;
+
   Future<void> _load() async {
     final uid = _db.auth.currentUser?.id;
+    final seq = ++_loadSeq;
     if (uid == null) {
+      _forget();
       if (mounted) {
         setState(() {
           _loading = false;
-          _loadError = _signedOutMsg;
+          _loadError = _signedOutBody;
         });
       }
       return;
     }
-    if (_loadError != null && mounted) {
-      setState(() {
-        _loading = true;
-        _loadError = null;
-      });
+    // A refresh of the coach already shown keeps what is shown until the new
+    // read lands (and if it fails). Anyone else starts from nothing.
+    final refresh = _loadedFor == uid;
+    if (!refresh) {
+      _forget();
+      _owner = uid;
+      _loading = true;
+      _loadError = null;
+      if (mounted) setState(() {});
     }
     try {
       final profileData = await _db.from('user_profiles').select('*').eq('id', uid).maybeSingle();
+      if (!_isCurrentLoad(seq, uid)) return;
       if (profileData == null) {
         // No row came back: the profile was not read, so there is nothing
         // the form may show or save over.
         throw StateError('user_profiles: no row for the signed-in coach');
+      }
+      // P0-FL-54: only this coach's own row fills the screen.
+      if (confirmedProfileRead(AsyncData(profileData), _db.auth.currentUser) ==
+          null) {
+        throw StateError('user_profiles: the row read is not the signed-in coach');
       }
       // Wave 1 (migration 132): a team lead no longer reads `user_profiles`, so
       // the embedded resource above this line used to return nothing. D1(iii)
@@ -223,6 +326,9 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
           .select('*, public_profiles!client_id(first_name, last_name, avatar_url)')
           .eq('coach_id', uid)
           .order('created_at', ascending: false);
+      // Every await above is a point where the account can change or a newer
+      // load can start: only the current one is applied.
+      if (!mounted || !_isCurrentLoad(seq, uid)) return;
       final team = teamData;
       final p = profileData;
       _bioCtrl.text = p['bio'] as String? ?? '';
@@ -231,17 +337,24 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       _taglineCtrl.text = p['tagline'] as String? ?? '';
       _specialties = List<String>.from(p['specialties'] as List? ?? []);
       _certifications = List<String>.from(p['certifications'] as List? ?? []);
-      if (!mounted) return;
       setState(() {
         _profile = p;
         _team = List<Map<String, dynamic>>.from(team as List);
         _reviews = List<Map<String, dynamic>>.from(reviewData as List);
+        _owner = uid;
+        _loadedFor = uid;
         _loading = false;
         _loadError = null;
       });
     } catch (e, s) {
       reportError('CoachBusinessScreen._load', e, s);
-      if (!mounted) return;
+      if (!mounted || !_isCurrentLoad(seq, uid)) return;
+      if (_loadedFor == uid) {
+        // A failed refresh of the coach already shown: keep what is shown
+        // (it is still this coach's last confirmed profile) and say so.
+        _say(_couldnt('refresh your business profile', e), error: true);
+        return;
+      }
       setState(() {
         _loading = false;
         _loadError = isNetworkFailure(e) ? _checkConnection : _tryLater;
@@ -276,7 +389,8 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
           error: true);
       return;
     }
-    final uid = _requireSignedIn();
+    // P0-FL-54: the form must be the signed-in coach's (it is what is saved).
+    final uid = _requireShownCoach('save your profile');
     if (uid == null) return;
     final bio = _bioCtrl.text.trim();
     final tagline = _taglineCtrl.text.trim();
@@ -292,6 +406,9 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
         'specialties': specialties,
         'certifications': certifications,
       }).eq('id', uid).select('id'));
+      // The account changed while this was in flight: what is shown now is
+      // another coach's, so nothing here is updated or announced over it.
+      if (_loadedFor != uid) return;
       if (!saved) {
         _say(_couldntNothingChanged('save your profile'), error: true);
         return;
@@ -333,19 +450,31 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       _say(refilled ? _blankKept : 'Profile updated!');
     } catch (e, s) {
       reportError('CoachBusinessScreen._save', e, s);
-      _say(_couldnt('save your profile', e), error: true);
+      if (_loadedFor == uid) {
+        _say(_couldnt('save your profile', e), error: true);
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
   Future<void> _uploadTransformationPhoto() async {
-    final uid = _requireSignedIn();
+    // FL-55: one photo at a time — two uploads each copied the same list and
+    // the second write dropped the first photo.
+    if (_uploadingPhoto) return;
+    // P0-FL-54: the list copied below must be the signed-in coach's.
+    final uid = _requireShownCoach('add the photo');
     if (uid == null) return;
-    final picker = ImagePicker();
-    final img = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
-    if (img == null) return;
+    setState(() => _uploadingPhoto = true);
     try {
+      final picker = ImagePicker();
+      final img = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
+      if (img == null) return;
+      // The picker can stay open a long time: still the same coach?
+      if (!_showsSignedInCoach || _loadedFor != uid) {
+        _say(_otherAccount('add the photo'), error: true);
+        return;
+      }
       // Use bytes + uploadBinary so this works on web as well as native.
       final bytes = await img.readAsBytes();
       final ext = (img.name.contains('.') ? img.name.split('.').last : 'jpg').toLowerCase();
@@ -353,6 +482,12 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       await _db.storage.from('coach-media').uploadBinary(path, bytes,
           fileOptions: FileOptions(contentType: 'image/$ext', upsert: true));
       final url = _db.storage.from('coach-media').getPublicUrl(path);
+      // The list is copied from the profile shown, so it must still be this
+      // coach's — otherwise another coach's photos would be written here.
+      if (!_showsSignedInCoach || _loadedFor != uid) {
+        _say(_otherAccount('add the photo'), error: true);
+        return;
+      }
       final current = List<String>.from(_profile?['transformation_photo_urls'] as List? ?? []);
       current.add(url);
       final saved = _changedRow(await _db
@@ -360,15 +495,24 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
           .update({'transformation_photo_urls': current})
           .eq('id', uid)
           .select('id'));
+      if (!mounted || _loadedFor != uid) return; // another coach is shown now
       if (!saved) {
         _say(_couldntNothingChanged('add the photo'), error: true);
         return;
       }
-      await _load();
+      // What the server now holds, kept even if the refresh below fails.
+      setState(() => _profile = {...?_profile, 'transformation_photo_urls': current});
       _say('Photo added');
+      await _load();
     } catch (e, s) {
       reportError('CoachBusinessScreen._uploadTransformationPhoto', e, s);
-      _say(_couldnt('add the photo', e), error: true);
+      if (_loadedFor == uid) _say(_couldnt('add the photo', e), error: true);
+    } finally {
+      if (mounted) {
+        setState(() => _uploadingPhoto = false);
+      } else {
+        _uploadingPhoto = false;
+      }
     }
   }
 
@@ -377,10 +521,17 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
 
   // Certifications persist immediately (no dependence on the Save button, and
   // safe against a reload re-reading the list from the DB).
-  Future<void> _persistCerts(List<String> next, {required String what}) async {
+  Future<void> _persistCerts(List<String> next,
+      {required String what, String? forCoach}) async {
     if (_certWriteInFlight || _saving) return;
-    final uid = _requireSignedIn();
+    // P0-FL-54: [next] is built from the list shown, so it must be the
+    // signed-in coach's — and, from the dialog, the coach it was opened for.
+    final uid = _requireShownCoach(what);
     if (uid == null) return;
+    if (forCoach != null && forCoach != uid) {
+      _say(_otherAccount(what), error: true);
+      return;
+    }
     final prev = List<String>.from(_certifications);
     setState(() {
       _certWriteInFlight = true;
@@ -404,16 +555,19 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
         _certWriteInFlight = false;
       }
     }
-    if (failure != null && mounted) {
+    // Rolled back only onto the same coach's list: after an account change
+    // the list shown is another coach's (and `prev` is not theirs).
+    if (failure != null && mounted && _loadedFor == uid) {
       setState(() => _certifications = prev);
       _say(failure, error: true);
     }
   }
 
-  Future<void> _addCertification(String cert) {
+  Future<void> _addCertification(String cert, {String? forCoach}) {
     final c = cert.trim();
     if (c.isEmpty || _certifications.contains(c)) return Future.value();
-    return _persistCerts([..._certifications, c], what: 'add the certification');
+    return _persistCerts([..._certifications, c],
+        what: 'add the certification', forCoach: forCoach);
   }
 
   Future<void> _removeCertification(String cert) =>
@@ -422,6 +576,10 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
 
   @override
   Widget build(BuildContext context) {
+    // P0-FL-54: between a sign-in and its auth event reaching this screen the
+    // data may still be the previous coach's — it is not shown meanwhile.
+    final loading = _loading ||
+        (_loadError == null && _loadedFor != null && !_showsSignedInCoach);
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
@@ -431,7 +589,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
           onPressed: () => Navigator.pop(context)),
         title: const Text('Business Profile', style: TextStyle(color: _wht, fontSize: 17, fontWeight: FontWeight.w700)),
         actions: [
-          if (!_loading && _loadError == null) TextButton(
+          if (!loading && _loadError == null) TextButton(
             onPressed: _saving || _certWriteInFlight ? null : _save,
             child: _saving
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: _brand, strokeWidth: 2))
@@ -444,7 +602,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
           tabs: const [Tab(text: 'Profile'), Tab(text: 'Specialties'), Tab(text: 'Team'), Tab(text: 'Reviews')],
         ),
       ),
-      body: _loading
+      body: loading
           ? const Center(child: CircularProgressIndicator(
               color: _brand, semanticsLabel: 'Loading your business profile'))
           : _loadError != null
@@ -462,6 +620,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
                 onAddCert: () => _showAddCert(),
                 onRemoveCert: _removeCertification,
                 onAddPhoto: _uploadTransformationPhoto,
+                uploadingPhoto: _uploadingPhoto,
               ),
               _SpecialtiesTab(selected: _specialties, all: _specialtyOptions, onToggle: _toggleSpecialty),
               _TeamTab(team: _team, onInvite: _showInviteTeam),
@@ -473,16 +632,22 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
   Future<void> _showAddCert() async {
     // The dialog owns its controller: disposing it here as soon as the route
     // popped left the closing animation rendering a disposed controller.
+    // P0-FL-54: what is typed here is for the coach shown when it opened.
+    final forCoach = _loadedFor;
     final text = await showDialog<String>(
         context: context,
         builder: (_) =>
             _AddCertDialog(existing: List<String>.unmodifiable(_certifications)));
-    if (text != null && text.isNotEmpty) await _addCertification(text);
+    if (text != null && text.isNotEmpty) {
+      await _addCertification(text, forCoach: forCoach);
+    }
   }
 
   void _showInviteTeam() => showDialog(context: context, builder: (dctx) {
     final ctrl = TextEditingController();
     final messenger = ScaffoldMessenger.of(context);
+    // P0-FL-54: the invite joins the team of the coach shown when it opened.
+    final forCoach = _loadedFor;
     return AlertDialog(
       backgroundColor: _card,
       title: const Text('Invite Team Member', style: TextStyle(color: _wht)),
@@ -497,6 +662,11 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
           final uid = _db.auth.currentUser?.id;
           if (uid == null) {
             messenger.showSnackBar(_snack(_signedOutMsg, error: true));
+            return;
+          }
+          if (uid != forCoach || uid != _loadedFor) {
+            messenger.showSnackBar(
+                _snack(_otherAccount('save the invite'), error: true));
             return;
           }
           try {
@@ -622,11 +792,13 @@ class _ProfileTab extends StatelessWidget {
   final List<String> certifications, transformationUrls;
   final VoidCallback onAddCert, onAddPhoto;
   final void Function(String) onRemoveCert;
+  final bool uploadingPhoto;
   const _ProfileTab({
     required this.bioCtrl, required this.priceCtrl, required this.yearsCtrl,
     required this.taglineCtrl, required this.certifications,
     required this.transformationUrls, required this.onAddCert,
     required this.onRemoveCert, required this.onAddPhoto,
+    required this.uploadingPhoto,
     required this.priceFocus, required this.yearsFocus,
     required this.onPriceChanged, required this.onYearsChanged,
     this.priceError, this.yearsError,
@@ -666,16 +838,33 @@ class _ProfileTab extends StatelessWidget {
               borderRadius: BorderRadius.circular(12),
               image: DecorationImage(image: NetworkImage(url), fit: BoxFit.cover)),
           )),
-          GestureDetector(
-            onTap: onAddPhoto,
-            child: Container(
-              width: 100, height: 120,
-              decoration: BoxDecoration(color: _card, borderRadius: BorderRadius.circular(12), border: Border.all(color: _brd, style: BorderStyle.solid)),
-              child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                Icon(Icons.add_photo_alternate_rounded, color: _mut, size: 28),
-                SizedBox(height: 4),
-                Text('Add Photo', style: TextStyle(color: _mut, fontSize: 11)),
-              ]),
+          // FL-55: a labelled button, disabled and announced while a photo is
+          // on its way (a second tap used to start a second upload).
+          Semantics(
+            button: true,
+            enabled: !uploadingPhoto,
+            liveRegion: uploadingPhoto,
+            label: uploadingPhoto
+                ? 'Adding transformation photo'
+                : 'Add transformation photo',
+            excludeSemantics: true,
+            onTap: uploadingPhoto ? null : onAddPhoto,
+            child: GestureDetector(
+              onTap: uploadingPhoto ? null : onAddPhoto,
+              child: Container(
+                width: 100, height: 120,
+                decoration: BoxDecoration(color: _card, borderRadius: BorderRadius.circular(12), border: Border.all(color: _brd, style: BorderStyle.solid)),
+                child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  uploadingPhoto
+                      ? const SizedBox(width: 28, height: 28,
+                          child: CircularProgressIndicator(color: _brand, strokeWidth: 2))
+                      : const Icon(Icons.add_photo_alternate_rounded, color: _mut, size: 28),
+                  const SizedBox(height: 4),
+                  Text(uploadingPhoto ? 'Adding…' : 'Add Photo',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: _mut, fontSize: 11)),
+                ]),
+              ),
             ),
           ),
         ],
