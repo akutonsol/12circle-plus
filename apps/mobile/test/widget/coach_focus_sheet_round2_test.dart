@@ -248,6 +248,31 @@ void main() {
       await unmount(tester);
     });
 
+    testWidgets('r3: applying a saved pack clears a pack-save failure',
+        (tester) async {
+      server.reads['coach_exercise_media'] = _row();
+      server.reads['coach_coaching_packs'] = [
+        {'id': 'p1', 'name': 'Hinge cues', 'cues': ['Hips back', 'Neutral spine']}
+      ];
+      await mount(tester);
+      await openEditor(tester);
+      await tester.enterText(focusField(), 'Brace\nDrive');
+      server.mode = WriteMode.serverError;
+      server.modeAppliesTo = (w) => w.contains('coach_coaching_packs');
+      await savePack(tester, 'Squat cues');
+      final msg = "Couldn't save your cue pack — $_generic";
+      expect(find.text(msg), findsOneWidget, reason: 'premise');
+      await tester.ensureVisible(find.text('Hinge cues'));
+      await tester.tap(find.text('Hinge cues'));
+      await tester.pump();
+      expect(tester.widget<TextField>(focusField()).controller!.text,
+          'Hips back\nNeutral spine', reason: 'premise: the pack applied');
+      expect(find.text(msg), findsNothing,
+          reason: 'QA r2 gap (mutant 9): a stale failure stayed after a pack '
+              'replaced the cues');
+      await unmount(tester);
+    });
+
     testWidgets('a 0-row pack save through the sheet is said (QA gap)',
         (tester) async {
       server.reads['coach_exercise_media'] = _row();
