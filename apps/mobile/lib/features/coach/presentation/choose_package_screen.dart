@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../shared/theme/app_background.dart';
+import '../../auth/domain/auth_provider.dart';
+import '../../payments/data/payment_service.dart' show CheckoutRefused;
 import '../../payments/domain/payment_provider.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../domain/package_provider.dart';
 
 const _card   = Color(0xFF0E0B16);
@@ -41,8 +45,24 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
   final Set<int> _days = {};
   TimeOfDay _time = const TimeOfDay(hour: 7, minute: 0); // default for new days
   final Map<int, TimeOfDay> _dayTimes = {};             // per-day override
-  bool _seeded = false;
   bool _saving = false;
+
+  /// P0-FL-56b: what is on this screen (the chosen package, days, times)
+  /// belongs to [_seedFor], the client signed in now; [_seedSeq] discards a
+  /// late answer for an earlier client or an earlier try.
+  bool _seedStarted = false;
+  String? _seedFor;
+  int _seedSeq = 0;
+
+  /// The client's schedule was read (a genuine "none yet" included). Until then
+  /// the days are not offered and Save is paused: saving replaces the whole
+  /// schedule, so it must not be built on one that was not read.
+  bool _seedReady = false;
+  bool _seedLoading = false;
+  Object? _seedError;
+
+  /// The last save's failure, said above the button.
+  String? _saveError;
 
   TimeOfDay _parseTime(String t) => TimeOfDay(
         hour: int.tryParse(t.split(':')[0]) ?? 7,
@@ -50,12 +70,47 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
   String _fmt(TimeOfDay t) =>
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
+  /// Called from build: the first load, and again for another client.
+  void _followClient(String? uid) {
+    if (_seedStarted && _seedFor == uid) return;
+    _seedStarted = true;
+    _seedFor = uid;
+    _selected = null;
+    _currentPackageId = null;
+    _days.clear();
+    _dayTimes.clear();
+    _time = const TimeOfDay(hour: 7, minute: 0);
+    _saving = false;
+    _saveError = null;
+    _seedReady = false;
+    _seedError = null;
+    _seedDays();
+  }
+
   Future<void> _seedDays() async {
-    if (_seeded) return;
-    _seeded = true;
+    final seq = ++_seedSeq;
+    _seedLoading = true;
     final svc = ref.read(packageServiceProvider);
-    // Prefer an existing schedule; else seed from onboarding days/week.
-    final existing = await svc.getMySchedule();
+    final Map<String, dynamic>? existing;
+    var onboardingDays = 0;
+    try {
+      // Prefer an existing schedule; else seed from onboarding days/week.
+      existing = await svc.getMySchedule();
+      if ((existing?['days'] as List?)?.isNotEmpty != true) {
+        onboardingDays = await svc.getOnboardingTrainingDays();
+      }
+    } catch (e, st) {
+      // P0-FL-56b: this escaped unhandled; the days read as none, the current
+      // plan as no plan, and saving replaced a schedule that was never read.
+      reportError('ChoosePackageScreen._seedDays', e, st);
+      if (!mounted || seq != _seedSeq) return;
+      setState(() {
+        _seedLoading = false;
+        _seedError = e;
+      });
+      return;
+    }
+    if (!mounted || seq != _seedSeq) return;
     _currentPackageId = existing?['package_id'] as String?;
     if (existing != null && (existing['days'] as List?)?.isNotEmpty == true) {
       _days.addAll((existing['days'] as List)
@@ -71,19 +126,36 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
         }
       }
     } else {
-      final n = await svc.getOnboardingTrainingDays();
-      _days.addAll(_defaultSpread[n.clamp(0, 7)] ?? const []);
+      _days.addAll(_defaultSpread[onboardingDays.clamp(0, 7)] ?? const []);
     }
     // Every selected day needs a time (fall back to the default).
     for (final i in _days) {
       _dayTimes[i] ??= _time;
     }
-    if (mounted) setState(() {});
+    setState(() {
+      _seedLoading = false;
+      _seedError = null;
+      _seedReady = true;
+    });
   }
 
   Future<void> _save() async {
-    if (_selected == null || _days.isEmpty) return;
-    setState(() => _saving = true);
+    if (_selected == null || _days.isEmpty || _saving || !_seedReady) return;
+    final client = _seedFor;
+    // The sign-in this save belongs to: after A → B → A the client is A again,
+    // but the screen was reset and this save is not the one on it (P0-FL-56b).
+    final seq = _seedSeq;
+    if (ref.read(currentUserProvider)?.id != client) return;
+    // Read now: leaving the screen mid-save must not leave the saved schedule
+    // unread elsewhere, and `ref` is unusable after dispose.
+    final container = ProviderScope.containerOf(context, listen: false);
+    final svc = ref.read(packageServiceProvider);
+    final payments = ref.read(paymentServiceProvider);
+    final selected = _selected!;
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
     final dayTimes = <String, String>{
       for (final i in _days) _dayKeys[i]: _fmt(_dayTimes[i] ?? _time),
     };
@@ -91,19 +163,35 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
     final baseTime = _fmt(_dayTimes[sorted.first] ?? _time);
     // Save the schedule first so the client's choice isn't lost if they bail at
     // the payment step (they can return and pay later).
-    await ref.read(packageServiceProvider).saveSchedule(
-          coachId: widget.coachId,
-          packageId: _selected!['id'] as String?,
-          days: _days.map((i) => _dayKeys[i]).toList(),
-          sessionTime: baseTime,
-          dayTimes: dayTimes,
-        );
-    ref.invalidate(myScheduleProvider);
+    try {
+      await svc.saveSchedule(
+        coachId: widget.coachId,
+        packageId: selected['id'] as String?,
+        days: _days.map((i) => _dayKeys[i]).toList(),
+        sessionTime: baseTime,
+        dayTimes: dayTimes,
+      );
+    } catch (e, st) {
+      // P0-FL-56b: a failed save escaped unhandled and the button spun for
+      // good. Nothing was confirmed saved, so neither booking nor payment
+      // follows; what the client chose stays.
+      reportError('ChoosePackageScreen._save', e, st);
+      if (!mounted || seq != _seedSeq) return;
+      setState(() {
+        _saving = false;
+        _saveError = couldntMessage('save your schedule', e);
+      });
+      return;
+    }
+    container.invalidate(myScheduleProvider);
+    // Left, or another client signed in: no booking or payment for them.
+    if (!mounted || ref.read(currentUserProvider)?.id != client) return;
+    // Signed out and in again: a save started since may pay for this too.
+    if (seq != _seedSeq) return;
 
-    final price = (_selected!['price'] as num?)?.toDouble() ?? 0;
+    final price = (selected['price'] as num?)?.toDouble() ?? 0;
     // Free package (price 0) — nothing to charge. Hand off to booking.
     if (price <= 0) {
-      if (!mounted) return;
       setState(() => _saving = false);
       context.go('/booking-handoff');
       return;
@@ -111,27 +199,52 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
 
     // Paid package → Stripe Checkout. The webhook activates the coaching
     // relationship + grants session credits once payment succeeds.
-    final ok = await ref.read(paymentServiceProvider).startCheckout(
-          kind: 'package',
-          packageId: _selected!['id'] as String?,
-        );
-    if (!mounted) return;
+    var problem = 'Schedule saved, but we couldn’t open checkout. Please try again.';
+    var ok = false;
+    try {
+      ok = await payments.startCheckout(
+        kind: 'package',
+        packageId: selected['id'] as String?,
+      );
+    } on CheckoutRefused catch (e) {
+      // The server's answer (the client already has this plan): trying again
+      // would never work, so the reason is said, as launchCheckout does.
+      problem = 'Schedule saved. ${e.message}';
+    } catch (e, st) {
+      reportError('ChoosePackageScreen._save.checkout', e, st);
+    }
+    if (!mounted || seq != _seedSeq) return;
     setState(() => _saving = false);
     if (ok) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Schedule saved — complete payment to activate your coaching.')));
       Navigator.pop(context);
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Schedule saved, but we couldn’t open checkout. Please try again.'),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Semantics(liveRegion: true, child: Text(problem)),
           backgroundColor: Colors.red));
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    _seedDays();
+    _followClient(ref.watch(currentUserProvider)?.id);
     final pkgsAsync = ref.watch(coachPackagesProvider(widget.coachId));
+    // A coach's published packages are the same for every client, so what was
+    // read stays through a failed re-read (P0-FL-56b).
+    final pkgs = pkgsAsync.hasValue ? pkgsAsync.value : null;
+    final failure = !pkgsAsync.hasError
+        ? null
+        : SectionLoadFailure(
+            what: 'packages',
+            error: pkgsAsync.error,
+            busy: pkgsAsync.isLoading,
+            onRetry: () => ref.invalidate(coachPackagesProvider(widget.coachId)),
+            accent: _brand,
+            textColor: _white,
+            mutedColor: _muted,
+            detail: pkgs == null ? null : 'The list below may be out of date.',
+          );
     return AppGradientBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
@@ -141,12 +254,16 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
           title: Text('Train with ${widget.coachName}',
               style: const TextStyle(color: _white, fontWeight: FontWeight.w700)),
         ),
-        body: pkgsAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
-          error: (e, _) => Center(child: Text('Could not load packages.',
-              textAlign: TextAlign.center, style: const TextStyle(color: _muted))),
-          data: (pkgs) {
-            if (pkgs.isEmpty) {
+        body: Builder(
+          builder: (context) {
+            if (pkgs == null) {
+              return failure == null
+                  ? const Center(child: CircularProgressIndicator(color: _brand))
+                  : ListView(
+                      padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
+                      children: [failure]);
+            }
+            if (pkgs.isEmpty && failure == null) {
               return const Center(child: Padding(padding: EdgeInsets.all(32),
                 child: Text('This coach hasn’t published any packages yet.',
                     textAlign: TextAlign.center, style: TextStyle(color: _muted))));
@@ -166,11 +283,29 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
                 const Text('Choose a package',
                     style: TextStyle(color: _white, fontSize: 18, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 12),
+                if (failure != null) ...[failure, const SizedBox(height: 8)],
                 ...pkgs.map((p) => _pkgCard(p)),
                 const SizedBox(height: 24),
                 const Text('Your training schedule',
                     style: TextStyle(color: _white, fontSize: 18, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 4),
+                if (!_seedReady && _seedError != null)
+                  SectionLoadFailure(
+                    what: 'your training schedule',
+                    error: _seedError,
+                    busy: _seedLoading,
+                    onRetry: () => setState(() { _seedDays(); }),
+                    accent: _brand,
+                    textColor: _white,
+                    mutedColor: _muted,
+                    detail: 'Saving is paused until it loads.',
+                  )
+                else if (!_seedReady)
+                  const Center(child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: CircularProgressIndicator(
+                        color: _brand, semanticsLabel: 'Loading your training schedule')))
+                else ...[
                 const Text('We pre-filled this from your onboarding — confirm or change your days, then set a time for each.',
                     style: TextStyle(color: _muted, fontSize: 13, height: 1.4)),
                 const SizedBox(height: 12),
@@ -194,15 +329,21 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
                 _daysPicker(),
                 const SizedBox(height: 16),
                 _perDayTimes(),
+                ],
                 const SizedBox(height: 24),
+                if (_saveError != null) ...[
+                  Semantics(liveRegion: true, child: Text(_saveError!,
+                      style: const TextStyle(color: Color(0xFFFFB4AB), fontSize: 13, height: 1.35))),
+                  const SizedBox(height: 12),
+                ],
                 SizedBox(width: double.infinity, child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _brand, foregroundColor: _white,
                     padding: const EdgeInsets.symmetric(vertical: 15),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-                  onPressed: (_selected == null || _days.isEmpty || _saving) ? null : _save,
+                  onPressed: (_selected == null || _days.isEmpty || _saving || !_seedReady) ? null : _save,
                   child: _saving
-                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: _white))
+                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: _white, semanticsLabel: 'Saving'))
                       : Text(_buttonLabel(),
                           style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
                 )),
@@ -309,9 +450,10 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
         padding: const EdgeInsets.only(bottom: 8),
         child: GestureDetector(
           onTap: () async {
+            final seq = _seedSeq;
             final t = await showTimePicker(
                 context: context, initialTime: _dayTimes[i] ?? _time);
-            if (t != null && mounted) setState(() { _dayTimes[i] = t; _time = t; });
+            if (t != null && mounted && seq == _seedSeq) setState(() { _dayTimes[i] = t; _time = t; });
           },
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
