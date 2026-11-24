@@ -263,6 +263,67 @@ Runtime (device/simulator/live QA): **not performed**; journey completion unchan
 
 **Runtime evidence:** none (no device, simulator or live QA). Journeys are unchanged at 2 of 14 and beta conditions at 0 of 4.
 
+## Cycle 12 log (2026-11-24): P0-FL-56a, P0-FL-56b, P0-FL-57a, P0-FL-57b, P0-FL-58
+
+**How the cycle ran.**
+- The base was checked first: `origin/integration/p0-flutter-stack-c11` = `f191d48`, and `-c12` did not exist. #209–#213 were open and unmerged with no auto-merge. Every package started from `f191d48` and targets `-c11`. Earlier cycle branches and PRs, main and #14 were not touched.
+- Five engineers ran in parallel in separate worktrees (`pkg-b1`…`pkg-b5`), with no file touched by two packages. Two shared-file items were assigned by file: `enrichWithAI` and `updateExercise` went to 57a, and the video record/pick catches went to 58.
+- Each package got independent UX, security and QA review. Fix rounds and narrow re-checks ran until QA was VERIFIED at the final head. Reviews ran in waves of at most two full suites, because five parallel suites took the disk to 220 MB.
+- Security REJECTED FL-57b round 1 for a regression: a late keystroke from A was saved into B's row after a switch. It also found an ambiguous error that deleted a photo whose update had landed. Both were fixed in round 2, the bare-status remainder in round 3, and security then gave **APPROVE**.
+- QA found FL-56b NOT VERIFIED. Provider tear-offs had blinded `per_user_provider_scope_test`, and QA proved it by removing each watch. The call form restored the guard.
+- The lead ran mutants at every round's head with test lists from each package's test diff, plus every reviewer-proposed mutant. CI's negative controls and the static guards were run locally on the combined head.
+- SEC-R3 paths and Women's Health (incl. `home_screen.dart:817`) were not touched. Action Center was not touched. There was no storage policy or backend authorization change.
+- **Combined branch `integration/p0-flutter-stack-c12`** @ `a82f993`: 5557 tests (= 4917 + 98 + 117 + 116 + 100 + 209), analyze 284, guards 0, negative controls 0, contract exit 0 (unseen 31), coordinator 268/268, CI CI 7/7 (run 45437860682).
+
+| Package | Agent | Branch, final head, PR | Tests (full) | Independent review (final head) | Lead mutants | CI (exact head) |
+|---|---|---|---|---|---|---|
+| P0-FL-57a challenges and own exercises follow sign-in; a late join awards nobody else; voice-note delete checked; exercise service records | engineer, 2 rounds | `fix/member-state-follows-signin` `fc32118` → **#214** | 5015 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 11/11 · 11/11 + QA 7/7 | 7/7 `45426409472` |
+| P0-FL-56b package writes 0-row checked; tier read gates Save (no wipe); partial tier save named; marketplace/choose-package failures said; stale save cannot reach checkout | engineer, 2 rounds | `fix/packages-pricing-failures-said` `ace9295` → **#215** | 5034 | UX PASS · sec APPROVE-WITH-NOTES · QA VERIFIED (NOT VERIFIED at r1) | 9/12 → 9/12 (3 explained) + QA 5/5 + 1/1 | 7/7 `45428406655` |
+| P0-FL-56a every photo/video picker says what happened; member fixed before the pick, re-checked after upload; trusted cleanup | engineer, 2 rounds | `fix/photo-pickers-say-what-happened` `feb216c` → **#216** | 5033 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 9/10 → 11/11 + QA 9/9 | 7/7 `45431012051` |
+| P0-FL-57b Business Profile keeps unsaved edits, closes stale dialogs, never orphans or loses a photo | engineer, 3 rounds | `fix/coach-business-edits-and-orphans` `c959d4a` → **#218** | 5017 | UX PASS-WITH-NOTES · sec APPROVE (REJECT at r1) · QA VERIFIED | 8/8 · 10/10 · 12/12 | 7/7 `45435339840` |
+| P0-FL-58 Activity, Availability, Video Response, Coach Focus: 44px targets, labels, fit to 3×; note-only Send; video failures said | engineer, 2 rounds | `fix/activity-availability-video-fit` `b1996f2` → **#217** | 5126 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 10/11 → 11/11 + QA 8/8 | 7/7 `45433049005` |
+
+**Surviving mutants at final heads:** three in FL-56b, none a missed behaviour. 56b-6 is equivalent, 56b-8 is unreachable, and 56b-9 is redundant: it is caught when combined with its neighbour. **Flakes:** none.
+
+**Runtime evidence:** none (no device, simulator or live QA). Journeys stay at 2 of 14 and beta conditions at 0 of 4.
+
+### Backlog after cycle 12 (decision-free first)
+
+1. **P0-FL-59: account-switch sweep, HIGH items.**
+   - Workout and rest-timer state.
+   - `selectedConversationProvider`.
+   - Intake save-on-pause.
+   - The load-as-A-save-as-current screens: `coach_availability`, `integrations`, `coach_pricing_sheet`.
+   - The `create_exercise_screen` open form.
+   - `challenge_card` and Activity join feedback.
+2. **P0-FL-60: remaining swallows.**
+   - Activity streak and upcoming reads.
+   - `AiNutritionNotifier`.
+   - `StorageException` hint.
+   - Other `PaymentService` catches, and `startCheckout` after a switch.
+   - Invite email `catch (_)`.
+   - `coach_voice.dart` catches.
+   - `create_exercise_screen` double recording.
+   - Progress member keying.
+3. **P0-FL-61: shared accessibility.**
+   - `SectionLoadFailure` screen-reader tap.
+   - `coach_voice.dart` recorder and player.
+   - Bell reduce-motion.
+   - Scan idle view at 2×, and a missing calorie value reading as 0.
+4. **Needs Julia.**
+   - **Carried over:** everything listed after cycle 11.
+   - **New this cycle:**
+     - Business Profile two-device edits.
+     - Packages copy and five packages rules.
+     - OD-57 note-only video response.
+     - The Activity water control.
+     - A refused progress row's file.
+   - **Backend items, each a migration:**
+     - Server-side challenge award.
+     - Messages INSERT participant check.
+     - `coach-media` orphan sweep.
+     - Migration 185 on QA.
+
 ### Backlog after cycle 11 (decision-free first)
 
 1. **P0-FL-56: remaining swallows.** Unguarded `pickImage` (`progress_screen` :337/:381, `personal_info` :237, `chat_screen` :265, `ai_nutrition` :84, `ai_scan_view` :177); `package_service` row checks and partial `saveSessionTiers`; `coach_packages` read retry; `coach_marketplace`, `choose_package_screen` `saveSchedule`, `coach_pricing_sheet`; video record/pick; `enrichWithAI`, `updateExercise`; `PaymentService.cancelSubscription` `reportError`.
