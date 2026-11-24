@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 const _bg    = Color(0xFF030303);
 const _card  = Color(0xFF0E0B16);
@@ -91,6 +92,9 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
       if (!mounted) return;
       setState(() => _deleting.remove(id));
       if ((rows as List).isEmpty) {
+        // P0-FL-53b · said, but was never recorded.
+        reportError('CoachAvailabilityScreen._delete',
+            StateError('coach_availability delete matched no row'));
         messenger.showSnackBar(const SnackBar(content: Text(
             "Couldn't remove this slot — it may already be gone or booked. "
             'Refreshing your list.')));
@@ -553,11 +557,14 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
         Navigator.pop(context);
         widget.onSaved();
       }
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        // ERR-2: see coach_video_response_screen.
-        const SnackBar(content: Text('Failed to save availability. Try again.'),
-            backgroundColor: Colors.red));
+    } catch (e, st) {
+      // ERR-2: see coach_video_response_screen. P0-FL-53b · recorded (it was
+      // swallowed unseen), and said in the one voice.
+      reportError('CoachAvailabilityScreen._AddSlotSheet._save', e, st);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Semantics(liveRegion: true,
+              child: Text(couldntMessage('save this time slot', e))),
+          backgroundColor: Colors.red));
     } finally {
       if (mounted) setState(() => _saving = false);
     }

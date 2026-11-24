@@ -74,7 +74,9 @@ class LiveChallengeService {
 
   Future<void> joinChallenge(String challengeId) async {
     final uid = _db.auth.currentUser?.id;
-    if (uid == null) return;
+    // P0-FL-53b · nothing was written, so this is not a join: returning here
+    // read as success and the challenge was shown as joined.
+    if (uid == null) throw StateError('not signed in');
     try {
       await _db.from('challenge_participants').insert({
         'challenge_id': challengeId,

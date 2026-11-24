@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../shared/theme/app_background.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../../payments/domain/payment_provider.dart';
 import '../data/package_service.dart';
 import '../domain/package_provider.dart';
@@ -84,7 +86,18 @@ class CoachPackagesScreen extends ConsumerWidget {
                     pkg: p,
                     onEdit: () => _edit(context, ref, existing: p),
                     onDelete: () async {
-                      await ref.read(packageServiceProvider).deletePackage(p['id'] as String);
+                      // P0-FL-53b · a failed delete escaped unhandled: no
+                      // message, the package simply stayed. Recorded and said.
+                      final messenger = ScaffoldMessenger.of(context);
+                      try {
+                        await ref.read(packageServiceProvider).deletePackage(p['id'] as String);
+                      } catch (e, st) {
+                        reportError('CoachPackagesScreen.deletePackage', e, st);
+                        messenger.showSnackBar(SnackBar(content: Semantics(
+                            liveRegion: true,
+                            child: Text(couldntMessage('delete this package', e)))));
+                        return;
+                      }
                       ref.invalidate(myPackagesProvider);
                     },
                   )),
@@ -229,8 +242,13 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
   }
 
   Future<void> _save() async {
+    if (_saving) return;
     setState(() => _saving = true);
     final svc = ref.read(packageServiceProvider);
+    // P0-FL-53b · a failed save escaped unhandled: the button spun for good
+    // and nothing was said. Now it is recorded and said, and the sheet stays
+    // open with what the coach typed.
+    try {
     if (_type == 'bulk') {
       final tiers = <int, ({String name, double price, String description})>{
         for (final t in PackageService.sessionTiers)
@@ -256,6 +274,15 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
         description: _desc.text.trim(),
         cancellationPolicy: _cancel.text.trim().isEmpty ? null : _cancel.text.trim(),
       );
+    }
+    } catch (e, st) {
+      reportError('CoachPackagesScreen._PackageEditor._save', e, st);
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Semantics(
+          liveRegion: true,
+          child: Text(couldntMessage('save this package', e)))));
+      return;
     }
     if (mounted) { setState(() => _saving = false); Navigator.pop(context, true); }
   }
