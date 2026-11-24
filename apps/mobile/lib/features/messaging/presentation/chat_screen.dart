@@ -375,10 +375,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// checked by listing the folder for the exact name, not with `exists`,
   /// which reads every 400/404 as "gone".
   ///
-  /// The uploader is the path's own segment (`messages/<conversation>/
-  /// <uploader>/<file>`, [ChatMediaPath]). Once someone else (or no one) is
-  /// signed in, storage hides the object from the session, so every answer
-  /// looks like "gone": nothing is asked as them, and the leftover is recorded.
+  /// The uploader is the path's third segment (see [ChatMediaPath]). Once
+  /// someone else (or no one) is signed in, storage hides the object from the
+  /// session, so every answer looks like "gone": nothing is asked as them, and
+  /// the leftover is recorded.
   Future<void> _removeOrphan(StorageFileApi storage, String path) async {
     final uid = path.split('/')[2];
     void requireUploader() {
