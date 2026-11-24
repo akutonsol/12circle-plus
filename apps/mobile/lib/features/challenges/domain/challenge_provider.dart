@@ -32,7 +32,12 @@ class ChallengeNotifier extends StateNotifier<List<Challenge>> {
   final LiveChallengeService _svc;
   ChallengeNotifier(super.state, this._svc);
 
+  /// Whether this member's list has been read. Until it has, an empty [state]
+  /// is not "no challenges" (P0-FL-57a).
+  bool hasLoaded = false;
+
   void initialize(List<Challenge> challenges) {
+    hasLoaded = true;
     state = challenges;
   }
 

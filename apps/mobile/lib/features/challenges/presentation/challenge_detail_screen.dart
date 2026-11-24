@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/animations/app_animations.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../domain/challenge_provider.dart';
 import '../data/models/challenge_model.dart';
 import 'widgets/leaderboard_tile.dart';
@@ -200,10 +201,14 @@ class ChallengeDetailScreen extends ConsumerWidget {
                       // it was ignored, so a join that failed still played the
                       // success haptic and closed the screen as if it had worked.
                       onPressed: () async {
+                        final joiner = ref.read(currentUserProvider)?.id;
                         final ok = await ref
                             .read(challengeNotifierProvider.notifier)
                             .joinChallenge(challenge.id);
                         if (!context.mounted) return;
+                        // P0-FL-57a: the join was the member's who tapped. If
+                        // another has signed in since, none of this is theirs.
+                        if (ref.read(currentUserProvider)?.id != joiner) return;
                         if (ok) {
                           AppAnimations.hapticSuccess();
                           context.pop();

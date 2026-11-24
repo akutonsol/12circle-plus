@@ -215,6 +215,46 @@ void main() {
           reason: 'THE defect: the older answer replaced the newer one');
     });
 
+    // F2. HOW TO SEE IT FAIL: drop `|| seq != _loadSeq` in _load's catch.
+    test('an older load FAILING after a newer one landed does not replace it',
+        () async {
+      await asA();
+      final older =
+          server.holds['GET custom_exercises:$memberA'] = Completer<void>();
+      unawaited(notifier().refresh());
+      await settle();
+      server.holds.clear();
+      server.exercises.add(_ex('a-2', memberA));
+      await notifier().refresh();
+      expect(ids(), ['a-1', 'shared', 'a-2']);
+      server.fails.add('GET custom_exercises:$memberA'); // the held one
+      older.complete();
+      await settle();
+      expect(reported.map((f) => f.origin), ['MyExercisesNotifier.load'],
+          reason: 'premise: the older load failed, and is recorded');
+      expect(state(), isA<AsyncData<List<ExerciseDetail>>>(),
+          reason: 'the older failure was shown over the newer list');
+      expect(ids(), ['a-1', 'shared', 'a-2']);
+    });
+
+    // F1. HOW TO SEE IT FAIL: 136b745's custom_exercise_provider.dart.
+    test("refresh() on A's notifier after B signs in does nothing", () async {
+      await asA();
+      final stale = notifier();
+      await signInAs(memberB);
+      await settle();
+      final reads = server.calls.length;
+      await expectLater(stale.refresh(), completes,
+          reason: 'THE defect: it threw StateError (disposed)');
+      expect(server.calls.length, reads, reason: 'nothing is read as B');
+      expect(ids(), ['b-1', 'shared']);
+      expect(reported, isEmpty);
+      // Control: B's own refresh still works.
+      server.exercises.add(_ex('b-2', memberB));
+      await notifier().refresh();
+      expect(ids(), ['b-1', 'shared', 'b-2']);
+    });
+
     test('a row deleted while a load is in flight does not come back',
         () async {
       await asA();

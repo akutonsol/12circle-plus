@@ -48,6 +48,14 @@ class _ChallengesScreenState extends ConsumerState<ChallengesScreen>
     // an empty month.
     final source = ref.watch(liveChallengesProvider);
     final failed = source is AsyncError;
+    // P0-FL-57a: nor is a list that has not been read yet "no challenges". The
+    // notifier is asked rather than `source.hasValue`, which is still the last
+    // member's list while the next member's first read is pending.
+    final pending = !failed &&
+        source.isLoading &&
+        !ref.watch(challengeNotifierProvider.notifier).hasLoaded;
+    String tabCount(List<Challenge> list) =>
+        failed || pending ? '—' : '${list.length}';
 
     return AppGradientBackground(
       child: Scaffold(
@@ -81,7 +89,7 @@ class _ChallengesScreenState extends ConsumerState<ChallengesScreen>
                     // a number the screen cannot support, the same class as
                     // /train's "0 workouts" and /home's "0%". An em dash says
                     // the count is unknown and needs no new copy to do it.
-                    Text(failed ? '— active challenges' : '${joined.length} active challenges',
+                    Text(failed || pending ? '— active challenges' : '${joined.length} active challenges',
                         style: const TextStyle(color: AppColors.textSecondary, fontSize: 14))
                         .fadeSlideIn(delay: 100.ms),
                     const SizedBox(height: 24),
@@ -147,9 +155,9 @@ class _ChallengesScreenState extends ConsumerState<ChallengesScreen>
                       unselectedLabelColor: AppColors.textTertiary,
                       indicatorSize: TabBarIndicatorSize.label,
                       tabs: [
-                        Tab(text: 'Active (${active.length})'),
-                        Tab(text: 'Upcoming (${upcoming.length})'),
-                        Tab(text: 'Completed (${completed.length})'),
+                        Tab(text: 'Active (${tabCount(active)})'),
+                        Tab(text: 'Upcoming (${tabCount(upcoming)})'),
+                        Tab(text: 'Completed (${tabCount(completed)})'),
                       ],
                     ),
                     const SizedBox(height: 16),
@@ -161,9 +169,9 @@ class _ChallengesScreenState extends ConsumerState<ChallengesScreen>
           body: TabBarView(
             controller: _tabController,
             children: [
-              _buildList(active, failed: failed),
-              _buildList(upcoming, failed: failed),
-              _buildList(completed, failed: failed),
+              _buildList(active, failed: failed, pending: pending),
+              _buildList(upcoming, failed: failed, pending: pending),
+              _buildList(completed, failed: failed, pending: pending),
             ],
           ),
         ),
@@ -171,7 +179,8 @@ class _ChallengesScreenState extends ConsumerState<ChallengesScreen>
     ));
   }
 
-  Widget _buildList(List<Challenge> challenges, {required bool failed}) {
+  Widget _buildList(List<Challenge> challenges,
+      {required bool failed, required bool pending}) {
     if (failed) {
       // The line `/classes` already renders for the same source (FIT-027), so
       // no new product copy is introduced for this screen.
@@ -206,6 +215,18 @@ class _ChallengesScreenState extends ConsumerState<ChallengesScreen>
               ),
             ),
           ],
+        ),
+      );
+    }
+    if (pending) {
+      return const Center(
+        child: SizedBox(
+          width: 28,
+          height: 28,
+          child: CircularProgressIndicator(
+              color: AppColors.purple,
+              strokeWidth: 2.5,
+              semanticsLabel: 'Loading challenges'),
         ),
       );
     }

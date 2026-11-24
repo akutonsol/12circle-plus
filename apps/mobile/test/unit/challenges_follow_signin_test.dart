@@ -261,6 +261,107 @@ void main() {
     expect(reported, isEmpty);
   });
 
+  // Points go to whoever is signed in when `award_points` runs (035 credits
+  // auth.uid()). HOW TO SEE IT FAIL: `git checkout 136b745 -- …/challenges/
+  // data/live_challenge_service.dart`.
+  group('points for a join or a finished challenge (S-57a-1)', () {
+    List<String> awards() => [
+          for (final x in server.calls)
+            if (x.contains('award_points')) x
+        ];
+    const asAWrite = 'POST challenge_participants:$memberA';
+
+    final writes = {
+      'LiveChallengeService.joinChallenge.award': (ChallengeNotifier n) =>
+          n.joinChallenge('ch-2'),
+      'LiveChallengeService.updateProgress.award': (ChallengeNotifier n) =>
+          n.updateProgress('ch-1', 1),
+    };
+    for (final w in writes.entries) {
+      test("${w.key}: A's, landing after B signs in, is not B's", () async {
+        await asA();
+        final hold = server.holds[asAWrite] = Completer<void>();
+        final Future<Object?> done =
+            w.value(c.read(challengeNotifierProvider.notifier));
+        await settle();
+        expect(server.calls, contains(asAWrite), reason: 'premise: in flight');
+        await signInAs(memberB);
+        await settle();
+        hold.complete();
+        await done;
+        await settle();
+        expect(awards(), isEmpty, reason: "THE defect: A's points went to B");
+        expect(reported.map((f) => f.origin), [w.key],
+            reason: 'the skipped award is recorded');
+        expect(joined(), ['ch-2:42']);
+      });
+
+      test("${w.key}: A's, landing after sign-out, is nobody's", () async {
+        await asA();
+        final hold = server.holds[asAWrite] = Completer<void>();
+        final Future<Object?> done =
+            w.value(c.read(challengeNotifierProvider.notifier));
+        await settle();
+        await signOut();
+        await settle();
+        hold.complete();
+        await done;
+        await settle();
+        expect(awards(), isEmpty);
+        expect(reported.map((f) => f.origin), [w.key]);
+      });
+
+      test(
+          '${w.key}: positive control — the same member is awarded once, '
+          'also across a session refresh', () async {
+        await asA();
+        final hold = server.holds[asAWrite] = Completer<void>();
+        final Future<Object?> done =
+            w.value(c.read(challengeNotifierProvider.notifier));
+        await settle();
+        await refreshSession();
+        await settle();
+        hold.complete();
+        await done;
+        await settle();
+        expect(awards(), ['POST award_points:$memberA']);
+        expect(reported, isEmpty);
+      });
+    }
+
+    test(
+        'negative control: an unfinished progress earns nothing, records '
+        'nothing — also after a switch', () async {
+      await asA();
+      final n = c.read(challengeNotifierProvider.notifier);
+      await n.updateProgress('ch-1', 0.5);
+      final hold = server.holds[asAWrite] = Completer<void>();
+      final done = n.updateProgress('ch-1', 0.6);
+      await settle();
+      await signInAs(memberB);
+      await settle();
+      hold.complete();
+      await done;
+      await settle();
+      expect(awards(), isEmpty);
+      expect(reported, isEmpty);
+    });
+
+    test('a join that failed earns nothing', () async {
+      await asA();
+      server.fails.add(asAWrite);
+      expect(
+          await c
+              .read(challengeNotifierProvider.notifier)
+              .joinChallenge('ch-2'),
+          isFalse);
+      await settle();
+      expect(awards(), isEmpty);
+      expect(reported.map((f) => f.origin),
+          ['ChallengeNotifier.joinChallenge']);
+    });
+  });
+
   group('the opened challenge', () {
     test('is not kept for the next member, nor through sign-out', () async {
       await asA();

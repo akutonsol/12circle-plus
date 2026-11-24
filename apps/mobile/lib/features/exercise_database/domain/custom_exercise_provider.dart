@@ -50,6 +50,7 @@ class MyExercisesNotifier extends StateNotifier<AsyncValue<List<ExerciseDetail>>
   /// P0-FL-57a · only the newest load, for the coach it was started for, is
   /// shown. A failed re-read keeps the list already shown, beside the error.
   Future<void> _load() async {
+    if (!mounted) return; // the coach it was for has signed out
     final seq = ++_loadSeq;
     state = const AsyncValue<List<ExerciseDetail>>.loading().copyWithPrevious(state);
     try {

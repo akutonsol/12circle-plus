@@ -8,8 +8,10 @@ import 'package:circle_fitness/features/challenges/presentation/challenges_scree
 import 'package:circle_fitness/features/exercise_database/domain/custom_exercise_provider.dart';
 import 'package:circle_fitness/features/exercise_database/presentation/create_exercise_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 import '../support/pump_until.dart';
 import '../support/two_member_postgrest.dart';
@@ -20,7 +22,8 @@ import '../support/two_member_postgrest.dart';
 // my_exercises_follow_signin_test.dart.)
 //
 // HOW TO SEE IT FAIL: `git checkout f191d48 --` challenge_provider.dart and
-// custom_exercise_provider.dart.
+// custom_exercise_provider.dart. Round 2 (the pending list, the late join):
+// `git checkout 136b745 --` challenges_screen.dart, challenge_detail_screen.dart.
 
 Map<String, Object?> _row(String id, String title) => {
       'id': id,
@@ -97,6 +100,17 @@ void main() {
 
   Finder activeCard() => find.text('My Active Challenges');
 
+  /// Loading is said as loading: not as "none", not as a failure.
+  void expectPending() {
+    expect(find.text('No challenges here'), findsNothing,
+        reason: 'THE defect: a pending read was said as an empty list');
+    expect(find.text('0 active challenges'), findsNothing);
+    expect(find.text('— active challenges'), findsOneWidget);
+    expect(find.text('Active (—)'), findsOneWidget);
+    expect(find.bySemanticsLabel('Loading challenges'), findsOneWidget);
+    expect(find.text('Could not load challenges'), findsNothing);
+  }
+
   Future<void> challengesAsA(WidgetTester tester) async {
     await show(tester, const ChallengesScreen());
     await pumpUntil(tester, () => activeCard().evaluate().isNotEmpty,
@@ -118,6 +132,7 @@ void main() {
       expect(activeCard(), findsNothing,
           reason: "THE defect: A's joined challenge was shown to B");
       expect(find.text('Joined'), findsNothing);
+      expectPending();
       hold.complete();
       await pumpUntil(tester, () => activeCard().evaluate().isNotEmpty,
           what: "B's challenges");
@@ -153,6 +168,67 @@ void main() {
           tester, () => find.text('No challenges here').evaluate().isNotEmpty,
           what: 'the empty list');
       expect(find.text('Could not load challenges'), findsNothing);
+      expect(find.text('0 active challenges'), findsOneWidget);
+      expect(find.text('Active (0)'), findsOneWidget);
+      expect(find.bySemanticsLabel('Loading challenges'), findsNothing);
+      // …and stays said while a new session re-reads it for the same member.
+      final hold = server.holds['GET challenges:$memberB'] = Completer<void>();
+      final reads = server.calls.length;
+      await tester.runAsync(refreshSession);
+      await pumpUntil(tester, () => server.calls.length > reads,
+          what: 'the re-read');
+      expect(find.text('No challenges here'), findsOneWidget);
+      expect(find.text('0 active challenges'), findsOneWidget);
+      hold.complete();
+      await unmount(tester);
+    });
+
+    testWidgets('the first read pending is loading, not "none"',
+        (tester) async {
+      final hold = server.holds['GET challenges:$memberA'] = Completer<void>();
+      await show(tester, const ChallengesScreen());
+      await pumpUntil(
+          tester, () => server.calls.contains('GET challenges:$memberA'),
+          what: 'the read');
+      expectPending();
+      hold.complete();
+      await pumpUntil(tester, () => activeCard().evaluate().isNotEmpty,
+          what: "A's challenges");
+      expect(find.bySemanticsLabel('Loading challenges'), findsNothing);
+      expect(find.text('1 active challenges'), findsOneWidget);
+      expect(find.text('Active (2)'), findsOneWidget);
+      await unmount(tester);
+    });
+
+    testWidgets('control: a re-read for the same member keeps their list',
+        (tester) async {
+      await challengesAsA(tester);
+      final hold = server.holds['GET challenges:$memberA'] = Completer<void>();
+      final reads = server.calls.length;
+      await tester.runAsync(refreshSession);
+      await pumpUntil(tester, () => server.calls.length > reads,
+          what: 'the re-read');
+      expect(find.bySemanticsLabel('Loading challenges'), findsNothing);
+      expect(activeCard(), findsOneWidget);
+      expect(find.text('1 active challenges'), findsOneWidget);
+      hold.complete();
+      await unmount(tester);
+    });
+
+    testWidgets('a failed first read, retried: the failure, then the list',
+        (tester) async {
+      server.fails.add('GET challenges:$memberA');
+      await show(tester, const ChallengesScreen());
+      await pumpUntil(tester,
+          () => find.text('Could not load challenges').evaluate().isNotEmpty,
+          what: 'the failure');
+      expect(find.text('Active (—)'), findsOneWidget);
+      expect(find.bySemanticsLabel('Loading challenges'), findsNothing,
+          reason: 'a failure is said, not an endless spinner');
+      server.fails.clear();
+      await tester.tap(find.text('Try again'));
+      await pumpUntil(tester, () => activeCard().evaluate().isNotEmpty,
+          what: 'the list');
       await unmount(tester);
     });
   });
@@ -184,6 +260,123 @@ void main() {
       await tester.runAsync(refreshSession);
       await tester.pump(const Duration(seconds: 1));
       expect(find.text('500 steps'), findsOneWidget);
+      await unmount(tester);
+    });
+  });
+
+  group('joining from the opened challenge (S-57a-8)', () {
+    final haptics = <Object?>[];
+
+    /// A taps Join; the returned hold is what their join waits on.
+    Future<Completer<void>> tapJoin(WidgetTester tester) async {
+      final messenger = tester.binding.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'HapticFeedback.vibrate') {
+          haptics.add(call.arguments);
+        }
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(
+          SystemChannels.platform, null));
+      tester.view
+        ..devicePixelRatio = 1
+        ..physicalSize = const Size(1000, 2600);
+      addTearDown(tester.view.reset);
+      c.listen(challengeNotifierProvider, (_, __) {});
+      await pumpUntil(
+          tester, () => c.read(challengeNotifierProvider).isNotEmpty,
+          what: "A's challenges");
+      c.read(selectedChallengeProvider.notifier).state =
+          c.read(challengeNotifierProvider).firstWhere((x) => !x.isJoined);
+      final router = GoRouter(routes: [
+        GoRoute(
+            path: '/',
+            builder: (_, __) => const Scaffold(body: Text('THE LIST')),
+            routes: [
+              GoRoute(
+                  path: 'detail',
+                  builder: (_, __) => const ChallengeDetailScreen())
+            ]),
+      ]);
+      addTearDown(router.dispose);
+      await tester.pumpWidget(UncontrolledProviderScope(
+          container: c, child: MaterialApp.router(routerConfig: router)));
+      unawaited(router.push('/detail'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 2));
+      final hold = server.holds['POST challenge_participants:$memberA'] =
+          Completer<void>();
+      await tester.tap(find.text('Join Challenge'));
+      await pumpUntil(
+          tester,
+          () => server.calls.contains('POST challenge_participants:$memberA'),
+          what: "A's join");
+      haptics.clear();
+      return hold;
+    }
+
+    /// Lets the held join land, and what follows it reach the screen.
+    Future<void> land(WidgetTester tester, Completer<void> hold) async {
+      hold.complete();
+      for (var i = 0; i < 20; i++) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 5)));
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+    }
+
+    testWidgets("A's join landing after B signs in gives B no feedback",
+        (tester) async {
+      final hold = await tapJoin(tester);
+      await switchToB(tester);
+      final recorded = <String>[];
+      setFailureSink((f) => recorded.add(f.origin));
+      await land(tester, hold);
+      expect(recorded, ['LiveChallengeService.joinChallenge.award'],
+          reason: 'premise: the join landed');
+      expect(haptics, isEmpty, reason: 'THE defect: B felt a success');
+      expect(find.text('THE LIST'), findsNothing,
+          reason: "THE defect: B's screen was closed by A's join");
+      expect(find.text('No challenge selected'), findsOneWidget);
+      await unmount(tester);
+    });
+
+    testWidgets("A's join failing after B signs in is not said to B",
+        (tester) async {
+      server.fails.add('POST challenge_participants:$memberA');
+      final hold = await tapJoin(tester);
+      await switchToB(tester);
+      final recorded = <String>[];
+      setFailureSink((f) => recorded.add(f.origin));
+      await land(tester, hold);
+      expect(recorded, ['ChallengeNotifier.joinChallenge'],
+          reason: 'premise: the join landed, failed and was recorded');
+      expect(find.byType(SnackBar), findsNothing,
+          reason: "THE defect: B was told A's join failed");
+      await unmount(tester);
+    });
+
+    testWidgets(
+        'positive control: the same member, also after a session refresh, '
+        'gets the haptic and the list', (tester) async {
+      final hold = await tapJoin(tester);
+      await tester.runAsync(refreshSession);
+      await tester.pump();
+      await land(tester, hold);
+      await tester.pump(const Duration(seconds: 1));
+      expect(haptics, hasLength(1));
+      expect(find.text('THE LIST'), findsOneWidget);
+      await unmount(tester);
+    });
+
+    testWidgets('control: the same member is told their join failed',
+        (tester) async {
+      server.fails.add('POST challenge_participants:$memberA');
+      final hold = await tapJoin(tester);
+      await land(tester, hold);
+      expect(find.byType(SnackBar), findsOneWidget);
+      expect(find.text('Join Challenge'), findsOneWidget);
+      expect(haptics, isEmpty);
       await unmount(tester);
     });
   });

@@ -181,13 +181,28 @@ class CustomExerciseService {
             .maybeSingle();
         if (existing != null) {
           final eid = existing['id'] as String;
-          await _db.from('custom_exercises').update(data).eq('id', eid);
+          // P0-FL-57a · .select() so an RLS-filtered update (0 rows, no error)
+          // is not returned as a save.
+          final res = await _db
+              .from('custom_exercises')
+              .update(data)
+              .eq('id', eid)
+              .select('id');
+          if ((res as List).isEmpty) {
+            lastError = "You don't have permission to edit this exercise";
+            reportError('CustomExerciseService.createExercise', lastError!);
+            return null;
+          }
           return eid;
         }
       }
       final row = await _db.from('custom_exercises').insert(data).select().single();
       return row['id'] as String;
-    } catch (e) { lastError = e; return null; }
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.createExercise', e, st);
+      return null;
+    }
   }
 
   /// Fan a master-schema exercise JSON out into the normalized child tables
@@ -827,7 +842,11 @@ class CustomExerciseService {
       await _db.storage.from('coach-media').uploadBinary(path, bytes,
           fileOptions: const FileOptions(contentType: 'audio/mp4', upsert: true));
       return path;
-    } catch (e) { lastError = e; return null; }
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.uploadCoachVoice', e, st);
+      return null;
+    }
   }
 
   /// A short-lived URL for a stored coach voice note.
@@ -871,8 +890,9 @@ class CustomExerciseService {
     if (path == null) return null;
     try {
       return await _db.storage.from('coach-media').createSignedUrl(path, 3600);
-    } catch (e) {
+    } catch (e, st) {
       lastError = e;
+      reportError('CustomExerciseService.signedCoachVoiceUrl', e, st);
       return null;
     }
   }
@@ -889,7 +909,11 @@ class CustomExerciseService {
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }, onConflict: 'coach_id,exercise_id');
       return true;
-    } catch (e) { lastError = e; return false; }
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.setCoachVoice', e, st);
+      return false;
+    }
   }
 
   /// The object path inside `coach-media` for a stored voice **URL**.
