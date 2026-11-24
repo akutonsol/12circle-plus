@@ -13,6 +13,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../support/fake_image_picker.dart';
 import '../support/pump_until.dart';
 import '../support/row_checking_postgrest.dart';
+import '../support/session_switch.dart';
 
 // P0-FL-56a · Personal Info's photo button.
 //
@@ -26,6 +27,7 @@ import '../support/row_checking_postgrest.dart';
 // HOW TO SEE IT FAIL: run against f191d48's personal_info_screen.dart.
 
 const _uid = '00000000-0000-4000-8000-00000000a56a';
+const _uidB = '00000000-0000-4000-8000-00000000b56a';
 
 class _Server extends RowCheckingPostgrest {
   _Server() : super(_uid);
@@ -56,7 +58,8 @@ void main() {
   });
   tearDownAll(picker.dispose);
 
-  setUp(() {
+  setUp(() async {
+    await signInAs(_uid);
     server.reset();
     server.storage.clear();
     picker.reset();
@@ -193,16 +196,14 @@ void main() {
     expect(reported, isEmpty);
   });
 
-  // Last: it signs the seeded member out for the whole file.
-  testWidgets('the member signs out while the picker is open: nothing is '
-      'uploaded or linked, and it is recorded', (t) async {
+  testWidgets("A's pick, B signs in while the picker is open: nothing is "
+      "uploaded to or linked on B's profile, and it is recorded", (t) async {
     await open(t);
     final gate = Completer<Object?>();
     picker.answer = (_) => gate.future;
     await tapPhoto(t);
-    await t.runAsync(() =>
-        Supabase.instance.client.auth.signOut(scope: SignOutScope.local));
-    expect(Supabase.instance.client.auth.currentUser, isNull,
+    await t.runAsync(() => signInAs(_uidB));
+    expect(Supabase.instance.client.auth.currentUser?.id, _uidB,
         reason: 'premise');
     gate.complete(picker.photoPath);
     await pumpUntil(t, () => reported.isNotEmpty, what: 'the refusal');

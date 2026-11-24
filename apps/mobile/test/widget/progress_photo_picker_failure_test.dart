@@ -11,6 +11,7 @@ import 'package:http/http.dart' as http;
 import '../support/fake_image_picker.dart';
 import '../support/pump_until.dart';
 import '../support/row_checking_postgrest.dart';
+import '../support/session_switch.dart';
 
 // P0-FL-56a · Progress photos (Add Photo, and the three baseline slots).
 //
@@ -24,6 +25,7 @@ import '../support/row_checking_postgrest.dart';
 // HOW TO SEE IT FAIL: run against f191d48's progress_screen.dart.
 
 const _uid = '00000000-0000-4000-8000-00000000056a';
+const _uidB = '00000000-0000-4000-8000-00000000056b';
 
 class _Server extends RowCheckingPostgrest {
   _Server() : super(_uid);
@@ -104,7 +106,8 @@ void main() {
   });
   tearDownAll(picker.dispose);
 
-  setUp(() {
+  setUp(() async {
+    await signInAs(_uid);
     server.reset();
     picker.reset();
     reported.clear();
@@ -228,6 +231,22 @@ void main() {
         expect(find.byType(SnackBar), findsNothing);
         expect(reported, isEmpty);
         expect(server.storage, isEmpty);
+        await close(t);
+      });
+
+      testWidgets("A's pick, B signs in while the picker is open: nothing "
+          "lands in B's folder, recorded", (t) async {
+        await open(t);
+        final gate = Completer<Object?>();
+        picker.answer = (_) => gate.future;
+        await choose(t, control);
+        await t.runAsync(() => signInAs(_uidB));
+        gate.complete(picker.photoPath);
+        await pumpUntil(t, () => reported.isNotEmpty, what: 'the refusal');
+        await settle(t);
+        expect(origins(), ['$origin.identity']);
+        expect(server.storage, isEmpty);
+        expect(server.inserts, 0);
         await close(t);
       });
 

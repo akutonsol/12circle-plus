@@ -14,6 +14,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../support/fake_image_picker.dart';
 import '../support/pump_until.dart';
 import '../support/row_checking_postgrest.dart';
+import '../support/session_switch.dart';
 
 // P0-FL-56a · Attach (chat photo): the pick, the read, the upload, the message
 // row, and the cleanup of a photo whose row never landed.
@@ -27,6 +28,7 @@ import '../support/row_checking_postgrest.dart';
 // HOW TO SEE IT FAIL: run against f191d48's chat_screen.dart.
 
 const _uid = '00000000-0000-4000-8000-00000000c56a';
+const _uidB = '00000000-0000-4000-8000-00000000c56b';
 const _conv = 'conv-fl56a';
 const _sendFailed = "Couldn't send your photo — $tryAgainHint";
 
@@ -117,7 +119,8 @@ void main() {
   });
   tearDownAll(picker.dispose);
 
-  setUp(() {
+  setUp(() async {
+    await signInAs(_uid);
     server.reset();
     picker.reset();
     reported.clear();
@@ -358,15 +361,13 @@ void main() {
     });
   });
 
-  // Last: these sign the seeded member out for the whole file.
-  testWidgets('the member signs out while the picker is open: nothing is '
-      'uploaded or sent', (t) async {
+  testWidgets("A's pick, B signs in while the picker is open: nothing is "
+      'uploaded or sent as B', (t) async {
     await open(t);
     final gate = Completer<Object?>();
     picker.answer = (_) => gate.future;
     await attach(t);
-    await t.runAsync(() =>
-        Supabase.instance.client.auth.signOut(scope: SignOutScope.local));
+    await t.runAsync(() => signInAs(_uidB));
     gate.complete(picker.photoPath);
     await outcome(t);
     expect(origins(), ['ChatScreen._sendPhoto']);
@@ -377,6 +378,8 @@ void main() {
 
   testWidgets('Attach while signed out says so', (t) async {
     await open(t);
+    await t.runAsync(() =>
+        Supabase.instance.client.auth.signOut(scope: SignOutScope.local));
     await attach(t);
     expect(find.text("You're signed out — sign in again to send a photo."),
         findsOneWidget);
