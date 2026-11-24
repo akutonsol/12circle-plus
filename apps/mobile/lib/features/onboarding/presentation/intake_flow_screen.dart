@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'widgets/intake_back_button.dart';
 import 'widgets/intake_complete_page.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -1071,57 +1072,113 @@ class _IntakeStepBar extends StatelessWidget {
   const _IntakeStepBar({
     required this.step, required this.total, this.onBack, this.onSkip});
 
+  static const _skipStyle = TextStyle(
+      color: _onSurfV, fontSize: 13, fontWeight: FontWeight.w600);
+  static const _countStyle = TextStyle(
+      color: _onSurfV, fontSize: 12, fontWeight: FontWeight.w600);
+
   @override
   Widget build(BuildContext context) {
     final top = MediaQuery.of(context).padding.top;
+    final back = IntakeBackButton(
+      onTap: onBack,
+      chip: Container(
+        decoration: BoxDecoration(
+          color: _surfCH,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: const Icon(Icons.chevron_left, color: _onSurf, size: 24),
+      ),
+    );
+    // P0-FL-53c · the pills carry the step for a screen reader ("Step 4 of
+    // 24", not the glyphs "04 / 24"; the Skip variant had no step at all).
+    final pills = Semantics(
+      container: true,
+      label: 'Step $step of $total',
+      child: ExcludeSemantics(
+        child: Row(
+          children: List.generate(total, (i) {
+            final done = i < step;
+            return Expanded(
+              child: Container(
+                height: 4,
+                margin: const EdgeInsets.symmetric(horizontal: 2),
+                decoration: BoxDecoration(
+                  color: done ? _priCont : _surfCHH,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            );
+          }),
+        ),
+      ),
+    );
+    final label = onSkip != null
+        ? 'Skip'
+        : '${step.toString().padLeft(2, '0')} / ${total.toString().padLeft(2, '0')}';
+    final style = onSkip != null ? _skipStyle : _countStyle;
+    // Skip was a bare text-height tap target with no button role.
+    final trailing = onSkip != null
+        ? Semantics(
+            button: true,
+            enabled: true,
+            label: 'Skip',
+            excludeSemantics: true,
+            onTap: onSkip,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onSkip,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+                child: Center(widthFactor: 1, heightFactor: 1,
+                  child: Text(label, style: style)),
+              ),
+            ),
+          )
+        : ExcludeSemantics(child: Text(label, style: style));
     return Padding(
       padding: EdgeInsets.fromLTRB(16, top + 12, 16, 16),
-      child: Row(
-        children: [
-          IntakeBackButton(
-            onTap: onBack,
-            chip: Container(
-              decoration: BoxDecoration(
-                color: _surfCH,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(Icons.chevron_left, color: _onSurf, size: 24),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Row(
-              children: List.generate(total, (i) {
-                final done = i < step;
-                return Expanded(
-                  child: Container(
-                    height: 4,
-                    margin: const EdgeInsets.symmetric(horizontal: 2),
-                    decoration: BoxDecoration(
-                      color: done ? _priCont : _surfCHH,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                );
-              }),
-            ),
-          ),
-          const SizedBox(width: 12),
-          if (onSkip != null)
-            GestureDetector(
-              onTap: onSkip,
-              child: const Text('Skip',
-                style: TextStyle(
-                  color: _onSurfV, fontSize: 13, fontWeight: FontWeight.w600)),
-            )
-          else
-            Text(
-              '${step.toString().padLeft(2, '0')} / ${total.toString().padLeft(2, '0')}',
-              style: const TextStyle(
-                color: _onSurfV, fontSize: 12, fontWeight: FontWeight.w600),
-            ),
-        ],
-      ),
+      // P0-FL-53c · at large text the trailing label took the row's width
+      // and squeezed the pills to nothing (2×), then overflowed (3×, 320dp).
+      // When it would leave the pills less than 1px each (plus their 2px side
+      // margins) it moves to its own line under the pills; the bar grows, the
+      // text keeps its size. At 1× on a phone the bar is one row as before.
+      child: LayoutBuilder(builder: (context, c) {
+        final painter = TextPainter(
+          text: TextSpan(text: label, style: style),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          maxLines: 1,
+        )..layout();
+        final trailingWidth =
+            math.max(painter.width, onSkip != null ? 44.0 : 0.0) + 12;
+        painter.dispose();
+        const backWidth = 44.0 + 12; // the back target (>= 44) and its gap
+        final stacked =
+            c.maxWidth - backWidth - trailingWidth < total * (1.0 + 4);
+        if (!stacked) {
+          return Row(children: [
+            back,
+            const SizedBox(width: 12),
+            Expanded(child: pills),
+            const SizedBox(width: 12),
+            trailing,
+          ]);
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(children: [
+              back,
+              const SizedBox(width: 12),
+              Expanded(child: pills),
+            ]),
+            const SizedBox(height: 8),
+            Align(alignment: AlignmentDirectional.centerEnd, child: trailing),
+          ],
+        );
+      }),
     );
   }
 }
@@ -4100,33 +4157,88 @@ class _PhotoUploadCardState extends State<_PhotoUploadCard> {
     if (widget.image == null) _previewBytes = null;
   }
 
-  Future<void> _applyPicked(XFile? file) async {
-    if (file == null) return;
-    final bytes = await file.readAsBytes();
+  /// P0-FL-53c · the last pick that failed (null = none), and how. A picker
+  /// failure used to be swallowed by `catch (_) {}` — the button did nothing.
+  String? _pickFailure;
+  ImageSource _lastSource = ImageSource.gallery;
+  bool _picking = false;
+
+  /// Reads the picked file and only then shows it. Null is the person
+  /// cancelling — legitimate absence: nothing changes and nothing is said.
+  /// Returns false when the file could not be read (reported, the earlier
+  /// photo and preview are kept).
+  Future<bool> _applyPicked(XFile? file) async {
+    if (file == null) return true;
+    final Uint8List bytes;
+    try {
+      bytes = await file.readAsBytes();
+    } catch (e, st) {
+      reportError('intake.photos.read', e, st);
+      _failPick("Couldn't use that photo — ${_intakeNextStep(e)}");
+      return false;
+    }
     if (mounted) setState(() => _previewBytes = bytes);
     widget.onPicked(file);
+    return true;
+  }
+
+  /// image_picker's permission codes: `photo_access_denied`,
+  /// `camera_access_denied`.
+  static bool _isAccessDenied(Object e) =>
+      e is PlatformException && e.code.endsWith('_access_denied');
+
+  void _failPick(String message) {
+    if (mounted) setState(() => _pickFailure = message);
+  }
+
+  void _failOpen(String origin, ImageSource source, Object e, StackTrace st) {
+    reportError(origin, e, st);
+    final camera = source == ImageSource.camera;
+    _failPick(_isAccessDenied(e)
+        ? "Couldn't open your ${camera ? 'camera' : 'photos'} — allow "
+            '${camera ? 'camera' : 'photo'} access in Settings, then try again.'
+        : "Couldn't open your ${camera ? 'camera' : 'photos'} — "
+            '${_intakeNextStep(e)}');
   }
 
   Future<void> _pick(BuildContext context, ImageSource source) async {
-    final picker = ImagePicker();
+    if (_picking) return;
+    setState(() {
+      _picking = true;
+      _pickFailure = null;
+      _lastSource = source;
+    });
     try {
-      final file = await picker.pickImage(
-          source: source, imageQuality: 85, maxWidth: 1920);
+      final picker = ImagePicker();
+      XFile? file;
+      var webCameraFailed = false;
+      try {
+        file = await picker.pickImage(
+            source: source, imageQuality: 85, maxWidth: 1920);
+      } catch (e, st) {
+        if (!(kIsWeb && source == ImageSource.camera)) {
+          _failOpen('intake.photos.pick.${source.name}', source, e, st);
+          return;
+        }
+        reportError('intake.photos.pick.camera', e, st);
+        webCameraFailed = true;
+      }
       // Desktop web can't open a camera — fall back to the file picker so the
       // user can still add a photo instead of the button doing nothing.
-      if (file == null && kIsWeb && source == ImageSource.camera) {
-        await _applyPicked(await picker.pickImage(
-            source: ImageSource.gallery, imageQuality: 85, maxWidth: 1920));
-        return;
+      if ((file == null || webCameraFailed) &&
+          kIsWeb && source == ImageSource.camera) {
+        try {
+          file = await picker.pickImage(
+              source: ImageSource.gallery, imageQuality: 85, maxWidth: 1920);
+        } catch (e, st) {
+          _failOpen('intake.photos.pick.webGalleryFallback',
+              ImageSource.gallery, e, st);
+          return;
+        }
       }
       await _applyPicked(file);
-    } catch (_) {
-      if (kIsWeb && source == ImageSource.camera) {
-        try {
-          await _applyPicked(await picker.pickImage(
-              source: ImageSource.gallery, imageQuality: 85, maxWidth: 1920));
-        } catch (_) {}
-      }
+    } finally {
+      if (mounted) setState(() => _picking = false);
     }
   }
 
@@ -4199,7 +4311,8 @@ class _PhotoUploadCardState extends State<_PhotoUploadCard> {
       photoWidget = const SizedBox.shrink();
     }
 
-    return GestureDetector(
+    final failure = _pickFailure;
+    final card = GestureDetector(
       onTap: () => _showOptions(context),
       child: Container(
         // P0-FL-48: a picked photo fills a fixed 140px frame as before; the
@@ -4278,6 +4391,22 @@ class _PhotoUploadCardState extends State<_PhotoUploadCard> {
               ],
             )),
       ),
+    );
+    if (failure == null) return card;
+    // P0-FL-53c · the pick failed: say so under this card, keep whatever
+    // photo it already had, and offer the same source again.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        card,
+        const SizedBox(height: 8),
+        _IntakeFailureNotice(
+          message: failure,
+          busy: _picking,
+          onRetry: () => _pick(context, _lastSource),
+        ),
+      ],
     );
   }
 }
