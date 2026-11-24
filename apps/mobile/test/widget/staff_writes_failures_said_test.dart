@@ -460,6 +460,34 @@ void main() {
       expect(reported, isEmpty);
     });
   });
+  // r4 (QA M18): the scrollable Done view still sits centred when it fits.
+  testWidgets('Done view that fits is centred, not pinned to the top', (tester) async {
+    _server.failing = {'notifications'};
+    _sink();
+    tester.view
+      ..devicePixelRatio = 1
+      ..physicalSize = const Size(430, 932);
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(const MaterialApp(
+        home: CoachVideoResponseScreen(clientId: 'client-1', clientName: 'Jamie')));
+    await tester.enterText(find.byType(TextField), 'Great week — keep the tempo.');
+    // ignore: avoid_dynamic_calls
+    (tester.state(find.byType(CoachVideoResponseScreen)) as dynamic).setState(() {});
+    await tester.pump();
+    await tester.ensureVisible(find.text('Send to Client'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Send to Client'));
+    await tester.pumpAndSettle();
+    final content = tester.getRect(find.ancestor(
+        of: find.text('Video Sent!'), matching: find.byType(Column)).first);
+    // The body: below the app bar, to the bottom of the screen.
+    final top = tester.getRect(find.byType(AppBar)).bottom;
+    final body = Rect.fromLTRB(0, top, 430, 932);
+    expect(content.height, lessThan(body.height), reason: 'premise: it fits');
+    expect((content.center.dy - body.center.dy).abs(), lessThan(1),
+        reason: 'the Done view moved to the top of the screen');
+  });
+
   // P0-FL-53b r3 (re-review UX N1 / QA): the failure line added in r2 must
   // still fit. The Add-slot sheet was a plain Column: on a short phone or at
   // large text, the extra line could overflow or push Publish Slot off screen.
