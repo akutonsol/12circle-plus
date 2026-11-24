@@ -153,7 +153,7 @@ void main() {
         final h = tester.ensureSemantics();
         await mount(tester, width: 320, height: 12000, scale: s);
         await openEditor(tester);
-        for (final l in [applyLong, 'Apply pack Bench', 'Save these cues as a pack',
+        for (final l in [applyLong, 'Apply pack Bench', 'Save these as a pack',
             'Voice note expires: Today', 'Voice note expires: This week',
             'Voice note expires: Never']) {
           expectNamedButton(tester, l);
@@ -165,13 +165,76 @@ void main() {
         // The recorder's gesture area itself, not only the room it is given.
         expect(tester.getSize(find.descendant(of: find.byType(CoachVoiceRecorder),
             matching: find.byType(GestureDetector)).first).height, greaterThanOrEqualTo(44));
-        // The sheet's fields have no name of their own (older; outside this
-        // package's sub-44px scope, reported as a follow-up).
-        expectTargets(tester, sheet, atLeast: 9, fieldsMayBeUnnamed: true);
+        expectTargets(tester, sheet, atLeast: 9);
         h.dispose();
         await unmount(tester);
       });
     }
+
+    testWidgets('r2: the hold-to-record bar is 44px with its text on one line (1.0x)',
+        (tester) async {
+      // Wide, so the text is on one line in the (wide) test font too: wrapped,
+      // the bar is over 44px by itself and proves nothing.
+      await mount(tester, width: 800);
+      await openEditor(tester);
+      expectWholeOnOneLine(tester, find.text('Hold to record a voice note'));
+      final bar = find.descendant(
+          of: find.byType(CoachVoiceRecorder), matching: find.byType(GestureDetector)).first;
+      expect(tester.getSize(bar).height, greaterThanOrEqualTo(44));
+      // The drawn bar is that tall, not only the room around it.
+      expect(tester.getSize(find.descendant(of: bar, matching: find.byType(Container)).first),
+          tester.getSize(bar));
+      await unmount(tester);
+    });
+
+    testWidgets('r2: the fields keep their names once text is in them', (tester) async {
+      final h = tester.ensureSemantics();
+      server.reads.remove('coach_exercise_media'); // nothing saved: all empty
+      await mount(tester);
+      await tester.tap(find.textContaining('Add your coaching'));
+      await tester.pumpAndSettle();
+      final fields = find.descendant(of: sheet, matching: find.byType(TextField));
+      expect(fields, findsNWidgets(3), reason: 'premise');
+      for (final (i, name) in const [(0, 'Coach focus today'), (1, 'Note (optional)'),
+          (2, 'Your video (optional — YouTube link or id)')]) {
+        await expectFieldNamed(tester, fields.at(i), name);
+      }
+      await tester.tap(find.text('＋ Save these as a pack'));
+      await tester.pumpAndSettle();
+      await expectFieldNamed(tester, find.descendant(
+          of: find.byType(AlertDialog), matching: find.byType(TextField)), 'Pack name');
+      h.dispose();
+      await unmount(tester);
+    });
+
+    testWidgets('r2 negative control: an empty field is still empty, and its hint is said',
+        (tester) async {
+      final h = tester.ensureSemantics();
+      server.reads.remove('coach_exercise_media');
+      await mount(tester);
+      await tester.tap(find.textContaining('Add your coaching'));
+      await tester.pumpAndSettle();
+      final d = tester.getSemantics(find.descendant(
+          of: find.descendant(of: sheet, matching: find.byType(TextField)).at(1),
+          matching: find.byType(EditableText))).getSemanticsData();
+      expect(d.value, isEmpty);
+      expect('${d.label}\n${d.hint}', contains('A short message to your clients'));
+      h.dispose();
+      await unmount(tester);
+    });
+
+    testWidgets('control: a field still saves what was typed in it', (tester) async {
+      await mount(tester);
+      await openEditor(tester);
+      await tester.enterText(
+          find.descendant(of: sheet, matching: find.byType(TextField)).at(1), 'Tempo 3-1-1');
+      await tester.tap(find.text('Save coaching'));
+      await tester.pumpAndSettle();
+      expect(server.writes.where((w) => w.contains('/coach_exercise_media') &&
+          w.contains('Tempo 3-1-1')), hasLength(1));
+      expect(reported, isEmpty);
+      await unmount(tester);
+    });
 
     testWidgets('a screen reader applies the pack it named', (tester) async {
       final h = tester.ensureSemantics();
@@ -209,7 +272,7 @@ void main() {
       await mount(tester);
       await openEditor(tester);
       await tester.enterText(focusField(), 'Brace');
-      tester.semantics.tap(find.semantics.byLabel('Save these cues as a pack'));
+      tester.semantics.tap(find.semantics.byLabel('Save these as a pack'));
       await tester.pumpAndSettle();
       server.gate = Completer<void>();
       await tester.enterText(find.descendant(
@@ -222,7 +285,7 @@ void main() {
       expect(d.flagsCollection.isLiveRegion, isTrue);
       server.gate!.complete();
       await tester.pumpAndSettle();
-      expect(find.bySemanticsLabel('Save these cues as a pack'), findsOneWidget);
+      expect(find.bySemanticsLabel('Save these as a pack'), findsOneWidget);
       h.dispose();
       await unmount(tester);
     });
@@ -234,7 +297,9 @@ void main() {
     final chip = tester.getSize(
         find.ancestor(of: find.text('Today'), matching: find.byType(Container)).first);
     expect(chip.height, lessThan(44), reason: 'the drawn chip is not inflated');
-    expect(chip.width, closeTo(5 * 11.0 + 22, 3));
+    // Its own text plus padding (10 + 10) and border (1 + 1), in any font.
+    expect(chip.width, closeTo(tester.getSize(find.text('Today')).width + 22, 0.1));
+    expectWholeOnOneLine(tester, find.text('Today'));
     expect(tester.getRect(find.text('Today')).top, tester.getRect(find.text('Never')).top,
         reason: 'one line');
     await unmount(tester);

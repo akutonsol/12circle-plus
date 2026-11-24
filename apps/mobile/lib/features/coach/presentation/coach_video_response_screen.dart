@@ -3,6 +3,7 @@ import 'package:flutter/services.dart' show PlatformException;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -74,10 +75,12 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
       return "Couldn't $what — allow ${camera ? 'camera' : 'photo'} access in "
           'Settings, then try again.';
     }
-    // A device with no camera (desktop web) can still send a video: the old
-    // message said so, and that next step stays.
-    final message = couldntMessage(what, e);
-    return camera ? '$message You can also use From Gallery.' : message;
+    // P0-FL-58 r2 · the device may have no camera (desktop web): trying again
+    // cannot help, the gallery can. Unless it IS the connection.
+    if (camera && !isNetworkFailure(e)) {
+      return "Couldn't $what — you can use From Gallery instead.";
+    }
+    return couldntMessage(what, e);
   }
 
   void _removeVideo() => setState(() => _videoFile = null);
@@ -176,13 +179,23 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
     final large = MediaQuery.textScalerOf(context).scale(12) > 12 * 1.3;
     final record = _ActionBtn(
       icon: Icons.videocam_rounded, label: 'Record Now',
-      semanticLabel: 'Record a video for ${widget.clientName} now',
-      color: _brand, onTap: _recordVideo);
+      semanticLabel: 'Record Now, for ${widget.clientName}',
+      color: _brand, onTap: _uploading ? null : _recordVideo);
     final gallery = _ActionBtn(
       icon: Icons.video_library_rounded, label: 'From Gallery',
-      semanticLabel: 'Choose a video for ${widget.clientName} from your gallery',
-      color: const Color(0xFF1A1020), onTap: _pickVideo);
-    return Scaffold(
+      semanticLabel: 'From Gallery, for ${widget.clientName}',
+      color: const Color(0xFF1A1020), onTap: _uploading ? null : _pickVideo);
+    // P0-FL-58 r2 · nothing changes the video while a response is being sent.
+    final removeVideo = _uploading ? null : _removeVideo;
+    final selectVideo = _videoFile == null && !_uploading ? _pickVideo : null;
+    // P0-FL-58 r2 · this screen's SnackBars are failures on red: their text is
+    // white (the dark theme's default is dark text).
+    final theme = Theme.of(context);
+    return Theme(
+      data: theme.copyWith(snackBarTheme: theme.snackBarTheme.copyWith(
+        contentTextStyle: (theme.snackBarTheme.contentTextStyle ??
+            theme.textTheme.bodyMedium ?? const TextStyle()).copyWith(color: _wht))),
+      child: Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
         backgroundColor: _card, elevation: 0,
@@ -203,11 +216,12 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
                 Semantics(
                   container: true,
                   button: _videoFile == null,
+                  enabled: _videoFile == null ? !_uploading : null,
                   label: _videoFile == null ? 'Select a video for ${widget.clientName}, up to 5 minutes' : null,
-                  onTap: _videoFile == null ? _pickVideo : null,
+                  onTap: selectVideo,
                   excludeSemantics: _videoFile == null,
                   child: GestureDetector(
-                  onTap: _videoFile == null ? _pickVideo : null,
+                  onTap: selectVideo,
                   child: Container(
                     // P0-FL-58 · 200px at least: it grows with large text.
                     constraints: const BoxConstraints(minHeight: 200),
@@ -228,13 +242,16 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
                             Semantics(
                               container: true,
                               button: true,
+                              enabled: removeVideo != null,
                               label: 'Remove ${_videoFile!.name}',
-                              onTap: _removeVideo,
+                              onTap: removeVideo,
                               excludeSemantics: true,
                               child: TextButton(
-                                onPressed: _removeVideo,
+                                onPressed: removeVideo,
                                 style: TextButton.styleFrom(minimumSize: const Size(44, 44)),
-                                child: const Text('Remove', style: TextStyle(color: _mut, fontSize: 12)))),
+                                child: Text('Remove', style: TextStyle(
+                                  color: removeVideo == null ? _mut.withValues(alpha: 0.4) : _mut,
+                                  fontSize: 12)))),
                           ])
                         : const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
                             Icon(Icons.video_library_rounded, color: _mut, size: 40),
@@ -265,7 +282,8 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
                 const Text('Written Notes (optional)',
                   style: TextStyle(color: _wht, fontSize: 14, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 8),
-                TextField(
+                // P0-FL-58 r2 · a name that stays once the hint is gone.
+                MergeSemantics(child: Semantics(label: 'Written Notes (optional)', child: TextField(
                   controller: _noteCtrl,
                   maxLines: 4,
                   style: const TextStyle(color: _wht, fontSize: 13),
@@ -277,7 +295,7 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: _brd)),
                     enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: _brd)),
                     focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: _brand))),
-                ),
+                ))),
                 const SizedBox(height: 32),
                 if (_uploading) ...[
                   LinearProgressIndicator(value: _progress, color: _brand, backgroundColor: _brd),
@@ -299,12 +317,12 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
                       icon: const Icon(Icons.send_rounded),
                       label: Text('Send to Client',
-                        semanticsLabel: 'Send to ${widget.clientName}',
+                        semanticsLabel: 'Send to Client, ${widget.clientName}',
                         style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                     ))),
               ]),
             ),
-    );
+    ));
   }
 }
 
@@ -313,13 +331,15 @@ class _ActionBtn extends StatelessWidget {
   final String label;
   final String semanticLabel;
   final Color color;
-  final VoidCallback onTap;
+  /// Null is disabled: dimmed, and said so.
+  final VoidCallback? onTap;
   const _ActionBtn({required this.icon, required this.label, required this.semanticLabel,
     required this.color, required this.onTap});
   @override
   Widget build(BuildContext context) => Semantics(
     container: true,
     button: true,
+    enabled: onTap != null,
     label: semanticLabel,
     onTap: onTap,
     excludeSemantics: true,
@@ -328,13 +348,16 @@ class _ActionBtn extends StatelessWidget {
       child: Container(
         constraints: const BoxConstraints(minHeight: 44),
         padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(14)),
+        decoration: BoxDecoration(
+          color: onTap == null ? color.withValues(alpha: 0.4) : color,
+          borderRadius: BorderRadius.circular(14)),
         child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(icon, color: _wht, size: 18),
+          Icon(icon, color: onTap == null ? _wht.withValues(alpha: 0.5) : _wht, size: 18),
           const SizedBox(width: 8),
           // P0-FL-58 · wraps instead of overflowing.
-          Flexible(child: Text(label,
-            style: const TextStyle(color: _wht, fontSize: 13, fontWeight: FontWeight.w600))),
+          Flexible(child: Text(label, style: TextStyle(
+            color: onTap == null ? _wht.withValues(alpha: 0.5) : _wht,
+            fontSize: 13, fontWeight: FontWeight.w600))),
         ]),
       ),
     ),

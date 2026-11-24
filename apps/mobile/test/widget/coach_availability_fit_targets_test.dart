@@ -137,7 +137,7 @@ void main() {
           expect(box.height, greaterThanOrEqualTo(52));
           expect(box.contains(time.topLeft) && box.contains(time.bottomRight - const Offset(.1, .1)),
               isTrue, reason: 'time $time outside its box $box');
-          expect(time.width, greaterThanOrEqualTo(14 * s * 5 - 0.5), reason: 'on one line');
+          expectWholeOnOneLine(tester, find.text('09:05'));
         });
 
         testWidgets('the Add-slot sheet, ${w}dp at ${s}x', (tester) async {
@@ -228,6 +228,20 @@ void main() {
         h.dispose();
       });
     }
+
+    testWidgets('r2: the delete tooltip says what the delete button is called',
+        (tester) async {
+      final h = tester.ensureSemantics();
+      fitWindow(tester, 390, 2000, 1);
+      await open(tester);
+      for (final name in ['Delete Strategy Consultation slot, ${_dayLabel()} 09:05',
+          'Delete Weekly Check-In slot, ${_dayLabel()} 13:05']) {
+        expect(find.bySemanticsLabel(name), findsOneWidget, reason: 'premise: the label');
+        expect(find.byTooltip(name), findsOneWidget, reason: 'the tooltip is the label');
+      }
+      expect(find.byTooltip('Remove slot'), findsNothing);
+      h.dispose();
+    });
 
     testWidgets('a screen reader deletes the slot it named — one request', (tester) async {
       final h = tester.ensureSemantics();
@@ -373,6 +387,60 @@ void main() {
     }
   });
 
+  group('r2: the Add Slot button and the load', () {
+    final fab = find.byType(FloatingActionButton);
+    FloatingActionButton button(WidgetTester tester) => tester.widget(fab);
+    SemanticsData node(WidgetTester tester) =>
+        tester.getSemantics(find.bySemanticsLabel('Add Slot')).getSemanticsData();
+    Color ink(WidgetTester tester) =>
+        tester.widget<Text>(find.text('Add Slot')).style!.color!;
+
+    for (final table in ['coach_availability', 'coaching_calls']) {
+      testWidgets('disabled, dimmed and said so after a failed read of $table; live '
+          'again once it loads', (tester) async {
+        final h = tester.ensureSemantics();
+        server.failReads[table] = ReadFailure.server;
+        fitWindow(tester, 390, 844, 1);
+        await tester.pumpWidget(const MaterialApp(home: CoachAvailabilityScreen()));
+        await tester.pumpAndSettle();
+        expect(find.textContaining("Couldn't load your availability"), findsOneWidget,
+            reason: 'premise');
+        expect(button(tester).onPressed, isNull,
+            reason: 'THE defect: a slot could be added to a schedule that did not load');
+        expect(node(tester).flagsCollection.isEnabled, Tristate.isFalse);
+        expect(node(tester).hasAction(SemanticsAction.tap), isFalse);
+        expect(button(tester).backgroundColor!.a, lessThan(1), reason: 'dimmed');
+        expect(ink(tester).a, lessThan(1), reason: 'dimmed');
+        expect(tester.getSize(fab).height, greaterThanOrEqualTo(56));
+        await tester.tap(fab);
+        await tester.pumpAndSettle();
+        expect(find.text('Publish Slot'), findsNothing);
+
+        server.failReads.clear();
+        await tester.tap(find.text('Try again'));
+        await tester.pumpAndSettle();
+        expect(node(tester).flagsCollection.isEnabled, Tristate.isTrue);
+        expect(button(tester).backgroundColor!.a, 1);
+        expect(ink(tester).a, 1);
+        await openSheet(tester);
+        h.dispose();
+      });
+    }
+
+    testWidgets('negative control: a genuinely empty calendar can be added to',
+        (tester) async {
+      final h = tester.ensureSemantics();
+      server.reads['coach_availability'] = [];
+      server.reads['coaching_calls'] = [];
+      fitWindow(tester, 390, 844, 1);
+      await open(tester);
+      expect(find.text('No availability published'), findsOneWidget);
+      expect(node(tester).flagsCollection.isEnabled, Tristate.isTrue);
+      await openSheet(tester);
+      h.dispose();
+    });
+  });
+
   testWidgets('control: 1.0x on 390dp keeps its layout', (tester) async {
     fitWindow(tester, 390, 844, 1);
     await open(tester);
@@ -390,7 +458,7 @@ void main() {
   testWidgets('control: a delete by touch still removes the slot it is on', (tester) async {
     fitWindow(tester, 390, 844, 1);
     await open(tester);
-    await tester.tap(find.byTooltip('Remove slot').first);
+    await tester.tap(find.byIcon(Icons.delete_outline_rounded).first);
     await tester.pumpAndSettle();
     expect(server.writes.single, contains('id=eq.s1'));
     expect(reported, isEmpty);

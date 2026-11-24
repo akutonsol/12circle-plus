@@ -50,6 +50,10 @@ class _FocusTarget extends StatelessWidget {
         child: Center(widthFactor: 1, heightFactor: 1, child: child))));
 }
 
+/// P0-FL-58 r2 · [field] under a [name] that stays once its hint is gone.
+Widget _named(String name, Widget field) =>
+    MergeSemantics(child: Semantics(label: name, child: field));
+
 class CoachFocusSection extends ConsumerStatefulWidget {
   final String exerciseId;
   /// Lowercased searchable attributes of the exercise (name/muscle/equipment)
@@ -356,9 +360,9 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
           final name = await showDialog<String>(context: ctx, builder: (dctx) => AlertDialog(
             backgroundColor: _panel2,
             title: const Text('Save cue pack', style: TextStyle(color: _text, fontSize: 16)),
-            content: TextField(controller: nameCtl, autofocus: true,
+            content: _named('Pack name', TextField(controller: nameCtl, autofocus: true,
               style: const TextStyle(color: _text),
-              decoration: const InputDecoration(hintText: 'e.g. Squat cues', hintStyle: TextStyle(color: _muted))),
+              decoration: const InputDecoration(hintText: 'e.g. Squat cues', hintStyle: TextStyle(color: _muted)))),
             actions: [
               TextButton(onPressed: () => Navigator.pop(dctx), child: const Text('Cancel', style: TextStyle(color: _muted))),
               TextButton(onPressed: () => Navigator.pop(dctx, nameCtl.text.trim()),
@@ -389,17 +393,17 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
         void cuesEdited() {
           if (packSaveError != null) setSheet(() => packSaveError = null);
         }
-        Widget field(String label, TextEditingController c, String hint,
+        Widget field(String label, String name, TextEditingController c, String hint,
             {int min = 1, ValueChanged<String>? onChanged}) => Column(
           crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(label, style: const TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1)),
             const SizedBox(height: 6),
-            TextField(controller: c, minLines: min, maxLines: min == 1 ? 1 : null, onChanged: onChanged,
+            _named(name, TextField(controller: c, minLines: min, maxLines: min == 1 ? 1 : null, onChanged: onChanged,
               style: const TextStyle(color: _text, fontSize: 14),
               decoration: InputDecoration(hintText: hint, hintStyle: const TextStyle(color: _muted),
                 filled: true, fillColor: _panel2,
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                contentPadding: const EdgeInsets.all(12))),
+                contentPadding: const EdgeInsets.all(12)))),
             const SizedBox(height: 14),
           ]);
         // P0-FL-53a · the body scrolls: with failure notices, large text, a
@@ -470,19 +474,20 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                 ]);
               }),
             ],
-            field('COACH FOCUS TODAY', focusCtl, 'Control the descent\nPush through your heels\nIgnore weight today',
+            field('COACH FOCUS TODAY', 'Coach focus today', focusCtl, 'Control the descent\nPush through your heels\nIgnore weight today',
                 min: 3, onChanged: (_) => cuesEdited()),
             // P0-FL-53a · a save in flight is visible (and announced).
             Align(alignment: Alignment.centerRight, child: _FocusTarget(
-              label: savingPack ? 'Saving pack…' : 'Save these cues as a pack',
+              label: savingPack ? 'Saving pack…' : 'Save these as a pack',
               onTap: savingPack ? null : saveAsPack,
               liveRegion: savingPack,
               child: Text(savingPack ? 'Saving pack…' : '＋ Save these as a pack',
                 style: TextStyle(color: savingPack ? _brand.withValues(alpha: 0.5) : _brand,
                     fontSize: 12, fontWeight: FontWeight.w700)))),
             if (packSaveError != null) inlineError(packSaveError!),
-            field('NOTE (optional)', noteCtl, 'A short message to your clients…', min: 2),
-            field('YOUR VIDEO (optional — YouTube link or id)', videoCtl, 'https://youtu.be/…'),
+            field('NOTE (optional)', 'Note (optional)', noteCtl, 'A short message to your clients…', min: 2),
+            field('YOUR VIDEO (optional — YouTube link or id)',
+                'Your video (optional — YouTube link or id)', videoCtl, 'https://youtu.be/…'),
             // ── Voice note ──
             const Text('VOICE NOTE (optional)',
                 style: TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1)),

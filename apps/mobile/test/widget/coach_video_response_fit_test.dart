@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io' show SocketException;
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/coach/presentation/coach_video_response_screen.dart';
@@ -29,7 +28,7 @@ import '../support/row_checking_postgrest.dart';
 const _uid = '00000000-0000-4000-8000-0000000f58c0';
 const _client = 'Alexandria Montgomery';
 const _generic = 'try again in a moment. If it keeps happening, contact support.';
-const _fromGallery = ' You can also use From Gallery.';
+const _useGallery = "Couldn't open the camera — you can use From Gallery instead.";
 const _file = 'weekly-review-for-alexandria-september-final.mp4';
 const _channel = MethodChannel('plugins.flutter.io/image_picker');
 
@@ -145,11 +144,11 @@ void main() {
         final h = tester.ensureSemantics();
         await show(tester, width: 320, scale: s);
         expectTargets(tester, screen, atLeast: 5);
-        expectNamedButton(tester, 'Record a video for $_client now');
-        expectNamedButton(tester, 'Choose a video for $_client from your gallery');
+        expectNamedButton(tester, 'Record Now, for $_client');
+        expectNamedButton(tester, 'From Gallery, for $_client');
         expectNamedButton(tester, 'Select a video for $_client, up to 5 minutes');
         expect(find.byTooltip('Close video response'), findsOneWidget);
-        expect(find.bySemanticsLabel('Send to $_client'), findsOneWidget);
+        expect(find.bySemanticsLabel('Send to Client, $_client'), findsOneWidget);
         await pick(tester);
         expectTargets(tester, screen, atLeast: 5);
         expectNamedButton(tester, 'Remove $_file');
@@ -162,14 +161,14 @@ void main() {
     testWidgets('a screen reader can record, choose and remove', (tester) async {
       final h = tester.ensureSemantics();
       await show(tester);
-      tester.semantics.tap(find.semantics.byLabel('Record a video for $_client now'));
+      tester.semantics.tap(find.semantics.byLabel('Record Now, for $_client'));
       await tester.pumpAndSettle();
       expect(calls, ['pickVideo:camera:300']);
       tester.semantics.tap(find.semantics.byLabel('Remove $_file'));
       await tester.pumpAndSettle();
       expect(find.text(_file), findsNothing);
       tester.semantics.tap(
-          find.semantics.byLabel('Choose a video for $_client from your gallery'));
+          find.semantics.byLabel('From Gallery, for $_client'));
       await tester.pumpAndSettle();
       expect(calls.last, 'pickVideo:gallery:null');
       expect(find.text(_file), findsOneWidget);
@@ -233,7 +232,7 @@ void main() {
   group('record / pick failures', () {
     for (final (name, tap, origin, message) in [
       ('record', record, 'CoachVideoResponseScreen._recordVideo',
-          "Couldn't open the camera — $_generic$_fromGallery"),
+          _useGallery),
       ('pick', pick, 'CoachVideoResponseScreen._pickVideo',
           "Couldn't open your videos — $_generic"),
     ]) {
@@ -305,16 +304,7 @@ void main() {
       });
     }
 
-    testWidgets('the connection hint only for a network failure', (tester) async {
-      // Not a PlatformException from the channel: thrown by the plugin itself.
-      answer = (_) async => throw const SocketException('offline');
-      await show(tester);
-      await pick(tester);
-      // The channel mock turns it into a PlatformException, as a platform
-      // would: it is NOT a connection failure and says so.
-      expect(find.textContaining('connection'), findsNothing);
-      expect(reported, hasLength(1));
-    });
+    // (The network case is in coach_video_response_round2_test.dart.)
 
     testWidgets('one picker at a time', (tester) async {
       final open = Completer<Object?>();

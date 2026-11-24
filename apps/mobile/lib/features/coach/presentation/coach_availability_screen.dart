@@ -268,6 +268,11 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // P0-FL-14 (UX-2) · while the load has failed the coach cannot see the
+    // schedule, so adding a slot to it is disabled until it loads. P0-FL-58 r2 ·
+    // the floating button too: it stayed live over a failed load.
+    final onAdd = _loadError != null ? null : _showAddSheet;
+    final onFab = onAdd == null ? _wht.withValues(alpha: 0.5) : _wht;
     final grouped = <String, List<Map<String, dynamic>>>{};
     for (final s in _slots) {
       final dt = DateTime.parse(s['slot_time'] as String).toLocal();
@@ -286,12 +291,10 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
         title: const Text('Manage Availability',
           style: TextStyle(color: _wht, fontSize: 17, fontWeight: FontWeight.w700)),
         actions: [
-          // P0-FL-14 (UX-2) · while the load has failed the coach cannot see
-          // the schedule, so adding a slot to it is disabled until it loads.
           IconButton(
             tooltip: 'Add slot',
             icon: const Icon(Icons.add_circle_outline_rounded, color: _tert, size: 24),
-            onPressed: _loadError != null ? null : _showAddSheet),
+            onPressed: onAdd),
         ],
       ),
       body: _loading
@@ -356,14 +359,14 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
         data: theme.copyWith(floatingActionButtonTheme: theme.floatingActionButtonTheme.copyWith(
           extendedSizeConstraints: const BoxConstraints(minHeight: 56))),
         child: FloatingActionButton.extended(
-          onPressed: _showAddSheet,
-          backgroundColor: _brand,
-          icon: const Icon(Icons.add, color: _wht),
+          onPressed: onAdd,
+          backgroundColor: onAdd == null ? _brand.withValues(alpha: 0.4) : _brand,
+          icon: Icon(Icons.add, color: onFab),
           label: ConstrainedBox(
             constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width - 104),
-            child: const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: Text('Add Slot', style: TextStyle(color: _wht, fontWeight: FontWeight.w700)))),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text('Add Slot', style: TextStyle(color: onFab, fontWeight: FontWeight.w700)))),
         ),
       ),
     );
@@ -500,7 +503,7 @@ class _SlotTile extends StatelessWidget {
             onTap: deleting ? null : onDelete,
             excludeSemantics: true,
             child: IconButton(
-              tooltip: 'Remove slot',
+              tooltip: deleting ? 'Remove slot' : 'Delete $slotName',
               icon: deleting
                   ? const SizedBox(width: 18, height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2, color: _mut))

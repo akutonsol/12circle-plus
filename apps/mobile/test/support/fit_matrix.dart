@@ -116,9 +116,8 @@ double renderedFontSize(WidgetTester tester, Finder text) {
 
 /// Every node a person can tap (or adjust) in the semantics tree under
 /// [surface]: its label and its size.
-List<({String label, Size size, bool isField})> tapNodes(
-    WidgetTester tester, Finder surface) {
-  final out = <({String label, Size size, bool isField})>[];
+List<({String label, Size size})> tapNodes(WidgetTester tester, Finder surface) {
+  final out = <({String label, Size size})>[];
   void visit(SemanticsNode n, Matrix4 to) {
     final d = n.getSemanticsData();
     final t = n.transform == null ? to : to.multiplied(n.transform!);
@@ -130,7 +129,6 @@ List<({String label, Size size, bool isField})> tapNodes(
       out.add((
         label: [d.label, d.tooltip].where((s) => s.isNotEmpty).join('\n'),
         size: MatrixUtils.transformRect(t, n.rect).size,
-        isField: d.flagsCollection.isTextField,
       ));
     }
     n.visitChildren((c) {
@@ -144,16 +142,43 @@ List<({String label, Size size, bool isField})> tapNodes(
   return out;
 }
 
+/// [text] is painted whole, on one line: laid out again with its own font,
+/// size and scale, its one line fits the box it was given. The text is
+/// compared with itself, so this holds in any font.
+void expectWholeOnOneLine(WidgetTester tester, Finder text) {
+  final p = tester.renderObject<RenderParagraph>(
+      find.descendant(of: text, matching: find.byType(RichText)).first);
+  final name = p.text.toPlainText();
+  final line = TextPainter(text: p.text, textDirection: p.textDirection,
+      textScaler: p.textScaler, maxLines: 1)..layout();
+  addTearDown(line.dispose);
+  expect(p.didExceedMaxLines, isFalse, reason: '"$name" is cut off');
+  expect(p.size.width, greaterThanOrEqualTo(line.width - 0.5),
+      reason: '"$name" is wrapped or cut off');
+  expect(p.size.height, closeTo(line.height, 0.5),
+      reason: '"$name" is not one whole line');
+}
+
+/// The text field [field] is announced as [name] with text in it, when its
+/// hint is gone. Leaves [text] in it.
+Future<void> expectFieldNamed(WidgetTester tester, Finder field, String name,
+    {String text = 'Typed'}) async {
+  await tester.enterText(field, text);
+  await tester.pumpAndSettle();
+  final d = tester.getSemantics(
+      find.descendant(of: field, matching: find.byType(EditableText))).getSemanticsData();
+  expect(d.flagsCollection.isTextField, isTrue, reason: 'premise: "$name" is a field');
+  expect(d.value, text, reason: 'premise: "$name" holds the text');
+  expect(d.label, name, reason: 'the field has no name once its hint is gone');
+}
+
 /// Every tap node under [surface] is at least 44×44 and has a label.
-/// [fieldsMayBeUnnamed]: a filled text field's own name is not checked.
-void expectTargets(WidgetTester tester, Finder surface,
-    {int atLeast = 1, bool fieldsMayBeUnnamed = false}) {
+void expectTargets(WidgetTester tester, Finder surface, {int atLeast = 1}) {
   final nodes = tapNodes(tester, surface);
   expect(nodes.length, greaterThanOrEqualTo(atLeast), reason: 'premise: tap nodes found');
   final bad = [
     for (final n in nodes)
-      if (n.size.width < 43.99 || n.size.height < 43.99 ||
-          (n.label.trim().isEmpty && !(fieldsMayBeUnnamed && n.isField)))
+      if (n.size.width < 43.99 || n.size.height < 43.99 || n.label.trim().isEmpty)
         '"${n.label.replaceAll('\n', ' / ')}" ${n.size.width.toStringAsFixed(1)}×'
             '${n.size.height.toStringAsFixed(1)}'
   ];
