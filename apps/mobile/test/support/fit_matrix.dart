@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart' show describeIdentity;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Screen-fit helpers (P0-FL-58): overflow, text size, target size, labels.

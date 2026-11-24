@@ -267,6 +267,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final grouped = <String, List<Map<String, dynamic>>>{};
     for (final s in _slots) {
       final dt = DateTime.parse(s['slot_time'] as String).toLocal();
@@ -300,8 +301,10 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
                 '${_nextStep(_loadError!)}', onRetry: _load)
           : ListView(
               // P0-FL-58 · room under the last card: the Add Slot button
-              // floats over the list and covered its delete button.
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+              // floats over the list and covered its delete button. (96 at 1×;
+              // it grows with that button.)
+              padding: EdgeInsets.fromLTRB(16, 16, 16,
+                  56 + MediaQuery.textScalerOf(context).scale(40)),
               children: [
                 // ── Upcoming booked sessions ──
                 if (_sessions.isNotEmpty) ...[
@@ -347,11 +350,21 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
                 }),
               ],
             ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showAddSheet,
-        backgroundColor: _brand,
-        icon: const Icon(Icons.add, color: _wht),
-        label: const Text('Add Slot', style: TextStyle(color: _wht, fontWeight: FontWeight.w700)),
+      // P0-FL-58 · 56px at least (it was 56px exactly: 3× text was cut), and its
+      // label wraps inside the screen: 104 = margins, padding, icon and gap.
+      floatingActionButton: Theme(
+        data: theme.copyWith(floatingActionButtonTheme: theme.floatingActionButtonTheme.copyWith(
+          extendedSizeConstraints: const BoxConstraints(minHeight: 56))),
+        child: FloatingActionButton.extended(
+          onPressed: _showAddSheet,
+          backgroundColor: _brand,
+          icon: const Icon(Icons.add, color: _wht),
+          label: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width - 104),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text('Add Slot', style: TextStyle(color: _wht, fontWeight: FontWeight.w700)))),
+        ),
       ),
     );
   }

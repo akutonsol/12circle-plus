@@ -122,6 +122,13 @@ void main() {
           whole(tester, 'Alexandria Montgomery', 14, s);
           whole(tester, 'Cancel', 13, s);
           whole(tester, 'Add Slot', 14, s);
+          // The floating button is on screen, and its label inside it.
+          final fab = tester.getRect(find.byType(FloatingActionButton));
+          final label = tester.getRect(find.text('Add Slot'));
+          expect(fab.left >= 0 && fab.height >= 56, isTrue, reason: '$fab');
+          expect(label.left >= fab.left && label.right <= fab.right &&
+              label.top >= fab.top && label.bottom <= fab.bottom, isTrue,
+              reason: 'label $label cut off by the button $fab');
           // The time is inside its box, on one line: the box grew with it.
           final time = tester.getRect(find.text('09:05'));
           final box = tester.getRect(
@@ -342,15 +349,18 @@ void main() {
       h.dispose();
     });
 
-    testWidgets("the last slot's delete is not under the Add Slot button", (tester) async {
+    for (final (w, h, s) in [(390, 844.0, 1.0), (320, 568.0, 3.0)]) {
+    testWidgets("the last slot's delete is not under the Add Slot button, ${w}dp at ${s}x",
+        (tester) async {
       server.reads['coach_availability'] = [
         for (var i = 0; i < 12; i++)
           {'id': 'n$i', 'slot_time': _iso(i ~/ 2), 'is_booked': false,
            'duration_minutes': 30, 'type': 'check_in'},
       ];
-      fitWindow(tester, 390, 844, 1);
+      server.reads['coaching_calls'] = [];
+      fitWindow(tester, w, h, s);
       await open(tester);
-      await tester.drag(find.byType(ListView), const Offset(0, -5000));
+      await tester.drag(find.byType(ListView), const Offset(0, -40000));
       await tester.pumpAndSettle();
       final last = tester.getRect(find.byIcon(Icons.delete_outline_rounded).last);
       final fab = tester.getRect(find.byType(FloatingActionButton));
@@ -360,6 +370,7 @@ void main() {
       expect(server.writes.where((w) => w.startsWith('DELETE')), hasLength(1));
       expect(find.text('Publish Slot'), findsNothing);
     });
+    }
   });
 
   testWidgets('control: 1.0x on 390dp keeps its layout', (tester) async {
