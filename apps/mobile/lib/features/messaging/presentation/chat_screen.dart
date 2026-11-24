@@ -257,6 +257,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// The photo picker is open: a second tap opens no second one (P0-FL-56a).
   bool _pickingPhoto = false;
 
+  /// What [_showPhotoFailure] says about the photo send that just failed.
+  String _photoFailure = '';
+
   // Photo send, in the order the storage contract requires (DEC-3A-10 §6):
   //   1. upload — authorization needs only the conversation, which exists;
   //   2. send the message carrying the object PATH (the bucket is private,
@@ -340,18 +343,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         onNotSent: (e) => sendError = e);
       if (!ok) {
         // Recorded by the service (`MessagingService.sendMessage`).
-        await _removeOrphan(storage, storagePath, uid);
+        await _removeOrphan(storage, storagePath);
         if (sameMember()) {
-          _showSendFailure(couldntMessage('send your photo', sendError));
+          _photoFailure = couldntMessage('send your photo', sendError);
+          _showPhotoFailure();
         }
       }
     } catch (e, st) {
       // Upload itself failed, or something after it threw. If the object got
       // as far as storage, it has no message row and must not be left behind.
       reportError('ChatScreen._sendPhoto', e, st);
-      if (uploadedPath != null) await _removeOrphan(storage, uploadedPath, uid);
+      if (uploadedPath != null) await _removeOrphan(storage, uploadedPath);
       // Another member signed in: it was not their photo, so nothing is said.
-      if (sameMember()) _showSendFailure(couldntMessage('send your photo', e));
+      if (sameMember()) {
+        _photoFailure = couldntMessage('send your photo', e);
+        _showPhotoFailure();
+      }
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -368,11 +375,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// checked by listing the folder for the exact name, not with `exists`,
   /// which reads every 400/404 as "gone".
   ///
-  /// [uid] uploaded it. Once someone else (or no one) is signed in, storage
-  /// hides the object from the session, so every answer looks like "gone":
-  /// nothing is asked as them, and the leftover is recorded.
-  Future<void> _removeOrphan(
-      StorageFileApi storage, String path, String uid) async {
+  /// The uploader is the path's own segment (`messages/<conversation>/
+  /// <uploader>/<file>`, [ChatMediaPath]). Once someone else (or no one) is
+  /// signed in, storage hides the object from the session, so every answer
+  /// looks like "gone": nothing is asked as them, and the leftover is recorded.
+  Future<void> _removeOrphan(StorageFileApi storage, String path) async {
+    final uid = path.split('/')[2];
     void requireUploader() {
       if (Supabase.instance.client.auth.currentUser?.id != uid) {
         throw StateError('an unsent photo could not be cleaned up: '
@@ -398,6 +406,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       reportError('ChatScreen._sendPhoto.cleanup', e, st);
     }
   }
+
+  void _showPhotoFailure() => _showSendFailure(_photoFailure);
 
   bool _isMe(Map<String, dynamic> msg) {
     final userId = Supabase.instance.client.auth.currentUser?.id;
