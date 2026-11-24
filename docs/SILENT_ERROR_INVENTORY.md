@@ -136,3 +136,32 @@ Combined branch `integration/p0-flutter-stack-c11` @ f191d48: 4917 tests, CI 7/7
 - **Still open (decision-free):** unguarded `pickImage` (`progress_screen`, `personal_info`, `chat_screen`, `ai_nutrition`, `ai_scan_view`); `enrichWithAI` stringifies errors; `updateExercise` unrecorded; `storage.remove` result ignored on voice-note clear; `package_service` row checks; `coach_marketplace`, `choose_package_screen` `saveSchedule`, `coach_pricing_sheet`; video record/pick; `PaymentService.cancelSubscription` unrecorded.
 - **Needs a ruling:** observability PGRST202 reading (unchanged).
 - **Still blocked (SEC-R3):** staff-screen "Assign failed." lives in `coach_copilot_screen.dart`; the `predictClient` / `evaluateWeek` / `regenerateProgram` trio.
+
+**Status 2026-11-24 (cycle 12):**
+- **#216 (P0-FL-56a):** the unguarded `pickImage` / `pickVideo` sites are guarded: `progress_screen` (add and baseline), `personal_info_screen`, `chat_screen`, `ai_nutrition_screen`, `ai_scan_view` and `create_exercise_screen`. Each records under its own origin and tells the member; cancel stays silent. Chat `_removeOrphan` no longer trusts an empty `remove()`. The scan `_describe` failure is recorded and said inline.
+- **#215 (P0-FL-56b):**
+  - `package_service`'s `catch (_)` is gone, and 0-row or signed-out writes throw; partial `saveSessionTiers` is reported.
+  - The `coach_packages` read has a retry.
+  - `coach_marketplace`'s `catch (_)` is gone, and its fallback use is recorded.
+  - `choose_package_screen` `saveSchedule`, the schedule read and checkout are all caught, recorded and said.
+  - `coach_pricing_sheet` and `PaymentService.cancelSubscription` record; all four package providers record.
+- **#214 (P0-FL-57a):**
+  - `enrichWithAI` no longer stringifies errors.
+  - `updateExercise`, `createExercise`, `setCoachVoice`, `uploadCoachVoice` and `signedCoachVoiceUrl` record.
+  - `clearCoachVoice` checks the `remove()` result (S-53a-5).
+  - A skipped challenge award is recorded.
+- **#218 (P0-FL-57b):** picker failures are recorded; the uploaded photo's cleanup and the unconfirmed update are recorded.
+- **#217 (P0-FL-58):** video record/pick failures are recorded and said.
+
+Combined branch `integration/p0-flutter-stack-c12` @ `a82f993`: 5557 tests, CI 7/7 (run 45437860682).
+- **Still open (decision-free):**
+  - `create_exercise_screen` double-records `updateExercise` / `createExercise` failures.
+  - `AiNutritionNotifier` records nothing.
+  - `StorageException` hides the connection hint.
+  - Other `PaymentService` catches.
+  - The invite email `catch (_)` in `coach_business_screen`.
+  - `coach_voice.dart` `catch (_)` blocks.
+  - Activity `streakProvider` / `upcomingClassesProvider` / `upcomingEventsProvider` swallow errors to 0 or `[]`.
+  - `progress_screen` signed-URL catches.
+- **Needs a ruling:** observability PGRST202 reading (unchanged).
+- **Still blocked (SEC-R3):** staff-screen "Assign failed." lives in `coach_copilot_screen.dart`; the `predictClient` / `evaluateWeek` / `regenerateProgram` trio.

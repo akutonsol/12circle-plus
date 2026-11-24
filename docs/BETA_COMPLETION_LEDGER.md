@@ -10,7 +10,7 @@ evidence. Nothing is marked complete without it.
 |---|---|
 | `origin/main` | `8f2c8a0` (PR #159), CI run `43792727007` **7/7 success** |
 | Live QA evidence on main | security **1173/1173**, AI **51/51**, ENV-3 L-1..L-5 PASS (ledger 188 rows; frontier 192; 182–186 declared excluded) |
-| Open PRs | #14 (owner's, untouched) · #160–#213, all unmerged. Flutter P0 stack CI 7/7 on each exact head. #183 targets `integration/p0-flutter-stack`; #184–#190 target #183's branch; #191 targets #189's; #192–#194 target `-c6`; #195–#198 target `-c7`; #199–#203 target `-c8`; #204–#208 target `-c9`; #209–#213 target `-c10`. Combined branches `-c6` @ `6f8918f`, `-c7` @ `df35d5f`, `-c8` @ `185261e`, `-c9` @ `1b94044`, `-c10` @ `b7ec6ef`, `-c11` @ `f191d48`, all CI 7/7. **None to be merged without explicit authorization** |
+| Open PRs | #14 (owner's, untouched) · #160–#218, all unmerged. Flutter P0 stack CI 7/7 on each exact head. #183 targets `integration/p0-flutter-stack`; #184–#190 target #183's branch; #191 targets #189's; #192–#194 target `-c6`; #195–#198 target `-c7`; #199–#203 target `-c8`; #204–#208 target `-c9`; #209–#213 target `-c10`; #214–#218 target `-c11`. Combined branches `-c6` @ `6f8918f`, `-c7` @ `df35d5f`, `-c8` @ `185261e`, `-c9` @ `1b94044`, `-c10` @ `b7ec6ef`, `-c11` @ `f191d48`, `-c12` @ `a82f993`, all CI 7/7. **None to be merged without explicit authorization** |
 | QA migrations | applied through **192** (182–186 excluded). **Pending, not applied:** 193, 194, 195, 196 |
 | QA Edge Functions | **1 of 19 deployed** (`ai-nutrition` v18, deployed ~2026-09-30 from the pre-rename path) |
 | QA function secrets | `ANTHROPIC_API_KEY` + Supabase defaults only. **No Stripe, no email provider, no `APP_URL`, no YouTube** |
@@ -883,6 +883,76 @@ Mutant test lists were taken from each package's test diff. **Surviving mutants 
 - Overflows that existed before this cycle: Availability slot cards, the video form action buttons, the Activity Performance ring at 2×. Activity Browse/Join/Log food/Explore are under 44px.
 - FL-54: N7 (a refresh overwrites unsaved typed fields), the certification dialog shows A's list until closed, S1 (signed-out `cloud_off` icon), the coach-media storage policy checks only the bucket (backend).
 
+### Cycle 12: P0-FL-56a/b, P0-FL-57a/b, P0-FL-58 (2026-11-24)
+
+**Base.** Verified before any branch was cut: `origin/integration/p0-flutter-stack-c11` = `f191d48`, and `-c12` did not exist. #209–#213 are open and unmerged with no auto-merge, and still target `-c10`. All five packages start from `f191d48` and **target `integration/p0-flutter-stack-c11`**, so each PR's diff shows one package. Main, PR #14 and the earlier cycle branches were not touched.
+
+**Combined evidence branch.** `integration/p0-flutter-stack-c12` is `f191d48` plus `fc32118`, `ace9295`, `feb216c`, `c959d4a` and `b1996f2`, merged `--no-ff` in that order. All five merge without conflict, and no file is touched by two packages.
+- @ ``a82f993``: analyze **284**, **5557** tests pass. That is 4917 + 98 + 117 + 116 + 100 + 209 = 5557, so nothing overlaps or is lost.
+- Static guards 0, contract exit 0 (unseen 31), coordinator 268/268, CI's 10 negative controls 0 (run locally).
+- `reportFailure(` has 0 callers outside `core/observability`. `valueOrNull` in lib is 111 (114 at base).
+- CI (push): **7/7 success**, run `45437860682` on `a82f993`. **No cross-package defect found.**
+
+| PR | Package | Final head | Independent verdicts at the final head | Lead mutants | Tests (full) | CI (exact head) |
+|---|---|---|---|---|---|---|
+| #214 | **P0-FL-57a**: identity and storage. `challengeNotifierProvider`, `selectedChallengeProvider`, `myExercisesNotifierProvider` and `editingExerciseProvider` are keyed to the signed-in uid. Loads are sequenced and late responses dropped; a same-member failed refresh keeps the list. A join or progress finishing after a switch no longer awards points as B, and challenge detail gives B no feedback for A's join. Pending challenges show loading, not "No challenges here". `clearCoachVoice` checks an empty `remove()` by exact-name list (not `exists()`). `enrichWithAI` keeps the network error. `createExercise`'s slug update is 0-row checked. The exercise service records its failures, and exercise detail no longer records them twice | `fc32118` | security APPROVE-WITH-NOTES ×2 · UX PASS-WITH-NOTES ×2 · QA VERIFIED ×2 | 11/11 · 11/11, plus QA's 7/7 | 5015 | 7/7 `45426409472` |
+| #215 | **P0-FL-56b**: `package_service` 0-row and signed-out writes throw, and only 23503 deactivates (announced). Partial tier save names the saved and unsaved tiers. The editor waits for its tier read; a failed read used to blank prices so Save **deleted every tier**. The packages list keeps data on a failed refresh. Marketplace pauses requests while the status is unread. Choose Package records and says save, schedule-read and checkout failures, and nothing follows an unconfirmed save; a generation check stops A→B→A opening a second checkout. The view sheet reads once per opening. Pricing sheet and `cancelSubscription` record. Providers use the call form, so `per_user_provider_scope_test` sees them again | `ace9295` | security APPROVE-WITH-NOTES ×2 · UX PASS-WITH-NOTES → **PASS** · QA NOT VERIFIED (tear-offs blinded the identity guard) → **VERIFIED** | 9/12 → 9/12, plus QA's 5/5 and a two-guard 1/1. Survivors: 56b-6 equivalent (exception type), 56b-8 unreachable (QA agrees), 56b-9 redundant beside the generation check | 5034 | 7/7 `45428406655` |
+| #216 | **P0-FL-56a**: all seven picker sites record and say pick, read, upload and write failures. A denied permission points to Settings; cancel is silent and keeps the earlier photo; one picker opens at a time. The member is fixed before the pick and re-checked after the upload: chat no longer posts as B in A's conversation, and avatar, progress and both AI pickers drop late results for B. Cleanup sends nothing under another login and uses an exact-name list. Chat speaks in one voice. Log Meal shows its notices inline. Progress has a Refresh action. Exercise Save waits for an in-flight read | `feb216c` | security APPROVE-WITH-NOTES ×2 · UX PASS-WITH-NOTES ×2 · QA VERIFIED ×2 | 9/10 → 11/11, plus QA's 9/9 | 5033 | 7/7 `45431012051` |
+| #218 | **P0-FL-57b**: Business Profile. A switch closes the certification and invite dialogs (lead decision), and they open only over the signed-in coach's own profile. A same-coach refresh keeps unsaved typing, and a different coach clears everything first; this fixes the round-1 regression where A's late text saved into B's row. The uploaded photo is removed exactly once, only after a definite refusal or 0 rows, only as its owner. **No answer, or an answer that says nothing about the write, never deletes** (lead decision): network, PGRST00x/PGRSTX, 08/57P/58/XX, 40003 and any bare HTTP status. Picker failures are said | `c959d4a` | security **REJECT** (S1 regression, S2) → APPROVE-WITH-NOTES → **APPROVE** · UX PASS-WITH-NOTES ×2 · QA VERIFIED ×3 | 8/8 · 10/10 · 12/12 | 5017 | 7/7 `45435339840` |
+| #217 | **P0-FL-58**: Activity, Availability, Video Response and the Coach Focus sheet. Every target is ≥ 44×44, with a label that starts with its visible words and a screen-reader tap action. The water dots are one adjustable control. No overflow at 320–430dp × 1.0/1.3/2.0/3.0; content stacks or wraps, nothing shrinks. Video Send follows the note. Record and pick failures are recorded and said; controls are disabled while uploading. Add Slot is disabled after a failed load. Fields keep accessible names. Width checks are font-independent | `b1996f2` | security APPROVE-WITH-NOTES ×2 · UX PASS-WITH-NOTES ×2 · QA VERIFIED ×2 | 10/11 → 11/11, plus QA's 8/8 | 5126 | 7/7 `45433049005` |
+
+Mutant test lists were taken from each package's test diff. One lead mutant from round 1 (56b-6) did not compile, and the FL-56b engineer caught it; it was rewritten. **Surviving mutants at final heads:** the three FL-56b items above, each explained; none is a missed behaviour. **Flakes:** none observed. Disk fell to 220 MB once during five parallel suites; the guard cleared temp files and no run was lost.
+
+**What the evidence covers:** automated only. No device, simulator or live-QA run; nothing here counts as manual or live verification. Real-font fit at large text, screen-reader passes and FAB clearance over a bottom inset need a device check. **Journeys 2/14, beta-ready conditions 0/4, unchanged.**
+
+**Scope held:**
+- Women's Health code untouched; `home_screen.dart:817` stays out of scope.
+- SEC-R3: Copilot screen, `coach_program_service`, `predictClient`, `evaluateWeek`, `regenerateProgram`, the `reportFailure()` sink and the AI workout-build path untouched.
+- No migration, QA or production write, Edge Function deploy, secret, Vault, Stripe, email-provider, app-URL or hosting change. No storage policy or backend authorization change. No merge, no auto-merge. PR #14 untouched.
+- Action Center not touched.
+
+**Accessibility:** no 44px target was reduced, and no `FittedBox`, `scaleDown` or text shrinking was added.
+
+**Lead decisions (engineering, not product rules):**
+- A switch closes the invite dialog like the certification dialog.
+- An uploaded photo is never deleted after no answer or an ambiguous one; the orphan is recorded.
+- After a switch, chat cleanup sends nothing under B and records it.
+- Storage cleanup checks by exact-name list, never `exists()`, which reads any 400 as absent.
+
+**New decisions for Julia:**
+- **Business Profile:** the same field edited on two devices is last-write-wins with no notice.
+- **Copy:** "Hidden from clients", "Can't delete a package clients are using — hidden from clients instead." and "Schedule saved. <reason>".
+- **Packages:**
+  - `getSessionTiers` re-offers deactivated tiers;
+  - a mistyped price saves as 0 / free, and an empty name does nothing;
+  - "Your coach will be notified" shows even when notification fails;
+  - saving a schedule replaces one held with another coach;
+  - an all-tiers transaction needs an RPC.
+- **OD-57:** note-only video response Send is now reachable but still says "Video Sent!", the client notification says "video", and nothing reads `coach_video_responses`.
+- **Activity water control:** keep the bars (segments about 10–13px wide on the half-width card) or use −/+ steppers.
+- **Progress:** a refused progress row leaves its file in storage.
+
+**Backend or migration (record only):**
+- **Server-side challenge award** from the participant row. It closes the remaining small timing window.
+- **Messages INSERT policy** (migration 003) lacks a participant check (S3).
+- **Public `coach-media` bucket:** recorded orphans need a sweep.
+- **Owner list/read** on own `voice/<uid>/` must survive any SELECT narrowing; pending 199 keeps it.
+- **Migration 185** is not applied on QA.
+
+**Engineering follow-ups:**
+- **Account-switch sweep (57a, read-only):** `selectedWorkoutProvider` / `activeWorkoutProvider` / rest timer, `selectedConversationProvider`, intake save-on-pause, `coach_availability` / `integrations` / `coach_pricing_sheet` load-as-A-save-as-current, `whats_on` previous value, `selectedClassProvider`, the progress / check-in / AI coach / booking / tickets / pods `initState` loads, client-detail sheets, and kept-alive client/program families.
+- **Exercise screens:** `create_exercise_screen` keeps A's open edit form (S-57a-2) and records some failures twice.
+- **Challenges:** `challenge_card` and Activity join feedback have no member check.
+- **Payments:** `startCheckout` launches its URL after a switch (payments package).
+- **Progress and AI nutrition:**
+  - Progress tells B about A's failed upload, and its state is not member-keyed.
+  - `StorageException` hides the connection hint.
+  - `AiNutritionNotifier` records nothing.
+  - A missing scan calorie value reads as 0; the scan idle view overflows at 2×.
+- **Activity:** shows 0 or vanishes on failed streak, nutrition and upcoming reads.
+- **Shared components:** `SectionLoadFailure` Try again has no screen-reader tap action. The `coach_voice.dart` recorder and player are unnamed and long-press only.
+- **Coach Business:** the invite email `catch (_)` is unrecorded.
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
@@ -958,15 +1028,33 @@ exists.
 
 ## Next autonomous action
 
-**Cycle 12 recommendation (2026-11-24).** Cycle 11 is done:
-- P0-FL-53a is #209, FL-53b #213, FL-53c #210, FL-54 #211, FL-55 #212, all targeting `-c10`;
-- combined `-c11` @ `f191d48`, CI 7/7 (run 45342689729).
+**Cycle 13 recommendation (2026-11-24).** Cycle 12 is done:
+- P0-FL-57a is #214, FL-56b #215, FL-56a #216, FL-57b #218 and FL-58 #217, all targeting `-c11`.
+- Combined `-c12` @ `a82f993`, CI 7/7 (run 45437860682).
 
-Decision-free work, data integrity first:
+Decision-free work, identity and data integrity first:
 
-1. **P0-FL-56: remaining swallows.** Unguarded `pickImage` (`progress_screen` :337/:381, `personal_info` :237, `chat_screen` :265, `ai_nutrition` :84, `ai_scan_view` :177); `package_service` row checks and the partial `saveSessionTiers`; `coach_packages` read retry; `coach_marketplace`, `choose_package_screen` `saveSchedule`, `coach_pricing_sheet`; video record/pick; `enrichWithAI`, `updateExercise`; `PaymentService.cancelSubscription` `reportError`.
-2. **P0-FL-57: identity and storage.** `challengeNotifierProvider` keyed to the member (S-53b-I1); the business certification dialog after a switch; S-53a-5 (`storage.remove` result on voice-note clear) as its own package.
-3. **P0-FL-58: fit and targets.** Activity Browse/Join/Log food/Explore to 44px; Performance ring at 2×; Availability slot cards and video form buttons at large text; video note field rebuild; FL-54 N7 (refresh overwrites unsaved fields).
+1. **P0-FL-59: account-switch sweep, HIGH items (57a read-only sweep).**
+   - `selectedWorkoutProvider`, `activeWorkoutProvider` and the rest timer (A's workout restored as B);
+   - `selectedConversationProvider`;
+   - intake save-on-pause writing A's answers as B;
+   - `coach_availability`, `integrations` and `coach_pricing_sheet`, which load as A and save with the current uid;
+   - the `create_exercise_screen` open edit form (S-57a-2);
+   - `challenge_card` and Activity join feedback.
+2. **P0-FL-60: remaining swallows.**
+   - Activity streak, upcoming classes and upcoming events show 0 or vanish on failure.
+   - `AiNutritionNotifier` records nothing.
+   - `StorageException` connection hint.
+   - Other `PaymentService` catches, and `startCheckout` after a switch.
+   - Invite email `catch (_)`.
+   - `coach_voice.dart` catches.
+   - `create_exercise_screen` double recording.
+   - Progress state keyed to the member, and its notices to B.
+3. **P0-FL-61: shared accessibility.**
+   - `SectionLoadFailure` Try again screen-reader tap action.
+   - `coach_voice.dart` recorder and player names and roles.
+   - Bell reduce-motion.
+   - Scan idle view at 2×; a missing scan calorie value reads as 0.
 
 **Blocked on Julia (read-only):**
 - the **Copilot late-response remediation** (`docs/COPILOT_LATE_RESPONSE_REMEDIATION_PROPOSAL.md`, options A/B/C);
@@ -977,6 +1065,8 @@ Decision-free work, data integrity first:
 - P0-SB-2 (Decisions 17, 18), P0-SB-3 (Decision 20) and member list (Decision 22); Decisions 21, 23 and 24;
 - cycle 9 questions: the Workout Zone unit lock, the 42501 wording, the admin/content_manager "Member" label;
 - cycle 10 questions: unconfirmed Activity defaults, observability PGRST202 reading, AI Coach grouped offline banner;
-- cycle 11 questions: S-53a-4 global-library self-publish, the two new copy lines, "Open Settings" for photo permission, `send-invite-email` to any address, a Sign in button on the signed-out business screen, S-55-1 one-tap memory delete;
+- cycle 11 questions: S-53a-4 global-library self-publish, the two copy lines, "Open Settings" for photo permission, `send-invite-email` to any address, a Sign in button on the signed-out business screen, S-55-1 one-tap memory delete;
+- cycle 12 questions: Business Profile two-device edits, the packages copy and five packages rules, OD-57 note-only video response, the Activity water control, a refused progress row's file;
+- backend (each needs a migration): server-side challenge award, messages INSERT participant check (S3), `coach-media` orphan sweep, migration 185 on QA;
 - `home_screen.dart:817` (Women's Health held-profile read);
-- merge order for the open stack #172–#213.
+- merge order for the open stack #172–#218.
