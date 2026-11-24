@@ -14,6 +14,7 @@ import '../../challenges/data/models/challenge_model.dart';
 import '../../community/domain/community_provider.dart';
 import '../../home/domain/home_session_card.dart';
 import '../../workout/domain/workout_provider.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 class _C {
@@ -655,9 +656,21 @@ class _MotivationalQuoteCard extends ConsumerWidget {
 }
 
 // ── Challenge Section ─────────────────────────────────────────────────────────
-class _ChallengeSection extends ConsumerWidget {
+class _ChallengeSection extends ConsumerStatefulWidget {
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_ChallengeSection> createState() => _ChallengeSectionState();
+}
+
+class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
+  // P0-FL-53b · the last list this section showed, and for whom. A failed
+  // refresh keeps it on screen under the failure notice; a list read for
+  // another member (Riverpod holds A's value while B's read fails) is never
+  // shown.
+  List<Challenge>? _held;
+  String? _heldFor;
+
+  @override
+  Widget build(BuildContext context) {
     // P0-FL-49 · the preference of the member signed in NOW. Riverpod keeps the
     // previous member's row through a re-read, so the held value showed (or
     // hid) the prompt on A's `notif_challenges` while B's read was in flight
@@ -667,15 +680,54 @@ class _ChallengeSection extends ConsumerWidget {
     final showPrompt    =
         profile != null && (profile['notif_challenges'] as bool?) != true;
     final challengesAsync = ref.watch(liveChallengesProvider);
+    final uid = ref.watch(currentUserProvider)?.id;
+    if (challengesAsync is AsyncData<List<Challenge>>) {
+      _held = challengesAsync.value;
+      _heldFor = uid;
+    }
+    final held = _heldFor == uid ? _held : null;
+    // U5 · "Enable" goes under the message at large text, as the failure
+    // card's retry does: beside it the message was squeezed to a sliver.
+    final stacked = MediaQuery.textScalerOf(context).scale(12) > 12 * 1.3;
+    final enable = Semantics(
+      button: true,
+      label: 'Enable challenge alerts',
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => context.push('/notification-preferences'),
+        // U5 · the pill keeps its look; the tap target is >= 44px.
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+          child: Center(widthFactor: 1, heightFactor: 1,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: _C.brand.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8)),
+              child: const Text('Enable',
+                style: TextStyle(color: _C.primary, fontSize: 12, fontWeight: FontWeight.w600)))))),
+    );
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        const Text('Challenges',
-          style: TextStyle(color: _C.onSurface, fontSize: 20, fontWeight: FontWeight.w800)),
-        GestureDetector(
-          onTap: () => context.go('/challenges'),
-          child: const Text('See All',
-            style: TextStyle(color: _C.primary, fontSize: 13, fontWeight: FontWeight.w600))),
+      Row(children: [
+        const Expanded(
+          child: Text('Challenges',
+            style: TextStyle(color: _C.onSurface, fontSize: 20, fontWeight: FontWeight.w800))),
+        const SizedBox(width: 8),
+        // U5 · was 13px text with no role: < 44px and announced as plain text.
+        Semantics(
+          button: true,
+          label: 'See all challenges',
+          excludeSemantics: true,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => context.go('/challenges'),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+              child: const Center(widthFactor: 1, heightFactor: 1,
+                child: Text('See All',
+                  style: TextStyle(color: _C.primary, fontSize: 13, fontWeight: FontWeight.w600)))))),
       ]),
       const SizedBox(height: 12),
 
@@ -688,47 +740,52 @@ class _ChallengeSection extends ConsumerWidget {
                 shape: BoxShape.circle, color: _C.brand.withValues(alpha: 0.12)),
               child: const Icon(Icons.notifications_off_outlined, color: _C.primary, size: 22)),
             const SizedBox(width: 12),
-            const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Enable challenge alerts',
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Enable challenge alerts',
                 style: TextStyle(color: _C.onSurface, fontSize: 13, fontWeight: FontWeight.w600)),
-              SizedBox(height: 3),
-              Text('Turn on notifications to track challenges here.',
+              const SizedBox(height: 3),
+              const Text('Turn on notifications to track challenges here.',
                 style: TextStyle(color: _C.onSurfVar, fontSize: 11, height: 1.4)),
+              if (stacked) ...[const SizedBox(height: 10), enable],
             ])),
-            const SizedBox(width: 8),
-            GestureDetector(
-              onTap: () => context.push('/notification-preferences'),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: _C.brand.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(8)),
-                child: const Text('Enable',
-                  style: TextStyle(color: _C.primary, fontSize: 12, fontWeight: FontWeight.w600)))),
+            if (!stacked) ...[const SizedBox(width: 8), enable],
           ]))
+      else if (challengesAsync.hasError) ...[
+        // P0-FL-53b · a failed read said "No active challenges": a claim about
+        // what exists that the app could not make. The failure is recorded
+        // once, by LiveChallengeService.getActiveChallenges. What this member
+        // was last shown stays, under the notice.
+        _GlassCard(
+          padding: const EdgeInsets.all(18),
+          child: SectionLoadFailure(
+            what: 'challenges',
+            error: challengesAsync.error,
+            busy: challengesAsync.isLoading,
+            onRetry: () => ref.invalidate(liveChallengesProvider),
+            textColor: _C.onSurface,
+            mutedColor: _C.onSurfVar,
+            detail: held != null && held.any((c) => c.status == ChallengeStatus.active)
+                ? 'Showing the challenges loaded earlier.'
+                : null)),
+        if (held != null && held.any((c) => c.status == ChallengeStatus.active)) ...[
+          const SizedBox(height: 10),
+          _challengeList(context, held),
+        ],
+      ]
       else
         challengesAsync.when(
           loading: () => _GlassCard(
             padding: const EdgeInsets.symmetric(vertical: 28),
             child: const Center(
               child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2))),
-          error: (_, __) => _GlassCard(
-            padding: const EdgeInsets.all(18),
-            child: Row(children: [
-              Container(width: 44, height: 44,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle, color: _C.brand.withValues(alpha: 0.12)),
-                child: const Icon(Icons.emoji_events_outlined, color: _C.primary, size: 22)),
-              const SizedBox(width: 12),
-              const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('No active challenges',
-                  style: TextStyle(color: _C.onSurface, fontSize: 13, fontWeight: FontWeight.w600)),
-                SizedBox(height: 3),
-                Text('Check back soon for new challenges.',
-                  style: TextStyle(color: _C.onSurfVar, fontSize: 11, height: 1.4)),
-              ])),
-            ])),
-          data: (all) {
+          // Unreachable: `hasError` is handled above.
+          error: (_, __) => const SizedBox.shrink(),
+          data: (all) => _challengeList(context, all),
+        ),
+    ]);
+  }
+
+  Widget _challengeList(BuildContext context, List<Challenge> all) {
             final active = all
                 .where((c) => c.status == ChallengeStatus.active)
                 .take(3)
@@ -828,9 +885,14 @@ class _ChallengeSection extends ConsumerWidget {
                               if (ok) {
                                 ref.invalidate(liveChallengesProvider);
                               } else {
+                                // P0-FL-53b · recorded by the notifier; said in
+                                // the one voice, announced.
+                                final err = ref.read(challengeNotifierProvider.notifier)
+                                    .lastJoinError;
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Unable to join — please try again.')));
+                                  SnackBar(
+                                    content: Semantics(liveRegion: true,
+                                      child: Text(couldntMessage('join this challenge', err)))));
                               }
                             },
                             child: Container(
@@ -848,9 +910,6 @@ class _ChallengeSection extends ConsumerWidget {
                 );
               }),
             );
-          },
-        ),
-    ]);
   }
 }
 

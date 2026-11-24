@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 const _bg    = Color(0xFF030303);
 const _card  = Color(0xFF0E0B16);
@@ -91,6 +92,9 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
       if (!mounted) return;
       setState(() => _deleting.remove(id));
       if ((rows as List).isEmpty) {
+        // P0-FL-53b · said, but was never recorded.
+        reportError('CoachAvailabilityScreen._delete',
+            StateError('coach_availability delete matched no row'));
         messenger.showSnackBar(const SnackBar(content: Text(
             "Couldn't remove this slot — it may already be gone or booked. "
             'Refreshing your list.')));
@@ -527,6 +531,8 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
   String _type = 'check_in';
   int _duration = 30;
   bool _saving = false;
+  /// The last publish's failure, said above the button (P0-FL-53b r2).
+  String? _error;
 
   static const _types = [
     ('check_in',         'Weekly Check-In'),
@@ -538,7 +544,7 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
   static const _durations = [30, 45, 60];
 
   Future<void> _save() async {
-    setState(() => _saving = true);
+    setState(() { _saving = true; _error = null; });
     try {
       final uid = _db.auth.currentUser?.id;
       final slotTime = DateTime(_date.year, _date.month, _date.day, _hour, _minute);
@@ -553,11 +559,12 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
         Navigator.pop(context);
         widget.onSaved();
       }
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        // ERR-2: see coach_video_response_screen.
-        const SnackBar(content: Text('Failed to save availability. Try again.'),
-            backgroundColor: Colors.red));
+    } catch (e, st) {
+      // ERR-2: see coach_video_response_screen. P0-FL-53b · recorded (it was
+      // swallowed unseen), and said in the one voice.
+      reportError('CoachAvailabilityScreen._AddSlotSheet._save', e, st);
+      // Said inside the sheet: a SnackBar would sit on the Scaffold under it.
+      if (mounted) setState(() => _error = couldntMessage('save this time slot', e));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -582,7 +589,10 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
     final months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     final days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
-    return Padding(
+    // P0-FL-53b r3 · the body scrolls: with the failure line (r2), large
+    // text or a short phone, Publish Slot stays reachable instead of being
+    // pushed off screen.
+    return SingleChildScrollView(
       padding: EdgeInsets.only(
         left: 20, right: 20, top: 20,
         bottom: MediaQuery.of(context).viewInsets.bottom + 20),
@@ -605,9 +615,8 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
             child: Row(children: [
               const Icon(Icons.calendar_today_rounded, color: _brand, size: 18),
               const SizedBox(width: 10),
-              Text('${days[_date.weekday - 1]}, ${_date.day} ${months[_date.month - 1]} ${_date.year}',
-                style: const TextStyle(color: _wht, fontSize: 14, fontWeight: FontWeight.w600)),
-              const Spacer(),
+              Expanded(child: Text('${days[_date.weekday - 1]}, ${_date.day} ${months[_date.month - 1]} ${_date.year}',
+                style: const TextStyle(color: _wht, fontSize: 14, fontWeight: FontWeight.w600))),
               const Icon(Icons.chevron_right_rounded, color: _mut, size: 18),
             ]),
           ),
@@ -654,9 +663,7 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
         // Duration
         const Text('Duration', style: TextStyle(color: _mut, fontSize: 12, fontWeight: FontWeight.w600)),
         const SizedBox(height: 8),
-        Row(children: _durations.map((d) => Padding(
-          padding: const EdgeInsets.only(right: 8),
-          child: GestureDetector(
+        Wrap(spacing: 8, runSpacing: 8, children: _durations.map((d) => GestureDetector(
             onTap: () => setState(() => _duration = d),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 150),
@@ -667,10 +674,14 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
                 border: Border.all(color: _duration == d ? _tert : _brd)),
               child: Text('$d min', style: TextStyle(
                 color: _duration == d ? _tert : _mut, fontSize: 13, fontWeight: FontWeight.w600))),
-          ),
         )).toList()),
         const SizedBox(height: 24),
 
+        if (_error != null) ...[
+          Semantics(liveRegion: true, child: Text(_error!,
+              style: const TextStyle(color: Color(0xFFFFB4AB), fontSize: 13, height: 1.35))),
+          const SizedBox(height: 12),
+        ],
         SizedBox(width: double.infinity, child: ElevatedButton(
           onPressed: _saving ? null : _save,
           style: ElevatedButton.styleFrom(

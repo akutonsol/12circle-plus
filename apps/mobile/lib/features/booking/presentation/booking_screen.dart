@@ -56,6 +56,8 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
   /// Calls whose cancel is in flight: their Cancel control is busy (no double
   /// fire).
   final Set<String> _cancelling = {};
+  /// Why the last read failed, for the error state's next step.
+  Object? _loadError;
 
   @override
   void initState() {
@@ -153,14 +155,17 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       final selId = _coaches.any((c) => c['id'] == _coachId)
           ? _coachId! : _coaches.first['id'] as String;
       await _applyCoach(selId);
-    } catch (_) {
+    } catch (e, st) {
       // UIX-1 / invariants I-1 and I-5: the authoritative data could not be
       // obtained, so the screen must not present the confident "no slots"
       // answer. An empty value is an answer; this is not one.
+      // P0-FL-53b · and it is recorded: this catch swallowed it unseen.
+      reportError('BookingScreen._load', e, st);
       if (!mounted) return;
       setState(() {
         _slots  = [];
         _booked = [];
+        _loadError = e;
         _state  = _BookingState.error;
       });
     }
@@ -229,11 +234,13 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
     setState(() => _state = _BookingState.loading);
     try {
       await _applyCoach(coachId);
-    } catch (_) {
+    } catch (e, st) {
+      reportError('BookingScreen._selectCoach', e, st);
       if (!mounted) return;
       setState(() {
         _slots  = [];
         _booked = [];
+        _loadError = e;
         _state  = _BookingState.error;
       });
     }
@@ -450,7 +457,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         onRefresh:    _load,
       ),
       _BookingState.noSlots  => _NoSlotsState(coachName: _coachName),
-      _BookingState.error    => _LoadFailedState(onRetry: _load),
+      _BookingState.error    => _LoadFailedState(error: _loadError, onRetry: _load),
       _BookingState.ready || _BookingState.booked => _ReadyState(
         coachName: _coachName ?? 'Your Coach',
         coachAvatar: _coachAvatar,
@@ -740,8 +747,9 @@ class _PendingCoachState extends StatelessWidget {
 // answer about the coach's availability, and this is the absence of an answer.
 // Collapsing the two is the false-success condition Workstream M recorded.
 class _LoadFailedState extends StatelessWidget {
+  final Object? error;
   final VoidCallback onRetry;
-  const _LoadFailedState({required this.onRetry});
+  const _LoadFailedState({required this.error, required this.onRetry});
 
   @override
   Widget build(BuildContext context) => Center(
@@ -754,14 +762,19 @@ class _LoadFailedState extends StatelessWidget {
             color: _brand.withValues(alpha: 0.1), shape: BoxShape.circle),
           child: const Icon(Icons.cloud_off_rounded, color: _brand, size: 36)),
         const SizedBox(height: 20),
-        const Text("Couldn't load your bookings",
-          style: TextStyle(color: _wht, fontSize: 20, fontWeight: FontWeight.w700),
-          textAlign: TextAlign.center),
+        Semantics(
+          liveRegion: true,
+          child: const Text("Couldn't load your bookings",
+            style: TextStyle(color: _wht, fontSize: 20, fontWeight: FontWeight.w700),
+            textAlign: TextAlign.center)),
         const SizedBox(height: 10),
-        const Text(
-          'We could not reach your coach and availability data just now. '
-          'This is a connection problem, not an empty schedule.',
-          style: TextStyle(color: _mut, fontSize: 13, height: 1.5),
+        // P0-FL-53b · it said "This is a connection problem" for every
+        // failure; the connection hint is only for one that IS the connection.
+        Text(
+          isNetworkFailure(error)
+              ? 'Check your connection and try again.'
+              : 'Try again in a moment. If it keeps happening, contact support.',
+          style: const TextStyle(color: _mut, fontSize: 13, height: 1.5),
           textAlign: TextAlign.center),
         const SizedBox(height: 20),
         TextButton.icon(
