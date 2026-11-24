@@ -545,9 +545,9 @@ void main() {
       });
     }
 
-    testWidgets(
-        'a press between the close and the next frame does not pop the screen',
-        (tester) async {
+    for (final button in ['Add', 'Invite']) {
+      testWidgets('a press on $button between the close and the next frame '
+          'does not pop the screen', (tester) async {
       VoidCallback? add;
       AlertDialog? stillMounted;
       tester.view
@@ -564,9 +564,16 @@ void main() {
           ],
           home: const CoachBusinessScreen()));
       await settle(tester);
-      await typeCert(tester, 'CSCS');
+      if (button == 'Invite') {
+        await showTab(tester, 'Team');
+        await tester.tap(find.text('Invite Assistant Coach'));
+        await tester.pumpAndSettle();
+        await tester.enterText(dialogField(), 'invitee-of-a@example.com');
+      } else {
+        await typeCert(tester, 'CSCS');
+      }
       add = tester
-          .widget<TextButton>(find.widgetWithText(TextButton, 'Add'))
+          .widget<TextButton>(find.widgetWithText(TextButton, button))
           .onPressed;
       await tester.runAsync(() => auth().recoverSession(_session(_b)));
       await settle(tester);
@@ -574,10 +581,14 @@ void main() {
           reason: 'premise: closed, its widgets not yet gone');
       expect(find.byType(AlertDialog), findsNothing);
       expect(find.byType(CoachBusinessScreen), findsOneWidget);
+      if (button == 'Invite') await showTab(tester, 'Profile');
       expect(find.text('Bravo bio'), findsOneWidget);
       expect(server.patches, isEmpty);
+      expect(server.calls.where((c) => c.contains('coach_team_invites')),
+          isEmpty);
       await close(tester);
-    });
+      });
+    }
 
     testWidgets('sign-out closes it; nothing is written when A is back',
         (tester) async {
