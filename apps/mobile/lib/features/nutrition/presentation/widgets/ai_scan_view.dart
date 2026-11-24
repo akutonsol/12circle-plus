@@ -1,7 +1,10 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show Uint8List, kIsWeb;
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:image_picker/image_picker.dart';
+import '../../../../core/observability/app_failure.dart';
+import '../../../workout/presentation/widgets/section_load_failure.dart';
 import '../../data/nutrition_service.dart';
 
 const _card    = Color(0xFF0D0D1E);
@@ -128,6 +131,13 @@ class _AiScanViewState extends State<AiScanView> {
   _ScanStage _stage = _ScanStage.idle;
   ScanResult? _result;
   double _portion = 1.0; // serving multiplier applied before logging
+  /// A picker is open (or its file is being read): no second one opens.
+  bool _picking = false;
+  /// What the last photo attempt's failure says (null = none). Inline, not a
+  /// SnackBar: this view lives in the Log Meal bottom sheet, and a SnackBar
+  /// belongs to the page BEHIND it — it was drawn under the sheet, unseen
+  /// (P0-FL-56a).
+  String? _notice;
 
   @override
   void dispose() {
@@ -159,7 +169,7 @@ class _AiScanViewState extends State<AiScanView> {
     final text = _descCtrl.text.trim();
     if (text.isEmpty) return;
     FocusScope.of(context).unfocus();
-    setState(() { _image = null; _stage = _ScanStage.scanning; });
+    setState(() { _image = null; _notice = null; _stage = _ScanStage.scanning; });
     try {
       final r = await NutritionService().analyzeFood(description: text);
       if (!mounted) return;
@@ -172,30 +182,56 @@ class _AiScanViewState extends State<AiScanView> {
     }
   }
 
-  Future<void> _pickImage(ImageSource source) async {
+  void _say(String message) {
+    if (mounted) setState(() => _notice = message);
+  }
+
+  /// One photo, picked and read. Null is the person cancelling (silent) or a
+  /// failure that was recorded and said here.
+  Future<(XFile, Uint8List)?> _pickAndRead(ImageSource source) async {
+    if (_picking) return null;
+    setState(() { _picking = true; _notice = null; });
     try {
-      final file = await _picker.pickImage(source: source, imageQuality: 80);
-      if (file == null) return;
-      if (!mounted) return;
-      setState(() {
-        _image = file;
-        _stage = _ScanStage.scanning;
-      });
-      await _analyze();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Couldn't access the camera or gallery.")),
-        );
+      final XFile? file;
+      try {
+        file = await _picker.pickImage(source: source, imageQuality: 80);
+      } catch (e, st) {
+        reportError('nutrition.scan.pick.${source.name}', e, st);
+        final camera = source == ImageSource.camera;
+        final what = camera ? 'camera' : 'photos';
+        // image_picker's permission codes end `_access_denied`.
+        _say(e is PlatformException && e.code.endsWith('_access_denied')
+            ? "Couldn't open your $what — allow ${camera ? 'camera' : 'photo'} "
+                'access in Settings, then try again.'
+            : couldntMessage('open your $what', e));
+        return null;
       }
+      if (file == null) return null;
+      try {
+        return (file, await file.readAsBytes());
+      } catch (e, st) {
+        reportError('nutrition.scan.read', e, st);
+        _say(couldntMessage('use that photo', e));
+        return null;
+      }
+    } finally {
+      if (mounted) setState(() => _picking = false);
     }
   }
 
-  Future<void> _analyze() async {
-    final file = _image;
-    if (file == null) return;
+  Future<void> _pickImage(ImageSource source) async {
+    final picked = await _pickAndRead(source);
+    if (picked == null || !mounted) return;
+    final (file, bytes) = picked;
+    setState(() {
+      _image = file;
+      _stage = _ScanStage.scanning;
+    });
+    await _analyze(file, bytes);
+  }
+
+  Future<void> _analyze(XFile file, Uint8List bytes) async {
     try {
-      final bytes = await file.readAsBytes();
       final ext = file.name.toLowerCase().split('.').last;
       final mime = ext == 'png' ? 'image/png'
           : ext == 'webp' ? 'image/webp'
@@ -208,12 +244,14 @@ class _AiScanViewState extends State<AiScanView> {
         _portion = 1.0;
         _stage = _ScanStage.result;
       });
-    } catch (e) {
+    } catch (e, st) {
+      reportError('nutrition.scan.analyze', e, st);
       if (!mounted) return;
-      setState(() => _stage = _ScanStage.idle);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Couldn't analyze that photo. Try again or add manually."),
-          backgroundColor: _redChip));
+      setState(() {
+        _stage = _ScanStage.idle;
+        _notice = '${couldntMessage('analyze that photo', e)} '
+            'You can also add the meal manually.';
+      });
     }
   }
 
@@ -250,6 +288,21 @@ class _AiScanViewState extends State<AiScanView> {
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
       child: Column(
         children: [
+          if (_notice != null) ...[
+            Semantics(
+              liveRegion: true,
+              container: true,
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const ExcludeSemantics(child: Icon(
+                  Icons.error_outline, color: _redChip, size: 18)),
+                const SizedBox(width: 10),
+                Expanded(child: Text(_notice!,
+                  style: const TextStyle(
+                    color: _redChip, fontSize: 13, height: 1.4))),
+              ]),
+            ),
+            const SizedBox(height: 16),
+          ],
           // ── Camera placeholder ─────────────────────────────────────
           Container(
             width: double.infinity,

@@ -1,10 +1,13 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:speech_to_text/speech_to_text.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../domain/ai_nutrition_provider.dart';
 import 'widgets/ai_chat_bubble.dart';
 
@@ -75,15 +78,70 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
     await ref.read(aiNutritionNotifierProvider.notifier).sendMessage(message, image: image);
     if (!mounted) return;
     setState(() => _isLoading = false);
+    // The notifier draws the failed turn (with "Send it again") but records
+    // nothing; a photo turn's failure is recorded here (P0-FL-56a).
+    if (image != null && ref.read(aiNutritionNotifierProvider).last.failed) {
+      reportError('aiNutrition.photo.analyze',
+          StateError('the photo turn was not answered'));
+    }
     _scrollToBottom();
   }
 
+  void _say(String message) {
+    if (!mounted) return;
+    // A SnackBar is a live region on its own. The default 4 s: it covers the
+    // composer.
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// Source sheet → picker → read in flight: a second tap opens nothing.
+  bool _pickingPhoto = false;
+
+  /// P0-FL-56a · one readable photo, or null: the person cancelled (silent),
+  /// or a failure that was recorded and said here. The picker was unguarded —
+  /// a denied permission was an uncaught error and the button did nothing.
+  Future<File?> _pickPhoto() async {
+    if (_pickingPhoto) return null;
+    _pickingPhoto = true;
+    try {
+      final source = await _showImageSourceSheet();
+      if (source == null) return null;
+      final XFile? xfile;
+      try {
+        xfile = await _picker.pickImage(source: source, imageQuality: 80);
+      } catch (e, st) {
+        reportError('aiNutrition.photo.pick.${source.name}', e, st);
+        final camera = source == ImageSource.camera;
+        final what = camera ? 'camera' : 'photos';
+        // image_picker's permission codes end `_access_denied`.
+        _say(e is PlatformException && e.code.endsWith('_access_denied')
+            ? "Couldn't open your $what — allow ${camera ? 'camera' : 'photo'} "
+                'access in Settings, then try again.'
+            : couldntMessage('open your $what', e));
+        return null;
+      }
+      if (xfile == null) return null;
+      try {
+        // Openable? An unreadable file was sent anyway and came back as a
+        // turn the assistant had failed.
+        final photo = File(xfile.path);
+        await photo.openRead(0, 1).drain<void>();
+        return photo;
+      } catch (e, st) {
+        reportError('aiNutrition.photo.read', e, st);
+        _say(couldntMessage('use that photo', e));
+        return null;
+      }
+    } finally {
+      _pickingPhoto = false;
+    }
+  }
+
   Future<void> _pickAndAnalyzePhoto() async {
-    final source = await _showImageSourceSheet();
-    if (source == null) return;
-    final xfile = await _picker.pickImage(source: source, imageQuality: 80);
-    if (xfile == null) return;
-    await _sendMessage('Analyze this meal photo for me.', image: File(xfile.path));
+    final photo = await _pickPhoto();
+    if (photo == null || !mounted) return;
+    await _sendMessage('Analyze this meal photo for me.', image: photo);
   }
 
   Future<ImageSource?> _showImageSourceSheet() async {

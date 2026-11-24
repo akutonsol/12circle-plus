@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
@@ -567,16 +568,67 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     });
   }
 
-  Future<void> _pickImage() async {
-    final picked = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
-    if (picked != null) {
-      final bytes = await picked.readAsBytes();
-      if (!mounted) return;
-      setState(() {
-        _imageBytes = bytes;
-        _imageExt = _extOf(picked.name, 'jpg');
-      });
+  /// A gallery picker is open (or its file is being read): no second opens.
+  bool _picking = false;
+
+  /// The picked file is being read. Save waits for it: it would store the
+  /// exercise without that media and say "Exercise Saved!".
+  bool _readingMedia = false;
+
+  void _sayMedia(String message) {
+    if (!mounted) return;
+    // A SnackBar is a live region on its own.
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        duration: const Duration(seconds: 6), content: Text(message)));
+  }
+
+  /// P0-FL-56a · one file, picked and read. Null is the person cancelling
+  /// (silent) or a failure that was recorded and said here — both awaits were
+  /// unguarded, so a denied permission was an uncaught error and the tile did
+  /// nothing. [what] is 'image' or 'video'; whatever was chosen before stays.
+  Future<(XFile, Uint8List)?> _pickMedia(
+      String what, Future<XFile?> Function() open) async {
+    if (_picking) return null;
+    _picking = true;
+    try {
+      final XFile? file;
+      try {
+        file = await open();
+      } catch (e, st) {
+        reportError('exercise.$what.pick.gallery', e, st);
+        final library = what == 'video' ? 'videos' : 'photos';
+        // image_picker's permission codes end `_access_denied`.
+        _sayMedia(e is PlatformException && e.code.endsWith('_access_denied')
+            ? "Couldn't open your $library — allow photo access in Settings, "
+                'then try again.'
+            : couldntMessage('open your $library', e));
+        return null;
+      }
+      if (file == null) return null;
+      if (mounted) setState(() => _readingMedia = true);
+      try {
+        return (file, await file.readAsBytes());
+      } catch (e, st) {
+        reportError('exercise.$what.read', e, st);
+        _sayMedia(couldntMessage('use that $what', e));
+        return null;
+      } finally {
+        if (mounted) setState(() => _readingMedia = false);
+      }
+    } finally {
+      _picking = false;
     }
+  }
+
+  Future<void> _pickImage() async {
+    final picked = await _pickMedia('image',
+        () => _picker.pickImage(source: ImageSource.gallery, imageQuality: 80));
+    if (picked == null || !mounted) return;
+    final (file, bytes) = picked;
+    setState(() {
+      _imageBytes = bytes;
+      _imageExt = _extOf(file.name, 'jpg');
+    });
   }
 
   String _extOf(String name, String fallback) {
@@ -585,15 +637,17 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   }
 
   Future<void> _pickVideo(int index) async {
-    final picked = await _picker.pickVideo(source: ImageSource.gallery);
-    if (picked != null) {
-      final bytes = await picked.readAsBytes();
-      if (!mounted) return;
-      setState(() {
-        _videoEntries[index].bytes = bytes;
-        _videoEntries[index].ext = _extOf(picked.name, 'mp4');
-      });
-    }
+    // The entry, not its index: one removed while its file is read must not
+    // hand the video to the next entry (or throw past the end of the list).
+    final entry = _videoEntries[index];
+    final picked = await _pickMedia(
+        'video', () => _picker.pickVideo(source: ImageSource.gallery));
+    if (picked == null || !mounted) return;
+    final (file, bytes) = picked;
+    setState(() {
+      entry.bytes = bytes;
+      entry.ext = _extOf(file.name, 'mp4');
+    });
   }
 
   /// JSON used to populate the normalized child tables — the full imported
@@ -618,6 +672,8 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     if (_saving) return;
     // P0-FL-50a · never save a form that does not hold the exercise yet.
     if (_prefillPending) return;
+    // P0-FL-56a · nor one whose picked file is still being read.
+    if (_readingMedia) return;
     if (!_formKey.currentState!.validate()) {
       _tabs.animateTo(0);
       return;
@@ -971,14 +1027,16 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
               Semantics(
                 container: true,
                 button: true,
-                enabled: !(_saving || _prefillPending),
+                enabled: !(_saving || _prefillPending || _readingMedia),
                 label: 'Save',
                 child: GestureDetector(
-                  onTap: _saving || _prefillPending ? null : _save,
+                  onTap: _saving || _prefillPending || _readingMedia ? null : _save,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     decoration: BoxDecoration(
-                      color: _prefillPending ? _C.brand.withValues(alpha: 0.35) : _C.brand,
+                      color: _prefillPending || _readingMedia
+                          ? _C.brand.withValues(alpha: 0.35)
+                          : _C.brand,
                       borderRadius: BorderRadius.circular(20)),
                     child: ExcludeSemantics(child: _saving
                         ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(color: _C.wht, strokeWidth: 2))

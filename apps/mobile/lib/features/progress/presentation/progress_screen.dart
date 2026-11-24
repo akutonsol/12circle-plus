@@ -1,5 +1,7 @@
+import 'dart:async' show unawaited;
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show Uint8List, kIsWeb;
+import 'package:flutter/services.dart' show PlatformException;
 import 'dart:math' as math;
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -7,6 +9,7 @@ import '../../../features/coach/data/score_service.dart';
 import '../../../features/scoring/data/score_engine.dart';
 import '../../../shared/widgets/app_scaffold.dart';
 import '../../../core/observability/app_failure.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../data/baseline_photo_replace.dart';
 
 class _C {
@@ -62,7 +65,10 @@ class _ProgressScreenState extends State<ProgressScreen>
     _loadData();
   }
 
-  Future<void> _loadData() async {
+  /// [afterPhoto]: a reload after a photo was stored. If it fails, what is on
+  /// screen stays and the failed refresh is said (P0-FL-56a) — the photo IS
+  /// saved, and "Could not load your progress" in its place hid both facts.
+  Future<void> _loadData({bool afterPhoto = false}) async {
     if (mounted) setState(() => _loadFailed = false);
     final uid = Supabase.instance.client.auth.currentUser?.id;
     if (uid == null) { setState(() => _loading = false); return; }
@@ -151,7 +157,12 @@ class _ProgressScreenState extends State<ProgressScreen>
           _loading  = false;
         });
       }
-    } catch (_) {
+    } catch (e, st) {
+      reportError('ProgressScreen._loadData', e, st);
+      if (afterPhoto) {
+        _say('Your photo is saved. ${couldntMessage('refresh your progress', e)}');
+        return;
+      }
       if (mounted) setState(() { _loading = false; _loadFailed = true; });
     }
   }
@@ -330,23 +341,98 @@ class _ProgressScreenState extends State<ProgressScreen>
     );
   }
 
-  Future<void> _pickAndUploadPhoto(BuildContext context) async {
-    final source = await _showPhotoSourceSheet();
-    if (source == null) return;
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(source: source, imageQuality: 85);
-    if (picked == null) return;
-    final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (uid == null) return;
+  void _say(String message) {
+    if (!mounted) return;
+    // A SnackBar is a live region on its own.
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        duration: const Duration(seconds: 6), content: Text(message)));
+  }
+
+  /// Source sheet → picker → read in flight: a second tap opens nothing.
+  bool _pickingPhoto = false;
+
+  /// P0-FL-56a · one photo, picked and read, with the member it belongs to.
+  /// Null is the person cancelling (silent: legitimate absence) or a failure
+  /// that was recorded and said here. The picker call was unguarded: a denied
+  /// permission or a missing camera was an uncaught error and the button did
+  /// nothing.
+  Future<({XFile file, Uint8List bytes, String uid})?> _pickPhoto(String origin,
+      {bool webUsesGallery = false}) async {
+    if (_pickingPhoto) return null;
+    _pickingPhoto = true;
     try {
-      final bytes = await picked.readAsBytes();
-      final ext = picked.path.split('.').last.toLowerCase();
+      final auth = Supabase.instance.client.auth;
+      final uid = auth.currentUser?.id;
+      var source = await _showPhotoSourceSheet();
+      if (source == null) return null;
+      if (uid == null) {
+        reportError('$origin.signedOut', StateError('no session'));
+        _say("You're signed out — sign in again to add your photo.");
+        return null;
+      }
+      // The browser can't open a native camera — fall back to the file picker.
+      if (webUsesGallery && kIsWeb && source == ImageSource.camera) {
+        source = ImageSource.gallery;
+      }
+      final XFile? file;
+      try {
+        file = await ImagePicker().pickImage(source: source, imageQuality: 85);
+      } catch (e, st) {
+        reportError('$origin.pick.${source.name}', e, st);
+        final camera = source == ImageSource.camera;
+        final what = camera ? 'camera' : 'photos';
+        // image_picker's permission codes end `_access_denied`.
+        _say(e is PlatformException && e.code.endsWith('_access_denied')
+            ? "Couldn't open your $what — allow ${camera ? 'camera' : 'photo'} "
+                'access in Settings, then try again.'
+            : couldntMessage('open your $what', e));
+        return null;
+      }
+      if (file == null) return null;
+      final Uint8List bytes;
+      try {
+        bytes = await file.readAsBytes();
+      } catch (e, st) {
+        reportError('$origin.read', e, st);
+        _say(couldntMessage('use that photo', e));
+        return null;
+      }
+      // Another member signed in meanwhile: their folder never receives this
+      // member's photo.
+      if (auth.currentUser?.id != uid) {
+        reportError('$origin.identity',
+            StateError('the member changed during a pick'));
+        return null;
+      }
+      return (file: file, bytes: bytes, uid: uid);
+    } finally {
+      _pickingPhoto = false;
+    }
+  }
+
+  /// Best effort: a failed award never turns the saved photo into a failure.
+  Future<void> _awardCheckinPoints() async {
+    try {
+      await ScoreService().addCheckinPoints();
+    } catch (e, st) {
+      reportError('progress.photo.points', e, st);
+    }
+  }
+
+  Future<void> _pickAndUploadPhoto(BuildContext context) async {
+    final photo = await _pickPhoto('progress.photo');
+    if (photo == null) return;
+    final uid = photo.uid;
+    var step = 'upload';
+    try {
+      final ext = photo.file.path.split('.').last.toLowerCase();
       final ts = DateTime.now().millisecondsSinceEpoch;
       final storagePath = '$uid/gallery_${ts}.$ext';
       await Supabase.instance.client.storage
           .from('progress-photos')
-          .uploadBinary(storagePath, bytes,
+          .uploadBinary(storagePath, photo.bytes,
             fileOptions: FileOptions(contentType: 'image/$ext', upsert: false));
+      step = 'save';
       // Every progress log's `logged_at` is timestamptz and goes out as a UTC
       // instant. Local time with no zone is read by Postgres as UTC, so the
       // dates and times this screen converts back (`toLocal`) were shifted by
@@ -358,33 +444,26 @@ class _ProgressScreenState extends State<ProgressScreen>
         'side': 'gallery',
         'logged_at': DateTime.now().toUtc().toIso8601String(),
       });
-      ScoreService().addCheckinPoints();
-      ScoreEngine().progressPhotos();
-      _loadData();
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to upload photo'), backgroundColor: Colors.red));
-      }
+    } catch (e, st) {
+      reportError('progress.photo.$step', e, st);
+      _say(couldntMessage('save your photo', e));
+      return;
     }
+    unawaited(_awardCheckinPoints());
+    ScoreEngine().progressPhotos();
+    _loadData(afterPhoto: true);
   }
 
   // Sets one of the baseline (start) photos — front / side / back — writing to
   // the SAME `<uid>/<side>.<ext>` path the onboarding step uses, so it shows in
   // the Comparison Tool here and in the coach's client view.
   Future<void> _setBaselinePhoto(BuildContext context, String side) async {
-    var source = await _showPhotoSourceSheet();
-    if (source == null) return;
-    // The browser can't open a native camera — fall back to the file picker.
-    if (kIsWeb && source == ImageSource.camera) source = ImageSource.gallery;
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(source: source, imageQuality: 85);
-    if (picked == null) return;
-    final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (uid == null) return;
+    final photo = await _pickPhoto('progress.baseline', webUsesGallery: true);
+    if (photo == null) return;
+    final uid = photo.uid;
+    Object? cleanupError;
     try {
-      final bytes = await picked.readAsBytes();
-      final ext = _baselineExt(picked);
+      final ext = _baselineExt(photo.file);
       final mime = ext == 'png' ? 'image/png'
           : ext == 'webp' ? 'image/webp'
           : ext == 'heic' ? 'image/heic' : 'image/jpeg';
@@ -394,23 +473,36 @@ class _ProgressScreenState extends State<ProgressScreen>
       // place and a failed upload can no longer delete the existing photo.
       await replaceBaselinePhoto(
         uid: uid, side: side, ext: ext,
-        upload: (path) => storage.uploadBinary(path, bytes,
+        upload: (path) => storage.uploadBinary(path, photo.bytes,
             fileOptions: FileOptions(contentType: mime, upsert: true)),
-        remove: (paths) => storage.remove(paths),
-        onCleanupError: (e, s) =>
-            reportError('ProgressScreen._setBaselinePhoto.cleanup', e, s),
+        remove: (paths) async {
+          await storage.remove(paths);
+          // `remove` does not throw for a copy it could not delete, and an
+          // empty answer is normal (there was no other copy). Look: a copy
+          // still there can be the one this screen finds first.
+          final left = await storage.list(
+              path: uid, searchOptions: SearchOptions(search: '$side.'));
+          if (left.any((o) => paths.contains('$uid/${o.name}'))) {
+            throw StateError('an earlier baseline photo is still in storage');
+          }
+        },
+        onCleanupError: (e, s) {
+          cleanupError = e;
+          reportError('ProgressScreen._setBaselinePhoto.cleanup', e, s);
+        },
       );
-      _loadData();
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${side[0].toUpperCase()}${side.substring(1)} photo updated')));
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Upload failed.'), backgroundColor: Colors.red));
-      }
+    } catch (e, st) {
+      reportError('progress.baseline.upload', e, st);
+      _say(couldntMessage('update your $side photo', e));
+      return;
     }
+    final name = '${side[0].toUpperCase()}${side.substring(1)}';
+    final stale = cleanupError;
+    _say(stale == null
+        ? '$name photo updated'
+        : '$name photo saved. '
+            '${couldntMessage('remove the earlier one, so it may still show', stale)}');
+    _loadData(afterPhoto: true);
   }
 
   String _baselineExt(XFile f) {
