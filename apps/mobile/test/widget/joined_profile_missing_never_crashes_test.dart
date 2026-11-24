@@ -143,9 +143,13 @@ class _Server extends http.BaseClient {
           },
         ]);
       case 'user_profiles':
-        if (single) {
-          // The signed-in coach's own row (CoachBusinessScreen).
-          return _json(request, {
+        // The signed-in coach's own row (CoachBusinessScreen). Its
+        // `.maybeSingle()` read asks for a LIST filtered by id, so it is
+        // matched by the filter too: answering it with another user's row
+        // passed only while the screen never checked whose row it got
+        // (P0-FL-54 now refuses a row that is not the signed-in coach's).
+        if (single || request.url.queryParameters['id'] == 'eq.$_uid') {
+          final row = {
             'id': _uid,
             'bio': 'Bio',
             'tagline': '',
@@ -153,7 +157,8 @@ class _Server extends http.BaseClient {
             'years_experience': 3,
             'specialties': <String>[],
             'certifications': <String>[],
-          });
+          };
+          return _json(request, single ? row : [row]);
         }
         return _json(request, [
           {

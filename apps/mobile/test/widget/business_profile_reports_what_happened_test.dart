@@ -537,10 +537,16 @@ void main() {
     testWidgets('signed out: says so and writes nothing', (tester) async {
       await open(tester);
       await signOut(tester);
-      await tapSave(tester);
+      // P0-FL-54: a sign-out now takes the form (and Save) away — the coach's
+      // profile is no longer on screen to be saved. It says why.
+      await settle(tester);
+      expect(find.text('Save'), findsNothing);
+      expect(find.byType(TextField), findsNothing);
+      expect(
+          find.text(
+              "You're signed out — sign in again to see your business profile."),
+          findsOneWidget);
       expect(patchCount(), 0);
-      expect(find.text(_signedOut), findsOneWidget,
-          reason: 'THE defect: Save returned silently');
     });
   });
 
@@ -637,7 +643,10 @@ void main() {
 
   // ── E. Team invite ─────────────────────────────────────────────────────────
   group('E. team invite', () {
-    Future<void> invite(WidgetTester tester) async {
+    /// [beforeSubmit] runs with the dialog open (P0-FL-54: a sign-out takes
+    /// the Team tab away, so a signed-out submit happens from an open dialog).
+    Future<void> invite(WidgetTester tester,
+        {Future<void> Function()? beforeSubmit}) async {
       await tester.tap(find.text('Team'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Invite Assistant Coach'));
@@ -646,6 +655,7 @@ void main() {
           find.descendant(
               of: find.byType(AlertDialog), matching: find.byType(TextField)),
           'assistant@example.com');
+      if (beforeSubmit != null) await beforeSubmit();
       await tester.tap(find.text('Invite'));
       await settleOnSnackBar(tester, 'the invite outcome (a SnackBar)');
     }
@@ -673,8 +683,7 @@ void main() {
 
     testWidgets('signed out: says so, no insert, no email', (tester) async {
       await open(tester);
-      await signOut(tester);
-      await invite(tester);
+      await invite(tester, beforeSubmit: () => signOut(tester));
       expect(server.calls, isNot(contains('POST /rest/v1/coach_team_invites')));
       expect(emailed(), isFalse);
       expect(find.text(_signedOut), findsOneWidget);
@@ -893,7 +902,10 @@ void main() {
 
   // ── K. N7 — invite failures use the error style ────────────────────────────
   group('K. invite SnackBars', () {
-    Future<void> invite(WidgetTester tester) async {
+    /// [beforeSubmit] runs with the dialog open (P0-FL-54: a sign-out takes
+    /// the Team tab away, so a signed-out submit happens from an open dialog).
+    Future<void> invite(WidgetTester tester,
+        {Future<void> Function()? beforeSubmit}) async {
       await tester.tap(find.text('Team'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Invite Assistant Coach'));
@@ -902,6 +914,7 @@ void main() {
           find.descendant(
               of: find.byType(AlertDialog), matching: find.byType(TextField)),
           'assistant@example.com');
+      if (beforeSubmit != null) await beforeSubmit();
       await tester.tap(find.text('Invite'));
       await settleOnSnackBar(tester, 'the invite outcome (a SnackBar)');
     }
@@ -917,8 +930,7 @@ void main() {
 
     testWidgets('signed out is shown in the error style', (tester) async {
       await open(tester);
-      await signOut(tester);
-      await invite(tester);
+      await invite(tester, beforeSubmit: () => signOut(tester));
       expect(find.text(_signedOut), findsOneWidget);
       expect(snackColor(tester), _errorRed);
     });
