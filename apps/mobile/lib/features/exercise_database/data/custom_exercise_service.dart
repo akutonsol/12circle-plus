@@ -698,18 +698,37 @@ class CustomExerciseService {
   }
 
   /// Create/replace the coach's overlay (a partial override — any field optional).
+  ///
+  /// P0-FL-53a · false (with [lastError] set and the failure recorded) when
+  /// the upsert failed or wrote no row (an RLS-filtered update returns no
+  /// error and no row). It caught the error without recording it, and the
+  /// sheet closed as if the coaching were saved.
   Future<bool> upsertCoachOverlay(String exerciseId,
       {String? note, List<String>? focus, String? videoRef}) async {
+    lastError = null; // never report an earlier call's error
     try {
       final uid = _db.auth.currentUser?.id;
-      if (uid == null) return false;
-      await _db.from('coach_exercise_media').upsert({
+      if (uid == null) {
+        lastError = 'No coaching was saved';
+        reportError('CustomExerciseService.upsertCoachOverlay', lastError!);
+        return false;
+      }
+      final res = await _db.from('coach_exercise_media').upsert({
         'coach_id': uid, 'exercise_id': exerciseId,
         'note': note, 'focus': focus ?? [], 'video_ref': videoRef,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }, onConflict: 'coach_id,exercise_id');
+      }, onConflict: 'coach_id,exercise_id').select('exercise_id'); // no id column (PK coach_id, exercise_id)
+      if ((res as List).isEmpty) {
+        lastError = 'No coaching was saved';
+        reportError('CustomExerciseService.upsertCoachOverlay', lastError!);
+        return false;
+      }
       return true;
-    } catch (e) { lastError = e; return false; }
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.upsertCoachOverlay', e, st);
+      return false;
+    }
   }
 
   // ── Coaching packs (reusable cue sets) ────────────────────────────────────
@@ -909,10 +928,19 @@ class CustomExerciseService {
   ///
   /// Making the bucket private is the other half and is a migration —
   /// wave-governed, not taken here.
+  ///
+  /// P0-FL-53a · false (with [lastError] set and the failure recorded) when
+  /// the removal or the row update failed, or the update matched no row while
+  /// there was a row to clear. No row at all is nothing to clear (true).
   Future<bool> clearCoachVoice(String exerciseId) async {
+    lastError = null; // never report an earlier call's error
     try {
       final uid = _db.auth.currentUser?.id;
-      if (uid == null) return false;
+      if (uid == null) {
+        lastError = 'No voice note was removed';
+        reportError('CustomExerciseService.clearCoachVoice', lastError!);
+        return false;
+      }
 
       final row = await _db.from('coach_exercise_media')
           .select('voice_url')
@@ -938,11 +966,21 @@ class CustomExerciseService {
         await _db.storage.from('coach-media').remove([path]);
       }
 
-      await _db.from('coach_exercise_media').update({
+      if (row == null) return true; // no overlay row: nothing to clear
+      final res = await _db.from('coach_exercise_media').update({
         'voice_url': null, 'voice_duration_ms': null, 'voice_expires_at': null,
-      }).eq('coach_id', uid).eq('exercise_id', exerciseId);
+      }).eq('coach_id', uid).eq('exercise_id', exerciseId).select('exercise_id');
+      if ((res as List).isEmpty) {
+        lastError = 'No voice note was removed';
+        reportError('CustomExerciseService.clearCoachVoice', lastError!);
+        return false;
+      }
       return true;
-    } catch (e) { lastError = e; return false; }
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.clearCoachVoice', e, st);
+      return false;
+    }
   }
 
   /// Raw exercise row by id (for prefilling the edit form with all columns).

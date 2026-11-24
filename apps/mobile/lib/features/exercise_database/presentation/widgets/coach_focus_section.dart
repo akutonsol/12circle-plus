@@ -75,20 +75,28 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
   Object? _loadError;
   bool _retrying = false;
 
+  /// P0-FL-53a (S-53a-1) · numbers each read; only the newest one is applied.
+  /// Two reads can overlap (a background reload after an edit and a retry):
+  /// an older SUCCESS landing after a newer FAILURE cleared the failure and
+  /// gave Edit back over a copy the newest read could not confirm.
+  int _loadSeq = 0;
+
   /// Loads the overlay for [key] (`uid|staff` or `uid|client`); a response
-  /// that lands after the member or view changed is dropped.
+  /// that lands after the member or view changed, or after a newer read
+  /// started, is dropped.
   Future<void> _loadFor(String key, bool staff) async {
     _loadedKey = key;
+    final seq = ++_loadSeq;
     try {
       final data = staff
           ? await _svc.getCoachOverlay(widget.exerciseId)
           : await _svc.resolveExerciseMedia(widget.exerciseId);
-      if (!mounted || _loadedKey != key) return;
+      if (!mounted || _loadedKey != key || seq != _loadSeq) return;
       setState(() {
         _isStaff = staff; _overlay = data; _loadError = null; _loading = false;
       });
     } catch (e) {
-      if (!mounted || _loadedKey != key) return;
+      if (!mounted || _loadedKey != key || seq != _loadSeq) return;
       // Keep whatever was shown for this member + view; say the read failed.
       setState(() { _isStaff = staff; _loadError = e; _loading = false; });
     }
@@ -288,6 +296,11 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
     final packNameCtl = TextEditingController();
     String? packSaveError;
     var savingPack = false;
+    // P0-FL-53a · a failed save keeps the sheet open with what was typed and
+    // says so; a failed voice-note removal is said too (both recorded by the
+    // service). They were ignored: the sheet closed / the note just stayed.
+    String? saveError;
+    String? voiceClearError;
     var expiry = 'never';
     var saving = false;
     if (!mounted) return;
@@ -331,11 +344,20 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
             if (ctx.mounted) setSheet(() {});
           }
         }
-        Widget field(String label, TextEditingController c, String hint, {int min = 1}) => Column(
+        // A failure said in the sheet: announced when it appears.
+        Widget inlineError(String m) => Padding(padding: const EdgeInsets.only(bottom: 14),
+          child: Semantics(liveRegion: true, container: true,
+            child: Text(m, style: const TextStyle(color: _text, fontSize: 12.5, height: 1.4))));
+        // Editing the cues makes an earlier pack-save failure stale.
+        void cuesEdited() {
+          if (packSaveError != null) setSheet(() => packSaveError = null);
+        }
+        Widget field(String label, TextEditingController c, String hint,
+            {int min = 1, ValueChanged<String>? onChanged}) => Column(
           crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(label, style: const TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1)),
             const SizedBox(height: 6),
-            TextField(controller: c, minLines: min, maxLines: min == 1 ? 1 : null,
+            TextField(controller: c, minLines: min, maxLines: min == 1 ? 1 : null, onChanged: onChanged,
               style: const TextStyle(color: _text, fontSize: 14),
               decoration: InputDecoration(hintText: hint, hintStyle: const TextStyle(color: _muted),
                 filled: true, fillColor: _panel2,
@@ -343,7 +365,9 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                 contentPadding: const EdgeInsets.all(12))),
             const SizedBox(height: 14),
           ]);
-        return Padding(
+        // P0-FL-53a · the body scrolls: with failure notices, large text, a
+        // narrow screen or the keyboard up it overflowed and Save was lost.
+        return SingleChildScrollView(child: Padding(
           padding: EdgeInsets.fromLTRB(20, 16, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Coach this exercise',
@@ -382,7 +406,7 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                     for (final p in sorted) GestureDetector(
                       onTap: () {
                         final cues = (p['cues'] as List?)?.map((e) => e.toString()).toList() ?? [];
-                        setSheet(() => focusCtl.text = cues.join('\n'));
+                        setSheet(() { focusCtl.text = cues.join('\n'); packSaveError = null; });
                       },
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
@@ -407,15 +431,17 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                 ]);
               }),
             ],
-            field('COACH FOCUS TODAY', focusCtl, 'Control the descent\nPush through your heels\nIgnore weight today', min: 3),
+            field('COACH FOCUS TODAY', focusCtl, 'Control the descent\nPush through your heels\nIgnore weight today',
+                min: 3, onChanged: (_) => cuesEdited()),
             Align(alignment: Alignment.centerRight, child: GestureDetector(
               onTap: savingPack ? null : saveAsPack,
-              child: const Padding(padding: EdgeInsets.only(bottom: 14),
-                child: Text('＋ Save these as a pack', style: TextStyle(color: _brand, fontSize: 12, fontWeight: FontWeight.w700))))),
-            if (packSaveError != null)
-              Padding(padding: const EdgeInsets.only(bottom: 14),
-                child: Semantics(liveRegion: true, container: true,
-                  child: Text(packSaveError!, style: const TextStyle(color: _text, fontSize: 12.5, height: 1.4)))),
+              // P0-FL-53a · a save in flight is visible (and announced).
+              child: Padding(padding: const EdgeInsets.only(bottom: 14),
+                child: Semantics(liveRegion: savingPack, container: true,
+                  child: Text(savingPack ? 'Saving pack…' : '＋ Save these as a pack',
+                    style: TextStyle(color: savingPack ? _brand.withValues(alpha: 0.5) : _brand,
+                        fontSize: 12, fontWeight: FontWeight.w700)))))),
+            if (packSaveError != null) inlineError(packSaveError!),
             field('NOTE (optional)', noteCtl, 'A short message to your clients…', min: 2),
             field('YOUR VIDEO (optional — YouTube link or id)', videoCtl, 'https://youtu.be/…'),
             // ── Voice note ──
@@ -446,11 +472,16 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                     durationMs: (sheetOverlay?['voice_duration_ms'] as num?)?.toInt())),
                   IconButton(icon: const Icon(Icons.delete_outline_rounded, color: _muted, size: 20),
                     onPressed: () async {
-                      await _svc.clearCoachVoice(widget.exerciseId);
+                      voiceClearError = null;
+                      final cleared = await _svc.clearCoachVoice(widget.exerciseId);
+                      if (!cleared) {
+                        voiceClearError = couldntMessage('remove your voice note', _svc.lastError);
+                      }
                       await rereadSheet();
                       _load(); if (ctx.mounted) setSheet(() {});
                     }),
                 ])),
+            if (voiceClearError != null) inlineError(voiceClearError!),
             Wrap(spacing: 6, children: [
               for (final e in const [('today', 'Today'), ('week', 'This week'), ('never', 'Never')])
                 GestureDetector(
@@ -473,22 +504,30 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                 _load(); if (ctx.mounted) setSheet(() {});
               }),
             const SizedBox(height: 16),
+            if (saveError != null) inlineError(saveError!),
             SizedBox(width: double.infinity, child: FilledButton(
               style: FilledButton.styleFrom(backgroundColor: _brand, padding: const EdgeInsets.symmetric(vertical: 14)),
               onPressed: saving ? null : () async {
-                setSheet(() => saving = true);
+                setSheet(() { saving = true; saveError = null; });
                 final focus = focusCtl.text.split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
                 final ok = await _svc.upsertCoachOverlay(widget.exerciseId,
                     note: noteCtl.text.trim().isEmpty ? null : noteCtl.text.trim(),
                     focus: focus,
                     videoRef: videoCtl.text.trim().isEmpty ? null : videoCtl.text.trim());
+                if (!ok) {
+                  // Keep the sheet and what was typed; say it (recorded).
+                  saving = false;
+                  saveError = couldntMessage('save your coaching', _svc.lastError);
+                  if (ctx.mounted) setSheet(() {});
+                  return;
+                }
                 if (ctx.mounted) Navigator.pop(ctx);
-                if (mounted && ok) { setState(() => _loading = true); _load(); }
+                if (mounted) { setState(() => _loading = true); _load(); }
               },
               child: Text(saving ? 'Saving…' : 'Save coaching',
                   style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)))),
           ]),
-        );
+        ));
       }),
     );
   }

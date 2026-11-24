@@ -7,8 +7,8 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../support/failing_reads_postgrest.dart';
+import '../support/held_reads_postgrest.dart';
 import '../support/row_checking_postgrest.dart';
-import '../support/rpc_answering_postgrest.dart';
 
 // P0-FL-53a · Coach Focus reads, cue-pack saves and global-library
 // submission stop turning a failure into "nothing there" / "done".
@@ -26,13 +26,13 @@ import '../support/rpc_answering_postgrest.dart';
 const _uid = '00000000-0000-4000-8000-0000000f5053';
 
 void main() {
-  late RpcAnsweringPostgrest server;
+  late HeldReadsPostgrest server;
   final reported = <AppFailure>[];
   late CustomExerciseService svc;
 
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
-    server = RpcAnsweringPostgrest(_uid);
+    server = HeldReadsPostgrest(_uid);
     await initSignedInSupabase(server);
   });
 
@@ -146,12 +146,106 @@ void main() {
           reason: 'the list shown is kept');
     });
 
+    test('a thrown submission is false, recorded, and does not reload (QA gap)',
+        () async {
+      final s = _CountingSvc();
+      final n = MyExercisesNotifier(s);
+      await Future<void>.delayed(Duration.zero);
+      server.mode = WriteMode.serverError;
+      expect(await n.submitForGlobal('ex-1'), isFalse);
+      expect(s.lastError, isA<PostgrestException>());
+      expect(origins(), ['CustomExerciseService.submitForGlobalLibrary']);
+      expect(s.loads, 1);
+      expect(n.state.value!.map((e) => e.id), ['ex-1']);
+    });
+
     test('positive control: a submitted exercise reloads the list', () async {
       final s = _CountingSvc();
       final n = MyExercisesNotifier(s);
       await Future<void>.delayed(Duration.zero);
       expect(await n.submitForGlobal('ex-1'), isTrue);
       expect(s.loads, 2);
+    });
+  });
+
+  // P0-FL-53a round 2 · Save coaching and voice-note removal.
+  group('upsertCoachOverlay', () {
+    Future<bool> save() =>
+        svc.upsertCoachOverlay('ex-1', note: 'Slow down', focus: ['Brace']);
+
+    test('a 0-row upsert is a failure, recorded', () async {
+      server.mode = WriteMode.zeroRows;
+      expect(await save(), isFalse,
+          reason: 'THE defect: an upsert that wrote no row read as saved');
+      expect(svc.lastError, isNotNull);
+      expect(origins(), ['CustomExerciseService.upsertCoachOverlay']);
+      expect(server.writes.single, contains('select=exercise_id'));
+    });
+
+    test('a refused upsert sets lastError and is recorded', () async {
+      server.mode = WriteMode.serverError;
+      expect(await save(), isFalse);
+      expect(svc.lastError, isA<PostgrestException>());
+      expect(origins(), ['CustomExerciseService.upsertCoachOverlay'],
+          reason: 'THE defect: the failure was caught and never recorded');
+    });
+
+    test('positive control: one row is success; an earlier error is cleared',
+        () async {
+      svc.lastError = 'stale';
+      expect(await save(), isTrue);
+      expect(svc.lastError, isNull);
+      expect(reported, isEmpty);
+    });
+  });
+
+  group('clearCoachVoice', () {
+    const voice = 'voice/$_uid/ex-1-1.m4a';
+    bool patch(String w) =>
+        w.startsWith('PATCH') && w.contains('coach_exercise_media');
+
+    test('a refused row update is false and recorded', () async {
+      server.reads['coach_exercise_media'] = {'voice_url': voice};
+      server.mode = WriteMode.serverError;
+      server.modeAppliesTo = patch;
+      expect(await svc.clearCoachVoice('ex-1'), isFalse);
+      expect(svc.lastError, isA<PostgrestException>());
+      expect(origins(), ['CustomExerciseService.clearCoachVoice'],
+          reason: 'THE defect: the failure was never recorded');
+    });
+
+    test('a failed object removal is false, recorded, row untouched', () async {
+      server.reads['coach_exercise_media'] = {'voice_url': voice};
+      server.failStorageDelete = true;
+      expect(await svc.clearCoachVoice('ex-1'), isFalse);
+      expect(origins(), ['CustomExerciseService.clearCoachVoice']);
+      expect(server.writes.where(patch), isEmpty);
+    });
+
+    test('a 0-row row update is a failure', () async {
+      server.reads['coach_exercise_media'] = {'voice_url': voice};
+      server.mode = WriteMode.zeroRows;
+      server.modeAppliesTo = patch;
+      expect(await svc.clearCoachVoice('ex-1'), isFalse);
+      expect(origins(), ['CustomExerciseService.clearCoachVoice']);
+      expect(server.writes.singleWhere(patch), contains('select=exercise_id'));
+    });
+
+    test('positive control: removed and cleared; an earlier error is cleared',
+        () async {
+      server.reads['coach_exercise_media'] = {'voice_url': voice};
+      svc.lastError = 'stale';
+      expect(await svc.clearCoachVoice('ex-1'), isTrue);
+      expect(svc.lastError, isNull);
+      expect(server.writes, contains(startsWith('DELETE /storage/v1/')));
+      expect(reported, isEmpty);
+    });
+
+    test('negative control: no overlay row is nothing to clear — not a failure',
+        () async {
+      expect(await svc.clearCoachVoice('ex-1'), isTrue);
+      expect(server.writes, isEmpty);
+      expect(reported, isEmpty);
     });
   });
 }
