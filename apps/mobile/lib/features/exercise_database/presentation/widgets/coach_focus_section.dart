@@ -19,6 +19,41 @@ const _mint   = Color(0xFF6FFBBE);
 const _text   = Color(0xFFEDE7F3);
 const _muted  = Color(0xFFB6A9C4);
 
+/// P0-FL-58 · a >= 44px target around [child], which keeps its own look.
+/// [label] names the action and the item; [selected] (when given) says whether
+/// it is the current choice; a null [onTap] is disabled.
+class _FocusTarget extends StatelessWidget {
+  final String label;
+  final VoidCallback? onTap;
+  final bool? selected;
+  final bool liveRegion;
+  final Widget child;
+  const _FocusTarget({required this.label, required this.onTap, required this.child,
+    this.selected, this.liveRegion = false});
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    container: true,
+    button: true,
+    enabled: onTap != null,
+    selected: selected,
+    inMutuallyExclusiveGroup: selected == null ? null : true,
+    liveRegion: liveRegion,
+    label: label,
+    onTap: onTap,
+    excludeSemantics: true,
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+        child: Center(widthFactor: 1, heightFactor: 1, child: child))));
+}
+
+/// P0-FL-58 r2 · [field] under a [name] that stays once its hint is gone.
+Widget _named(String name, Widget field) =>
+    MergeSemantics(child: Semantics(label: name, child: field));
+
 class CoachFocusSection extends ConsumerStatefulWidget {
   final String exerciseId;
   /// Lowercased searchable attributes of the exercise (name/muscle/equipment)
@@ -185,7 +220,13 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
       ]));
   }
 
-  Widget _addPrompt() => GestureDetector(
+  Widget _addPrompt() => Semantics(
+    container: true,
+    button: true,
+    label: 'Add your coaching for this exercise — a focus, a note, your own video',
+    onTap: _openEditor,
+    excludeSemantics: true,
+    child: GestureDetector(
     onTap: _openEditor,
     child: Container(
       width: double.infinity,
@@ -201,7 +242,7 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
         const Icon(Icons.chevron_right_rounded, color: _muted, size: 18),
       ]),
     ),
-  );
+  ));
 
   Widget _card(Map<String, dynamic> m, {required bool editable}) {
     final focus = _focusOf(m);
@@ -222,7 +263,7 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
           Expanded(child: Text(editable ? 'YOUR COACHING' : 'COACH FOCUS TODAY',
               style: const TextStyle(color: _brand, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1))),
           if (editable)
-            GestureDetector(onTap: _openEditor,
+            _FocusTarget(label: 'Edit your coaching for this exercise', onTap: _openEditor,
               child: const Text('Edit', style: TextStyle(color: _brand, fontSize: 12, fontWeight: FontWeight.w800))),
         ]),
         if (!editable && coachName != null) Padding(padding: const EdgeInsets.only(top: 2),
@@ -319,9 +360,9 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
           final name = await showDialog<String>(context: ctx, builder: (dctx) => AlertDialog(
             backgroundColor: _panel2,
             title: const Text('Save cue pack', style: TextStyle(color: _text, fontSize: 16)),
-            content: TextField(controller: nameCtl, autofocus: true,
+            content: _named('Pack name', TextField(controller: nameCtl, autofocus: true,
               style: const TextStyle(color: _text),
-              decoration: const InputDecoration(hintText: 'e.g. Squat cues', hintStyle: TextStyle(color: _muted))),
+              decoration: const InputDecoration(hintText: 'e.g. Squat cues', hintStyle: TextStyle(color: _muted)))),
             actions: [
               TextButton(onPressed: () => Navigator.pop(dctx), child: const Text('Cancel', style: TextStyle(color: _muted))),
               TextButton(onPressed: () => Navigator.pop(dctx, nameCtl.text.trim()),
@@ -352,17 +393,17 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
         void cuesEdited() {
           if (packSaveError != null) setSheet(() => packSaveError = null);
         }
-        Widget field(String label, TextEditingController c, String hint,
+        Widget field(String label, String name, TextEditingController c, String hint,
             {int min = 1, ValueChanged<String>? onChanged}) => Column(
           crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(label, style: const TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1)),
             const SizedBox(height: 6),
-            TextField(controller: c, minLines: min, maxLines: min == 1 ? 1 : null, onChanged: onChanged,
+            _named(name, TextField(controller: c, minLines: min, maxLines: min == 1 ? 1 : null, onChanged: onChanged,
               style: const TextStyle(color: _text, fontSize: 14),
               decoration: InputDecoration(hintText: hint, hintStyle: const TextStyle(color: _muted),
                 filled: true, fillColor: _panel2,
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                contentPadding: const EdgeInsets.all(12))),
+                contentPadding: const EdgeInsets.all(12)))),
             const SizedBox(height: 14),
           ]);
         // P0-FL-53a · the body scrolls: with failure notices, large text, a
@@ -402,8 +443,10 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                   Text(anyMatch ? 'SUGGESTED PACKS' : 'APPLY A PACK',
                       style: const TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1)),
                   const SizedBox(height: 6),
-                  Wrap(spacing: 6, runSpacing: 6, children: [
-                    for (final p in sorted) GestureDetector(
+                  Wrap(spacing: 6, children: [
+                    for (final p in sorted) _FocusTarget(
+                      label: 'Apply pack ${p['name']?.toString() ?? 'Pack'}'
+                          '${scores[p['id'].toString()] == null ? '' : ', ${scores[p['id'].toString()]}% match'}',
                       onTap: () {
                         final cues = (p['cues'] as List?)?.map((e) => e.toString()).toList() ?? [];
                         setSheet(() { focusCtl.text = cues.join('\n'); packSaveError = null; });
@@ -418,8 +461,8 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                           if (scores.containsKey(p['id'].toString()))
                             const Padding(padding: EdgeInsets.only(right: 4),
                               child: Icon(Icons.star_rounded, color: _brand, size: 13)),
-                          Text(p['name']?.toString() ?? 'Pack',
-                              style: const TextStyle(color: _brand, fontSize: 12, fontWeight: FontWeight.w700)),
+                          Flexible(child: Text(p['name']?.toString() ?? 'Pack',
+                              style: const TextStyle(color: _brand, fontSize: 12, fontWeight: FontWeight.w700))),
                           if (scores[p['id'].toString()] != null)
                             Text('  ${scores[p['id'].toString()]}%',
                                 style: TextStyle(color: _brand.withValues(alpha: 0.7), fontSize: 11, fontWeight: FontWeight.w700)),
@@ -431,19 +474,20 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                 ]);
               }),
             ],
-            field('COACH FOCUS TODAY', focusCtl, 'Control the descent\nPush through your heels\nIgnore weight today',
+            field('COACH FOCUS TODAY', 'Coach focus today', focusCtl, 'Control the descent\nPush through your heels\nIgnore weight today',
                 min: 3, onChanged: (_) => cuesEdited()),
-            Align(alignment: Alignment.centerRight, child: GestureDetector(
+            // P0-FL-53a · a save in flight is visible (and announced).
+            Align(alignment: Alignment.centerRight, child: _FocusTarget(
+              label: savingPack ? 'Saving pack…' : 'Save these as a pack',
               onTap: savingPack ? null : saveAsPack,
-              // P0-FL-53a · a save in flight is visible (and announced).
-              child: Padding(padding: const EdgeInsets.only(bottom: 14),
-                child: Semantics(liveRegion: savingPack, container: true,
-                  child: Text(savingPack ? 'Saving pack…' : '＋ Save these as a pack',
-                    style: TextStyle(color: savingPack ? _brand.withValues(alpha: 0.5) : _brand,
-                        fontSize: 12, fontWeight: FontWeight.w700)))))),
+              liveRegion: savingPack,
+              child: Text(savingPack ? 'Saving pack…' : '＋ Save these as a pack',
+                style: TextStyle(color: savingPack ? _brand.withValues(alpha: 0.5) : _brand,
+                    fontSize: 12, fontWeight: FontWeight.w700)))),
             if (packSaveError != null) inlineError(packSaveError!),
-            field('NOTE (optional)', noteCtl, 'A short message to your clients…', min: 2),
-            field('YOUR VIDEO (optional — YouTube link or id)', videoCtl, 'https://youtu.be/…'),
+            field('NOTE (optional)', 'Note (optional)', noteCtl, 'A short message to your clients…', min: 2),
+            field('YOUR VIDEO (optional — YouTube link or id)',
+                'Your video (optional — YouTube link or id)', videoCtl, 'https://youtu.be/…'),
             // ── Voice note ──
             const Text('VOICE NOTE (optional)',
                 style: TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1)),
@@ -470,7 +514,8 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                   Expanded(child: CoachVoicePlayer(
                     url: sheetOverlay!['voice_url'].toString(),
                     durationMs: (sheetOverlay?['voice_duration_ms'] as num?)?.toInt())),
-                  IconButton(icon: const Icon(Icons.delete_outline_rounded, color: _muted, size: 20),
+                  IconButton(tooltip: 'Remove your voice note',
+                    icon: const Icon(Icons.delete_outline_rounded, color: _muted, size: 20),
                     onPressed: () async {
                       voiceClearError = null;
                       final cleared = await _svc.clearCoachVoice(widget.exerciseId);
@@ -484,7 +529,9 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
             if (voiceClearError != null) inlineError(voiceClearError!),
             Wrap(spacing: 6, children: [
               for (final e in const [('today', 'Today'), ('week', 'This week'), ('never', 'Never')])
-                GestureDetector(
+                _FocusTarget(
+                  label: 'Voice note expires: ${e.$2}',
+                  selected: expiry == e.$1,
                   onTap: () => setSheet(() => expiry = e.$1),
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -496,7 +543,8 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                 ),
             ]),
             const SizedBox(height: 8),
-            CoachVoiceRecorder(
+            // P0-FL-58 · the recorder's own bar is 42px at 1×: 44px at least.
+            ConstrainedBox(constraints: const BoxConstraints(minHeight: 44), child: CoachVoiceRecorder(
               exerciseId: widget.exerciseId,
               resolveExpiry: expiryDate,
               onRecorded: () async {
@@ -505,7 +553,7 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                 voiceClearError = null;
                 await rereadSheet();
                 _load(); if (ctx.mounted) setSheet(() {});
-              }),
+              })),
             const SizedBox(height: 16),
             if (saveError != null) inlineError(saveError!),
             SizedBox(width: double.infinity, child: FilledButton(
