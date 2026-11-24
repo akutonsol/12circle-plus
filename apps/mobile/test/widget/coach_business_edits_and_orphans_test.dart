@@ -85,6 +85,10 @@ enum _Patch {
 
   /// Answers [_Server.patchCode], but the write DID land.
   codedLanded,
+
+  /// Answers the bare status [_Server.patchStatus] (no `code` in the body), but
+  /// the write DID land.
+  bareLanded,
 }
 
 enum _Remove {
@@ -126,6 +130,9 @@ class _Server extends http.BaseClient {
   /// The error `code` of [_Patch.codedLanded].
   String patchCode = '';
 
+  /// The status of [_Patch.bareLanded].
+  int patchStatus = 0;
+
   /// Lands the pending [_Patch.landsAfterRead] write.
   VoidCallback? _lateLand;
 
@@ -152,6 +159,7 @@ class _Server extends http.BaseClient {
     held.clear();
     uploadGate = patchGate = removeGate = null;
     patchCode = '';
+    patchStatus = 0;
     _lateLand = null;
     for (final l in [calls, patches, uploads, removes, removedAs, checks]) {
       l.clear();
@@ -244,6 +252,9 @@ class _Server extends http.BaseClient {
         case _Patch.codedLanded:
           land();
           return _json({'message': 'lost', 'code': patchCode}, 503, request);
+        case _Patch.bareLanded:
+          land();
+          return _json({'message': 'lost'}, patchStatus, request);
         case _Patch.ok:
           land();
       }
@@ -1416,12 +1427,29 @@ void main() {
     for (final code in [
       'PGRST000', 'PGRST001', 'PGRST002', 'PGRST003', //
       '08000', '08006', '08P01', '57P01', '57P05', '58000', '58030', '40003',
+      'PGRSTX00', 'XX000', // an internal error (security N2)
     ]) {
       testWidgets('answered $code, but the update landed: the file is kept, '
           'the photo is listed', (tester) async {
         server
           ..patchMode = _Patch.codedLanded
           ..patchCode = code;
+        await open(tester);
+        await addPhoto(tester);
+        expectKeptAndUnconfirmed();
+        expect(server.rows[_a]!['transformation_photo_urls'], hasLength(1));
+        await close(tester);
+      });
+    }
+
+    // Security N1 (round 3): a body with no `code` — postgrest gives the bare
+    // HTTP status as the code, which is never the database's own refusal.
+    for (final status in [408, 499, 302, 401]) {
+      testWidgets('answered a bare $status, but the update landed: the file is '
+          'kept, the photo is listed', (tester) async {
+        server
+          ..patchMode = _Patch.bareLanded
+          ..patchStatus = status;
         await open(tester);
         await addPhoto(tester);
         expectKeptAndUnconfirmed();

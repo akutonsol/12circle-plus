@@ -634,16 +634,17 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
   }
 
   /// The database answered and refused: nothing was written. Anything else —
-  /// no answer, a gateway's (a bare 5xx), or a code that says the connection
-  /// or the server went away (PGRST00x; SQLSTATE 08, 57P, 58, 40003) — says
-  /// nothing about the write.
+  /// no answer, one with no error code of its own (postgrest then gives the
+  /// bare HTTP status, e.g. a gateway's 408 or 504), or a code that says the
+  /// connection or the server went away or broke (PGRST00x, PGRSTX; SQLSTATE
+  /// 08, 57P, 58, XX, 40003) — says nothing about the write.
   static bool _refused(Object e) =>
       !isNetworkFailure(e) &&
       e is PostgrestException &&
       e.code != null &&
       !_saysNothingAboutTheWrite.hasMatch(e.code!);
-  static final _saysNothingAboutTheWrite =
-      RegExp(r'^(5\d\d|PGRST00\w|08\w{3}|57P\w{2}|58\w{3}|40003)$');
+  static final _saysNothingAboutTheWrite = RegExp(r'^(\d{3}|PGRST00\w|'
+      r'PGRSTX\w\w|08\w{3}|57P\w{2}|58\w{3}|XX\w{3}|40003)$');
 
   /// Removes exactly [path], the object this tap uploaded for [uid]. True when
   /// it is gone; a failure is recorded and never makes the photo a success.
