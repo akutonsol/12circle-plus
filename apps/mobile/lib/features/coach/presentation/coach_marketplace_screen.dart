@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
 import '../data/coach_relationship_service.dart';
 import '../domain/coach_provider.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../../shared/theme/app_background.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../domain/package_provider.dart';
 import 'choose_package_screen.dart';
 
@@ -29,14 +31,22 @@ final coachMarketplaceProvider = FutureProvider<List<Map<String, dynamic>>>((ref
   try {
     final data = await db.rpc('marketplace_coaches');
     return List<Map<String, dynamic>>.from(data as List);
-  } catch (_) {
-    // Fallback if the ranking function isn't deployed yet.
-    final data = await db
-        .from('public_profiles')
-        .select('id, first_name, last_name, avatar_url, coach_title, tagline, bio, specialties, certifications, pricing_monthly, years_experience, rating_avg, review_count')
-        .eq('role', 'coach')
-        .order('rating_avg', ascending: false);
-    return List<Map<String, dynamic>>.from(data);
+  } catch (e, st) {
+    // Fallback if the ranking function isn't deployed yet: the same coaches,
+    // really read, unranked. P0-FL-56b: recorded — the ranked list going away
+    // was invisible — and a failure of the fallback too, then passed on.
+    reportError('coachMarketplaceProvider.ranked', e, st);
+    try {
+      final data = await db
+          .from('public_profiles')
+          .select('id, first_name, last_name, avatar_url, coach_title, tagline, bio, specialties, certifications, pricing_monthly, years_experience, rating_avg, review_count')
+          .eq('role', 'coach')
+          .order('rating_avg', ascending: false);
+      return List<Map<String, dynamic>>.from(data);
+    } catch (e, st) {
+      reportError('coachMarketplaceProvider.fallback', e, st);
+      rethrow;
+    }
   }
 });
 
@@ -47,14 +57,28 @@ final coachMarketplaceProvider = FutureProvider<List<Map<String, dynamic>>>((ref
 // moment a relationship changed anywhere else — it is private, so nothing
 // outside this file can invalidate it — and an ended coach still read "Your
 // Coach", with no way to request them again until the app restarted.
-final _myRelationshipStatusProvider = FutureProvider.autoDispose<Set<String>>((ref) async {
-  ref.watch(currentUserProvider);
-  final rows = await Supabase.instance.client
-      .from('coach_client_relationships')
-      .select('coach_id, status')
-      .eq('client_id', Supabase.instance.client.auth.currentUser?.id ?? '')
-      .inFilter('status', ['active', 'pending']);
-  return {for (final r in rows as List) '${r['status']}:${r['coach_id']}'};
+//
+// Carries whose it is (P0-FL-56b): Riverpod keeps the previous value through a
+// sign-in switch and its failure, and one client's coaches must not be marked
+// as another's.
+final _myRelationshipStatusProvider =
+    FutureProvider.autoDispose<({String? uid, Set<String> keys})>((ref) async {
+  final uid = ref.watch(currentUserProvider)?.id;
+  if (uid == null) return (uid: null, keys: <String>{});
+  try {
+    final rows = await Supabase.instance.client
+        .from('coach_client_relationships')
+        .select('coach_id, status')
+        .eq('client_id', uid)
+        .inFilter('status', ['active', 'pending']);
+    return (
+      uid: uid,
+      keys: {for (final r in rows as List) '${r['status']}:${r['coach_id']}'},
+    );
+  } catch (e, st) {
+    reportError('coachMarketplace.relationshipStatus', e, st);
+    rethrow;
+  }
 });
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -69,6 +93,9 @@ class _CoachMarketplaceScreenState extends ConsumerState<CoachMarketplaceScreen>
   final _search = TextEditingController();
   String _searchQuery = '';
 
+  /// `<client>:<coach>` requests in flight (until the status is read again).
+  final Set<String> _requesting = {};
+
   @override
   void initState() {
     super.initState();
@@ -81,7 +108,44 @@ class _CoachMarketplaceScreenState extends ConsumerState<CoachMarketplaceScreen>
   @override
   Widget build(BuildContext context) {
     final coachesAsync = ref.watch(coachMarketplaceProvider);
-    final relStatus   = ref.watch(_myRelationshipStatusProvider).valueOrNull ?? <String>{};
+    // A failed re-read keeps the coaches already shown (the same for everyone).
+    final coaches = coachesAsync.hasValue ? coachesAsync.value : null;
+    final coachesFailure = !coachesAsync.hasError
+        ? null
+        : SectionLoadFailure(
+            what: 'coaches',
+            error: coachesAsync.error,
+            busy: coachesAsync.isLoading,
+            onRetry: () => ref.invalidate(coachMarketplaceProvider),
+            accent: _pri,
+            textColor: _wht,
+            mutedColor: _mut,
+            detail: coaches == null ? null : 'The list below may be out of date.',
+          );
+
+    // P0-FL-56b: a status that was not read (failed, or still reading) was
+    // taken for "no relationship" and every card offered "Request to Connect",
+    // the client's own coach's included. Not read is not none: the badges that
+    // are known stay, and requesting waits for the read.
+    final uid = ref.watch(currentUserProvider)?.id;
+    final relAsync = ref.watch(_myRelationshipStatusProvider);
+    final rel = relAsync.hasValue ? relAsync.value : null;
+    final mine = rel != null && rel.uid == uid ? rel.keys : null;
+    // AsyncError (a retry stays one, loading) — never the AsyncLoading a
+    // sign-in switch leaves, which still carries the previous client's error.
+    final relFailed = relAsync is AsyncError;
+    final relFailure = !relFailed
+        ? null
+        : SectionLoadFailure(
+            what: 'your coach connections',
+            error: relAsync.error,
+            busy: relAsync.isLoading,
+            onRetry: () => ref.invalidate(_myRelationshipStatusProvider),
+            accent: _pri,
+            textColor: _wht,
+            mutedColor: _mut,
+            detail: 'Requesting a coach is paused until they load.',
+          );
 
     return AppGradientBackground(
       child: Scaffold(
@@ -119,10 +183,9 @@ class _CoachMarketplaceScreenState extends ConsumerState<CoachMarketplaceScreen>
         const SizedBox(height: 12),
 
         // Specialty filter chips
-        coachesAsync.when(
-          loading: () => const SizedBox.shrink(),
-          error: (_, __) => const SizedBox.shrink(),
-          data: (coaches) {
+        Builder(
+          builder: (context) {
+            if (coaches == null) return const SizedBox.shrink();
             final allSpecialties = <String>{};
             for (final c in coaches) {
               final sp = c['specialties'] as List? ?? [];
@@ -151,14 +214,19 @@ class _CoachMarketplaceScreenState extends ConsumerState<CoachMarketplaceScreen>
 
         // Coach list
         Expanded(
-          child: coachesAsync.when(
-            loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
-            // ERR-2: `Could not load [noun]` is the pattern this repository
-            // renders in fifteen places.
-            error: (e, _) => const Center(
-                child: Text('Could not load coaches',
-                    style: TextStyle(color: _mut))),
-            data: (coaches) {
+          child: Builder(
+            builder: (context) {
+              if (coaches == null) {
+                return coachesFailure == null
+                    ? const Center(child: CircularProgressIndicator(color: _brand))
+                    : SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
+                        child: coachesFailure);
+              }
+              final notices = <Widget>[
+                if (coachesFailure != null) coachesFailure,
+                if (relFailure != null) relFailure,
+              ];
               var filtered = coaches.where((c) {
                 final name = '${c['first_name'] ?? ''} ${c['last_name'] ?? ''}'.toLowerCase();
                 final specialties = (c['specialties'] as List? ?? []).cast<String>();
@@ -170,7 +238,7 @@ class _CoachMarketplaceScreenState extends ConsumerState<CoachMarketplaceScreen>
                 return matchesSearch && matchesFilter;
               }).toList();
 
-              if (filtered.isEmpty) {
+              if (filtered.isEmpty && coachesFailure == null) {
                 return const Center(
                   child: Column(mainAxisSize: MainAxisSize.min, children: [
                     Icon(Icons.person_search_outlined, color: _mut, size: 48),
@@ -181,12 +249,18 @@ class _CoachMarketplaceScreenState extends ConsumerState<CoachMarketplaceScreen>
 
               return ListView.builder(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 80),
-                itemCount: filtered.length,
-                itemBuilder: (_, i) => _CoachCard(
-                  coach: filtered[i],
-                  relStatus: relStatus,
-                  onRequest: (coachId) => _requestCoach(coachId),
-                ),
+                itemCount: notices.length + filtered.length,
+                itemBuilder: (_, i) => i < notices.length
+                    ? Padding(
+                        padding: const EdgeInsets.only(bottom: 12), child: notices[i])
+                    : _CoachCard(
+                        coach: filtered[i - notices.length],
+                        relStatus: mine ?? const <String>{},
+                        canRequest: mine != null && !relFailed,
+                        requesting: _requesting
+                            .contains('$uid:${filtered[i - notices.length]['id']}'),
+                        onRequest: (coachId) => _requestCoach(coachId),
+                      ),
               );
             },
           ),
@@ -196,23 +270,40 @@ class _CoachMarketplaceScreenState extends ConsumerState<CoachMarketplaceScreen>
   }
 
   Future<void> _requestCoach(String coachId) async {
+    final client = ref.read(currentUserProvider)?.id;
+    final key = '$client:$coachId';
+    if (_requesting.contains(key)) return;
+    // Left, or another client signed in: not theirs to hear.
+    bool stillTheirs() => ref.read(currentUserProvider)?.id == client;
+    setState(() => _requesting.add(key));
     try {
       await _relSvc.requestCoach(coachId);
-      ref.invalidate(_myRelationshipStatusProvider);
-      if (mounted) {
+      if (mounted) ref.invalidate(_myRelationshipStatusProvider);
+      if (mounted && stillTheirs()) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Request sent! Your coach will be notified.'),
           backgroundColor: _brand));
       }
-    } catch (e) {
+    } catch (e, st) {
       // Refused, not failed: the card was drawn before the status read arrived.
-      if (e is StateError) ref.invalidate(_myRelationshipStatusProvider);
-      if (mounted) {
+      if (e is! StateError) reportError('CoachMarketplaceScreen._requestCoach', e, st);
+      if (e is StateError && mounted) ref.invalidate(_myRelationshipStatusProvider);
+      if (mounted && stillTheirs()) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e is StateError ? e.message : 'Failed to send request. Try again.'),
+          content: Semantics(
+            liveRegion: true,
+            child: Text(e is StateError ? e.message : couldntMessage('send your request', e))),
           backgroundColor: _err));
       }
     }
+    if (!mounted) return;
+    try {
+      // The card offers a request again only once its status was read again.
+      await ref.read(_myRelationshipStatusProvider.future);
+    } catch (_) {
+      // Recorded by the provider and said by the notice above the list.
+    }
+    if (mounted) setState(() => _requesting.remove(key));
   }
 }
 
@@ -234,8 +325,13 @@ Widget _tierBadge(String label, Color color) => Container(
 class _CoachCard extends StatelessWidget {
   final Map<String, dynamic> coach;
   final Set<String> relStatus;
+  /// Whether the client's relationships are known, so "no relationship with
+  /// this coach" is an answer rather than a guess.
+  final bool canRequest;
+  final bool requesting;
   final void Function(String) onRequest;
-  const _CoachCard({required this.coach, required this.relStatus, required this.onRequest});
+  const _CoachCard({required this.coach, required this.relStatus,
+      required this.canRequest, required this.requesting, required this.onRequest});
 
   @override
   Widget build(BuildContext context) {
@@ -374,20 +470,27 @@ class _CoachCard extends StatelessWidget {
         else
           SizedBox(
             width: double.infinity,
-            child: GestureDetector(
-              onTap: () => onRequest(coachId),
+            child: Semantics(
+              button: true,
+              enabled: canRequest && !requesting,
+              child: GestureDetector(
+              onTap: canRequest && !requesting ? () => onRequest(coachId) : null,
               child: Container(
+                constraints: const BoxConstraints(minHeight: 44),
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF842BD2), Color(0xFFA855F7)]),
+                  color: canRequest && !requesting ? null : _brd,
+                  gradient: canRequest && !requesting
+                      ? const LinearGradient(
+                          colors: [Color(0xFF842BD2), Color(0xFFA855F7)])
+                      : null,
                   borderRadius: BorderRadius.circular(12)),
                 alignment: Alignment.center,
-                child: const Text(
+                child: Text(
                   'Request to Connect',
                   style: TextStyle(
-                    color: _wht,
-                    fontSize: 14, fontWeight: FontWeight.w700))))),
+                    color: canRequest && !requesting ? _wht : _mut,
+                    fontSize: 14, fontWeight: FontWeight.w700)))))),
       ]),
     );
   }
@@ -450,8 +553,24 @@ class _PricingSummary extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final pkgs = ref.watch(coachPackagesProvider(coachId)).valueOrNull ?? [];
-    if (pkgs.isEmpty) return const SizedBox.shrink();
+    final pkgsAsync = ref.watch(coachPackagesProvider(coachId));
+    final pkgs = pkgsAsync.hasValue ? pkgsAsync.value : null;
+    // P0-FL-56b: prices that could not be read showed as a coach with none.
+    if (pkgs == null && pkgsAsync.hasError) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: SectionLoadFailure(
+          what: 'package prices',
+          error: pkgsAsync.error,
+          busy: pkgsAsync.isLoading,
+          onRetry: () => ref.invalidate(coachPackagesProvider(coachId)),
+          accent: _pri,
+          textColor: _wht,
+          mutedColor: _mut,
+        ),
+      );
+    }
+    if (pkgs == null || pkgs.isEmpty) return const SizedBox.shrink();
 
     double? minOf(String type) {
       final prices = pkgs

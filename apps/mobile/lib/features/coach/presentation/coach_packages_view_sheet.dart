@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../../core/observability/app_failure.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../data/package_service.dart';
 
 const _card  = Color(0xFF0E0B16);
@@ -24,10 +26,47 @@ void showCoachPackagesSheet(
   );
 }
 
-class _CoachPackagesSheet extends StatelessWidget {
+class _CoachPackagesSheet extends StatefulWidget {
   final String coachId;
   final String coachName;
   const _CoachPackagesSheet({required this.coachId, required this.coachName});
+  @override
+  State<_CoachPackagesSheet> createState() => _CoachPackagesSheetState();
+}
+
+class _CoachPackagesSheetState extends State<_CoachPackagesSheet> {
+  List<Map<String, dynamic>>? _packages;
+  Object? _error;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  /// One read per opening (the read was started in `build`, so it ran again on
+  /// every drag of the sheet), recorded and retryable when it fails (P0-FL-56b).
+  Future<void> _load() async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      final rows = await PackageService().getCoachPackages(widget.coachId);
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = null;
+        _packages = rows;
+      });
+    } catch (e, st) {
+      reportError('CoachPackagesViewSheet._load', e, st);
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e;
+      });
+    }
+  }
 
   String _priceLabel(Map<String, dynamic> p) {
     final type = p['type'] as String? ?? '';
@@ -43,7 +82,7 @@ class _CoachPackagesSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final title = coachName.trim().isEmpty ? 'Coach' : coachName.trim();
+    final title = widget.coachName.trim().isEmpty ? 'Coach' : widget.coachName.trim();
     return DraggableScrollableSheet(
       expand: false,
       initialChildSize: 0.6,
@@ -71,19 +110,26 @@ class _CoachPackagesSheet extends StatelessWidget {
               style: TextStyle(color: _muted, fontSize: 13)),
             const SizedBox(height: 16),
             Expanded(
-              child: FutureBuilder<List<Map<String, dynamic>>>(
-                future: PackageService().getCoachPackages(coachId),
-                builder: (context, snap) {
-                  if (snap.connectionState == ConnectionState.waiting) {
-                    return const Center(
-                      child: CircularProgressIndicator(color: _brand));
+              child: Builder(
+                builder: (context) {
+                  final packages = _packages;
+                  if (packages == null) {
+                    if (_error == null) {
+                      return const Center(
+                        child: CircularProgressIndicator(color: _brand));
+                    }
+                    return SingleChildScrollView(
+                      controller: scrollCtrl,
+                      child: SectionLoadFailure(
+                        what: 'packages',
+                        error: _error,
+                        busy: _busy,
+                        onRetry: () => setState(() { _load(); }),
+                        accent: _brand,
+                        textColor: _white,
+                        mutedColor: _muted,
+                      ));
                   }
-                  if (snap.hasError) {
-                    return const Center(
-                      child: Text('Could not load packages. Please try again.',
-                        style: TextStyle(color: _muted)));
-                  }
-                  final packages = snap.data ?? [];
                   if (packages.isEmpty) {
                     return Center(
                       child: Padding(

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../../shared/theme/app_background.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../../payments/domain/payment_provider.dart';
 import '../data/package_service.dart';
 import '../domain/package_provider.dart';
@@ -41,12 +42,50 @@ bool _isRecurring(String t) => t == 'monthly' || t == 'hybrid';
 
 /// Coach defines the packages they offer clients: pay-per-session, bulk session
 /// packages (any number, each with its own session count + price), and monthly.
-class CoachPackagesScreen extends ConsumerWidget {
+class CoachPackagesScreen extends ConsumerStatefulWidget {
   const CoachPackagesScreen({super.key});
+  @override
+  ConsumerState<CoachPackagesScreen> createState() => _CoachPackagesScreenState();
+}
+
+class _CoachPackagesScreenState extends ConsumerState<CoachPackagesScreen> {
+  /// P0-FL-56b: the last answer read for [_for], the coach signed in now. A
+  /// failed re-read keeps it on screen; another coach never sees it (Riverpod
+  /// itself keeps the previous value through a sign-in switch).
+  String? _for;
+  List<Map<String, dynamic>>? _kept;
+  Object? _loadError;
+
+  /// Packages with a delete in flight: a second delete of the same one would
+  /// match no row and be said as a failure.
+  final Set<String> _deleting = {};
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
+    final uid = ref.watch(currentUserProvider)?.id;
     final pkgsAsync = ref.watch(myPackagesProvider);
+    if (_for != uid) {
+      _for = uid;
+      _kept = null;
+      _loadError = null;
+    }
+    if (!pkgsAsync.isLoading) {
+      _loadError = pkgsAsync.error;
+      if (!pkgsAsync.hasError) _kept = pkgsAsync.value;
+    }
+    final pkgs = _kept;
+    final failure = _loadError == null
+        ? null
+        : SectionLoadFailure(
+            what: 'your packages',
+            error: _loadError,
+            busy: pkgsAsync.isLoading,
+            onRetry: () => ref.invalidate(myPackagesProvider),
+            accent: _brand,
+            textColor: _white,
+            mutedColor: _muted,
+            detail: pkgs == null ? null : 'The list below may be out of date.',
+          );
     return AppGradientBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
@@ -61,13 +100,13 @@ class CoachPackagesScreen extends ConsumerWidget {
           backgroundColor: _brand,
           icon: const Icon(Icons.add, color: _white),
           label: const Text('New Package', style: TextStyle(color: _white)),
-          onPressed: () => _edit(context, ref),
+          onPressed: () => _edit(),
         ),
-        body: pkgsAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
-          error: (e, _) => Center(child: Text('Could not load packages.',
-              textAlign: TextAlign.center, style: const TextStyle(color: _muted))),
-          data: (pkgs) => ListView(
+        body: pkgs == null && failure == null
+          ? const Center(child: CircularProgressIndicator(color: _brand))
+          : pkgs == null
+          ? ListView(padding: const EdgeInsets.fromLTRB(16, 24, 16, 96), children: [failure!])
+          : ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
             children: [
               const Text('Offer clients flexible ways to train with you. They’ll '
@@ -76,6 +115,7 @@ class CoachPackagesScreen extends ConsumerWidget {
               const SizedBox(height: 12),
               _ConnectBanner(),
               const SizedBox(height: 4),
+              if (failure != null) ...[failure, const SizedBox(height: 8)],
               if (pkgs.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 32),
@@ -84,38 +124,47 @@ class CoachPackagesScreen extends ConsumerWidget {
                 ),
               ...pkgs.map((p) => _PackageCard(
                     pkg: p,
-                    onEdit: () => _edit(context, ref, existing: p),
-                    onDelete: () async {
-                      // P0-FL-53b · a failed delete escaped unhandled: no
-                      // message, the package simply stayed. Recorded and said.
-                      final messenger = ScaffoldMessenger.of(context);
-                      try {
-                        await ref.read(packageServiceProvider).deletePackage(p['id'] as String);
-                      } catch (e, st) {
-                        reportError('CoachPackagesScreen.deletePackage', e, st);
-                        messenger.showSnackBar(SnackBar(content: Semantics(
-                            liveRegion: true,
-                            child: Text(couldntMessage('delete this package', e)))));
-                        return;
-                      }
-                      ref.invalidate(myPackagesProvider);
-                    },
+                    onEdit: () => _edit(existing: p),
+                    onDelete: () => _delete(p['id'] as String),
                   )),
             ],
           ),
-        ),
       ),
     );
   }
 
-  Future<void> _edit(BuildContext context, WidgetRef ref, {Map<String, dynamic>? existing}) async {
+  Future<void> _delete(String id) async {
+    if (!_deleting.add(id)) return;
+    final owner = _for;
+    // P0-FL-53b · a failed delete escaped unhandled: no message, the package
+    // simply stayed. Recorded and said.
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(packageServiceProvider).deletePackage(id);
+    } catch (e, st) {
+      reportError('CoachPackagesScreen.deletePackage', e, st);
+      // Left, or another coach signed in: not theirs to hear.
+      if (!mounted || _for != owner) return;
+      messenger.showSnackBar(SnackBar(content: Semantics(
+          liveRegion: true,
+          child: Text(couldntMessage('delete this package', e)))));
+      // No row matched: the package may already be gone, so re-read the list.
+      if (e is PackageNotChanged) ref.invalidate(myPackagesProvider);
+      return;
+    } finally {
+      _deleting.remove(id);
+    }
+    if (mounted) ref.invalidate(myPackagesProvider);
+  }
+
+  Future<void> _edit({Map<String, dynamic>? existing}) async {
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _PackageEditor(existing: existing),
     );
-    if (saved == true) ref.invalidate(myPackagesProvider);
+    if (saved == true && mounted) ref.invalidate(myPackagesProvider);
   }
 }
 
@@ -161,6 +210,13 @@ class _PackageCard extends StatelessWidget {
             const SizedBox(height: 2),
             Text(pkg['description'] as String, style: const TextStyle(color: _muted, fontSize: 12)),
           ],
+          // A delete the database refused (a client's schedule uses the package)
+          // hides it instead; without this the card looked untouched.
+          if (pkg['active'] == false) ...[
+            const SizedBox(height: 2),
+            const Text('Hidden from clients',
+                style: TextStyle(color: _amber, fontSize: 12, fontWeight: FontWeight.w600)),
+          ],
         ])),
         Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
           Text('\$${price.toStringAsFixed(0)}$per',
@@ -203,11 +259,20 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
   bool _saving = false;
   /// The last save's failure, said above the Save button (P0-FL-53b r2).
   String? _error;
-  bool _tiersLoaded = false;
+  /// P0-FL-56b: the coach's current tiers were read (a genuine "none yet"
+  /// included). Until then the tier fields and Save are not offered: a blank
+  /// price means "don't offer", so saving unread tiers would remove them all.
+  bool _tiersReady = false;
+  bool _tiersLoading = false;
+  Object? _tiersError;
+
+  /// The coach this editor was opened for. If another signs in, it is dropped.
+  String? _owner;
 
   @override
   void initState() {
     super.initState();
+    _owner = ref.read(currentUserProvider)?.id;
     final e = widget.existing;
     _type = e?['type'] as String? ?? 'per_session';
     _name = TextEditingController(text: e?['name'] as String? ?? '');
@@ -220,9 +285,21 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
   }
 
   Future<void> _loadTiers() async {
-    if (_tiersLoaded) return;
-    _tiersLoaded = true;
-    final tiers = await ref.read(packageServiceProvider).getSessionTiers();
+    if (_tiersReady || _tiersLoading) return;
+    _tiersLoading = true;
+    final Map<int, ({String name, double price, String description})> tiers;
+    try {
+      tiers = await ref.read(packageServiceProvider).getSessionTiers();
+    } catch (e, st) {
+      reportError('CoachPackagesScreen._PackageEditor._loadTiers', e, st);
+      if (!mounted) return;
+      setState(() {
+        _tiersLoading = false;
+        _tiersError = e;
+      });
+      return;
+    }
+    if (!mounted) return;
     for (final t in PackageService.sessionTiers) {
       final d = tiers[t];
       if (d != null && d.price > 0) {
@@ -231,7 +308,11 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
         _tierDesc[t]!.text = d.description;
       }
     }
-    if (mounted) setState(() {});
+    setState(() {
+      _tiersLoading = false;
+      _tiersError = null;
+      _tiersReady = true;
+    });
   }
 
   @override
@@ -244,7 +325,8 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
   }
 
   Future<void> _save() async {
-    if (_saving) return;
+    if (_saving || (_type == 'bulk' && !_tiersReady)) return;
+    if (ref.read(currentUserProvider)?.id != _owner) return;
     setState(() { _saving = true; _error = null; });
     final svc = ref.read(packageServiceProvider);
     // P0-FL-53b · a failed save escaped unhandled: the button spun for good
@@ -280,10 +362,17 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
     } catch (e, st) {
       reportError('CoachPackagesScreen._PackageEditor._save', e, st);
       if (!mounted) return;
+      // Some tiers were changed before one failed (P0-FL-56b): say which, and
+      // re-read the list under this sheet, which now differs.
+      if (e is SessionTiersPartlySaved) ref.invalidate(myPackagesProvider);
       // Said inside the sheet: a SnackBar would sit on the Scaffold under it.
       setState(() {
         _saving = false;
-        _error = couldntMessage('save this package', e);
+        _error = e is SessionTiersPartlySaved
+            ? 'Only part of this was saved: your changes to the '
+                '${_packs(e.saved)} are saved. '
+                '${couldntMessage('save the ${_packs(e.notSaved)}', e.cause)}'
+            : couldntMessage('save this package', e);
       });
       return;
     }
@@ -364,7 +453,7 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
             '12 → \$1,099 (\$91.58/ea)  ·  16 → \$1,399 (\$87.44/ea)',
             style: TextStyle(color: _muted, fontSize: 12, height: 1.5)),
         const SizedBox(height: 10),
-        _fillChip('Use suggested prices', () => setState(() {
+        if (_tiersReady) _fillChip('Use suggested prices', () => setState(() {
           _tierPrice[4]!.text = '399'; _tierPrice[8]!.text = '749';
           _tierPrice[12]!.text = '1099'; _tierPrice[16]!.text = '1399';
         })),
@@ -441,6 +530,15 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
   @override
   Widget build(BuildContext context) {
     final isBulk = _type == 'bulk';
+    // Another coach signed in under this sheet: nothing of the first coach's is
+    // shown, and the sheet goes.
+    ref.listen(currentUserProvider, (_, user) {
+      final route = ModalRoute.of(context);
+      if (user?.id != _owner && route != null && route.isActive) {
+        Navigator.of(context).removeRoute(route);
+      }
+    });
+    if (ref.watch(currentUserProvider)?.id != _owner) return const SizedBox.shrink();
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: Container(
@@ -476,7 +574,24 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
             // Intelligent, type-specific pricing guidance.
             _recommendation(),
 
-            if (isBulk) ...[
+            if (isBulk && !_tiersReady) ...[
+              if (_tiersError != null)
+                SectionLoadFailure(
+                  what: 'your session packages',
+                  error: _tiersError,
+                  busy: _tiersLoading,
+                  onRetry: () => setState(() { _loadTiers(); }),
+                  accent: _brand,
+                  textColor: _white,
+                  mutedColor: _muted,
+                  detail: 'Saving is paused until they load.',
+                )
+              else
+                const Center(child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: CircularProgressIndicator(
+                      color: _brand, semanticsLabel: 'Loading your session packages'))),
+            ] else if (isBulk) ...[
               const Text('Configure each bundle independently — its own name, price '
                   'and description. Leave a bundle’s price blank to not offer it.',
                   style: TextStyle(color: _muted, fontSize: 13, height: 1.4)),
@@ -551,7 +666,7 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
               style: ElevatedButton.styleFrom(backgroundColor: _brand, foregroundColor: _white,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-              onPressed: _saving ? null : _save,
+              onPressed: _saving || (isBulk && !_tiersReady) ? null : _save,
               child: _saving
                   ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: _white))
                   : Text(isBulk ? 'Save session packages' : 'Save package',
@@ -562,6 +677,16 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
       ),
     );
   }
+}
+
+/// "4-session package", "4- and 8-session packages",
+/// "4-, 8- and 12-session packages".
+String _packs(List<int> tiers) {
+  final t = [for (final x in tiers) '$x-'];
+  final list = t.length < 2
+      ? t.join()
+      : '${t.sublist(0, t.length - 1).join(', ')} and ${t.last}';
+  return '${list}session package${t.length == 1 ? '' : 's'}';
 }
 
 // Compact field used inside a session-tier card.
@@ -605,9 +730,12 @@ Widget _field(String label, TextEditingController c, {String? hint, int maxLines
 class _ConnectBanner extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final s = ref.watch(coachConnectStatusProvider).valueOrNull;
+    final status = ref.watch(coachConnectStatusProvider);
     // Unknown (still reading, or the read failed) is not "not connected": only
-    // a status that says so prompts the coach to connect (EC-14).
+    // a status that says so prompts the coach to connect (EC-14). AsyncData
+    // only: a re-read for another coach still carries the previous coach's
+    // status, as does its failure (P0-FL-56b).
+    final s = status is AsyncData<Map<String, dynamic>> ? status.value : null;
     if (s == null) return const SizedBox.shrink();
     final ready = s['connected'] == true && s['charges_enabled'] == true;
     if (ready) return const SizedBox.shrink();
