@@ -241,6 +241,37 @@ Runtime (device/simulator/live QA): **not performed**; journey completion unchan
 
 **Runtime evidence:** none (no device, simulator or live QA). Journeys are unchanged at 2 of 14 and beta conditions at 0 of 4.
 
+## Cycle 11 log (2026-11-24): P0-FL-53a, P0-FL-53b, P0-FL-53c, P0-FL-54, P0-FL-55
+
+**How the cycle ran.**
+- The base was checked first: `origin/integration/p0-flutter-stack-c10` = `b7ec6ef`, and `-c11` did not exist. Every package started from `b7ec6ef` and targets `-c10`. Cycle 9 and 10 branches and PRs were not touched.
+- Five engineers ran in parallel in separate worktrees (`pkg-b1`…`pkg-b5`), and no file is touched by two packages. Each package then got independent UX, security and QA review, with fix rounds and narrow re-checks until QA was VERIFIED at the final head.
+- QA caught one vacuous test (FL-53b r3: `byType(Flex)` never matches Row or Column). r4 switched to `bySubtype<Flex>()` and stopped the overflow filter from swallowing a failed expect; the lead confirmed the fix by mutants (2/4 survived before it, 6/6 caught after).
+- The lead ran mutants at every round's head with test lists from each package's test diff, CI's negative controls locally, and the static guards on the combined head.
+- SEC-R3 paths (Copilot incl. "Assign failed.", `coach_program_service`, `predictClient`, `evaluateWeek`, `regenerateProgram`, the `reportFailure()` sink, AI workout build) and Women's Health (incl. `home_screen.dart:817`) were not touched. Action Center layout unchanged.
+- **Combined branch `integration/p0-flutter-stack-c11`** @ `f191d48`: 4917 tests (= 4660 + 52 + 66 + 54 + 41 + 44), analyze 285, guards 0, negative controls 0, contract exit 0 (unseen 31), coordinator 268/268, CI **7/7** run `45342689729`. No cross-package defect.
+
+| Package | Agent | Branch, final head, PR | Tests (full) | Independent review (final head) | Lead mutants | CI (exact head) |
+|---|---|---|---|---|---|---|
+| P0-FL-53a exercise library: Coach Focus failed read no longer offers overwrite; cue pack and global submission 0-row; enrichment without backend text | engineer, 3 rounds | `fix/exercise-library-failures-said` `94c3fd9` → **#209** | 4712 | UX PASS · sec APPROVE-WITH-NOTES · QA VERIFIED | 10/10 · 12/12 · 1/1 + QA 9/9 | 7/7 `45328683630` |
+| P0-FL-53b challenges failed read/refresh, booking reads recorded, staff writes (Packages, Availability, Video Response) said; sheets fit at 2× | engineer, 4 rounds | `fix/challenges-booking-staff-failures-said` `79b45d3` → **#213** | 4726 | UX PASS · sec APPROVE-WITH-NOTES · QA VERIFIED (NOT VERIFIED at r3) | 13/13 · 15/15 · 6/6 | 7/7 `45339040341` |
+| P0-FL-53c intake photo picker failures recorded and said; step bar readable at large text | engineer, 2 rounds | `fix/intake-picker-and-step-bar-honest` `dcba6ae` → **#210** | 4714 | UX PASS · sec APPROVE-WITH-NOTES · QA VERIFIED | 9/9 · 9/9 | 7/7 `45331379755` |
+| P0-FL-54 coach business screen follows sign-in (real transitions, held responses, per-coach writes and uploads) | engineer, 3 rounds | `fix/coach-business-follows-signin` `ab19413` → **#211** | 4701 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES (F1 fixed) · QA VERIFIED (NOT VERIFIED at r2) | 5/10 → 17/17 | 7/7 `45334522037` |
+| P0-FL-55 AI Coach persona/memory chips 44px with named semantics; headers wrap; `cancel-subscription` `ok:true` pinned | engineer, 2 rounds | `fix/ai-coach-chips-and-stop-coach-reply` `bf98d9a` → **#212** | 4704 | UX PASS · sec APPROVE-WITH-NOTES · QA VERIFIED | 9/9 · 11/11 + QA 7/7 | 7/7 `45336281515` |
+
+**Surviving mutants at final heads:** none (the cycle 10 FL-51 survivor is now caught by #212). **Flakes:** none; two full runs stalled under disk pressure and passed from zero.
+
+**Runtime evidence:** none (no device, simulator or live QA). Journeys are unchanged at 2 of 14 and beta conditions at 0 of 4.
+
+### Backlog after cycle 11 (decision-free first)
+
+1. **P0-FL-56: remaining swallows.** Unguarded `pickImage` (`progress_screen` :337/:381, `personal_info` :237, `chat_screen` :265, `ai_nutrition` :84, `ai_scan_view` :177); `package_service` row checks and partial `saveSessionTiers`; `coach_packages` read retry; `coach_marketplace`, `choose_package_screen` `saveSchedule`, `coach_pricing_sheet`; video record/pick; `enrichWithAI`, `updateExercise`; `PaymentService.cancelSubscription` `reportError`.
+2. **P0-FL-57: identity and storage.** `challengeNotifierProvider` member-keyed (S-53b-I1); business certification dialog after a switch; S-53a-5 `storage.remove` result on voice-note clear.
+3. **P0-FL-58: fit and targets.** Activity Browse/Join/Log food/Explore 44px; Performance ring at 2×; Availability slot cards and video form buttons at large text; video note field rebuild; FL-54 N7 (refresh overwrites unsaved fields).
+4. **Needs Julia.**
+   - Everything listed after cycle 10 (Copilot late-response remediation, SEC-R3 / Wave 3B-4 incl. "Assign failed.", 184/185 window, Action Center density, Decisions 17–24, P0-SB-2/3, PHI enforcement, `coaching_calls`).
+   - New this cycle: S-53a-4 global-library self-publish; the two new copy lines; "Open Settings" for photo permission; `send-invite-email` to any address; a Sign in button on the signed-out business screen; S-55-1 one-tap memory delete.
+
 ### Backlog after cycle 10 (decision-free first)
 
 1. **P0-FL-53: remaining same-class swallows.** Coach Focus overlay/media reads (`lastError` unchecked); `createCoachingPack` result; `submitForGlobalLibrary` 0-row; `_enrich` raw error; challenges failure shown as "No active challenges"; intake picker `catch (_) {}`; booking `_load` / `_selectCoach` unrecorded; staff-screen "Assign failed." outside Copilot.
