@@ -500,6 +500,9 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
               exerciseId: widget.exerciseId,
               resolveExpiry: expiryDate,
               onRecorded: () async {
+                // P0-FL-53a r3 · a new note replaces the one that couldn't be
+                // removed, so that message no longer describes what is there.
+                voiceClearError = null;
                 await rereadSheet();
                 _load(); if (ctx.mounted) setSheet(() {});
               }),

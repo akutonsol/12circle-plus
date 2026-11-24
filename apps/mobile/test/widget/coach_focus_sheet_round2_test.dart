@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/exercise_database/presentation/widgets/coach_focus_section.dart';
+import 'package:circle_fitness/features/exercise_database/presentation/widgets/coach_voice.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -430,6 +431,29 @@ void main() {
       expect(find.text("Couldn't remove your voice note — $_generic"),
           findsOneWidget);
       expect(origins(), ['CustomExerciseService.clearCoachVoice']);
+      await unmount(tester);
+    });
+
+    testWidgets('r3: recording a new note clears "Couldn\'t remove your voice note"',
+        (tester) async {
+      server.reads['coach_exercise_media'] = _row(voice: _voice);
+      await mount(tester);
+      await openEditor(tester);
+      server.mode = WriteMode.serverError;
+      server.modeAppliesTo =
+          (w) => w.startsWith('PATCH') && w.contains('coach_exercise_media');
+      await tester.tap(find.byIcon(Icons.delete_outline_rounded));
+      await tester.pumpAndSettle();
+      final msg = "Couldn't remove your voice note — $_generic";
+      expect(find.text(msg), findsOneWidget);
+      // A new recording lands (the recorder itself needs a microphone; its
+      // callback is what the sheet acts on).
+      tester.widget<CoachVoiceRecorder>(find.byType(CoachVoiceRecorder)).onRecorded();
+      await tester.pumpAndSettle();
+      expect(find.text(msg), findsNothing,
+          reason: 'QA r2 low: the stale removal failure stayed after a new note');
+      expect(origins(), ['CustomExerciseService.clearCoachVoice'],
+          reason: 'the earlier failure stays recorded; nothing new is');
       await unmount(tester);
     });
 
