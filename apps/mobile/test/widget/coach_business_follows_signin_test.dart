@@ -85,6 +85,13 @@ class _Server extends http.BaseClient {
 
   /// Holds a coach's reads of `<table>` until completed: key `table:uid`.
   final gates = <String, Completer<void>>{};
+
+  /// Holds only the NEXT read of `table:uid`, answering with the row as it
+  /// was when that read arrived (an older answer landing late).
+  final holdOnce = <String, Completer<void>>{};
+
+  /// Holds the answer to a write (PATCH/POST) on `<table>` (recorded first).
+  final writeGates = <String, Completer<void>>{};
   Completer<void>? storageGate;
   final writes = <String>[];
   final calls = <String>[];
@@ -96,6 +103,8 @@ class _Server extends http.BaseClient {
       ..[_b] = _rowB();
     modes.clear();
     gates.clear();
+    holdOnce.clear();
+    writeGates.clear();
     storageGate = null;
     writes.clear();
     calls.clear();
@@ -123,6 +132,8 @@ class _Server extends http.BaseClient {
     if (request.method == 'PATCH' || request.method == 'POST') {
       final body = await request.finalize().bytesToString();
       writes.add('${request.method} /$table?${u.query} $body');
+      final wg = writeGates[table];
+      if (wg != null) await wg.future;
       final id = _eq(u, 'id');
       // Like the database: a profile update is what later reads return.
       final row = id == null ? null : rows[id];
@@ -138,6 +149,12 @@ class _Server extends http.BaseClient {
     final uid = _eq(u, 'id') ?? _eq(u, 'coach_id');
     final gate = gates['$table:$uid'];
     if (gate != null) await gate.future;
+    final once = holdOnce.remove('$table:$uid');
+    if (once != null) {
+      final then = rows[uid];
+      await once.future;
+      if (table == 'user_profiles') return _json(then, 200, request);
+    }
     switch (table) {
       case 'user_profiles':
         switch (modes[uid] ?? _Mode.ok) {
@@ -450,6 +467,11 @@ void main() {
         find.text(
             "You're signed out — sign in again to see your business profile."),
         findsOneWidget);
+    // UX N2: signed out is not a failed load, and a Try again that changes
+    // nothing is not offered.
+    expect(find.text("You're signed out"), findsOneWidget);
+    expect(find.text("Couldn't load your business profile"), findsNothing);
+    expect(find.text('Try again'), findsNothing);
     expect(profileWrites(), isEmpty);
 
     // Positive control: A signs back in → A's own profile, editable again.
@@ -574,7 +596,8 @@ void main() {
           reason: "A's certification (and A's list) into B's row");
       expect(
           find.text("Couldn't add the certification — you're signed in to a "
-              'different account now. Nothing was changed.'),
+              'different account now. Nothing was changed. Check the profile '
+              'shown, then try again.'),
           findsOneWidget);
       expect(find.widgetWithText(Chip, 'CSCS'), findsNothing);
       expect(find.widgetWithText(Chip, 'ACE-CPT'), findsOneWidget,
@@ -584,25 +607,27 @@ void main() {
 
     testWidgets(
         'a photo picked for A and returned after B signed in is not uploaded '
-        "or written into B's row", (tester) async {
+        "or written into B's row; B's tile is not busy for A's pick and B is "
+        "told nothing about a tap B never made (UX N5)", (tester) async {
       await open(tester);
       pickerGate = Completer<void>();
       await tester.tap(find.text('Add Photo'));
       await tester.pump();
       expect(picks, 1, reason: 'premise: the picker is open');
       await switchTo(tester, _b);
+      expect(find.text('Bravo bio'), findsOneWidget, reason: "B's profile");
+      expect(find.text('Adding…'), findsNothing,
+          reason: "B's tile busy for A's picker");
+      expect(find.text('Add Photo'), findsOneWidget);
       pickerGate!.complete();
-      await pumpUntil(tester, () => find.byType(SnackBar).evaluate().isNotEmpty,
-          what: 'the Add Photo outcome (a SnackBar)');
+      await settle(tester);
       await settle(tester);
       expect(server.writes.where((w) => w.contains('/storage/')), isEmpty,
           reason: "A's photo uploaded under B's folder");
       expect(profileWrites(), isEmpty,
           reason: "A's photo list (plus the new photo) written into B's row");
-      expect(
-          find.text("Couldn't add the photo — you're signed in to a different "
-              'account now. Nothing was changed.'),
-          findsOneWidget);
+      expect(find.byType(SnackBar), findsNothing,
+          reason: "a late refusal for A's tap shown to B");
       await tester.pumpWidget(const SizedBox());
     });
 
@@ -625,7 +650,8 @@ void main() {
           reason: "A's invite joined B's team");
       expect(
           find.text("Couldn't save the invite — you're signed in to a "
-              'different account now. Nothing was changed.'),
+              'different account now. Nothing was changed. Check the profile '
+              'shown, then try again.'),
           findsOneWidget);
       await tester.pumpWidget(const SizedBox());
     });
@@ -633,8 +659,10 @@ void main() {
 
   // ── 6. FL-55 · Add Photo in-flight guard ──────────────────────────────────
   group('Add Photo while a photo is on its way', () {
-    Finder tile() => find.bySemanticsLabel(
-        RegExp(r'^(Add|Adding) transformation photo$'));
+    // UX N6: the label starts with the visible words ("Add Photo" /
+    // "Adding…") so Voice Control finds the tile by what it shows.
+    Finder tile() => find.bySemanticsLabel(RegExp(
+        r'^(Add Photo, transformation photo|Adding… transformation photo)$'));
 
     testWidgets('a double tap starts one upload (no second copy of the same '
         'list)', (tester) async {
@@ -665,7 +693,7 @@ void main() {
       expect(
           tester.getSemantics(tile()),
           matchesSemantics(
-              label: 'Add transformation photo',
+              label: 'Add Photo, transformation photo',
               isButton: true,
               hasEnabledState: true,
               isEnabled: true,
@@ -679,7 +707,7 @@ void main() {
       expect(
           busy,
           matchesSemantics(
-              label: 'Adding transformation photo',
+              label: 'Adding… transformation photo',
               isButton: true,
               hasEnabledState: true,
               isEnabled: false,
@@ -756,5 +784,341 @@ void main() {
     await showTab(tester, 'Profile');
     await expectNothingOfA(tester);
     await tester.pumpWidget(const SizedBox());
+  });
+
+  // ── 8. Round 2 (review fixes) ─────────────────────────────────────────────
+  group('round 2', () {
+    bool emailed() => server.writes.any((w) => w.contains('send-invite-email'));
+
+    Future<void> typeInvite(WidgetTester tester) async {
+      await showTab(tester, 'Team');
+      await tester.tap(find.text('Invite Assistant Coach'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.descendant(
+              of: find.byType(AlertDialog), matching: find.byType(TextField)),
+          'assistant@example.com');
+    }
+
+    // Security F1: the email names whoever is signed in when it is sent.
+    testWidgets(
+        'F1: B signs in while A\'s invite insert is in flight → no invite '
+        'email under B\'s login, and nothing about it is said to B',
+        (tester) async {
+      await open(tester);
+      await typeInvite(tester);
+      final insert = server.writeGates['coach_team_invites'] = Completer<void>();
+      await tester.tap(find.text('Invite'));
+      await pumpUntil(tester,
+          () => server.writes.any((w) => w.contains('coach_team_invites')),
+          what: "A's invite insert");
+      expect(server.writes.where((w) => w.contains('coach_team_invites')).single,
+          contains('"coach_id":"$_a"'),
+          reason: "premise: on A's own team");
+      await switchTo(tester, _b);
+      insert.complete();
+      await settle(tester);
+      await settle(tester);
+      expect(emailed(), isFalse,
+          reason: "THE defect: send-invite-email ran with B's login");
+      expect(find.textContaining('Invite email sent'), findsNothing);
+      expect(find.textContaining('Invite saved'), findsNothing);
+      expect(find.textContaining('invite'), findsNothing,
+          reason: 'nothing about A\'s invite is announced to B');
+      expect(find.text('Bea Backup'), findsOneWidget, reason: "B's own team");
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('F1 positive control: with no switch the saved invite is '
+        'emailed and its outcome announced', (tester) async {
+      await open(tester);
+      await typeInvite(tester);
+      await tester.tap(find.text('Invite'));
+      await pumpUntil(tester, () => find.byType(SnackBar).evaluate().isNotEmpty,
+          what: 'the invite outcome (a SnackBar)');
+      expect(emailed(), isTrue);
+      // The fake function answers without {sent: true}: said honestly.
+      expect(find.textContaining('Invite saved, but the email'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    // Lead mutant M3: _isCurrentLoad without the seq check.
+    testWidgets(
+        'two loads for the same coach: the OLDER answer landing last is not '
+        'applied over the newer one', (tester) async {
+      await open(tester);
+      await switchTo(tester, null);
+      final older = server.holdOnce['user_profiles:$_a'] = Completer<void>();
+      await tester.runAsync(() => auth().recoverSession(_session(_a)));
+      await settle(tester); // A's first read is held (answers 'Alpha bio')
+      server.rows[_a] = {..._rowA(), 'bio': 'Alpha bio v2'};
+      await switchTo(tester, _a); // out and in again: a newer read
+      expect(find.text('Alpha bio v2'), findsOneWidget, reason: 'premise');
+      older.complete();
+      await settle(tester);
+      await settle(tester);
+      expect(find.text('Alpha bio v2'), findsOneWidget,
+          reason: 'the older read overwrote the newer one');
+      expect(find.text('Alpha bio'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    // QA Gap 1: a save still on its way when B signs in.
+    testWidgets(
+        'a save in flight when B signs in is not reported on B\'s screen',
+        (tester) async {
+      await open(tester);
+      final patch = server.writeGates['user_profiles'] = Completer<void>();
+      await tester.tap(find.text('Save'));
+      await pumpUntil(tester, () => profileWrites().isNotEmpty,
+          what: "A's save");
+      expect(profileWrites().single, contains('id=eq.$_a'),
+          reason: "premise: A's own row");
+      await switchTo(tester, _b);
+      patch.complete();
+      await settle(tester);
+      await settle(tester);
+      expect(find.text('Profile updated!'), findsNothing,
+          reason: "A's save announced to B");
+      expect(find.textContaining("Couldn't save"), findsNothing);
+      expect(find.text('Bravo bio'), findsOneWidget);
+      expectNoWriteOfAInto(_b);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    // Lead mutants M4 (_requireShownCoach without the uid != _loadedFor
+    // refusal) and M6 (build without the "not the signed-in coach's" gate).
+    //
+    // Between B's sign-in and its auth event reaching this screen, the
+    // session is B's while the screen still holds A. A listener registered
+    // BEFORE the screen's hears the event first — that is the window. In it,
+    // a frame is built (what would be painted) and the Save button rendered
+    // on A's last frame is pressed. Why not a plain tap: no frame can be
+    // pumped between two listeners of one event.
+    testWidgets(
+        'in the window between B\'s sign-in and the screen hearing of it, A\'s '
+        'data is not shown and a Save pressed then is refused', (tester) async {
+      var armed = false;
+      bool? aVisibleInWindow;
+      VoidCallback? savePressedOnAsFrame;
+      final sub = auth().onAuthStateChange.listen((_) {
+        if (!armed || auth().currentUser?.id != _b) return;
+        armed = false;
+        tester.element(find.byType(CoachBusinessScreen)).markNeedsBuild();
+        final owner = WidgetsBinding.instance.buildOwner!
+          ..buildScope(WidgetsBinding.instance.rootElement!);
+        aVisibleInWindow =
+            _aValues.any((v) => find.text(v).evaluate().isNotEmpty);
+        owner.finalizeTree(); // as a frame does: what left the tree is gone
+        savePressedOnAsFrame!();
+      });
+      addTearDown(sub.cancel);
+      await open(tester);
+      expect(find.text('Alpha bio'), findsOneWidget, reason: 'premise');
+      savePressedOnAsFrame =
+          tester.widget<TextButton>(find.widgetWithText(TextButton, 'Save'))
+              .onPressed;
+      armed = true;
+      // B's session replaces A's (no sign-out event first).
+      await tester.runAsync(() => auth().recoverSession(_session(_b)));
+      await settle(tester);
+      expect(aVisibleInWindow, isFalse,
+          reason: "A's data rendered while B is signed in (M6)");
+      expect(profileWrites(), isEmpty,
+          reason: "A's form saved into B's row (M4)");
+      expectNoWriteOfAInto(_b);
+      expect(
+          find.text("Couldn't save your profile — you're signed in to a "
+              'different account now. Nothing was changed. Check the profile '
+              'shown, then try again.'),
+          findsOneWidget,
+          reason: 'the Save pressed in the window is refused out loud '
+              '(also proves the window was reached)');
+      expect(find.text('Bravo bio'), findsOneWidget, reason: "then B's own");
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    // Lead mutant M9: confirmedProfileRead check removed.
+    testWidgets(
+        'the server answers the profile read with a row that is not the '
+        'signed-in coach\'s → a failure, nothing of that row shown',
+        (tester) async {
+      server.rows[_a] = _rowB(); // id is B's
+      await open(tester);
+      expect(find.text("Couldn't load your business profile"), findsOneWidget);
+      expect(find.text('Bravo bio'), findsNothing);
+      expect(find.text('Save'), findsNothing);
+      expect(find.byType(TextField), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    // QA Gap 2: the switch happens while the upload itself is running.
+    testWidgets(
+        'B signs in while A\'s photo is uploading → the photo list write is '
+        'skipped and nothing is said to B', (tester) async {
+      await open(tester);
+      final upload = server.storageGate = Completer<void>();
+      await tester.tap(find.text('Add Photo'));
+      await pumpUntil(tester,
+          () => server.writes.any((w) => w.contains('/storage/')),
+          what: "A's upload");
+      await switchTo(tester, _b);
+      upload.complete();
+      await settle(tester);
+      await settle(tester);
+      expect(profileWrites(), isEmpty,
+          reason: "a photo list written while B is signed in");
+      expect(find.byType(SnackBar), findsNothing);
+      expect(find.text('Bravo bio'), findsOneWidget);
+      expect(find.text('Add Photo'), findsOneWidget, reason: "B's tile idle");
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    // Lead mutant M8 / QA Gap 3: the "+ Add" header during an upload. A tap
+    // in the same frame as the first one reaches the handler before the
+    // header is rebuilt disabled — only the handler's guard stops it.
+    for (final (first, second) in const [('tile', 'header'), ('header', 'header')]) {
+      testWidgets(
+          '$first then $second in the same frame start one photo, not two',
+          (tester) async {
+        await open(tester);
+        pickerGate = Completer<void>();
+        Finder target(String w) =>
+            w == 'tile' ? find.text('Add Photo') : find.text('+ Add').last;
+        final a = tester.getCenter(target(first));
+        final b = tester.getCenter(target(second));
+        await tester.tapAt(a);
+        await tester.tapAt(b); // no frame in between
+        await tester.pump();
+        pickerGate!.complete();
+        await pumpUntil(tester, () => find.text('Photo added').evaluate().isNotEmpty,
+            what: 'Photo added');
+        await settle(tester);
+        expect(picks, 1, reason: 'a second picker/upload started');
+        expect(server.writes.where((w) => w.startsWith('POST /storage/')),
+            hasLength(1));
+        expect(profileWrites(), hasLength(1));
+        await tester.pumpWidget(const SizedBox());
+      });
+    }
+
+    // UX N1: the "+ Add" headers are labelled, >= 44 px buttons; the photo
+    // one is disabled while a photo is on its way.
+    testWidgets('the "+ Add" headers are labelled buttons >= 44 px; the photo '
+        'one is disabled while uploading', (tester) async {
+      final handle = tester.ensureSemantics();
+      await open(tester);
+      for (final label in ['Add certification', 'Add transformation photo']) {
+        expect(
+            tester.getSemantics(find.bySemanticsLabel(label)),
+            matchesSemantics(
+                label: label,
+                isButton: true,
+                hasEnabledState: true,
+                isEnabled: true,
+                hasTapAction: true),
+            reason: label);
+      }
+      for (final e in find.text('+ Add').evaluate()) {
+        final target = find
+            .ancestor(
+                of: find.byElementPredicate((x) => x == e),
+                matching: find.byType(GestureDetector))
+            .first;
+        expect(tester.getSize(target).height, greaterThanOrEqualTo(44));
+        expect(tester.getSize(target).width, greaterThanOrEqualTo(44));
+        // The pill and its text are unchanged (12 px, not shrunk).
+        expect((e.widget as Text).style?.fontSize, 12);
+      }
+      server.storageGate = Completer<void>();
+      await tester.tap(find.text('Add Photo'));
+      await pumpUntil(tester,
+          () => server.writes.any((w) => w.contains('/storage/')),
+          what: 'the upload');
+      expect(
+          tester.getSemantics(find.bySemanticsLabel('Add transformation photo')),
+          matchesSemantics(
+              label: 'Add transformation photo',
+              isButton: true,
+              hasEnabledState: true,
+              isEnabled: false));
+      await tester.tap(find.text('+ Add').last);
+      await settle(tester);
+      expect(picks, 1, reason: 'the header started a second photo');
+      server.storageGate!.complete();
+      await pumpUntil(tester, () => find.text('Photo added').evaluate().isNotEmpty,
+          what: 'Photo added');
+      await settle(tester);
+      expect(
+          tester.getSemantics(find.bySemanticsLabel('Add transformation photo')),
+          matchesSemantics(
+              label: 'Add transformation photo',
+              isButton: true,
+              hasEnabledState: true,
+              isEnabled: true,
+              hasTapAction: true),
+          reason: 'enabled again');
+      handle.dispose();
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    // UX N3: the failed-refresh notice offers Retry.
+    testWidgets('a failed refresh offers Retry; Retry shows what the server '
+        'now holds', (tester) async {
+      await open(tester);
+      server.modes[_a] = _Mode.fails;
+      await tester.tap(find.text('Add Photo'));
+      await pumpUntil(
+          tester,
+          () => find
+              .textContaining("Couldn't refresh your business profile")
+              .evaluate()
+              .isNotEmpty,
+          what: 'the refresh failure notice',
+          step: const Duration(milliseconds: 500));
+      await settle(tester);
+      expect(find.text('Alpha bio'), findsOneWidget, reason: 'kept');
+      final retry = find.widgetWithText(SnackBarAction, 'Retry');
+      expect(retry, findsOneWidget);
+      server.modes[_a] = _Mode.ok;
+      server.rows[_a] = {...server.rows[_a]!, 'bio': 'Alpha bio v2'};
+      await tester.tap(retry);
+      await pumpUntil(tester,
+          () => find.text('Alpha bio v2').evaluate().isNotEmpty,
+          what: 'the retried refresh');
+      expect(find.text("Couldn't load your business profile"), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    // UX N2 (opened while signed out).
+    testWidgets('opened signed out: "You\'re signed out", no Try again',
+        (tester) async {
+      await tester.runAsync(() => auth().signOut());
+      await open(tester);
+      expect(find.text("You're signed out"), findsOneWidget);
+      expect(
+          find.text(
+              "You're signed out — sign in again to see your business profile."),
+          findsOneWidget);
+      expect(find.text('Try again'), findsNothing);
+      expect(find.text("Couldn't load your business profile"), findsNothing);
+      expect(server.calls.where((c) => c.contains('/rest/v1/')), isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    // Negative control for N2: a real failed load still offers Try again.
+    testWidgets('negative control: a failed load (signed in) keeps its heading '
+        'and Try again', (tester) async {
+      server.modes[_a] = _Mode.fails;
+      await open(tester);
+      expect(find.text("Couldn't load your business profile"), findsOneWidget);
+      expect(find.text('Try again'), findsOneWidget);
+      expect(find.text("You're signed out"), findsNothing);
+      server.modes[_a] = _Mode.ok;
+      await tester.tap(find.text('Try again'));
+      await settle(tester);
+      expect(find.text('Alpha bio'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    });
   });
 }

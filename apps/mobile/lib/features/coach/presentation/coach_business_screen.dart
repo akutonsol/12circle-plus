@@ -68,9 +68,12 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
   int _loadSeq = 0;
   StreamSubscription<AuthState>? _authSub;
 
-  /// True while a transformation photo is on its way: a second tap would copy
-  /// the same list and one of the two photos would be lost.
-  bool _uploadingPhoto = false;
+  /// The coach whose transformation photo is on its way (null: none). While
+  /// it is the coach shown, a second tap would copy the same list and one of
+  /// the two photos would be lost. Keyed to the coach so another coach who
+  /// signs in meanwhile is not shown "Adding…" for the previous coach's pick.
+  String? _uploadingFor;
+  bool get _uploadingPhoto => _uploadingFor != null && _uploadingFor == _loadedFor;
 
   @override
   void initState() {
@@ -167,7 +170,12 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
   /// coach's (another account signed in since it was read).
   static String _otherAccount(String what) =>
       "Couldn't $what — you're signed in to a different account now. "
-      'Nothing was changed.';
+      'Nothing was changed. Check the profile shown, then try again.';
+
+  /// The invite started for [uid] may still go on: [uid] is still the coach
+  /// signed in and the coach whose team was shown (the screen may be gone).
+  bool _stillInvitingAs(String uid) =>
+      _db.auth.currentUser?.id == uid && _loadedFor == uid;
   static const _priceError = 'Enter a monthly price in dollars, e.g. 150.';
   static const _yearsError = 'Enter years of experience as a whole number, e.g. 5.';
   static const _bothError =
@@ -211,17 +219,26 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     return uid;
   }
 
-  void _say(String msg, {bool error = false}) {
+  void _say(String msg, {bool error = false, SnackBarAction? action}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(_snack(msg, error: error));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(_snack(msg, error: error, action: action));
   }
 
   /// The one SnackBar style on this screen (also used where only a captured
-  /// messenger is available, e.g. after a dialog closed).
-  static SnackBar _snack(String msg, {bool error = false}) => SnackBar(
-      content: Text(msg),
-      backgroundColor:
-          error ? const Color(0xFFFFB4AB) : const Color(0xFF6FFBBE));
+  /// messenger is available, e.g. after a dialog closed). With an [action]
+  /// it stays longer (time to reach it) but still goes by itself.
+  static SnackBar _snack(String msg,
+          {bool error = false, SnackBarAction? action}) =>
+      SnackBar(
+          content: Text(msg),
+          action: action,
+          persist: action == null ? null : false,
+          duration: action == null
+              ? const Duration(milliseconds: 4000)
+              : const Duration(seconds: 10),
+          backgroundColor:
+              error ? const Color(0xFFFFB4AB) : const Color(0xFF6FFBBE));
 
   void _clearPriceError() {
     if (_priceErrorText != null) setState(() => _priceErrorText = null);
@@ -352,7 +369,10 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       if (_loadedFor == uid) {
         // A failed refresh of the coach already shown: keep what is shown
         // (it is still this coach's last confirmed profile) and say so.
-        _say(_couldnt('refresh your business profile', e), error: true);
+        _say(_couldnt('refresh your business profile', e),
+            error: true,
+            action: SnackBarAction(
+                label: 'Retry', textColor: _bg, onPressed: _load));
         return;
       }
       setState(() {
@@ -465,16 +485,15 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     // P0-FL-54: the list copied below must be the signed-in coach's.
     final uid = _requireShownCoach('add the photo');
     if (uid == null) return;
-    setState(() => _uploadingPhoto = true);
+    setState(() => _uploadingFor = uid);
     try {
       final picker = ImagePicker();
       final img = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
       if (img == null) return;
-      // The picker can stay open a long time: still the same coach?
-      if (!_showsSignedInCoach || _loadedFor != uid) {
-        _say(_otherAccount('add the photo'), error: true);
-        return;
-      }
+      // The picker can stay open a long time: still the same coach? If not,
+      // nothing is written, and nothing is said to the coach shown now (they
+      // did not tap Add Photo).
+      if (!_showsSignedInCoach || _loadedFor != uid) return;
       // Use bytes + uploadBinary so this works on web as well as native.
       final bytes = await img.readAsBytes();
       final ext = (img.name.contains('.') ? img.name.split('.').last : 'jpg').toLowerCase();
@@ -484,10 +503,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       final url = _db.storage.from('coach-media').getPublicUrl(path);
       // The list is copied from the profile shown, so it must still be this
       // coach's — otherwise another coach's photos would be written here.
-      if (!_showsSignedInCoach || _loadedFor != uid) {
-        _say(_otherAccount('add the photo'), error: true);
-        return;
-      }
+      if (!_showsSignedInCoach || _loadedFor != uid) return;
       final current = List<String>.from(_profile?['transformation_photo_urls'] as List? ?? []);
       current.add(url);
       final saved = _changedRow(await _db
@@ -508,10 +524,14 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       reportError('CoachBusinessScreen._uploadTransformationPhoto', e, s);
       if (_loadedFor == uid) _say(_couldnt('add the photo', e), error: true);
     } finally {
-      if (mounted) {
-        setState(() => _uploadingPhoto = false);
-      } else {
-        _uploadingPhoto = false;
+      // Only this coach's own guard is cleared (another coach may have
+      // started a photo of their own meanwhile).
+      if (_uploadingFor == uid) {
+        if (mounted) {
+          setState(() => _uploadingFor = null);
+        } else {
+          _uploadingFor = null;
+        }
       }
     }
   }
@@ -606,7 +626,11 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
           ? const Center(child: CircularProgressIndicator(
               color: _brand, semanticsLabel: 'Loading your business profile'))
           : _loadError != null
-          ? _LoadFailed(message: _loadError!, onRetry: _load)
+          // Signed out is not a failed load, and retrying changes nothing.
+          ? _loadError == _signedOutBody
+              ? const _LoadFailed(
+                  title: "You're signed out", message: _signedOutBody)
+              : _LoadFailed(message: _loadError!, onRetry: _load)
           : TabBarView(controller: _tab, children: [
               _ProfileTab(
                 bioCtrl: _bioCtrl, priceCtrl: _priceCtrl,
@@ -675,16 +699,24 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
           } catch (e, s) {
             // The invite was not saved, so no email goes out claiming one.
             reportError('CoachBusinessScreen._showInviteTeam', e, s);
-            messenger.showSnackBar(
-                _snack(_couldnt('save the invite', e), error: true));
+            if (_stillInvitingAs(uid)) {
+              messenger.showSnackBar(
+                  _snack(_couldnt('save the invite', e), error: true));
+            }
             return;
           }
+          // P0-FL-54 · the account may have changed while the insert was in
+          // flight. The email goes out under the login of whoever is signed
+          // in (it names them), so it is sent — and announced — only while
+          // the inviting coach is still the one signed in and shown.
+          if (!_stillInvitingAs(uid)) return;
           var ok = true;
           try {
             final res = await _db.functions.invoke('send-invite-email',
                 body: {'email': email, 'type': 'team'});
             ok = (res.data is Map) && res.data['sent'] == true;
           } catch (_) { ok = false; }
+          if (!_stillInvitingAs(uid)) return;
           messenger.showSnackBar(ok
               ? SnackBar(content: Text('Invite email sent to $email'))
               : _snack(_inviteEmailNotSent, error: true));
@@ -750,9 +782,15 @@ class _AddCertDialogState extends State<_AddCertDialog> {
 
 // A failed load is not an empty profile: no form, no Save, a way to retry.
 class _LoadFailed extends StatelessWidget {
+  final String title;
   final String message;
-  final VoidCallback onRetry;
-  const _LoadFailed({required this.message, required this.onRetry});
+  /// Null: no Try again (nothing a retry could change, e.g. signed out).
+  final VoidCallback? onRetry;
+  const _LoadFailed({
+    this.title = "Couldn't load your business profile",
+    required this.message,
+    this.onRetry,
+  });
 
   @override
   // Scrolls so large text on a small phone never overflows; announced as a
@@ -766,18 +804,20 @@ class _LoadFailed extends StatelessWidget {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
         const Icon(Icons.cloud_off_rounded, color: _mut, size: 40),
         const SizedBox(height: 12),
-        const Text("Couldn't load your business profile",
+        Text(title,
           textAlign: TextAlign.center,
-          style: TextStyle(color: _wht, fontSize: 16, fontWeight: FontWeight.w700)),
+          style: const TextStyle(color: _wht, fontSize: 16, fontWeight: FontWeight.w700)),
         const SizedBox(height: 6),
         Text(message, textAlign: TextAlign.center,
           style: const TextStyle(color: _mut, fontSize: 13)),
+        if (onRetry != null) ...[
         const SizedBox(height: 16),
         OutlinedButton(
           onPressed: onRetry,
           style: OutlinedButton.styleFrom(
             foregroundColor: _brand, side: const BorderSide(color: _brand)),
           child: const Text('Try again', style: TextStyle(fontWeight: FontWeight.w700))),
+        ],
         ]),
       ),
     ),
@@ -815,7 +855,8 @@ class _ProfileTab extends StatelessWidget {
       _Field('Years Experience', yearsCtrl, '5', inputType: TextInputType.number,
         errorText: yearsError, focusNode: yearsFocus, onChanged: onYearsChanged),
       const SizedBox(height: 20),
-      _SectionHeader('Certifications', onAdd: onAddCert),
+      _SectionHeader('Certifications', onAdd: onAddCert,
+          addLabel: 'Add certification'),
       const SizedBox(height: 8),
       if (certifications.isEmpty)
         const Text('No certifications yet — tap “+ Add”.',
@@ -827,7 +868,8 @@ class _ProfileTab extends StatelessWidget {
           deleteIcon: const Icon(Icons.close, size: 14, color: _mut),
           onDeleted: () => onRemoveCert(c))).toList()),
       const SizedBox(height: 24),
-      _SectionHeader('Transformation Photos', onAdd: onAddPhoto),
+      _SectionHeader('Transformation Photos', onAdd: onAddPhoto,
+          addLabel: 'Add transformation photo', busy: uploadingPhoto),
       const SizedBox(height: 8),
       SizedBox(height: 120, child: ListView(
         scrollDirection: Axis.horizontal,
@@ -844,9 +886,11 @@ class _ProfileTab extends StatelessWidget {
             button: true,
             enabled: !uploadingPhoto,
             liveRegion: uploadingPhoto,
+            // The visible words come first, so "tap Add Photo" (Voice
+            // Control) finds it.
             label: uploadingPhoto
-                ? 'Adding transformation photo'
-                : 'Add transformation photo',
+                ? 'Adding… transformation photo'
+                : 'Add Photo, transformation photo',
             excludeSemantics: true,
             onTap: uploadingPhoto ? null : onAddPhoto,
             child: GestureDetector(
@@ -1004,17 +1048,39 @@ class _Field extends StatelessWidget {
 class _SectionHeader extends StatelessWidget {
   final String title;
   final VoidCallback onAdd;
-  const _SectionHeader(this.title, {required this.onAdd});
+  /// What "+ Add" adds, for screen readers and Voice Control ("Add …").
+  final String addLabel;
+  /// True while what it adds is on its way: disabled (and announced so).
+  final bool busy;
+  const _SectionHeader(this.title,
+      {required this.onAdd, required this.addLabel, this.busy = false});
   @override
   Widget build(BuildContext context) => Row(children: [
     Text(title, style: const TextStyle(color: _wht, fontSize: 14, fontWeight: FontWeight.w700)),
     const Spacer(),
-    GestureDetector(
-      onTap: onAdd,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(color: _brand.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
-        child: const Text('+ Add', style: TextStyle(color: _brand, fontSize: 12, fontWeight: FontWeight.w600))),
+    // A >= 44 px target around the same pill (the pill itself is unchanged).
+    Semantics(
+      button: true,
+      enabled: !busy,
+      label: addLabel,
+      excludeSemantics: true,
+      onTap: busy ? null : onAdd,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: busy ? null : onAdd,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+          child: Align(
+            alignment: Alignment.centerRight,
+            widthFactor: 1,
+            heightFactor: 1,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(color: _brand.withValues(alpha: busy ? 0.05 : 0.1), borderRadius: BorderRadius.circular(8)),
+              child: Text('+ Add', style: TextStyle(color: busy ? _mut : _brand, fontSize: 12, fontWeight: FontWeight.w600))),
+          ),
+        ),
+      ),
     ),
   ]);
 }
