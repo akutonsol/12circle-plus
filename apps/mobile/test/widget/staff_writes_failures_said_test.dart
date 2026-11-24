@@ -460,4 +460,117 @@ void main() {
       expect(reported, isEmpty);
     });
   });
+  // P0-FL-53b r3 (re-review UX N1 / QA): the failure line added in r2 must
+  // still fit. The Add-slot sheet was a plain Column: on a short phone or at
+  // large text, the extra line could overflow or push Publish Slot off screen.
+  // Matrix: 320/360/390/430dp (each with a phone-like height) x 1.0/1.3/2.0.
+  group('Fits after a failure', () {
+    const sizes = {320: 568.0, 360: 640.0, 390: 844.0, 430: 932.0};
+    const scales = [1.0, 1.3, 2.0];
+
+    // Overflow errors raised anywhere on screen. The screens UNDER the sheet
+    // (slot cards, the video form) have their own, older overflows that this
+    // package does not touch (listed as follow-ups); only overflows of a Flex
+    // inside the surface under test fail these tests.
+    List<String> overflows(WidgetTester tester) {
+      final seen = <String>[];
+      final previous = FlutterError.onError;
+      FlutterError.onError = (d) {
+        final text = d.toString();
+        if (text.contains('overflowed by')) {
+          seen.add(text);
+        } else {
+          previous?.call(d);
+        }
+      };
+      addTearDown(() => FlutterError.onError = previous);
+      return seen;
+    }
+
+    // The overflow messages that name a RenderFlex inside [surface].
+    List<String> overflowsIn(WidgetTester tester, List<String> seen, Finder surface) {
+      final ids = tester
+          .renderObjectList(find.descendant(of: surface, matching: find.byType(Flex)))
+          .map(describeIdentity)
+          .toSet();
+      return [
+        for (final e in seen)
+          if (ids.any((id) => e.contains('$id ') || e.contains('$id\n') || e.contains('$id:'))) e
+      ];
+    }
+
+    void phone(WidgetTester tester, int w, double h, double scale) {
+      tester.view
+        ..devicePixelRatio = 1
+        ..physicalSize = Size(w.toDouble(), h);
+      tester.platformDispatcher.textScaleFactorTestValue = scale;
+      addTearDown(tester.view.reset);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    }
+
+    for (final MapEntry(key: w, value: h) in sizes.entries) {
+      for (final scale in scales) {
+        testWidgets('Add-slot sheet with its failure line, ${w}dp at ${scale}x',
+            (tester) async {
+          _server.failing = {'coach_availability'};
+          _sink();
+          final seen = overflows(tester);
+          phone(tester, w, h, scale);
+          await tester.pumpWidget(const MaterialApp(home: CoachAvailabilityScreen()));
+          await tester.pumpAndSettle();
+          await tester.ensureVisible(find.text('Add Slot').first);
+          await tester.tap(find.text('Add Slot').first);
+          await tester.pumpAndSettle();
+          await tester.ensureVisible(_inSheet(find.text('Publish Slot')));
+          await tester.pumpAndSettle();
+          await tester.tap(_inSheet(find.text('Publish Slot')));
+          await tester.pumpAndSettle();
+          expect(overflowsIn(tester, seen, find.byType(BottomSheet)), isEmpty,
+              reason: 'the Add-slot sheet does not overflow with its failure line');
+          const msg = "Couldn't save this time slot — $_other";
+          await tester.ensureVisible(_inSheet(find.text(msg)));
+          await tester.pumpAndSettle();
+          expect(_inSheet(find.text(msg)).hitTestable(), findsOneWidget,
+              reason: 'the failure line can be brought on screen');
+          await tester.ensureVisible(_inSheet(find.text('Publish Slot')));
+          await tester.pumpAndSettle();
+          expect(_inSheet(find.text('Publish Slot')).hitTestable(), findsOneWidget,
+              reason: 'Publish Slot stays reachable for a retry');
+          expect(tester.getSize(find.ancestor(
+                  of: find.text('Publish Slot'), matching: find.byType(ElevatedButton))).height,
+              greaterThanOrEqualTo(44));
+          expect(overflowsIn(tester, seen, find.byType(BottomSheet)), isEmpty);
+        });
+
+        testWidgets('Video Done view, not notified, ${w}dp at ${scale}x',
+            (tester) async {
+          _server.failing = {'notifications'};
+          _sink();
+          final seen = overflows(tester);
+          phone(tester, w, h, scale);
+          await tester.pumpWidget(const MaterialApp(
+              home: CoachVideoResponseScreen(clientId: 'client-1', clientName: 'Jamie')));
+          await tester.enterText(find.byType(TextField), 'Great week — keep the tempo.');
+          // ignore: avoid_dynamic_calls
+          (tester.state(find.byType(CoachVideoResponseScreen)) as dynamic).setState(() {});
+          await tester.pump();
+          await tester.ensureVisible(find.text('Send to Client'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Send to Client'));
+          await tester.pumpAndSettle();
+          final done = find.ancestor(of: find.text('Video Sent!'), matching: find.byType(Scaffold));
+          expect(overflowsIn(tester, seen, done), isEmpty,
+              reason: 'the Done view does not overflow with the not-notified line');
+          const line = "Your response is saved, but Jamie wasn't notified — let them know another way.";
+          await tester.ensureVisible(find.text(line));
+          await tester.pumpAndSettle();
+          expect(find.text(line).hitTestable(), findsOneWidget);
+          await tester.ensureVisible(find.text('Done'));
+          await tester.pumpAndSettle();
+          expect(find.text('Done').hitTestable(), findsOneWidget);
+          expect(overflowsIn(tester, seen, done), isEmpty);
+        });
+      }
+    }
+  });
 }

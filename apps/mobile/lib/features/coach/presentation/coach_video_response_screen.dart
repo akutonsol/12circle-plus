@@ -268,7 +268,12 @@ class _DoneView extends StatelessWidget {
   final bool notified;
   const _DoneView({required this.clientName, required this.notified, required this.onDone});
   @override
-  Widget build(BuildContext context) => Center(child: Padding(
+  // P0-FL-53b r3 · scrolls when the not-notified line, large text or a
+  // short phone make it taller than the screen; centred otherwise.
+  Widget build(BuildContext context) => LayoutBuilder(builder: (context, box) =>
+    SingleChildScrollView(child: ConstrainedBox(
+    constraints: BoxConstraints(minHeight: box.maxHeight),
+    child: Center(child: Padding(
     padding: const EdgeInsets.all(32),
     child: Column(mainAxisSize: MainAxisSize.min, children: [
       // P0-FL-53b r2 · not notified: the warning colour and icon, a next step,
@@ -299,5 +304,5 @@ class _DoneView extends StatelessWidget {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
         child: const Text('Done', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)))),
     ]),
-  ));
+  )))));
 }

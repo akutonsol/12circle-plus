@@ -589,7 +589,10 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
     final months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     final days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
-    return Padding(
+    // P0-FL-53b r3 · the body scrolls: with the failure line (r2), large
+    // text or a short phone, Publish Slot stays reachable instead of being
+    // pushed off screen.
+    return SingleChildScrollView(
       padding: EdgeInsets.only(
         left: 20, right: 20, top: 20,
         bottom: MediaQuery.of(context).viewInsets.bottom + 20),
@@ -612,9 +615,8 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
             child: Row(children: [
               const Icon(Icons.calendar_today_rounded, color: _brand, size: 18),
               const SizedBox(width: 10),
-              Text('${days[_date.weekday - 1]}, ${_date.day} ${months[_date.month - 1]} ${_date.year}',
-                style: const TextStyle(color: _wht, fontSize: 14, fontWeight: FontWeight.w600)),
-              const Spacer(),
+              Expanded(child: Text('${days[_date.weekday - 1]}, ${_date.day} ${months[_date.month - 1]} ${_date.year}',
+                style: const TextStyle(color: _wht, fontSize: 14, fontWeight: FontWeight.w600))),
               const Icon(Icons.chevron_right_rounded, color: _mut, size: 18),
             ]),
           ),
@@ -661,9 +663,7 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
         // Duration
         const Text('Duration', style: TextStyle(color: _mut, fontSize: 12, fontWeight: FontWeight.w600)),
         const SizedBox(height: 8),
-        Row(children: _durations.map((d) => Padding(
-          padding: const EdgeInsets.only(right: 8),
-          child: GestureDetector(
+        Wrap(spacing: 8, runSpacing: 8, children: _durations.map((d) => GestureDetector(
             onTap: () => setState(() => _duration = d),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 150),
@@ -674,7 +674,6 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
                 border: Border.all(color: _duration == d ? _tert : _brd)),
               child: Text('$d min', style: TextStyle(
                 color: _duration == d ? _tert : _mut, fontSize: 13, fontWeight: FontWeight.w600))),
-          ),
         )).toList()),
         const SizedBox(height: 24),
 
