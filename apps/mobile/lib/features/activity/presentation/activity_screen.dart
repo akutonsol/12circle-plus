@@ -31,6 +31,169 @@ class _C {
   static const error        = Color(0xFFFFB4AB);
 }
 
+// ── Fit and touch helpers (P0-FL-58) ──────────────────────────────────────────
+
+/// Text is scaled past 1.3×: side-by-side pieces go under one another instead
+/// of being squeezed, clipped or shrunk.
+bool _largeText(BuildContext context) =>
+    MediaQuery.textScalerOf(context).scale(12) > 12 * 1.3;
+
+/// How wide [text] is on one line, as it will be drawn (style and scale).
+double _lineWidth(BuildContext context, String text, TextStyle style) {
+  final p = TextPainter(
+    // bodyMedium: what a Scaffold's Text inherits.
+    text: TextSpan(text: text,
+      style: Theme.of(context).textTheme.bodyMedium?.merge(style) ?? style),
+    textDirection: TextDirection.ltr,
+    textScaler: MediaQuery.textScalerOf(context))..layout();
+  final w = p.width;
+  p.dispose();
+  return w;
+}
+
+/// A >= 44px button around [child], which keeps its own look. [label] names
+/// the action AND the item; a screen reader can press it (`onTap`).
+class _TapTarget extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  final Widget child;
+  const _TapTarget({required this.label, required this.onTap, required this.child});
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    container: true,
+    button: true,
+    label: label,
+    onTap: onTap,
+    excludeSemantics: true,
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+        child: Center(widthFactor: 1, heightFactor: 1, child: child))));
+}
+
+/// The content of a card that is one button: the whole row is pressed, and is
+/// announced as [label]. [trailing] (its own button, or a badge) goes beside
+/// it, or under it at large text.
+class _RowButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  final Widget leading;
+  final Widget body;
+  final Widget trailing;
+  const _RowButton({required this.label, required this.onTap,
+    required this.leading, required this.body, required this.trailing});
+
+  @override
+  Widget build(BuildContext context) {
+    final large = _largeText(context);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      excludeFromSemantics: true, // announced by the Semantics below
+      onTap: onTap,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Semantics(
+            container: true,
+            button: true,
+            label: label,
+            onTap: onTap,
+            excludeSemantics: true,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 44),
+              child: Row(children: [
+                leading,
+                const SizedBox(width: 14),
+                Expanded(child: body),
+              ])))),
+          if (!large) ...[const SizedBox(width: 10), trailing],
+        ]),
+        if (large) ...[const SizedBox(height: 10), trailing],
+      ]));
+  }
+}
+
+/// A 48px emoji tile that grows with the emoji instead of clipping it.
+class _EmojiTile extends StatelessWidget {
+  final String emoji;
+  final Color color;
+  final double tint;
+  const _EmojiTile({required this.emoji, required this.color, required this.tint});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(12),
+      color: color.withValues(alpha: tint),
+      border: Border.all(color: color.withValues(alpha: 0.2))),
+    child: Center(widthFactor: 1, heightFactor: 1,
+      child: Text(emoji, style: const TextStyle(fontSize: 22))));
+}
+
+/// [title] with [action] at the right; under it at large text.
+class _SectionHeader extends StatelessWidget {
+  final Widget title;
+  final Widget action;
+  const _SectionHeader({required this.title, required this.action});
+
+  @override
+  Widget build(BuildContext context) => _largeText(context)
+    ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [title, action])
+    : Row(children: [Expanded(child: title), const SizedBox(width: 8), action]);
+}
+
+/// An icon, two lines and an action beside them (under them at large text).
+class _NoticeRow extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String message;
+  final Widget action;
+  const _NoticeRow({required this.icon, required this.color,
+    required this.title, required this.message, required this.action});
+
+  @override
+  Widget build(BuildContext context) {
+    final large = _largeText(context);
+    return Row(children: [
+      Container(width: 44, height: 44,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle, color: color.withValues(alpha: 0.12)),
+        child: Icon(icon, color: color, size: 22)),
+      const SizedBox(width: 12),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title,
+          style: const TextStyle(color: _C.onSurface, fontSize: 13, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 3),
+        Text(message,
+          style: const TextStyle(color: _C.onSurfVar, fontSize: 11, height: 1.4)),
+        if (large) ...[const SizedBox(height: 10), action],
+      ])),
+      if (!large) ...[const SizedBox(width: 8), action],
+    ]);
+  }
+}
+
+/// The small tinted pill the notices' actions are drawn as.
+class _Pill extends StatelessWidget {
+  final String text;
+  final Color color;
+  final double tint;
+  const _Pill({required this.text, required this.color, required this.tint});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: tint),
+      borderRadius: BorderRadius.circular(8)),
+    child: Text(text,
+      style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)));
+}
+
 // ── Activity Screen ───────────────────────────────────────────────────────────
 class ActivityScreen extends ConsumerStatefulWidget {
   const ActivityScreen({super.key});
@@ -45,6 +208,22 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
         SystemUiOverlayStyle.light.copyWith(statusBarColor: Colors.transparent));
     final topPad = MediaQuery.of(context).padding.top;
     final userName = ref.watch(currentFirstNameProvider);
+    // P0-FL-58 · the bar is 64px, between the buttons: a greeting that does
+    // not fit it on one line each (past 1.3×, or a long name on a narrow
+    // phone) moves to the top of the page, where it wraps. The buttons stay.
+    final large = _largeText(context);
+    final helloStyle = TextStyle(color: _C.onSurfVar.withValues(alpha: 0.6),
+        fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 1.5);
+    const nameStyle = TextStyle(color: _C.onSurface, fontSize: 20, fontWeight: FontWeight.w700);
+    const barTaken = 20 + 44 + 10 + 8 + 44 + 4 + 44 + 20; // padding, buttons, gaps
+    final barRoom = MediaQuery.sizeOf(context).width - barTaken;
+    final greetingInBar = !large &&
+        _lineWidth(context, 'Good Morning', helloStyle) <= barRoom &&
+        _lineWidth(context, userName, nameStyle) <= barRoom;
+    final greeting = Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('Good Morning', style: helloStyle),
+      Text(userName, style: nameStyle),
+    ]);
 
     return Scaffold(
       backgroundColor: _C.bg,
@@ -52,6 +231,7 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
             SingleChildScrollView(
               padding: EdgeInsets.only(top: topPad + 64 + 16, left: 20, right: 20, bottom: 24),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                if (!greetingInBar) ...[greeting, const SizedBox(height: 16)],
                 const Text('Activity',
                   style: TextStyle(color: _C.onSurface, fontSize: 24, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 16),
@@ -61,11 +241,17 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
                 const SizedBox(height: 16),
 
                 // ── Streak + Water row ─────────────────────────────────────────
-                Row(children: [
-                  Expanded(child: _StreakCard()),
-                  const SizedBox(width: 12),
-                  Expanded(child: _WaterTrackerCard()),
-                ]),
+                if (large) ...[
+                  SizedBox(width: double.infinity, child: _StreakCard()),
+                  const SizedBox(height: 12),
+                  SizedBox(width: double.infinity, child: _WaterTrackerCard()),
+                ] else
+                  IntrinsicHeight(child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    Expanded(child: _StreakCard()),
+                    const SizedBox(width: 12),
+                    Expanded(child: _WaterTrackerCard()),
+                  ])),
                 const SizedBox(height: 16),
 
                 // ── Performance ring card ──────────────────────────────────────
@@ -73,11 +259,16 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
                 const SizedBox(height: 16),
 
                 // ── Daily steps + Macros row ───────────────────────────────────
-                Row(children: [
-                  Expanded(child: _StepsCard()),
-                  const SizedBox(width: 12),
-                  Expanded(child: _CaloriesCard()),
-                ]),
+                if (large) ...[
+                  SizedBox(width: double.infinity, child: _StepsCard()),
+                  const SizedBox(height: 12),
+                  SizedBox(width: double.infinity, child: _CaloriesCard()),
+                ] else
+                  Row(children: [
+                    Expanded(child: _StepsCard()),
+                    const SizedBox(width: 12),
+                    Expanded(child: _CaloriesCard()),
+                  ]),
                 const SizedBox(height: 16),
 
                 // ── Nutrition 2×2 grid ─────────────────────────────────────────
@@ -110,22 +301,19 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
                       color: _C.bg.withValues(alpha: 0.6),
                       border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.1)))),
                     child: Row(children: [
-                      GestureDetector(
+                      // P0-FL-58 · 40px discs in 44px, named targets.
+                      _TapTarget(
+                        label: 'Open your profile',
                         onTap: () => context.go('/profile'),
                         child: _Avatar()),
-                      const SizedBox(width: 12),
-                      Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text('Good Morning',
-                          style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.6),
-                            fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 1.5)),
-                        Text(userName,
-                          style: const TextStyle(color: _C.onSurface, fontSize: 20, fontWeight: FontWeight.w700)),
-                      ]),
-                      const Spacer(),
-                      GestureDetector(
+                      const SizedBox(width: 10),
+                      Expanded(child: greetingInBar ? greeting : const SizedBox.shrink()),
+                      const SizedBox(width: 8),
+                      _TapTarget(
+                        label: 'Open messages',
                         onTap: () => context.go('/messages'),
                         child: _HeaderBtn(icon: Icons.chat_bubble_outline_rounded)),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 4),
                       _ShakingBell(),
                     ]),
                   ),
@@ -150,8 +338,25 @@ class _DailyWorkoutCard extends ConsumerWidget {
     final session = homeSession(ref.watch(assignedWorkoutsProvider));
     final badges = homeSessionBadges(session.workout);
     final title = session.title ?? session.emptyLine;
+    final large = _largeText(context);
+    // The pill is a picture of the card's own action, not a second target.
+    final start = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: _C.brand,
+        borderRadius: BorderRadius.circular(999),
+        boxShadow: [BoxShadow(color: _C.brand.withValues(alpha: 0.4), blurRadius: 12)]),
+      child: const Text('Start', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)));
 
-    return GestureDetector(
+    return Semantics(
+      container: true,
+      button: true,
+      label: session.canBegin
+          ? ["Open today's workout: $title", ...badges, 'Not started yet'].join(', ')
+          : 'Open Train: $title',
+      onTap: () => context.go('/train'),
+      excludeSemantics: true,
+      child: GestureDetector(
       onTap: () => context.go('/train'),
       child: Container(
         padding: const EdgeInsets.all(18),
@@ -180,27 +385,19 @@ class _DailyWorkoutCard extends ConsumerWidget {
               Text(title,
                 style: const TextStyle(color: _C.onSurface, fontSize: 16, fontWeight: FontWeight.w700)),
             ])),
-            if (session.canBegin)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: _C.brand,
-                borderRadius: BorderRadius.circular(999),
-                boxShadow: [BoxShadow(color: _C.brand.withValues(alpha: 0.4), blurRadius: 12)]),
-              child: const Text('Start', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700))),
+            if (session.canBegin && !large) start,
           ]),
           // Nothing to begin: the title line already says why. No badges, no
           // progress bar for a session that does not exist.
           if (session.canBegin) ...[
+          if (large) ...[const SizedBox(height: 14), start],
           if (badges.isNotEmpty) ...[
           const SizedBox(height: 14),
-          Row(children: [
-            for (final (i, b) in badges.indexed) ...[
-              if (i > 0) const SizedBox(width: 10),
+          Wrap(spacing: 10, runSpacing: 8, children: [
+            for (final b in badges)
               _WorkoutBadge(
                 icon: b.endsWith(' min') ? Icons.schedule_rounded : Icons.fitness_center_rounded,
                 text: b, color: _C.teal),
-            ],
           ]),
           ],
           const SizedBox(height: 14),
@@ -216,7 +413,7 @@ class _DailyWorkoutCard extends ConsumerWidget {
           ],
         ]),
       ),
-    );
+    ));
   }
 }
 
@@ -235,7 +432,7 @@ class _WorkoutBadge extends StatelessWidget {
     child: Row(mainAxisSize: MainAxisSize.min, children: [
       Icon(icon, color: color, size: 12),
       const SizedBox(width: 5),
-      Text(text, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600)),
+      Flexible(child: Text(text, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600))),
     ]));
 }
 
@@ -248,14 +445,17 @@ class _StreakCard extends ConsumerWidget {
     return _GlassCard(
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
+        // Wraps: the badge goes under the icon when they do not fit a line.
+        SizedBox(width: double.infinity, child: Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          runSpacing: 8, children: [
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: _C.brand.withValues(alpha: 0.2)),
             child: const Icon(Icons.local_fire_department_rounded, color: _C.primary, size: 18)),
-          const Spacer(),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
@@ -263,7 +463,7 @@ class _StreakCard extends ConsumerWidget {
               borderRadius: BorderRadius.circular(999)),
             child: Text(streak >= 7 ? '🔥 Hot' : 'Active',
               style: TextStyle(color: _C.primary, fontSize: 9, fontWeight: FontWeight.w700))),
-        ]),
+        ])),
         const SizedBox(height: 12),
         Text('$streak',
           style: const TextStyle(color: _C.onSurface, fontSize: 36, fontWeight: FontWeight.w800, height: 1)),
@@ -283,38 +483,59 @@ class _WaterTrackerCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final current = ref.watch(waterIntakeProvider);
+    void set(int v) => ref.read(waterIntakeProvider.notifier).state = v;
+    void tapDot(int i) => set((i + 1 == current) ? i : i + 1);
     return _GlassCard(
-      padding: const EdgeInsets.all(16),
+      // No bottom padding: the dots' 44px target reaches the card's edge.
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
+        SizedBox(width: double.infinity, child: Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          runSpacing: 8, children: [
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: const Color(0xFF38BDF8).withValues(alpha: 0.2)),
             child: const Icon(Icons.water_drop_rounded, color: Color(0xFF38BDF8), size: 18)),
-          const Spacer(),
           Text('$current/$_goal', style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 11, fontWeight: FontWeight.w700)),
-        ]),
+        ])),
         const SizedBox(height: 12),
         Text('$current',
           style: const TextStyle(color: _C.onSurface, fontSize: 36, fontWeight: FontWeight.w800, height: 1)),
         const Text('glasses', style: TextStyle(color: Color(0xFF38BDF8), fontSize: 12)),
-        const SizedBox(height: 12),
-        // Tap dots to log water
-        Row(children: List.generate(_goal, (i) => Expanded(
-          child: GestureDetector(
-            onTap: () => ref.read(waterIntakeProvider.notifier).state =
-              (i + 1 == current) ? i : i + 1,
-            child: Container(
-              height: 8,
-              margin: EdgeInsets.only(right: i < _goal - 1 ? 3 : 0),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(4),
-                color: i < current
-                  ? const Color(0xFF38BDF8)
-                  : Colors.white.withValues(alpha: 0.08)))))),
-        ),
+        // Tap dots to log water. P0-FL-58 · the eight 8px dots cannot each be
+        // 44px in this card, so they are ONE 44px control: a touch sets the
+        // dot it lands on, exactly as before; a screen reader adjusts it.
+        Semantics(
+          container: true,
+          slider: true,
+          label: 'Glasses of water today',
+          value: '$current of $_goal',
+          increasedValue: current < _goal ? '${current + 1} of $_goal' : null,
+          decreasedValue: current > 0 ? '${current - 1} of $_goal' : null,
+          onIncrease: current < _goal ? () => set(current + 1) : null,
+          onDecrease: current > 0 ? () => set(current - 1) : null,
+          excludeSemantics: true,
+          child: Builder(builder: (dots) => GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapUp: (d) {
+              final width = dots.size?.width ?? 0;
+              if (width <= 0) return;
+              tapDot((d.localPosition.dx / width * _goal).floor().clamp(0, _goal - 1));
+            },
+            child: Padding(
+              padding: const EdgeInsets.only(top: 14, bottom: 22),
+              child: Row(children: List.generate(_goal, (i) => Expanded(
+                child: Container(
+                  height: 8,
+                  margin: EdgeInsets.only(right: i < _goal - 1 ? 3 : 0),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(4),
+                    color: i < current
+                      ? const Color(0xFF38BDF8)
+                      : Colors.white.withValues(alpha: 0.08)))))))))),
       ]),
     );
   }
@@ -413,7 +634,7 @@ class _PerformanceCardState extends ConsumerState<_PerformanceCard>
                   color: _C.brand.withValues(alpha: 0.2)),
                 child: const Icon(Icons.bar_chart_rounded, color: _C.primary, size: 22)),
               const SizedBox(width: 14),
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(headline,
                   style: const TextStyle(color: _C.onSurface, fontSize: 14, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 3),
@@ -424,44 +645,60 @@ class _PerformanceCardState extends ConsumerState<_PerformanceCard>
                       _improving ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
                       color: _improving ? _C.green : _C.error, size: 12),
                     const SizedBox(width: 3),
-                    Text('$d pts vs last week',
+                    Flexible(child: Text('$d pts vs last week',
                       style: TextStyle(
                         color: _improving ? _C.green : _C.error,
-                        fontSize: 11, fontWeight: FontWeight.w600)),
+                        fontSize: 11, fontWeight: FontWeight.w600))),
                   ]);
                 }),
-              ]),
+              ])),
             ]),
             const SizedBox(height: 20),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.center, children: [
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            LayoutBuilder(builder: (context, box) {
+              // P0-FL-58 · the ring row overflowed at large text, and the
+              // label overflowed the 120px ring. The ring goes under the
+              // percentage when the two do not fit side by side, and past
+              // 1.3× its label goes under it. Measured with the FINAL
+              // percentage, so the layout does not jump while it counts up.
+              const pctStyle = TextStyle(color: _C.onSurface, fontSize: 48,
+                fontWeight: FontWeight.w800, height: 1, letterSpacing: -2);
+              final large = _largeText(context);
+              final stacked = large ||
+                  _lineWidth(context, '$pct%', pctStyle) > box.maxWidth - 120 - 12;
+              final total = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 AnimatedBuilder(animation: _anim, builder: (_, __) => Text(
-                  '${(_anim.value * _percentInt).round()}%',
-                  style: const TextStyle(color: _C.onSurface, fontSize: 48,
-                    fontWeight: FontWeight.w800, height: 1, letterSpacing: -2))),
+                  '${(_anim.value * _percentInt).round()}%', style: pctStyle)),
                 const SizedBox(height: 6),
                 Text('Total this month',
                   style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.7), fontSize: 12)),
-              ]),
-              SizedBox(width: 120, height: 120,
-                child: AnimatedBuilder(animation: _anim, builder: (_, __) => Stack(
-                  alignment: Alignment.center,
+              ]);
+              final ring = AnimatedBuilder(animation: _anim, builder: (_, __) {
+                final disc = CustomPaint(
+                  size: const Size(120, 120),
+                  painter: _RingPainter(progress: _anim.value * _targetProgress));
+                final days = Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: large ? CrossAxisAlignment.start : CrossAxisAlignment.center,
                   children: [
-                    CustomPaint(
-                      size: const Size(120, 120),
-                      painter: _RingPainter(progress: _anim.value * _targetProgress)),
-                    Column(mainAxisSize: MainAxisSize.min, children: [
-                      Text('${(_anim.value * _targetActivities).round()}',
-                        style: const TextStyle(color: _C.onSurface, fontSize: 26, fontWeight: FontWeight.w800, height: 1)),
-                      const SizedBox(height: 3),
-                      Text('WORKOUT\nDAYS',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.7),
-                          fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 1, height: 1.4)),
-                    ]),
-                  ]))),
-            ]),
+                    Text('${(_anim.value * _targetActivities).round()}',
+                      style: const TextStyle(color: _C.onSurface, fontSize: 26, fontWeight: FontWeight.w800, height: 1)),
+                    const SizedBox(height: 3),
+                    Text(large ? 'WORKOUT DAYS' : 'WORKOUT\nDAYS',
+                      textAlign: large ? TextAlign.start : TextAlign.center,
+                      style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.7),
+                        fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 1, height: 1.4)),
+                  ]);
+                return large
+                  ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      disc, const SizedBox(height: 10), days])
+                  : SizedBox(width: 120, height: 120,
+                      child: Stack(alignment: Alignment.center, children: [disc, days]));
+              });
+              return stacked
+                ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    total, const SizedBox(height: 16), ring])
+                : Row(children: [Expanded(child: total), const SizedBox(width: 12), ring]);
+            }),
           ]),
         );
       },
@@ -579,38 +816,39 @@ class _NutritionGrid extends ConsumerWidget {
     ];
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        Container(width: 3, height: 14, decoration: BoxDecoration(color: _C.brand, borderRadius: BorderRadius.circular(2))),
-        const SizedBox(width: 8),
-        Text("TODAY'S MACROS", style: TextStyle(color: _C.primary, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
-        const Spacer(),
-        GestureDetector(
+      _SectionHeader(
+        title: Row(children: [
+          Container(width: 3, height: 14, decoration: BoxDecoration(color: _C.brand, borderRadius: BorderRadius.circular(2))),
+          const SizedBox(width: 8),
+          Expanded(child: Text("TODAY'S MACROS", style: TextStyle(color: _C.primary, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1.5))),
+        ]),
+        action: _TapTarget(
+          label: "Log food for today's macros",
           onTap: () => context.go('/nutrition'),
-          child: Text('Log food', style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.5), fontSize: 11))),
-      ]),
-      const SizedBox(height: 10),
-      GridView.count(
-        crossAxisCount: 2,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 10,
-        childAspectRatio: 2.4,
-        children: items.map((item) => _GlassCard(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            Row(children: [
-              Icon(item.$1, color: item.$4, size: 13),
-              const SizedBox(width: 5),
-              Text(item.$2, style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.6),
-                fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 1)),
+          child: Text('Log food', style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.5), fontSize: 11)))),
+      // P0-FL-58 · a fixed 2.4:1 grid cell cut its text off at large text. The
+      // same cell is now a MINIMUM: it grows; past 1.3× there is one per line.
+      LayoutBuilder(builder: (context, box) {
+        final large = _largeText(context);
+        final width = large ? box.maxWidth : (box.maxWidth - 10) / 2;
+        return Wrap(spacing: 10, runSpacing: 10, children: items.map((item) => ConstrainedBox(
+          constraints: BoxConstraints(
+            minWidth: width, maxWidth: width, minHeight: large ? 0 : width / 2.4),
+          child: _GlassCard(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Row(children: [
+                Icon(item.$1, color: item.$4, size: 13),
+                const SizedBox(width: 5),
+                Expanded(child: Text(item.$2, style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.6),
+                  fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 1))),
+              ]),
+              Text(item.$3,
+                style: TextStyle(color: item.$4, fontSize: 14, fontWeight: FontWeight.w700)),
             ]),
-            Text(item.$3,
-              style: TextStyle(color: item.$4, fontSize: 14, fontWeight: FontWeight.w700)),
-          ]),
-        )).toList(),
-      ),
+          ))).toList());
+      }),
     ]);
   }
 }
@@ -638,9 +876,9 @@ class _MotivationalQuoteCard extends ConsumerWidget {
               color: _C.primary.withValues(alpha: 0.15)),
             child: const Icon(Icons.format_quote_rounded, color: _C.primary, size: 18)),
           const SizedBox(width: 10),
-          Text('DAILY MOTIVATION', style: TextStyle(
+          Expanded(child: Text('DAILY MOTIVATION', style: TextStyle(
             color: _C.primary.withValues(alpha: 0.7),
-            fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
+            fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 1.5))),
         ]),
         const SizedBox(height: 14),
         Text('"${quote.quote}"',
@@ -686,70 +924,33 @@ class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
       _heldFor = uid;
     }
     final held = _heldFor == uid ? _held : null;
-    // U5 · "Enable" goes under the message at large text, as the failure
-    // card's retry does: beside it the message was squeezed to a sliver.
-    final stacked = MediaQuery.textScalerOf(context).scale(12) > 12 * 1.3;
-    final enable = Semantics(
-      button: true,
-      label: 'Enable challenge alerts',
-      excludeSemantics: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => context.push('/notification-preferences'),
-        // U5 · the pill keeps its look; the tap target is >= 44px.
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-          child: Center(widthFactor: 1, heightFactor: 1,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: _C.brand.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(8)),
-              child: const Text('Enable',
-                style: TextStyle(color: _C.primary, fontSize: 12, fontWeight: FontWeight.w600)))))),
-    );
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        const Expanded(
-          child: Text('Challenges',
-            style: TextStyle(color: _C.onSurface, fontSize: 20, fontWeight: FontWeight.w800))),
-        const SizedBox(width: 8),
+      _SectionHeader(
+        title: const Text('Challenges',
+          style: TextStyle(color: _C.onSurface, fontSize: 20, fontWeight: FontWeight.w800)),
         // U5 · was 13px text with no role: < 44px and announced as plain text.
-        Semantics(
-          button: true,
+        // P0-FL-58 · and a screen reader had no tap action on it.
+        action: _TapTarget(
           label: 'See all challenges',
-          excludeSemantics: true,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => context.go('/challenges'),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-              child: const Center(widthFactor: 1, heightFactor: 1,
-                child: Text('See All',
-                  style: TextStyle(color: _C.primary, fontSize: 13, fontWeight: FontWeight.w600)))))),
-      ]),
+          onTap: () => context.go('/challenges'),
+          child: const Text('See All',
+            style: TextStyle(color: _C.primary, fontSize: 13, fontWeight: FontWeight.w600)))),
       const SizedBox(height: 12),
 
       if (showPrompt)
         _GlassCard(
           padding: const EdgeInsets.all(18),
-          child: Row(children: [
-            Container(width: 44, height: 44,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle, color: _C.brand.withValues(alpha: 0.12)),
-              child: const Icon(Icons.notifications_off_outlined, color: _C.primary, size: 22)),
-            const SizedBox(width: 12),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Enable challenge alerts',
-                style: TextStyle(color: _C.onSurface, fontSize: 13, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 3),
-              const Text('Turn on notifications to track challenges here.',
-                style: TextStyle(color: _C.onSurfVar, fontSize: 11, height: 1.4)),
-              if (stacked) ...[const SizedBox(height: 10), enable],
-            ])),
-            if (!stacked) ...[const SizedBox(width: 8), enable],
-          ]))
+          // U5 · "Enable" goes under the message at large text.
+          child: _NoticeRow(
+            icon: Icons.notifications_off_outlined,
+            color: _C.primary,
+            title: 'Enable challenge alerts',
+            message: 'Turn on notifications to track challenges here.',
+            action: _TapTarget(
+              label: 'Enable challenge alerts',
+              onTap: () => context.push('/notification-preferences'),
+              child: const _Pill(text: 'Enable', color: _C.primary, tint: 0.15))))
       else if (challengesAsync.hasError) ...[
         // P0-FL-53b · a failed read said "No active challenges": a claim about
         // what exists that the app could not make. The failure is recorded
@@ -793,31 +994,17 @@ class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
             if (active.isEmpty) {
               return _GlassCard(
                 padding: const EdgeInsets.all(18),
-                child: Row(children: [
-                  Container(width: 44, height: 44,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle, color: _C.brand.withValues(alpha: 0.12)),
-                    child: const Icon(Icons.emoji_events_outlined, color: _C.primary, size: 22)),
-                  const SizedBox(width: 12),
-                  const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('No active challenges',
-                      style: TextStyle(color: _C.onSurface, fontSize: 13, fontWeight: FontWeight.w600)),
-                    SizedBox(height: 3),
-                    Text('Check back soon for new challenges to join.',
-                      style: TextStyle(color: _C.onSurfVar, fontSize: 11, height: 1.4)),
-                  ])),
-                  const SizedBox(width: 8),
-                  GestureDetector(
+                child: _NoticeRow(
+                  icon: Icons.emoji_events_outlined,
+                  color: _C.primary,
+                  title: 'No active challenges',
+                  message: 'Check back soon for new challenges to join.',
+                  action: _TapTarget(
+                    label: 'Browse challenges',
                     onTap: () => context.go('/challenges'),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: _C.brand.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(8)),
-                      child: const Text('Browse',
-                        style: TextStyle(color: _C.primary, fontSize: 12, fontWeight: FontWeight.w600)))),
-                ]));
+                    child: const _Pill(text: 'Browse', color: _C.primary, tint: 0.15))));
             }
+            final large = _largeText(context);
             return Column(
               children: List.generate(active.length, (i) {
                 final c = active[i];
@@ -829,24 +1016,16 @@ class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
                   padding: EdgeInsets.only(bottom: i < active.length - 1 ? 10 : 0),
                   child: _GlassCard(
                     padding: const EdgeInsets.all(14),
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => context.go('/challenges'),
-                      child: Row(children: [
-                        Container(
-                          width: 48, height: 48,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
-                            color: _C.brand.withValues(alpha: 0.15),
-                            border: Border.all(color: _C.brand.withValues(alpha: 0.2))),
-                          child: Center(
-                            child: Text(c.emoji,
-                              style: const TextStyle(fontSize: 22)))),
-                        const SizedBox(width: 14),
-                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    child: _RowButton(
+                        label: 'Open ${c.title}, ${c.participantCount} joined, '
+                            '$daysLeft days left${c.isJoined ? ', joined' : ''}',
+                        onTap: () => context.go('/challenges'),
+                        leading: _EmojiTile(emoji: c.emoji, color: _C.brand, tint: 0.15),
+                        body: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                           Text(c.title,
                             style: const TextStyle(color: _C.onSurface, fontSize: 13, fontWeight: FontWeight.w700),
-                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                            maxLines: large ? null : 1,
+                            overflow: large ? null : TextOverflow.ellipsis),
                           const SizedBox(height: 4),
                           if (c.isJoined) ...[
                             ClipRRect(
@@ -858,26 +1037,24 @@ class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
                                 minHeight: 3)),
                             const SizedBox(height: 3),
                           ],
-                          Row(children: [
+                          Wrap(spacing: 8, children: [
                             Text('${c.participantCount} joined',
                               style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.8), fontSize: 10)),
-                            const SizedBox(width: 8),
                             Text('$daysLeft days left',
                               style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.5), fontSize: 10)),
                           ]),
-                        ])),
-                        const SizedBox(width: 10),
-                        if (c.isJoined)
-                          Container(
+                        ]),
+                        trailing: c.isJoined
+                          ? ExcludeSemantics(child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
                               color: _C.green.withValues(alpha: 0.12),
                               borderRadius: BorderRadius.circular(6)),
                             child: const Text('JOINED',
                               style: TextStyle(color: _C.green,
-                                fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.5)))
-                        else
-                          GestureDetector(
+                                fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.5))))
+                          : _TapTarget(
+                            label: 'Join ${c.title}',
                             onTap: () async {
                               final ok = await ref.read(challengeNotifierProvider.notifier)
                                   .joinChallenge(c.id);
@@ -904,7 +1081,6 @@ class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
                               child: const Text('Join',
                                 style: TextStyle(color: Colors.white,
                                   fontSize: 12, fontWeight: FontWeight.w700)))),
-                      ]),
                     ),
                   ),
                 );
@@ -933,16 +1109,17 @@ class _CommunitySection extends ConsumerWidget {
     // Null until the groups are loaded (and while a failure is shown).
     final joined = groupsAsync.whenOrNull(
         data: (groups) => groups.where((g) => g.isJoined).toList());
+    final large = _largeText(context);
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        const Text('Community',
+      _SectionHeader(
+        title: const Text('Community',
           style: TextStyle(color: _C.onSurface, fontSize: 20, fontWeight: FontWeight.w800)),
-        GestureDetector(
+        action: _TapTarget(
+          label: 'Explore the community',
           onTap: () => context.go('/community'),
           child: const Text('Explore',
-            style: TextStyle(color: _C.primary, fontSize: 13, fontWeight: FontWeight.w600))),
-      ]),
+            style: TextStyle(color: _C.primary, fontSize: 13, fontWeight: FontWeight.w600)))),
       const SizedBox(height: 12),
 
       if (groupsAsync.hasError)
@@ -964,30 +1141,15 @@ class _CommunitySection extends ConsumerWidget {
       else if (joined.isEmpty)
         _GlassCard(
           padding: const EdgeInsets.all(18),
-          child: Row(children: [
-            Container(width: 44, height: 44,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle, color: _C.tertiary.withValues(alpha: 0.12)),
-              child: const Icon(Icons.group_outlined, color: _C.tertiary, size: 22)),
-            const SizedBox(width: 12),
-            const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('No communities joined yet',
-                style: TextStyle(color: _C.onSurface, fontSize: 13, fontWeight: FontWeight.w600)),
-              SizedBox(height: 3),
-              Text('Join a group to see it here.',
-                style: TextStyle(color: _C.onSurfVar, fontSize: 11, height: 1.4)),
-            ])),
-            const SizedBox(width: 8),
-            GestureDetector(
+          child: _NoticeRow(
+            icon: Icons.group_outlined,
+            color: _C.tertiary,
+            title: 'No communities joined yet',
+            message: 'Join a group to see it here.',
+            action: _TapTarget(
+              label: 'Browse community groups',
               onTap: () => context.go('/community'),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: _C.tertiary.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8)),
-                child: Text('Browse',
-                  style: TextStyle(color: _C.tertiary, fontSize: 12, fontWeight: FontWeight.w600)))),
-          ]))
+              child: const _Pill(text: 'Browse', color: _C.tertiary, tint: 0.12))))
       else
         Column(
           children: List.generate(joined.take(3).length, (i) {
@@ -996,37 +1158,27 @@ class _CommunitySection extends ConsumerWidget {
               padding: EdgeInsets.only(bottom: i < joined.take(3).length - 1 ? 10 : 0),
               child: _GlassCard(
                 padding: const EdgeInsets.all(14),
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => context.go('/community'),
-                  child: Row(children: [
-                    Container(
-                      width: 48, height: 48,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(12),
-                        color: _C.tertiary.withValues(alpha: 0.12),
-                        border: Border.all(color: _C.tertiary.withValues(alpha: 0.2))),
-                      child: Center(
-                        child: Text(g.emoji, style: const TextStyle(fontSize: 22)))),
-                    const SizedBox(width: 14),
-                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                child: _RowButton(
+                    label: 'Open ${g.name}, ${g.memberCount} members, joined',
+                    onTap: () => context.go('/community'),
+                    leading: _EmojiTile(emoji: g.emoji, color: _C.tertiary, tint: 0.12),
+                    body: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text(g.name,
                         style: const TextStyle(color: _C.onSurface, fontSize: 13, fontWeight: FontWeight.w700),
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                        maxLines: large ? null : 1,
+                        overflow: large ? null : TextOverflow.ellipsis),
                       const SizedBox(height: 3),
                       Text('${g.memberCount} members',
                         style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.7), fontSize: 10)),
-                    ])),
-                    const SizedBox(width: 10),
-                    Container(
+                    ]),
+                    trailing: ExcludeSemantics(child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: _C.tertiary.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(6)),
                       child: Text('JOINED',
                         style: TextStyle(color: _C.tertiary,
-                          fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.5))),
-                  ]),
+                          fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.5)))),
                 ),
               ),
             );
@@ -1163,7 +1315,8 @@ class _ShakingBellState extends ConsumerState<_ShakingBell> with SingleTickerPro
   }
 
   @override
-  Widget build(BuildContext context) => GestureDetector(
+  Widget build(BuildContext context) => _TapTarget(
+    label: 'Show upcoming classes and events',
     onTap: _showNotifications,
     child: AnimatedBuilder(
       animation: _shake,
@@ -1203,16 +1356,18 @@ class _NotificationsPanel extends ConsumerWidget {
         const SizedBox(height: 20),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Row(children: [
+          child: SizedBox(width: double.infinity, child: Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            runSpacing: 8, children: [
             const Text('Upcoming', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
-            const Spacer(),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
                 color: _C.brand.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(999)),
               child: Text('Today & beyond', style: TextStyle(color: _C.primary, fontSize: 11, fontWeight: FontWeight.w600))),
-          ]),
+          ])),
         ),
         const SizedBox(height: 16),
         Flexible(
@@ -1291,7 +1446,7 @@ class _PanelSectionLabel extends StatelessWidget {
   Widget build(BuildContext context) => Row(children: [
     Container(width: 3, height: 14, decoration: BoxDecoration(color: _C.brand, borderRadius: BorderRadius.circular(2))),
     const SizedBox(width: 8),
-    Text(label.toUpperCase(), style: TextStyle(color: _C.primary, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
+    Expanded(child: Text(label.toUpperCase(), style: TextStyle(color: _C.primary, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1.5))),
   ]);
 }
 
@@ -1304,39 +1459,55 @@ class _UpcomingItem extends StatelessWidget {
     required this.subtitle, required this.badge, required this.onTap});
 
   @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0x08FFFFFF),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0x1AFFFFFF))),
-      child: Row(children: [
-        Container(
-          width: 44, height: 44,
+  Widget build(BuildContext context) {
+    final large = _largeText(context);
+    // The badge is an event's location, of any length: it wraps within a
+    // third of the width, and goes under the text at large text.
+    final badgeView = badge.isEmpty ? null : ConstrainedBox(
+      constraints: BoxConstraints(
+        maxWidth: large ? double.infinity : MediaQuery.sizeOf(context).width / 3),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: iconColor.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(large ? 12 : 999),
+          border: Border.all(color: iconColor.withValues(alpha: 0.2))),
+        child: Text(badge, style: TextStyle(color: iconColor, fontSize: 10, fontWeight: FontWeight.w600))));
+    return Semantics(
+      container: true,
+      button: true,
+      label: ['Open $title', subtitle, badge].where((s) => s.isNotEmpty).join(', '),
+      onTap: onTap,
+      excludeSemantics: true,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            color: iconColor.withValues(alpha: 0.15)),
-          child: Icon(icon, color: iconColor, size: 22)),
-        const SizedBox(width: 12),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 3),
-          Text(subtitle, style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.6), fontSize: 12)),
-        ])),
-        if (badge.isNotEmpty)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: iconColor.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: iconColor.withValues(alpha: 0.2))),
-            child: Text(badge, style: TextStyle(color: iconColor, fontSize: 10, fontWeight: FontWeight.w600))),
-      ]),
-    ),
-  );
+            color: const Color(0x08FFFFFF),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0x1AFFFFFF))),
+          child: Row(children: [
+            Container(
+              width: 44, height: 44,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: iconColor.withValues(alpha: 0.15)),
+              child: Icon(icon, color: iconColor, size: 22)),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 3),
+              Text(subtitle, style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.6), fontSize: 12)),
+              if (large && badgeView != null) ...[const SizedBox(height: 8), badgeView],
+            ])),
+            if (!large && badgeView != null) badgeView,
+          ]),
+        ),
+      ),
+    );
+  }
 }
 
 // ── Shared Glass Card ─────────────────────────────────────────────────────────
