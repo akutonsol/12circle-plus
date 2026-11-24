@@ -269,6 +269,14 @@ class _MemoryStore extends GotrueAsyncStorage {
   Future<void> removeItem({required String key}) async => _m.remove(key);
 }
 
+class _OnRemove extends NavigatorObserver {
+  final VoidCallback onRemove;
+  _OnRemove(this.onRemove);
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      onRemove();
+}
+
 const _later =
     'try again in a moment. If it keeps happening, contact support.';
 const _fileLeft = "The uploaded file couldn't be removed.";
@@ -456,24 +464,33 @@ void main() {
     }
 
     testWidgets(
-        'the press in the same frame as the close does not pop the screen',
+        'a press between the close and the next frame does not pop the screen',
         (tester) async {
-      await open(tester);
+      VoidCallback? add;
+      AlertDialog? stillMounted;
+      tester.view
+        ..devicePixelRatio = 1
+        ..physicalSize = const Size(1000, 2400);
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MaterialApp(
+          navigatorObservers: [
+            _OnRemove(() => scheduleMicrotask(() {
+                  stillMounted =
+                      tester.widgetList<AlertDialog>(find.byType(AlertDialog)).firstOrNull;
+                  add?.call();
+                }))
+          ],
+          home: const CoachBusinessScreen()));
+      await settle(tester);
       await typeCert(tester, 'CSCS');
-      final add =
-          tester.widget<TextButton>(find.widgetWithText(TextButton, 'Add'));
-      var pressed = false;
-      // Registered AFTER the screen's listener: the dialog has just been
-      // closed, its widgets are not yet gone.
-      final sub = auth().onAuthStateChange.listen((_) {
-        if (auth().currentUser?.id != _b || pressed) return;
-        pressed = true;
-        add.onPressed!();
-      });
-      addTearDown(sub.cancel);
+      add = tester
+          .widget<TextButton>(find.widgetWithText(TextButton, 'Add'))
+          .onPressed;
       await tester.runAsync(() => auth().recoverSession(_session(_b)));
       await settle(tester);
-      expect(pressed, isTrue, reason: 'premise');
+      expect(stillMounted, isNotNull,
+          reason: 'premise: closed, its widgets not yet gone');
+      expect(find.byType(AlertDialog), findsNothing);
       expect(find.byType(CoachBusinessScreen), findsOneWidget);
       expect(find.text('Bravo bio'), findsOneWidget);
       expect(server.patches, isEmpty);
