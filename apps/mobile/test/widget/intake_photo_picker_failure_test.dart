@@ -359,6 +359,77 @@ void main() {
     expect(reported, isEmpty);
   });
 
+  // Round 2 (UX 3) · the picker notice drew a cloud_off icon — a network
+  // picture for a permission/camera/file failure. It now draws a
+  // no-photography icon; the step's UPLOAD failure (a real network write)
+  // keeps cloud_off.
+  Finder noticeIcon(String message, IconData icon) => find.descendant(
+      of: liveRegionOver(message).first,
+      matching: find.byWidgetPredicate((w) => w is Icon && w.icon == icon));
+
+  testWidgets(
+      'picker failures (permission, picker, unreadable file) show a '
+      'no-photography icon, not the network cloud_off', (tester) async {
+    await openPhotos(tester);
+    answer = (_) async => throw PlatformException(code: 'photo_access_denied');
+    await pick(tester, 'Front Photo');
+    const denied = "Couldn't open your photos — allow photo access in "
+        'Settings, then try again.';
+    expect(find.text(denied), findsOneWidget, reason: 'premise');
+    expect(noticeIcon(denied, Icons.no_photography_rounded), findsOneWidget);
+    expect(noticeIcon(denied, Icons.cloud_off_rounded), findsNothing,
+        reason: 'not a network failure');
+
+    answer = (_) async => throw PlatformException(code: 'no_available_camera');
+    await pick(tester, 'Side Photo', row: 'Take Photo');
+    final noCamera = "Couldn't open your camera — $_generic";
+    expect(noticeIcon(noCamera, Icons.no_photography_rounded), findsOneWidget);
+    expect(noticeIcon(noCamera, Icons.cloud_off_rounded), findsNothing);
+
+    answer = (_) async => '${tmp.path}/vanished.png';
+    await tester.tap(find.text('Back Photo'));
+    await settle(tester);
+    await tester.tap(find.text('Choose from Library'));
+    final unreadable = "Couldn't use that photo — $_generic";
+    await pumpUntil(
+        tester, () => find.text(unreadable).evaluate().isNotEmpty,
+        what: 'the unreadable pick to be reported');
+    expect(
+        noticeIcon(unreadable, Icons.no_photography_rounded), findsOneWidget);
+    expect(noticeIcon(unreadable, Icons.cloud_off_rounded), findsNothing);
+  });
+
+  testWidgets(
+      'CONTROL: the step\'s upload failure (a network write) keeps the '
+      'cloud_off icon', (tester) async {
+    await openPhotos(tester);
+    await pick(tester, 'Front Photo');
+    await pumpUntil(
+        tester, () => find.text('Continue (1/3)').evaluate().isNotEmpty,
+        what: 'the photo to be read and counted');
+    expect(find.byIcon(Icons.no_photography_rounded), findsNothing,
+        reason: 'a successful pick shows no picker notice');
+    await tester.tap(find.text('Continue (1/3)'));
+    await pumpUntil(
+        tester,
+        () => find
+            .textContaining("Couldn't upload your photos")
+            .evaluate()
+            .isNotEmpty,
+        what: 'the storage upload (answered 400) to fail');
+    final notice = find.ancestor(
+        of: find.textContaining("Couldn't upload your photos"),
+        matching: find.byWidgetPredicate(
+            (w) => w is Semantics && (w.properties.liveRegion ?? false)));
+    expect(
+        find.descendant(
+            of: notice.first,
+            matching: find.byWidgetPredicate(
+                (w) => w is Icon && w.icon == Icons.cloud_off_rounded)),
+        findsOneWidget);
+    expect(find.byIcon(Icons.no_photography_rounded), findsNothing);
+  });
+
   testWidgets(
       'a failed pick then a cancel clears the notice (it described the last '
       'attempt) and reports nothing more', (tester) async {

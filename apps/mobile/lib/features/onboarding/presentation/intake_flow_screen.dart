@@ -57,6 +57,8 @@ class _IntakeFailureNotice extends StatelessWidget {
   final bool busy;
   final VoidCallback onRetry;
   final List<Widget> extraActions;
+  /// The (decorative) icon; the network picture unless the failure is local.
+  final IconData icon;
   const _IntakeFailureNotice({
     super.key,
     required this.message,
@@ -64,6 +66,7 @@ class _IntakeFailureNotice extends StatelessWidget {
     required this.onRetry,
     this.detail,
     this.extraActions = const [],
+    this.icon = Icons.cloud_off_rounded,
   });
 
   @override
@@ -86,9 +89,8 @@ class _IntakeFailureNotice extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const ExcludeSemantics(
-                      child: Icon(Icons.cloud_off_rounded,
-                          color: _tertiary, size: 20)),
+                    ExcludeSemantics(
+                      child: Icon(icon, color: _tertiary, size: 20)),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(message,
@@ -1130,7 +1132,11 @@ class _IntakeStepBar extends StatelessWidget {
               onTap: onSkip,
               child: ConstrainedBox(
                 constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
-                child: Center(widthFactor: 1, heightFactor: 1,
+                // End-aligned: a word narrower than 44px keeps its place on
+                // the margin instead of drifting left to the box's centre.
+                child: Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  widthFactor: 1, heightFactor: 1,
                   child: Text(label, style: style)),
               ),
             ),
@@ -1140,12 +1146,16 @@ class _IntakeStepBar extends StatelessWidget {
       padding: EdgeInsets.fromLTRB(16, top + 12, 16, 16),
       // P0-FL-53c · at large text the trailing label took the row's width
       // and squeezed the pills to nothing (2×), then overflowed (3×, 320dp).
-      // When it would leave the pills less than 1px each (plus their 2px side
+      // When it would leave the pills less than 3px each (plus their 2px side
       // margins) it moves to its own line under the pills; the bar grows, the
       // text keeps its size. At 1× on a phone the bar is one row as before.
       child: LayoutBuilder(builder: (context, c) {
+        // Measured in the style the Text actually renders with (the inherited
+        // DefaultTextStyle merged with its own), so the 3px floor holds.
         final painter = TextPainter(
-          text: TextSpan(text: label, style: style),
+          text: TextSpan(
+              text: label,
+              style: DefaultTextStyle.of(context).style.merge(style)),
           textDirection: Directionality.of(context),
           textScaler: MediaQuery.textScalerOf(context),
           maxLines: 1,
@@ -1155,7 +1165,7 @@ class _IntakeStepBar extends StatelessWidget {
         painter.dispose();
         const backWidth = 44.0 + 12; // the back target (>= 44) and its gap
         final stacked =
-            c.maxWidth - backWidth - trailingWidth < total * (1.0 + 4);
+            c.maxWidth - backWidth - trailingWidth < total * (3.0 + 4);
         if (!stacked) {
           return Row(children: [
             back,
@@ -4403,6 +4413,8 @@ class _PhotoUploadCardState extends State<_PhotoUploadCard> {
         const SizedBox(height: 8),
         _IntakeFailureNotice(
           message: failure,
+          // A permission, camera or file failure — not the network.
+          icon: Icons.no_photography_rounded,
           busy: _picking,
           onRetry: () => _pick(context, _lastSource),
         ),

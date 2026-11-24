@@ -25,7 +25,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 // 320dp, negative (invisible) at 2× on 320/360dp and at 3× on 390/430dp, and
 // the Row overflowed at 3× on 320dp.
 //
-// Now, when the trailing label would leave the pills less than 1px each, it
+// Now, when the trailing label would leave the pills less than 3px each, it
 // moves to its own line under the pills (the bar grows; no text is shrunk). The bar announces "Step 20 of 24"; Skip is a >= 44px
 // labelled button. At 1× on 390dp the geometry is exactly what it was.
 //
@@ -33,7 +33,12 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 // wider than the app's font, so the stacking point here is lower than on a
 // device. The pins are geometric and hold for any font.
 //
-// HOW TO SEE IT FAIL: run against b7ec6ef's intake_flow_screen.dart.
+// Round 2: the stacking floor is 3px per pill (it was 1px, which let the
+// strip survive as a dotted line), and Skip sits at the END of its 44px box
+// so the word keeps its position when it is narrower than the box.
+//
+// HOW TO SEE IT FAIL: run against b7ec6ef's intake_flow_screen.dart (round 1)
+// or 25603b0's (round 2: the 3px pins and the Skip-position pins).
 
 const _uid = '00000000-0000-4000-8000-0000000f1055';
 
@@ -263,11 +268,14 @@ void main() {
           expect(r.height, greaterThanOrEqualTo(fontSize * scale - 0.01),
               reason: 'the label is drawn at its full size, not clipped');
 
+          // Round 2 (UX 2): the floor is 3px, not 1px — a one-row bar must
+          // not leave the progress as a dotted line. Stacked, the pills get
+          // the full row and are wider still.
           final pills = pillWidths(tester);
           expect(pills, hasLength(24));
           for (final w in pills) {
-            expect(w, greaterThanOrEqualTo(1),
-                reason: 'every progress pill stays visible: $pills');
+            expect(w, greaterThanOrEqualTo(3 - 0.01),
+                reason: 'every progress pill stays >= 3px wide: $pills');
           }
 
           final back = inBar(find.byType(IntakeBackButton));
@@ -319,6 +327,88 @@ void main() {
       expect(r.right, closeTo(labelRect.right, 0.1));
       expect(r.bottom, closeTo(labelRect.bottom, 0.1));
       expect(pillWidths(tester).first, closeTo(pill, 0.01));
+    });
+  }
+
+  /// One row: the label shares the back button's line.
+  bool oneRow(WidgetTester tester, String label) {
+    final l = tester.getRect(inBar(find.text(label)));
+    final back = tester.getRect(inBar(find.byType(IntakeBackButton)));
+    return l.top < back.bottom && l.bottom > back.top;
+  }
+
+  // Round 2 (UX 2) · raising the floor to 3px must not stack the bar at 1×
+  // on a phone. In the FlutterTest font (1 em per glyph) "20 / 24" is ~86px
+  // and "Skip" ~53px wide, about twice the app font's (Inter: ~41px and
+  // ~27px, the latter inside its 44px box). So at 320dp BOTH variants stack
+  // in this font only — by 1px for Skip (pills 2.96px). The two tests after
+  // this loop cover 320dp at the app font's widths. 360/390/430dp are one
+  // row here, in the wider font.
+  for (final width in [320.0, 360.0, 390.0, 430.0]) {
+    for (final variant in ['counter', 'skip']) {
+      final testFontStacks = width == 320;
+      if (testFontStacks) continue;
+      final label = variant == 'counter' ? '20 / 24' : 'Skip';
+      testWidgets(
+          'at 1x on ${width.toInt()}dp the $variant bar stays ONE row with '
+          'every pill >= 3px', (tester) async {
+        await open(tester,
+            step: variant == 'counter' ? _modePage : _photosPage,
+            size: Size(width, 900),
+            scale: 1);
+        expect(oneRow(tester, label), isTrue, reason: 'not stacked at 1x');
+        for (final w in pillWidths(tester)) {
+          expect(w, greaterThanOrEqualTo(3 - 0.01));
+        }
+      });
+    }
+  }
+
+  testWidgets(
+      'at 320dp with the counter drawn at the app font\'s 1x width (~43px; '
+      'the FlutterTest font reaches it at 0.5x) the bar stays ONE row with '
+      'every pill >= 3px', (tester) async {
+    await open(tester,
+        step: _modePage, size: const Size(320, 900), scale: 0.5);
+    expect(tester.getSize(inBar(find.text('20 / 24'))).width,
+        lessThanOrEqualTo(44),
+        reason: 'premise: the label is as wide as the app font draws it');
+    expect(oneRow(tester, '20 / 24'), isTrue);
+    for (final w in pillWidths(tester)) {
+      expect(w, greaterThanOrEqualTo(3 - 0.01));
+    }
+  });
+
+  // Round 2 (UX 1) · Skip's 44px box must not move the word. When "Skip" is
+  // narrower than 44px (the app font at 1×; here, the test font at 0.8×) it
+  // sat CENTRED in the box, ~1-8px left of the 16px margin it had before.
+  // It now sits at the box's end, so its right edge is the margin.
+  // With the word under 44px the trailing slot is exactly the 44px box — the
+  // geometry the app font gives Skip at 1× — so at 320dp this is also the
+  // "1× does not stack, pills >= 3px" check for the Skip variant.
+  for (final width in [320.0, 390.0]) {
+    testWidgets(
+        'at 0.8x on ${width.toInt()}dp "Skip" (narrower than its 44px box) '
+        'keeps its right edge on the 16px margin, target still >= 44px, one '
+        'row with every pill >= 3px',
+        (tester) async {
+      await open(tester,
+          step: _photosPage, size: Size(width, 900), scale: 0.8);
+      final text = inBar(find.text('Skip'));
+      expect(tester.getSize(text).width, lessThan(44),
+          reason: 'premise: the word is narrower than its target');
+      expect(oneRow(tester, 'Skip'), isTrue);
+      expect(tester.getRect(text).right, closeTo(width - 16, 0.1),
+          reason: 'the visible word keeps its base position');
+      final target = tester.getRect(find
+          .ancestor(of: text, matching: find.byType(GestureDetector))
+          .first);
+      expect(target.width, greaterThanOrEqualTo(44));
+      expect(target.height, greaterThanOrEqualTo(44));
+      expect(target.right, closeTo(width - 16, 0.1));
+      for (final w in pillWidths(tester)) {
+        expect(w, greaterThanOrEqualTo(3 - 0.01));
+      }
     });
   }
 
