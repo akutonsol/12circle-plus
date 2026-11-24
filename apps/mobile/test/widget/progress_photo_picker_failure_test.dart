@@ -404,7 +404,7 @@ void main() {
       expect(find.text('Start Photos'), findsOneWidget);
       expect(find.text('Could not load your progress'), findsNothing);
       // And pressed again, it loads again: the busy state was released.
-      await t.pump(const Duration(milliseconds: 400));
+      await settle(t); // the notice slides in
       server.readsFail = false;
       final loads = server.loads;
       await t.tap(find.text('Refresh'));
