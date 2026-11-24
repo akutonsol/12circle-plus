@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../core/observability/app_failure.dart';
@@ -31,6 +32,8 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
   final _noteCtrl = TextEditingController();
   XFile? _videoFile;
   bool _uploading = false;
+  /// The camera or the gallery is open.
+  bool _choosing = false;
   bool _done = false;
   /// The client's notification was confirmed sent (best-effort; P0-FL-53b).
   bool _notified = false;
@@ -39,28 +42,51 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
   @override
   void dispose() { _noteCtrl.dispose(); super.dispose(); }
 
-  Future<void> _recordVideo() async {
+  // P0-FL-58 · a failed record / pick was said but never recorded, and not in
+  // the shared voice. Cancelling (null) is legitimate: nothing is said or
+  // recorded, and a video already chosen stays — as it does after a failure.
+  Future<void> _recordVideo() => _choose('_recordVideo', ImageSource.camera);
+
+  Future<void> _pickVideo() => _choose('_pickVideo', ImageSource.gallery);
+
+  Future<void> _choose(String method, ImageSource source) async {
+    if (_choosing) return; // one picker at a time
+    _choosing = true;
     try {
       final video = await ImagePicker().pickVideo(
-        source: ImageSource.camera, maxDuration: const Duration(minutes: 5));
+        source: source,
+        maxDuration: source == ImageSource.camera ? const Duration(minutes: 5) : null);
       if (video != null && mounted) setState(() => _videoFile = video);
-    } catch (e) {
-      _err('Recording not available here — try “From Gallery”.');
+    } catch (e, st) {
+      reportError('CoachVideoResponseScreen.$method', e, st);
+      _err(_chooseFailure(source, e));
+    } finally {
+      _choosing = false;
     }
   }
 
-  Future<void> _pickVideo() async {
-    try {
-      final video = await ImagePicker().pickVideo(source: ImageSource.gallery);
-      if (video != null && mounted) setState(() => _videoFile = video);
-    } catch (e) {
-      _err('Could not open that video. Try another file.');
+  /// image_picker's permission codes are `camera_access_denied` and
+  /// `photo_access_denied`: trying again cannot help, Settings can.
+  static String _chooseFailure(ImageSource source, Object e) {
+    final camera = source == ImageSource.camera;
+    final what = camera ? 'open the camera' : 'open your videos';
+    if (e is PlatformException && e.code.endsWith('_access_denied')) {
+      return "Couldn't $what — allow ${camera ? 'camera' : 'photo'} access in "
+          'Settings, then try again.';
     }
+    // A device with no camera (desktop web) can still send a video: the old
+    // message said so, and that next step stays.
+    final message = couldntMessage(what, e);
+    return camera ? '$message You can also use From Gallery.' : message;
   }
+
+  void _removeVideo() => setState(() => _videoFile = null);
 
   void _err(String m) {
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(m), backgroundColor: Colors.red));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Semantics(liveRegion: true, child: Text(m)),
+      backgroundColor: Colors.red));
   }
 
   Future<void> _send() async {
@@ -146,12 +172,23 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // P0-FL-58 · past 1.3× the two buttons go under one another.
+    final large = MediaQuery.textScalerOf(context).scale(12) > 12 * 1.3;
+    final record = _ActionBtn(
+      icon: Icons.videocam_rounded, label: 'Record Now',
+      semanticLabel: 'Record a video for ${widget.clientName} now',
+      color: _brand, onTap: _recordVideo);
+    final gallery = _ActionBtn(
+      icon: Icons.video_library_rounded, label: 'From Gallery',
+      semanticLabel: 'Choose a video for ${widget.clientName} from your gallery',
+      color: const Color(0xFF1A1020), onTap: _pickVideo);
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
         backgroundColor: _card, elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.close, color: _wht),
+          tooltip: 'Close video response',
           onPressed: () => Navigator.pop(context)),
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Video Response', style: TextStyle(color: _wht, fontSize: 17, fontWeight: FontWeight.w700)),
@@ -163,10 +200,18 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
               padding: const EdgeInsets.all(20),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 // ── Video preview / picker ────────────────────────────────────
-                GestureDetector(
+                Semantics(
+                  container: true,
+                  button: _videoFile == null,
+                  label: _videoFile == null ? 'Select a video for ${widget.clientName}, up to 5 minutes' : null,
+                  onTap: _videoFile == null ? _pickVideo : null,
+                  excludeSemantics: _videoFile == null,
+                  child: GestureDetector(
                   onTap: _videoFile == null ? _pickVideo : null,
                   child: Container(
-                    height: 200,
+                    // P0-FL-58 · 200px at least: it grows with large text.
+                    constraints: const BoxConstraints(minHeight: 200),
+                    padding: EdgeInsets.symmetric(vertical: 8, horizontal: large ? 8 : 0),
                     decoration: BoxDecoration(
                       color: _card, borderRadius: BorderRadius.circular(20),
                       border: Border.all(color: _videoFile != null ? _tert.withValues(alpha: 0.4) : _brd, width: 2)),
@@ -176,31 +221,45 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
                             const SizedBox(height: 8),
                             Text(_videoFile!.name,
                               style: const TextStyle(color: _tert, fontSize: 12),
-                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                              textAlign: TextAlign.center,
+                              maxLines: large ? null : 1,
+                              overflow: large ? null : TextOverflow.ellipsis),
                             const SizedBox(height: 8),
-                            TextButton(
-                              onPressed: () => setState(() => _videoFile = null),
-                              child: const Text('Remove', style: TextStyle(color: _mut, fontSize: 12))),
+                            Semantics(
+                              container: true,
+                              button: true,
+                              label: 'Remove ${_videoFile!.name}',
+                              onTap: _removeVideo,
+                              excludeSemantics: true,
+                              child: TextButton(
+                                onPressed: _removeVideo,
+                                style: TextButton.styleFrom(minimumSize: const Size(44, 44)),
+                                child: const Text('Remove', style: TextStyle(color: _mut, fontSize: 12)))),
                           ])
                         : const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
                             Icon(Icons.video_library_rounded, color: _mut, size: 40),
                             SizedBox(height: 12),
-                            Text('Tap to select a video', style: TextStyle(color: _mut, fontSize: 14)),
+                            Text('Tap to select a video', textAlign: TextAlign.center,
+                              style: TextStyle(color: _mut, fontSize: 14)),
                             SizedBox(height: 4),
-                            Text('Up to 5 minutes', style: TextStyle(color: _mut, fontSize: 12)),
+                            Text('Up to 5 minutes', textAlign: TextAlign.center,
+                              style: TextStyle(color: _mut, fontSize: 12)),
                           ]),
                   ),
-                ),
+                )),
                 const SizedBox(height: 12),
-                Row(children: [
-                  Expanded(child: _ActionBtn(
-                    icon: Icons.videocam_rounded, label: 'Record Now',
-                    color: _brand, onTap: _recordVideo)),
-                  const SizedBox(width: 12),
-                  Expanded(child: _ActionBtn(
-                    icon: Icons.video_library_rounded, label: 'From Gallery',
-                    color: const Color(0xFF1A1020), onTap: _pickVideo)),
-                ]),
+                if (large) ...[
+                  SizedBox(width: double.infinity, child: record),
+                  const SizedBox(height: 12),
+                  SizedBox(width: double.infinity, child: gallery),
+                ] else
+                  // Equal heights when one label wraps and the other does not.
+                  IntrinsicHeight(child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    Expanded(child: record),
+                    const SizedBox(width: 12),
+                    Expanded(child: gallery),
+                  ])),
                 const SizedBox(height: 24),
                 // ── Written notes ────────────────────────────────────────────
                 const Text('Written Notes (optional)',
@@ -226,15 +285,23 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
                   Text('${(_progress * 100).round()}% uploaded...',
                     style: const TextStyle(color: _mut, fontSize: 12), textAlign: TextAlign.center),
                 ] else
-                  SizedBox(width: double.infinity, child: ElevatedButton.icon(
-                    onPressed: (_videoFile != null || _noteCtrl.text.isNotEmpty) ? _send : null,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _brand, foregroundColor: _wht,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
-                    icon: const Icon(Icons.send_rounded),
-                    label: const Text('Send to Client', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                  )),
+                  // P0-FL-58 · follows the note as it is typed: nothing rebuilt
+                  // this screen, so a note alone could never be sent. The same
+                  // rule as _send: a blank note is nothing to send (it enabled
+                  // a Send that did nothing).
+                  ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: _noteCtrl,
+                    builder: (context, note, _) => SizedBox(width: double.infinity, child: ElevatedButton.icon(
+                      onPressed: (_videoFile != null || note.text.trim().isNotEmpty) ? _send : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _brand, foregroundColor: _wht,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+                      icon: const Icon(Icons.send_rounded),
+                      label: Text('Send to Client',
+                        semanticsLabel: 'Send to ${widget.clientName}',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    ))),
               ]),
             ),
     );
@@ -244,20 +311,32 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
 class _ActionBtn extends StatelessWidget {
   final IconData icon;
   final String label;
+  final String semanticLabel;
   final Color color;
   final VoidCallback onTap;
-  const _ActionBtn({required this.icon, required this.label, required this.color, required this.onTap});
+  const _ActionBtn({required this.icon, required this.label, required this.semanticLabel,
+    required this.color, required this.onTap});
   @override
-  Widget build(BuildContext context) => GestureDetector(
+  Widget build(BuildContext context) => Semantics(
+    container: true,
+    button: true,
+    label: semanticLabel,
     onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.symmetric(vertical: 14),
-      decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(14)),
-      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Icon(icon, color: _wht, size: 18),
-        const SizedBox(width: 8),
-        Text(label, style: const TextStyle(color: _wht, fontSize: 13, fontWeight: FontWeight.w600)),
-      ]),
+    excludeSemantics: true,
+    child: GestureDetector(
+      onTap: onTap,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 44),
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(14)),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(icon, color: _wht, size: 18),
+          const SizedBox(width: 8),
+          // P0-FL-58 · wraps instead of overflowing.
+          Flexible(child: Text(label,
+            style: const TextStyle(color: _wht, fontSize: 13, fontWeight: FontWeight.w600))),
+        ]),
+      ),
     ),
   );
 }

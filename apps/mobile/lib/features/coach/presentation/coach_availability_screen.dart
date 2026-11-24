@@ -12,6 +12,10 @@ const _tert  = Color(0xFF6FFBBE);
 const _wht   = Colors.white;
 const _mut   = Color(0xFFCFC2D6);
 
+/// Text is scaled past 1.3×: a card's pieces go under one another (P0-FL-58).
+bool _largeText(BuildContext context) =>
+    MediaQuery.textScalerOf(context).scale(12) > 12 * 1.3;
+
 class CoachAvailabilityScreen extends StatefulWidget {
   const CoachAvailabilityScreen({super.key});
   @override
@@ -115,6 +119,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
       context: context,
       builder: (dctx) => AlertDialog(
         backgroundColor: _card,
+        scrollable: true, // P0-FL-58 · at 3× on a short phone it was cut off
         title: const Text('Cancel session?', style: TextStyle(color: _wht, fontWeight: FontWeight.w800)),
         content: const Text('The client will be notified and the slot reopened.',
             style: TextStyle(color: _mut)),
@@ -294,7 +299,9 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
           ? _LoadFailed(message: "Couldn't load your availability — "
                 '${_nextStep(_loadError!)}', onRetry: _load)
           : ListView(
-              padding: const EdgeInsets.all(16),
+              // P0-FL-58 · room under the last card: the Add Slot button
+              // floats over the list and covered its delete button.
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
               children: [
                 // ── Upcoming booked sessions ──
                 if (_sessions.isNotEmpty) ...[
@@ -333,6 +340,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
                           letterSpacing: 0.5)),
                     ),
                     ...entry.value.map((s) => _SlotTile(slot: s,
+                        day: _dateLabel(dt),
                         deleting: _deleting.contains(s['id']),
                         onDelete: () => _delete(s['id'] as String))),
                   ]);
@@ -373,6 +381,34 @@ class _SessionTile extends StatelessWidget {
     final h = dt == null ? '' : (dt.hour % 12 == 0 ? 12 : dt.hour % 12);
     final ap = dt == null ? '' : (dt.hour < 12 ? 'AM' : 'PM');
     final when = dt == null ? '' : '${dt.month}/${dt.day} · $h:${dt.minute.toString().padLeft(2, '0')} $ap';
+    final who = name.isEmpty ? 'this client' : name;
+    final large = _largeText(context);
+    // UX-6 · a 44x44 target; while the cancel is in flight a spinner
+    // that says so takes its place (no double fire).
+    final action = cancelling
+        ? Semantics(
+            container: true,
+            label: 'Cancelling',
+            liveRegion: true,
+            child: const SizedBox(width: 44, height: 44,
+              child: Center(child: SizedBox(width: 18, height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Color(0xFFFFB4AB))))))
+        // P0-FL-58 · named for the session it cancels.
+        : Semantics(
+            container: true,
+            button: true,
+            label: 'Cancel session with $who${when.isEmpty ? '' : ', $when'}',
+            onTap: onCancel,
+            excludeSemantics: true,
+            child: TextButton(
+              onPressed: onCancel,
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(44, 44)),
+              child: const Text('Cancel',
+                style: TextStyle(color: Color(0xFFFFB4AB), fontSize: 13, fontWeight: FontWeight.w600)),
+            ));
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -394,27 +430,9 @@ class _SessionTile extends StatelessWidget {
           const SizedBox(height: 2),
           Text('$when · $type · $mins min',
             style: const TextStyle(color: _mut, fontSize: 12)),
+          if (large) ...[const SizedBox(height: 4), action],
         ])),
-        // UX-6 · a 44x44 target; while the cancel is in flight a spinner
-        // that says so takes its place (no double fire).
-        if (cancelling)
-          Semantics(
-            container: true,
-            label: 'Cancelling',
-            liveRegion: true,
-            child: const SizedBox(width: 44, height: 44,
-              child: Center(child: SizedBox(width: 18, height: 18,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2, color: Color(0xFFFFB4AB))))))
-        else
-          TextButton(
-            onPressed: onCancel,
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: const Size(44, 44)),
-            child: const Text('Cancel',
-              style: TextStyle(color: Color(0xFFFFB4AB), fontSize: 13, fontWeight: FontWeight.w600)),
-          ),
+        if (!large) action,
       ]),
     );
   }
@@ -424,7 +442,9 @@ class _SlotTile extends StatelessWidget {
   final Map<String, dynamic> slot;
   final VoidCallback onDelete;
   final bool deleting;
-  const _SlotTile({required this.slot, required this.onDelete, this.deleting = false});
+  /// The date heading it is under: part of the delete button's name.
+  final String day;
+  const _SlotTile({required this.slot, required this.day, required this.onDelete, this.deleting = false});
 
   @override
   Widget build(BuildContext context) {
@@ -432,6 +452,47 @@ class _SlotTile extends StatelessWidget {
     final isBooked = slot['is_booked'] == true;
     final type = slot['type'] as String? ?? 'check_in';
     final mins = slot['duration_minutes'] as int? ?? 30;
+    final time = '${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2,'0')}';
+    final large = _largeText(context);
+    // P0-FL-58 · 52px at least: the fixed box cut the time off at large text.
+    final timeBox = Container(
+      constraints: const BoxConstraints(minWidth: 52, minHeight: 52),
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: (isBooked ? _tert : _brand).withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12)),
+      child: Center(widthFactor: 1, heightFactor: 1, child: Text(time,
+        style: TextStyle(color: isBooked ? _tert : _brand, fontSize: 14, fontWeight: FontWeight.w800))));
+    final details = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(_typeLabel(type),
+        style: const TextStyle(color: _wht, fontSize: 14, fontWeight: FontWeight.w600)),
+      Text('$mins min${isBooked ? ' • Booked' : ' • Available'}',
+        style: TextStyle(color: isBooked ? _tert : _mut, fontSize: 12)),
+    ]);
+    final slotName = '${_typeLabel(type)} slot, $day $time';
+    final Widget action = isBooked
+        ? Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: _tert.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
+            child: const Text('Booked', style: TextStyle(color: _tert, fontSize: 11, fontWeight: FontWeight.w600)))
+        // Every card's button was announced "Remove slot": which one was not
+        // said, nor that a removal was in flight.
+        : Semantics(
+            container: true,
+            button: true,
+            enabled: !deleting,
+            liveRegion: deleting,
+            label: deleting ? 'Deleting $slotName' : 'Delete $slotName',
+            onTap: deleting ? null : onDelete,
+            excludeSemantics: true,
+            child: IconButton(
+              tooltip: 'Remove slot',
+              icon: deleting
+                  ? const SizedBox(width: 18, height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: _mut))
+                  : const Icon(Icons.delete_outline_rounded, color: _mut, size: 20),
+              onPressed: deleting ? null : onDelete));
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -441,38 +502,12 @@ class _SlotTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: isBooked ? _tert.withValues(alpha: 0.4) : _brd),
       ),
-      child: Row(children: [
-        Container(
-          width: 52, height: 52,
-          decoration: BoxDecoration(
-            color: (isBooked ? _tert : _brand).withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(12)),
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Text('${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2,'0')}',
-              style: TextStyle(color: isBooked ? _tert : _brand, fontSize: 14, fontWeight: FontWeight.w800)),
-          ])),
-        const SizedBox(width: 14),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(_typeLabel(type),
-            style: const TextStyle(color: _wht, fontSize: 14, fontWeight: FontWeight.w600)),
-          Text('$mins min${isBooked ? ' • Booked' : ' • Available'}',
-            style: TextStyle(color: isBooked ? _tert : _mut, fontSize: 12)),
-        ])),
-        if (!isBooked)
-          IconButton(
-            tooltip: 'Remove slot',
-            icon: deleting
-                ? const SizedBox(width: 18, height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: _mut))
-                : const Icon(Icons.delete_outline_rounded, color: _mut, size: 20),
-            onPressed: deleting ? null : onDelete)
-        else
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: _tert.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
-            child: const Text('Booked', style: TextStyle(color: _tert, fontSize: 11, fontWeight: FontWeight.w600))),
-      ]),
+      // Past 1.3× the pieces go under one another.
+      child: large
+          ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              timeBox, const SizedBox(height: 8), details, const SizedBox(height: 8), action])
+          : Row(children: [
+              timeBox, const SizedBox(width: 14), Expanded(child: details), action]),
     );
   }
 
@@ -600,14 +635,21 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
         Row(children: [
           const Expanded(child: Text('Add Availability Slot',
             style: TextStyle(color: _wht, fontSize: 18, fontWeight: FontWeight.w800))),
-          IconButton(icon: const Icon(Icons.close, color: _mut), onPressed: () => Navigator.pop(context)),
+          IconButton(tooltip: 'Close Add Availability Slot',
+            icon: const Icon(Icons.close, color: _mut), onPressed: () => Navigator.pop(context)),
         ]),
         const SizedBox(height: 20),
 
         // Date
         const Text('Date', style: TextStyle(color: _mut, fontSize: 12, fontWeight: FontWeight.w600)),
         const SizedBox(height: 8),
-        GestureDetector(
+        Semantics(
+          container: true,
+          button: true,
+          label: 'Change date, ${days[_date.weekday - 1]}, ${_date.day} ${months[_date.month - 1]} ${_date.year}',
+          onTap: _pickDate,
+          excludeSemantics: true,
+          child: GestureDetector(
           onTap: _pickDate,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -620,7 +662,7 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
               const Icon(Icons.chevron_right_rounded, color: _mut, size: 18),
             ]),
           ),
-        ),
+        )),
         const SizedBox(height: 16),
 
         // Time
@@ -628,6 +670,7 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
         const SizedBox(height: 8),
         Row(children: [
           Expanded(child: _DropdownField<int>(
+            label: 'Hour',
             value: _hour,
             items: _hours.map((h) => DropdownMenuItem(value: h,
               child: Text('${h.toString().padLeft(2,'0')}h', style: const TextStyle(color: _wht)))).toList(),
@@ -635,6 +678,7 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
           )),
           const SizedBox(width: 10),
           Expanded(child: _DropdownField<int>(
+            label: 'Minute',
             value: _minute,
             items: _minutes.map((m) => DropdownMenuItem(value: m,
               child: Text(':${m.toString().padLeft(2,'0')}', style: const TextStyle(color: _wht)))).toList(),
@@ -646,7 +690,9 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
         // Type
         const Text('Type', style: TextStyle(color: _mut, fontSize: 12, fontWeight: FontWeight.w600)),
         const SizedBox(height: 8),
-        Wrap(spacing: 8, children: _types.map(((String, String) t) => GestureDetector(
+        Wrap(spacing: 8, children: _types.map(((String, String) t) => _ChoiceTarget(
+          label: 'Type: ${t.$2}',
+          selected: _type == t.$1,
           onTap: () => setState(() => _type = t.$1),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
@@ -663,7 +709,9 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
         // Duration
         const Text('Duration', style: TextStyle(color: _mut, fontSize: 12, fontWeight: FontWeight.w600)),
         const SizedBox(height: 8),
-        Wrap(spacing: 8, runSpacing: 8, children: _durations.map((d) => GestureDetector(
+        Wrap(spacing: 8, children: _durations.map((d) => _ChoiceTarget(
+            label: 'Duration: $d min',
+            selected: _duration == d,
             onTap: () => setState(() => _duration = d),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 150),
@@ -698,20 +746,51 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
   }
 }
 
+/// A chip that is one of a set of choices: it keeps its look in a >= 44px
+/// target that says what it chooses and whether it is the current choice.
+class _ChoiceTarget extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final Widget child;
+  const _ChoiceTarget({required this.label, required this.selected,
+    required this.onTap, required this.child});
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    container: true,
+    button: true,
+    inMutuallyExclusiveGroup: true,
+    selected: selected,
+    label: label,
+    onTap: onTap,
+    excludeSemantics: true,
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+        child: Center(widthFactor: 1, heightFactor: 1, child: child))));
+}
+
 class _DropdownField<T> extends StatelessWidget {
+  final String label;
   final T value;
   final List<DropdownMenuItem<T>> items;
   final ValueChanged<T?> onChanged;
-  const _DropdownField({required this.value, required this.items, required this.onChanged});
+  const _DropdownField({required this.label, required this.value, required this.items, required this.onChanged});
 
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 12),
     decoration: BoxDecoration(color: _bg, borderRadius: BorderRadius.circular(12), border: Border.all(color: _brd)),
-    child: DropdownButton<T>(
+    child: Semantics(
+      label: label,
+      child: DropdownButton<T>(
       value: value, items: items, onChanged: onChanged,
+      itemHeight: null, // 48px at least, and grows with large text
       dropdownColor: _card, isExpanded: true, underline: const SizedBox(),
-      icon: const Icon(Icons.keyboard_arrow_down_rounded, color: _mut)),
+      icon: const Icon(Icons.keyboard_arrow_down_rounded, color: _mut))),
   );
 }
 
