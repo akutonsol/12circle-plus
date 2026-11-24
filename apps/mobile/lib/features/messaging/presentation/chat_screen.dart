@@ -257,9 +257,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// The photo picker is open: a second tap opens no second one (P0-FL-56a).
   bool _pickingPhoto = false;
 
-  /// What [_showPhotoFailure] says about the photo send that just failed.
-  Widget _photoFailure = const SizedBox.shrink();
-
   // Photo send, in the order the storage contract requires (DEC-3A-10 §6):
   //   1. upload — authorization needs only the conversation, which exists;
   //   2. send the message carrying the object PATH (the bucket is private,
@@ -269,7 +266,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Future<void> _sendPhoto() async {
     if (_sending || _pickingPhoto) return;
     final conversationId = _conversationId;
-    final uid = Supabase.instance.client.auth.currentUser?.id;
+    final auth = Supabase.instance.client.auth;
+    final uid = auth.currentUser?.id;
+    bool sameMember() => auth.currentUser?.id == uid;
     // Attach used to do nothing in these two states, without a word.
     if (conversationId == null) {
       _showSendFailure(_notReadyMessage);
@@ -310,13 +309,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         bytes = await picked.readAsBytes();
       } catch (e, st) {
         reportError('chat.photo.read', e, st);
-        _showSendFailure(couldntMessage('use that photo', e));
+        if (sameMember()) _showSendFailure(couldntMessage('use that photo', e));
         return;
       }
       // Another member signed in meanwhile: not their message to send.
-      if (Supabase.instance.client.auth.currentUser?.id != uid) {
-        throw StateError('the member changed during a pick');
-      }
+      if (!sameMember()) throw StateError('the member changed during a pick');
       final ext = picked.path.split('.').last.toLowerCase();
       // messages/<conversation_id>/<uploader_uid>/<epoch>.<ext> — the
       // conversation is the authorization identity, never the uploader.
@@ -330,6 +327,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       await storage.uploadBinary(storagePath, bytes,
           fileOptions: FileOptions(contentType: 'image/$ext', upsert: false));
       uploadedPath = storagePath;
+      // Checked again: `sendMessage` writes as whoever is signed in NOW, so a
+      // switch during the upload sent this photo as B, in A's conversation.
+      if (!sameMember()) throw StateError('the member changed during an upload');
       final ok = await _service.sendMessage(
         conversationId: conversationId,
         content: '[photo]',
@@ -340,24 +340,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         onNotSent: (e) => sendError = e);
       if (!ok) {
         // Recorded by the service (`MessagingService.sendMessage`).
-        await _removeOrphan(storage, storagePath);
-        _photoFailure = Text(couldntMessage('send your photo', sendError));
-        _showPhotoFailure();
+        await _removeOrphan(storage, storagePath, uid);
+        if (sameMember()) {
+          _showSendFailure(couldntMessage('send your photo', sendError));
+        }
       }
     } catch (e, st) {
       // Upload itself failed, or something after it threw. If the object got
       // as far as storage, it has no message row and must not be left behind.
       reportError('ChatScreen._sendPhoto', e, st);
-      if (uploadedPath != null) await _removeOrphan(storage, uploadedPath);
-      // The heading is pinned by messaging_inbox_and_send_truth_test.
-      _photoFailure = Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Text('Failed to send photo'),
-          Text(couldntMessage('send your photo', e)),
-        ]);
-      _showPhotoFailure();
+      if (uploadedPath != null) await _removeOrphan(storage, uploadedPath, uid);
+      // Another member signed in: it was not their photo, so nothing is said.
+      if (sameMember()) _showSendFailure(couldntMessage('send your photo', e));
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -370,23 +364,39 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   ///
   /// `remove` answers with the objects it removed and does NOT throw for one
   /// it could not delete, so an empty answer is checked: gone is fine (nothing
-  /// is left behind), still there is a cleanup failure (P0-FL-56a).
-  Future<void> _removeOrphan(StorageFileApi storage, String path) async {
+  /// is left behind), still there is a cleanup failure (P0-FL-56a). It is
+  /// checked by listing the folder for the exact name, not with `exists`,
+  /// which reads every 400/404 as "gone".
+  ///
+  /// [uid] uploaded it. Once someone else (or no one) is signed in, storage
+  /// hides the object from the session, so every answer looks like "gone":
+  /// nothing is asked as them, and the leftover is recorded.
+  Future<void> _removeOrphan(
+      StorageFileApi storage, String path, String uid) async {
+    void requireUploader() {
+      if (Supabase.instance.client.auth.currentUser?.id != uid) {
+        throw StateError('an unsent photo could not be cleaned up: '
+            'its uploader is no longer signed in');
+      }
+    }
+
     try {
+      requireUploader();
       final removed = await storage.remove([path]);
-      if (removed.isEmpty && await storage.exists(path)) {
+      if (removed.isNotEmpty) return;
+      requireUploader();
+      final slash = path.lastIndexOf('/');
+      final name = path.substring(slash + 1);
+      final left = await storage.list(
+          path: path.substring(0, slash),
+          searchOptions: SearchOptions(search: name));
+      requireUploader();
+      if (left.any((o) => o.name == name)) {
         throw StateError('an unsent photo is still in storage after remove');
       }
     } catch (e, st) {
       reportError('ChatScreen._sendPhoto.cleanup', e, st);
     }
-  }
-
-  void _showPhotoFailure() {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      // The default 4 s, as for every other notice here: it covers the composer.
-      SnackBar(content: _photoFailure));
   }
 
   bool _isMe(Map<String, dynamic> msg) {

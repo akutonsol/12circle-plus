@@ -32,11 +32,20 @@ const _uidB = '00000000-0000-4000-8000-00000000b56a';
 class _Server extends RowCheckingPostgrest {
   _Server() : super(_uid);
   final storage = <String>[];
+  Completer<void>? uploadGate;
+
+  @override
+  void reset() {
+    super.reset();
+    uploadGate = null;
+    storage.clear();
+  }
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     if (request.url.path.startsWith('/storage/v1/')) {
       storage.add('${request.method} ${request.url.path}');
+      await uploadGate?.future;
       return http.StreamedResponse(
           Stream.value(utf8.encode(jsonEncode({'Key': 'k'}))), 200,
           request: request, headers: {'content-type': 'application/json'});
@@ -61,7 +70,6 @@ void main() {
   setUp(() async {
     await signInAs(_uid);
     server.reset();
-    server.storage.clear();
     picker.reset();
     reported.clear();
     setFailureSink(reported.add);
@@ -77,13 +85,20 @@ void main() {
     addTearDown(() => t.binding.setSurfaceSize(null));
     await t.pumpWidget(ProviderScope(
       overrides: [
-        currentUserProfileProvider.overrideWith((ref) async => {
-              'id': _uid,
-              'first_name': 'Ana',
-              'last_name': 'Lee',
-              'role': 'client',
-              'avatar_url': 'https://cdn.example/old.jpg',
-            }),
+        // The profile read (not the identity) is answered here, for whoever
+        // is really signed in.
+        currentUserProfileProvider.overrideWith((ref) async {
+          final uid = ref.watch(currentUserProvider)?.id;
+          return {
+            'id': uid,
+            'first_name': uid == _uidB ? 'Bea' : 'Ana',
+            'last_name': 'Lee',
+            'role': 'client',
+            'avatar_url': uid == _uidB
+                ? 'https://cdn.example/b.jpg'
+                : 'https://cdn.example/old.jpg',
+          };
+        }),
       ],
       child: const MaterialApp(home: PersonalInfoScreen()),
     ));
@@ -194,6 +209,55 @@ void main() {
     expect(links().single, contains('select=id'));
     expect(find.byType(SnackBar), findsNothing);
     expect(reported, isEmpty);
+  });
+
+  // B signs in and B's own form fills (A's form was dropped).
+  Future<void> switchToB(WidgetTester t) async {
+    await t.runAsync(() => signInAs(_uidB));
+    await pumpUntil(t, () => find.text('Bea').evaluate().isNotEmpty,
+        what: "B's own form");
+  }
+
+  Future<void> uploadSettled(WidgetTester t) async {
+    await pumpUntil(t, () => shownAvatar(t) != null,
+        what: 'the photo (no spinner)');
+    await t.pump(const Duration(milliseconds: 400));
+  }
+
+  testWidgets("A's link saves after B signed in: A's photo is not shown on "
+      "B's form, and nothing is said to B", (t) async {
+    await open(t);
+    server.gate = Completer<void>();
+    await tapPhoto(t);
+    await pumpUntil(t, () => links().isNotEmpty, what: 'the link PATCH');
+    await switchToB(t);
+    server.gate!.complete();
+    await uploadSettled(t);
+    expect(links(), hasLength(1));
+    expect(shownAvatar(t), 'https://cdn.example/b.jpg',
+        reason: "A's late success landed on B's form");
+    expect(find.byType(SnackBar), findsNothing);
+    expect(reported, isEmpty);
+  });
+
+  testWidgets("B signs in during A's upload: the link is not written, "
+      'recorded, nothing said to B', (t) async {
+    await open(t);
+    server.uploadGate = Completer<void>();
+    await tapPhoto(t);
+    await pumpUntil(t, () => server.storage.isNotEmpty, what: 'the upload');
+    await switchToB(t);
+    server.uploadGate!.complete();
+    await pumpUntil(t, () => reported.isNotEmpty || links().isNotEmpty,
+        what: 'the refusal');
+    await uploadSettled(t);
+    expect(links(), isEmpty,
+        reason: "THE defect: A's row was written under B's session");
+    expect(origins(), ['PersonalInfoScreen._pickAndUploadAvatar']);
+    expect((reported.single.error as StateError).message,
+        'the member changed during an upload');
+    expect(shownAvatar(t), 'https://cdn.example/b.jpg');
+    expect(find.byType(SnackBar), findsNothing);
   });
 
   testWidgets("A's pick, B signs in while the picker is open: nothing is "

@@ -281,6 +281,9 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
           .from('avatars')
           .uploadBinary(path, bytes,
               fileOptions: FileOptions(contentType: 'image/$ext', upsert: true));
+      // And again after the upload: the link below is written as whoever is
+      // signed in NOW, who may not be this member any more.
+      if (!sameMember()) throw StateError('the member changed during an upload');
       // Same path is reused (upsert), so the public URL never changes — append
       // a cache-buster so the new image actually shows instead of the cached one.
       final base = Supabase.instance.client.storage.from('avatars').getPublicUrl(path);

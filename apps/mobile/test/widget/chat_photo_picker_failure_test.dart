@@ -32,7 +32,14 @@ const _uidB = '00000000-0000-4000-8000-00000000c56b';
 const _conv = 'conv-fl56a';
 const _sendFailed = "Couldn't send your photo — $tryAgainHint";
 
-enum _Remove { removed, emptyGone, emptyStillThere, throws, existsThrows }
+enum _Remove {
+  removed,
+  emptyGone,
+  emptyStillThere,
+  emptyNearNameThere,
+  throws,
+  listThrows,
+}
 
 class _Server extends RowCheckingPostgrest {
   _Server() : super(_uid);
@@ -40,11 +47,20 @@ class _Server extends RowCheckingPostgrest {
   _Remove remove = _Remove.removed;
   final storage = <String>[];
 
+  /// Held (after being counted in [storage]) until completed.
+  Completer<void>? uploadGate, deleteGate, listGate;
+
+  /// The folder and the search the cleanup listed with.
+  String? listedPrefix, listedSearch;
+  String _uploaded = '';
+
   @override
   void reset() {
     super.reset();
     uploadFails = false;
     remove = _Remove.removed;
+    uploadGate = deleteGate = listGate = null;
+    listedPrefix = listedSearch = null;
     storage.clear();
   }
 
@@ -52,9 +68,25 @@ class _Server extends RowCheckingPostgrest {
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final path = request.url.path;
     if (!path.startsWith('/storage/v1/')) return super.send(request);
+    if (path.startsWith('/storage/v1/object/list/')) {
+      storage.add('LIST');
+      final body = jsonDecode((request as http.Request).body) as Map;
+      listedPrefix = body['prefix'] as String;
+      listedSearch = body['search'] as String;
+      await listGate?.future;
+      if (remove == _Remove.listThrows) {
+        return json({'message': 'SECRET', 'error': 'x', 'statusCode': '500'},
+            500, request);
+      }
+      return json([
+        if (remove == _Remove.emptyStillThere) {'name': _uploaded},
+        if (remove == _Remove.emptyNearNameThere) {'name': '$_uploaded.bak'},
+      ], 200, request);
+    }
     storage.add(request.method);
     switch (request.method) {
       case 'DELETE':
+        await deleteGate?.future;
         if (remove == _Remove.throws) {
           return json({'message': 'SECRET', 'error': 'x', 'statusCode': '500'},
               500, request);
@@ -64,15 +96,12 @@ class _Server extends RowCheckingPostgrest {
         return json([
           if (remove == _Remove.removed) {'name': prefixes.single}
         ], 200, request);
-      case 'HEAD':
-        final status = switch (remove) {
-          _Remove.emptyStillThere => 200,
-          _Remove.existsThrows => 500,
-          _ => 400,
-        };
-        return http.StreamedResponse(const Stream.empty(), status,
+      case 'HEAD': // `exists`: a 400 is what "may not see it" looks like.
+        return http.StreamedResponse(const Stream.empty(), 400,
             request: request);
       default:
+        _uploaded = path.split('/').last;
+        await uploadGate?.future;
         return uploadFails
             ? json({'message': 'SECRET', 'error': 'x', 'statusCode': '403'},
                 403, request)
@@ -283,6 +312,8 @@ void main() {
       await attach(t);
       await outcome(t);
       expect(find.text(_sendFailed), findsOneWidget);
+      expect(find.text('Failed to send photo'), findsNothing,
+          reason: 'one voice: the same failure was said twice');
       expect(liveRegionOver(_sendFailed), findsWidgets);
       expect(origins(), ['ChatScreen._sendPhoto']);
       expect(server.writes.where(_isMessageInsert), isEmpty);
@@ -332,7 +363,18 @@ void main() {
     testWidgets('empty answer and the object is gone: legitimately absent',
         (t) async {
       await sendWithRefusedRow(t, _Remove.emptyGone);
-      expect(server.storage, ['POST', 'DELETE', 'HEAD']);
+      expect(server.storage, ['POST', 'DELETE', 'LIST'],
+          reason: '`exists` (HEAD) reads every 400/404 as gone');
+      expect(server.listedPrefix, 'messages/$_conv/$_uid');
+      expect(server.listedSearch, matches(RegExp(r'^\d+\.png$')));
+      expect(origins(), ['MessagingService.sendMessage']);
+      await close(t);
+    });
+
+    testWidgets('empty answer and only a near name is listed: the exact object '
+        'is gone', (t) async {
+      await sendWithRefusedRow(t, _Remove.emptyNearNameThere);
+      expect(server.storage, ['POST', 'DELETE', 'LIST']);
       expect(origins(), ['MessagingService.sendMessage']);
       await close(t);
     });
@@ -355,8 +397,126 @@ void main() {
 
     testWidgets('empty answer and the check itself fails: unknown is not '
         '"gone" — recorded', (t) async {
-      await sendWithRefusedRow(t, _Remove.existsThrows);
+      await sendWithRefusedRow(t, _Remove.listThrows);
       expect(origins(), contains('ChatScreen._sendPhoto.cleanup'));
+      await close(t);
+    });
+  });
+
+  group('B signs in after the pick', () {
+    Future<void> signInB(WidgetTester t) async {
+      await t.runAsync(() => signInAs(_uidB));
+      expect(Supabase.instance.client.auth.currentUser?.id, _uidB,
+          reason: 'premise');
+    }
+
+    Future<void> recorded(WidgetTester t, String origin) async {
+      await pumpUntil(t, () => origins().contains(origin), what: origin);
+      for (var i = 0; i < 10; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+      expect(find.byType(SnackBar), findsNothing,
+          reason: 'the notice belonged to the member who left');
+    }
+
+    const cleanup = 'ChatScreen._sendPhoto.cleanup';
+
+    testWidgets("during the upload: nothing is sent as B in A's conversation; "
+        'the leftover is recorded, not asked about as B', (t) async {
+      server.uploadGate = Completer<void>();
+      await open(t);
+      await attach(t);
+      await pumpUntil(t, () => server.storage.isNotEmpty, what: 'the upload');
+      await signInB(t);
+      server.uploadGate!.complete();
+      await recorded(t, cleanup);
+      expect(server.writes, isEmpty,
+          reason: 'THE defect: a row as B, plus the preview PATCH');
+      expect(server.storage, ['POST']);
+      expect(origins(), ['ChatScreen._sendPhoto', cleanup]);
+      expect((reported.first.error as StateError).message,
+          'the member changed during an upload');
+      await close(t);
+    });
+
+    testWidgets('during a refused upload: recorded, nothing said to B',
+        (t) async {
+      server
+        ..uploadGate = Completer<void>()
+        ..uploadFails = true;
+      await open(t);
+      await attach(t);
+      await pumpUntil(t, () => server.storage.isNotEmpty, what: 'the upload');
+      await signInB(t);
+      server.uploadGate!.complete();
+      await recorded(t, 'ChatScreen._sendPhoto');
+      expect(server.storage, ['POST']);
+      await close(t);
+    });
+
+    testWidgets('during a refused row: no clean-up request as B, recorded',
+        (t) async {
+      server
+        ..gate = Completer<void>()
+        ..mode = WriteMode.serverError
+        ..modeAppliesTo = _isMessageInsert;
+      await open(t);
+      await attach(t);
+      await pumpUntil(t, () => server.writes.any(_isMessageInsert),
+          what: 'the row');
+      await signInB(t);
+      server.gate!.complete();
+      await recorded(t, cleanup);
+      expect(server.storage, ['POST']);
+      expect(origins(), ['MessagingService.sendMessage', cleanup]);
+      await close(t);
+    });
+
+    testWidgets('during the remove: its empty answer is not "gone", and the '
+        'folder is not listed as B', (t) async {
+      server
+        ..remove = _Remove.emptyGone
+        ..deleteGate = Completer<void>()
+        ..mode = WriteMode.serverError
+        ..modeAppliesTo = _isMessageInsert;
+      await open(t);
+      await attach(t);
+      await pumpUntil(t, () => server.storage.contains('DELETE'),
+          what: 'the remove');
+      await signInB(t);
+      server.deleteGate!.complete();
+      await recorded(t, cleanup);
+      expect(server.storage, ['POST', 'DELETE']);
+      await close(t);
+    });
+
+    testWidgets('during the list: an empty folder is not "gone" — recorded',
+        (t) async {
+      server
+        ..remove = _Remove.emptyGone
+        ..listGate = Completer<void>()
+        ..mode = WriteMode.serverError
+        ..modeAppliesTo = _isMessageInsert;
+      await open(t);
+      await attach(t);
+      await pumpUntil(t, () => server.storage.contains('LIST'),
+          what: 'the list');
+      await signInB(t);
+      server.listGate!.complete();
+      await recorded(t, cleanup);
+      await close(t);
+    });
+
+    testWidgets('while an unreadable photo is read: recorded, nothing said',
+        (t) async {
+      await open(t);
+      final gate = Completer<Object?>();
+      picker.answer = (_) => gate.future;
+      await attach(t);
+      await signInB(t);
+      gate.complete(picker.vanishedPath);
+      await recorded(t, 'chat.photo.read');
+      expect(server.storage, isEmpty);
       await close(t);
     });
   });
@@ -369,7 +529,10 @@ void main() {
     await attach(t);
     await t.runAsync(() => signInAs(_uidB));
     gate.complete(picker.photoPath);
-    await outcome(t);
+    await pumpUntil(t, () => reported.isNotEmpty, what: 'the refusal');
+    await t.pump(const Duration(milliseconds: 400));
+    expect(find.byType(SnackBar), findsNothing,
+        reason: 'the notice belonged to the member who left');
     expect(origins(), ['ChatScreen._sendPhoto']);
     expect(server.storage, isEmpty);
     expect(server.writes.where(_isMessageInsert), isEmpty);

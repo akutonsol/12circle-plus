@@ -481,7 +481,10 @@ void main() {
       expect(server.writes.where(_isMessageInsert), isEmpty);
       expect(origins(), contains('ChatScreen._sendPhoto'),
           reason: 'this catch used to swallow the failure unrecorded');
-      expect(find.text('Failed to send photo'), findsOneWidget);
+      expect(
+          find.text("Couldn't send your photo — try again in a moment. "
+              'If it keeps happening, contact support.'),
+          findsOneWidget);
       await t.pump(const Duration(seconds: 5));
     });
   });

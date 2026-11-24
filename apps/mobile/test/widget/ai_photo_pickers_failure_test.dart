@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' show Tristate;
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/ai_nutrition/data/ai_nutrition_service.dart';
@@ -9,6 +10,7 @@ import 'package:circle_fitness/features/ai_nutrition/presentation/ai_nutrition_s
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/nutrition/presentation/widgets/ai_scan_view.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -17,6 +19,7 @@ import 'package:http/http.dart' as http;
 import '../support/fake_image_picker.dart';
 import '../support/pump_until.dart';
 import '../support/row_checking_postgrest.dart';
+import '../support/session_switch.dart';
 
 // P0-FL-56a · the two AI photo pickers.
 //
@@ -31,6 +34,7 @@ import '../support/row_checking_postgrest.dart';
 // HOW TO SEE IT FAIL: run against f191d48's two files.
 
 const _uid = '00000000-0000-4000-8000-00000000d56a';
+const _uidB = '00000000-0000-4000-8000-00000000d56b';
 
 class _Coach implements AiNutritionService {
   Object? fails;
@@ -57,10 +61,14 @@ class _Server extends RowCheckingPostgrest {
   int status = 200;
   bool offline = false;
 
+  /// Held (after being counted) until completed.
+  Completer<void>? analysisGate;
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     if (request.url.path.endsWith('/analyze-food-image')) {
       analyses++;
+      await analysisGate?.future;
       if (offline) throw http.ClientException('refused', request.url);
       return http.StreamedResponse(
           Stream.value(utf8.encode(jsonEncode(status == 200
@@ -100,9 +108,11 @@ void main() {
   });
   tearDownAll(picker.dispose);
 
-  setUp(() {
+  setUp(() async {
+    await signInAs(_uid);
     server
       ..reset()
+      ..analysisGate = null
       ..analyses = 0
       ..status = 200
       ..offline = false;
@@ -128,7 +138,7 @@ void main() {
   group('nutrition coach chat', () {
     late _Coach coach;
 
-    Future<void> open(WidgetTester t) async {
+    Future<void> open(WidgetTester t, {bool realIdentity = false}) async {
       coach = _Coach();
       t.view
         ..devicePixelRatio = 1
@@ -136,7 +146,7 @@ void main() {
       addTearDown(t.view.reset);
       await t.pumpWidget(ProviderScope(
         overrides: [
-          currentUserProvider.overrideWithValue(null),
+          if (!realIdentity) currentUserProvider.overrideWithValue(null),
           aiNutritionServiceProvider.overrideWithValue(coach),
         ],
         child: const MaterialApp(home: AiNutritionScreen()),
@@ -236,6 +246,50 @@ void main() {
       expect(picker.calls, hasLength(1));
       await close(t);
     });
+
+    for (final (name, finish, origin) in <(
+      String,
+      void Function(Completer<Object?>),
+      String
+    )>[
+      ('a photo', (g) => g.complete(picker.photoPath),
+          'aiNutrition.photo.identity'),
+      ('an unreadable photo', (g) => g.complete(picker.vanishedPath),
+          'aiNutrition.photo.read'),
+      (
+        'a denied picker',
+        (g) => g.completeError(PlatformException(code: 'photo_access_denied')),
+        'aiNutrition.photo.pick.gallery'
+      ),
+    ]) {
+      testWidgets("B signs in while A's picker is open, then $name: nothing is "
+          'sent as B, nothing is said, recorded', (t) async {
+        await open(t, realIdentity: true);
+        final gate = Completer<Object?>();
+        picker.answer = (_) => gate.future;
+        await scan(t);
+        expect(picker.calls, hasLength(1), reason: 'premise');
+        await t.runAsync(() => signInAs(_uidB));
+        await settle(t);
+        finish(gate);
+        await pumpUntil(t, () => reported.isNotEmpty || coach.sent.isNotEmpty,
+            what: 'the refusal');
+        await settle(t);
+        expect(coach.sent, isEmpty,
+            reason: "A's meal photo went out under B's token");
+        expect(find.text('Analyze this meal photo for me.'), findsNothing);
+        expect(find.byType(SnackBar), findsNothing);
+        expect(origins(), [origin]);
+        // B's own pick works.
+        picker.answer = (_) async => picker.photoPath;
+        await scan(t);
+        await pumpUntil(
+            t, () => find.text('Looks balanced.').evaluate().isNotEmpty,
+            what: "B's reply", step: const Duration(milliseconds: 5));
+        expect(coach.sent, hasLength(1));
+        await close(t);
+      });
+    }
 
     testWidgets('the photo turn fails: shown as failed (as before) and now '
         'recorded', (t) async {
@@ -392,6 +446,176 @@ void main() {
       expect(server.analyses, 1);
       expect(find.textContaining("Couldn't"), findsNothing);
       expect(reported, isEmpty);
+    });
+
+    for (final (name, finish, expected) in <(
+      String,
+      void Function(Completer<Object?>),
+      List<String>
+    )>[
+      ('a photo', (g) => g.complete(picker.photoPath),
+          ['nutrition.scan.identity']),
+      ('an unreadable photo', (g) => g.complete(picker.vanishedPath),
+          ['nutrition.scan.read', 'nutrition.scan.identity']),
+      (
+        'a denied picker',
+        (g) => g.completeError(PlatformException(code: 'photo_access_denied')),
+        ['nutrition.scan.pick.gallery', 'nutrition.scan.identity']
+      ),
+    ]) {
+      testWidgets("B signs in while A's picker is open, then $name: nothing is "
+          'analysed as B, nothing is said, recorded', (t) async {
+        await open(t);
+        final gate = Completer<Object?>();
+        picker.answer = (_) => gate.future;
+        await tap(t, 'Choose from Gallery');
+        await t.runAsync(() => signInAs(_uidB));
+        finish(gate);
+        await pumpUntil(
+            t, () => reported.isNotEmpty || server.analyses > 0,
+            what: 'the refusal');
+        await settle(t);
+        expect(server.analyses, 0);
+        expect(find.textContaining("Couldn't"), findsNothing);
+        expect(find.byType(SnackBar), findsNothing);
+        expect(origins(), expected);
+        // B's own pick works.
+        picker.answer = (_) async => picker.photoPath;
+        await tap(t, 'Choose from Gallery');
+        await waitFor(t, '640 kcal');
+        expect(server.analyses, 1);
+      });
+    }
+
+    Future<void> describe(WidgetTester t) async {
+      await t.enterText(find.byType(TextField), 'chicken salad');
+      await t.tap(find.byIcon(Icons.auto_awesome));
+      await t.pump();
+    }
+
+    for (final (what, start) in <(String, Future<void> Function(WidgetTester))>[
+      ('photo', (t) => tap(t, 'Choose from Gallery')),
+      ('description', describe),
+    ]) {
+      for (final fails in [false, true]) {
+        testWidgets("B signs in while A's $what is analysed "
+            '(${fails ? 'and it fails' : 'and it succeeds'}): neither the '
+            'result nor a notice is shown to B', (t) async {
+          await open(t);
+          server
+            ..analysisGate = Completer<void>()
+            ..status = fails ? 500 : 200;
+          await start(t);
+          await pumpUntil(t, () => server.analyses == 1, what: 'the request');
+          await t.runAsync(() => signInAs(_uidB));
+          server.analysisGate!.complete();
+          await pumpUntil(
+              t,
+              () =>
+                  origins().contains('nutrition.scan.identity') ||
+                  inView('640 kcal').evaluate().isNotEmpty ||
+                  find.textContaining("Couldn't").evaluate().isNotEmpty,
+              what: 'the late answer');
+          await settle(t);
+          expect(inView('640 kcal'), findsNothing);
+          expect(find.textContaining("Couldn't"), findsNothing);
+          expect(find.text('Scan Meal'), findsOneWidget, reason: 'usable');
+          expect(origins().last, 'nutrition.scan.identity');
+        });
+      }
+    }
+
+    testWidgets('a refused description: said IN the view, recorded, the words '
+        'kept; the next try clears it and works', (t) async {
+      await open(t);
+      server.status = 500;
+      await describe(t);
+      const msg = "Couldn't analyze that description — $tryAgainHint";
+      await waitFor(t, msg);
+      expect(liveRegionOver(msg), findsWidgets);
+      expect(find.byType(SnackBar), findsNothing,
+          reason: 'THE defect: drawn behind the Log Meal sheet');
+      expect(origins(), ['nutrition.scan.describe']);
+      expect(find.textContaining('kcal'), findsNothing);
+      expect(inView('chicken salad'), findsOneWidget);
+      nothingRaw();
+
+      server.status = 200;
+      await describe(t);
+      await waitFor(t, '640 kcal');
+      expect(reported, hasLength(1));
+    });
+
+    testWidgets('a description that cannot reach the server: the connection '
+        'hint', (t) async {
+      await open(t);
+      server.offline = true;
+      await describe(t);
+      await waitFor(
+          t,
+          "Couldn't analyze that description — check your connection and try "
+          'again.');
+      expect(origins(), ['nutrition.scan.describe']);
+    });
+
+    testWidgets('NEGATIVE CONTROL: an empty description asks nothing',
+        (t) async {
+      await open(t);
+      await t.tap(find.byIcon(Icons.auto_awesome));
+      await settle(t);
+      expect(server.analyses, 0);
+      expect(find.textContaining("Couldn't"), findsNothing);
+      expect(reported, isEmpty);
+    });
+
+    testWidgets('both pick buttons are named buttons, dimmed and disabled '
+        'while a picker is open', (t) async {
+      final semantics = t.ensureSemantics();
+      await open(t);
+      final gate = Completer<Object?>();
+      picker.answer = (_) => gate.future;
+      double dim(String label) => t
+          .widget<Opacity>(find
+              .ancestor(of: find.text(label), matching: find.byType(Opacity))
+              .first)
+          .opacity;
+      void expectState({required bool enabled}) {
+        for (final label in ['Scan Meal', 'Choose from Gallery']) {
+          final data =
+              t.getSemantics(find.bySemanticsLabel(label)).getSemanticsData();
+          expect(data.label, label, reason: 'announced once');
+          expect(data.flagsCollection.isButton, isTrue);
+          expect(data.flagsCollection.isEnabled,
+              enabled ? Tristate.isTrue : Tristate.isFalse);
+          expect(data.hasAction(SemanticsAction.tap), enabled);
+          expect(dim(label), enabled ? 1 : lessThan(0.6));
+        }
+      }
+
+      expectState(enabled: true);
+      await tap(t, 'Choose from Gallery');
+      expectState(enabled: false);
+      gate.complete(null);
+      await settle(t);
+      expectState(enabled: true);
+      expect(t.getSize(find.bySemanticsLabel('Scan Meal')).height,
+          greaterThanOrEqualTo(54));
+      expect(t.getSize(find.bySemanticsLabel('Choose from Gallery')).height,
+          greaterThanOrEqualTo(50));
+      semantics.dispose();
+    });
+
+    testWidgets('two taps before the screen can redraw open one picker',
+        (t) async {
+      await open(t);
+      final gate = Completer<Object?>();
+      picker.answer = (_) => gate.future;
+      await t.tap(find.text('Choose from Gallery'));
+      await t.tap(find.text('Scan Meal'));
+      await settle(t);
+      expect(picker.calls, hasLength(1));
+      gate.complete(null);
+      await settle(t);
     });
 
     // (At 2x the idle view's fixed-height frame and buttons already overflow

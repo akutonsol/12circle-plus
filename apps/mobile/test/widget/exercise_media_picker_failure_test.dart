@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'dart:ui' show Tristate;
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
@@ -9,6 +10,7 @@ import 'package:circle_fitness/features/exercise_database/domain/custom_exercise
 import 'package:circle_fitness/features/exercise_database/presentation/create_exercise_screen.dart';
 import 'package:circle_fitness/features/workout/data/models/video_variant_model.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
@@ -41,6 +43,7 @@ final _user = User(
 
 class _Svc extends CustomExerciseService {
   final calls = <String>[];
+  bool uploadsFail = false;
 
   @override
   Future<List<ExerciseDetail>> getMyExercises() async => const [];
@@ -79,6 +82,7 @@ class _Svc extends CustomExerciseService {
   Future<String?> uploadVideo(
       Uint8List bytes, String ext, String id, String label) async {
     calls.add('uploadVideo:$ext');
+    if (uploadsFail) return null;
     return 'https://cdn.test/video.$ext';
   }
 
@@ -99,7 +103,7 @@ class _SlowFile extends Fake implements XFile {
 }
 
 class _SlowPicker extends ImagePicker {
-  final file = _SlowFile();
+  var file = _SlowFile();
   @override
   Future<XFile?> pickVideo({
     required ImageSource source,
@@ -323,6 +327,83 @@ void main() {
     await settle(t);
     expect(svc.calls, ['create', 'uploadVideo:mp4']);
     expect(find.text('Exercise Saved!'), findsOneWidget);
+  });
+
+  testWidgets('while a picked file is read, Save is announced as disabled and '
+      'takes no tap; afterwards it is back', (t) async {
+    final semantics = t.ensureSemantics();
+    final media = _SlowPicker();
+    await open(t, media: media);
+    await addEntry(t);
+    SemanticsData save() =>
+        t.getSemantics(find.bySemanticsLabel('Save')).getSemanticsData();
+    expect(save().hasAction(SemanticsAction.tap), isTrue, reason: 'premise');
+    await t.tap(find.text('Upload from device'));
+    await settle(t);
+    expect(save().hasAction(SemanticsAction.tap), isFalse);
+    expect(save().flagsCollection.isEnabled, Tristate.isFalse);
+    media.file.gate.complete(Uint8List.fromList([0, 0, 0, 1]));
+    await settle(t);
+    expect(save().hasAction(SemanticsAction.tap), isTrue);
+    expect(save().flagsCollection.isEnabled, Tristate.isTrue);
+    semantics.dispose();
+  });
+
+  testWidgets('"Save again" (the failure notice) tapped while a new file is '
+      'read does not save without it', (t) async {
+    final media = _SlowPicker();
+    media.file.gate.complete(Uint8List.fromList([0, 0, 0, 1]));
+    svc.uploadsFail = true;
+    await open(t, media: media);
+    await addEntry(t);
+    await t.tap(find.text('Upload from device'));
+    await settle(t);
+    await t.tap(find.text('Save'));
+    await settle(t);
+    expect(find.text('Save again'), findsOneWidget, reason: 'premise');
+    final before = List.of(svc.calls);
+
+    // A second video is being read when the notice's button is pressed: the
+    // notice is outside the Save button's own gate.
+    media.file = _SlowFile();
+    await addEntry(t);
+    await t.tap(find.text('Upload from device'));
+    await settle(t);
+    await t.tap(find.text('Save again'));
+    await settle(t);
+    expect(svc.calls, before, reason: 'a save without the file being read');
+    expect(find.text('Exercise Saved!'), findsNothing);
+
+    svc.uploadsFail = false;
+    media.file.gate.complete(Uint8List.fromList([0, 0, 0, 2]));
+    await settle(t);
+    await t.tap(find.text('Save'));
+    await settle(t);
+    expect(svc.calls.where((c) => c.startsWith('uploadVideo')).length,
+        before.where((c) => c.startsWith('uploadVideo')).length + 2,
+        reason: 'POSITIVE: both videos are saved once the read is done');
+  });
+
+  testWidgets('ANOTHER entry removed while a video is read: the video lands on '
+      'its own entry and is uploaded', (t) async {
+    final media = _SlowPicker();
+    await open(t, media: media);
+    await addEntry(t);
+    await addEntry(t);
+    await t.tap(find.text('Upload from device').last);
+    await settle(t);
+    await t.tap(find.byIcon(Icons.remove_circle_outline).first);
+    await settle(t);
+    media.file.gate.complete(Uint8List.fromList([0, 0, 0, 1]));
+    await settle(t);
+    expect(t.takeException(), isNull);
+    expect(find.text('Video selected'), findsOneWidget,
+        reason: 'the entry moved up the list; the video is still its own');
+    await t.tap(find.text('Save'));
+    await settle(t);
+    expect(svc.calls, ['create', 'uploadVideo:mp4']);
+    expect(find.text('Exercise Saved!'), findsOneWidget);
+    expect(reported, isEmpty);
   });
 
   testWidgets('an entry removed while its video is read: no crash, and the '

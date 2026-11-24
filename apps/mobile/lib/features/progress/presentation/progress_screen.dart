@@ -65,10 +65,11 @@ class _ProgressScreenState extends State<ProgressScreen>
     _loadData();
   }
 
-  /// [afterPhoto]: a reload after a photo was stored. If it fails, what is on
-  /// screen stays and the failed refresh is said (P0-FL-56a) — the photo IS
-  /// saved, and "Could not load your progress" in its place hid both facts.
-  Future<void> _loadData({bool afterPhoto = false}) async {
+  /// [afterPhotoOf]: a reload after that member's photo was stored. If it
+  /// fails, what is on screen stays and the failed refresh is said, with a
+  /// Refresh (P0-FL-56a) — the photo IS saved, and "Could not load your
+  /// progress" in its place hid both facts.
+  Future<void> _loadData({String? afterPhotoOf}) async {
     if (mounted) setState(() => _loadFailed = false);
     final uid = Supabase.instance.client.auth.currentUser?.id;
     if (uid == null) { setState(() => _loading = false); return; }
@@ -159,11 +160,36 @@ class _ProgressScreenState extends State<ProgressScreen>
       }
     } catch (e, st) {
       reportError('ProgressScreen._loadData', e, st);
-      if (afterPhoto) {
-        _say('Your photo is saved. ${couldntMessage('refresh your progress', e)}');
+      if (afterPhotoOf != null && _isSignedIn(afterPhotoOf)) {
+        _say('Your photo is saved. ${couldntMessage('refresh your progress', e)}',
+            action: SnackBarAction(
+                label: 'Refresh',
+                onPressed: () => _refreshAfterPhoto(afterPhotoOf)));
         return;
       }
       if (mounted) setState(() { _loading = false; _loadFailed = true; });
+    }
+  }
+
+  bool _isSignedIn(String uid) =>
+      Supabase.instance.client.auth.currentUser?.id == uid;
+
+  /// True while a Refresh is loading: another one does nothing until then.
+  bool _refreshingAfterPhoto = false;
+
+  /// The failed-refresh notice's Refresh, for the member whose photo it was.
+  Future<void> _refreshAfterPhoto(String uid) async {
+    if (!mounted || _refreshingAfterPhoto) return;
+    if (!_isSignedIn(uid)) {
+      reportError('progress.photo.refresh.identity',
+          StateError('the member changed before a refresh'));
+      return;
+    }
+    _refreshingAfterPhoto = true;
+    try {
+      await _loadData(afterPhotoOf: uid);
+    } finally {
+      _refreshingAfterPhoto = false;
     }
   }
 
@@ -341,11 +367,15 @@ class _ProgressScreenState extends State<ProgressScreen>
     );
   }
 
-  void _say(String message) {
+  void _say(String message, {SnackBarAction? action}) {
     if (!mounted) return;
-    // A SnackBar is a live region on its own.
+    // A SnackBar is a live region on its own. One with an action would stay
+    // until it is pressed; it must not hold up the notices after it.
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        duration: const Duration(seconds: 6), content: Text(message)));
+        duration: Duration(seconds: action == null ? 6 : 10),
+        persist: false,
+        action: action,
+        content: Text(message)));
   }
 
   /// Source sheet → picker → read in flight: a second tap opens nothing.
@@ -449,9 +479,15 @@ class _ProgressScreenState extends State<ProgressScreen>
       _say(couldntMessage('save your photo', e));
       return;
     }
+    // Both read the session: the points would be B's for A's photo.
+    if (!_isSignedIn(uid)) {
+      reportError('progress.photo.identity',
+          StateError('the member changed while a photo was stored'));
+      return;
+    }
     unawaited(_awardCheckinPoints());
     ScoreEngine().progressPhotos();
-    _loadData(afterPhoto: true);
+    _loadData(afterPhotoOf: uid);
   }
 
   // Sets one of the baseline (start) photos — front / side / back — writing to
@@ -476,12 +512,25 @@ class _ProgressScreenState extends State<ProgressScreen>
         upload: (path) => storage.uploadBinary(path, photo.bytes,
             fileOptions: FileOptions(contentType: mime, upsert: true)),
         remove: (paths) async {
+          // Once someone else is signed in, this member's folder looks empty
+          // to them: nothing is asked as them, and an unchecked leftover is a
+          // cleanup failure.
+          void requireUploader() {
+            if (!_isSignedIn(uid)) {
+              throw StateError('earlier baseline photos could not be cleaned '
+                  'up: their owner is no longer signed in');
+            }
+          }
+
+          requireUploader();
           await storage.remove(paths);
+          requireUploader();
           // `remove` does not throw for a copy it could not delete, and an
           // empty answer is normal (there was no other copy). Look: a copy
           // still there can be the one this screen finds first.
           final left = await storage.list(
               path: uid, searchOptions: SearchOptions(search: '$side.'));
+          requireUploader();
           if (left.any((o) => paths.contains('$uid/${o.name}'))) {
             throw StateError('an earlier baseline photo is still in storage');
           }
@@ -496,13 +545,18 @@ class _ProgressScreenState extends State<ProgressScreen>
       _say(couldntMessage('update your $side photo', e));
       return;
     }
+    if (!_isSignedIn(uid)) {
+      reportError('progress.baseline.identity',
+          StateError('the member changed while a photo was stored'));
+      return;
+    }
     final name = '${side[0].toUpperCase()}${side.substring(1)}';
     final stale = cleanupError;
     _say(stale == null
         ? '$name photo updated'
         : '$name photo saved. '
             '${couldntMessage('remove the earlier one, so it may still show', stale)}');
-    _loadData(afterPhoto: true);
+    _loadData(afterPhotoOf: uid);
   }
 
   String _baselineExt(XFile f) {

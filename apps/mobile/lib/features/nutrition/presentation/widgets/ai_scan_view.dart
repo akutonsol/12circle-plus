@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show Uint8List, kIsWeb;
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:image_picker/image_picker.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 import '../../../../core/observability/app_failure.dart';
 import '../../../workout/presentation/widgets/section_load_failure.dart';
 import '../../data/nutrition_service.dart';
@@ -164,21 +165,34 @@ class _AiScanViewState extends State<AiScanView> {
     );
   }
 
+  String? _signedInUid() => Supabase.instance.client.auth.currentUser?.id;
+
+  /// True (recorded; the view goes back to its start, nothing is said) when
+  /// [uid] — whose meal this is — is no longer the member signed in.
+  bool _memberChanged(String? uid) {
+    if (_signedInUid() == uid) return false;
+    reportError('nutrition.scan.identity',
+        StateError('the member changed during a scan'));
+    if (mounted) setState(() { _image = null; _stage = _ScanStage.idle; });
+    return true;
+  }
+
   // Describe a meal in words instead of a photo.
   Future<void> _describe() async {
     final text = _descCtrl.text.trim();
     if (text.isEmpty) return;
     FocusScope.of(context).unfocus();
+    final uid = _signedInUid();
     setState(() { _image = null; _notice = null; _stage = _ScanStage.scanning; });
     try {
       final r = await NutritionService().analyzeFood(description: text);
-      if (!mounted) return;
+      if (!mounted || _memberChanged(uid)) return;
       setState(() { _result = _parse(r); _portion = 1.0; _stage = _ScanStage.result; });
-    } catch (e) {
-      if (!mounted) return;
+    } catch (e, st) {
+      reportError('nutrition.scan.describe', e, st);
+      if (!mounted || _memberChanged(uid)) return;
       setState(() => _stage = _ScanStage.idle);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Couldn't estimate that. Try again."), backgroundColor: _redChip));
+      _say(couldntMessage('analyze that description', e));
     }
   }
 
@@ -188,7 +202,8 @@ class _AiScanViewState extends State<AiScanView> {
 
   /// One photo, picked and read. Null is the person cancelling (silent) or a
   /// failure that was recorded and said here.
-  Future<(XFile, Uint8List)?> _pickAndRead(ImageSource source) async {
+  Future<(XFile, Uint8List)?> _pickAndRead(
+      ImageSource source, String? uid) async {
     if (_picking) return null;
     setState(() { _picking = true; _notice = null; });
     try {
@@ -197,6 +212,7 @@ class _AiScanViewState extends State<AiScanView> {
         file = await _picker.pickImage(source: source, imageQuality: 80);
       } catch (e, st) {
         reportError('nutrition.scan.pick.${source.name}', e, st);
+        if (_memberChanged(uid)) return null;
         final camera = source == ImageSource.camera;
         final what = camera ? 'camera' : 'photos';
         // image_picker's permission codes end `_access_denied`.
@@ -208,9 +224,12 @@ class _AiScanViewState extends State<AiScanView> {
       }
       if (file == null) return null;
       try {
-        return (file, await file.readAsBytes());
+        final bytes = await file.readAsBytes();
+        // Another member signed in meanwhile: not their photo to analyze.
+        return _memberChanged(uid) ? null : (file, bytes);
       } catch (e, st) {
         reportError('nutrition.scan.read', e, st);
+        if (_memberChanged(uid)) return null;
         _say(couldntMessage('use that photo', e));
         return null;
       }
@@ -220,17 +239,19 @@ class _AiScanViewState extends State<AiScanView> {
   }
 
   Future<void> _pickImage(ImageSource source) async {
-    final picked = await _pickAndRead(source);
+    // The member this photo belongs to, fixed before the pick.
+    final uid = _signedInUid();
+    final picked = await _pickAndRead(source, uid);
     if (picked == null || !mounted) return;
     final (file, bytes) = picked;
     setState(() {
       _image = file;
       _stage = _ScanStage.scanning;
     });
-    await _analyze(file, bytes);
+    await _analyze(file, bytes, uid);
   }
 
-  Future<void> _analyze(XFile file, Uint8List bytes) async {
+  Future<void> _analyze(XFile file, Uint8List bytes, String? uid) async {
     try {
       final ext = file.name.toLowerCase().split('.').last;
       final mime = ext == 'png' ? 'image/png'
@@ -238,7 +259,7 @@ class _AiScanViewState extends State<AiScanView> {
           : ext == 'heic' ? 'image/heic' : 'image/jpeg';
       final r = await NutritionService().analyzeFood(
         imageBytes: bytes, mediaType: mime);
-      if (!mounted) return;
+      if (!mounted || _memberChanged(uid)) return;
       setState(() {
         _result = _parse(r);
         _portion = 1.0;
@@ -246,7 +267,7 @@ class _AiScanViewState extends State<AiScanView> {
       });
     } catch (e, st) {
       reportError('nutrition.scan.analyze', e, st);
-      if (!mounted) return;
+      if (!mounted || _memberChanged(uid)) return;
       setState(() {
         _stage = _ScanStage.idle;
         _notice = '${couldntMessage('analyze that photo', e)} '
@@ -282,6 +303,25 @@ class _AiScanViewState extends State<AiScanView> {
       case _ScanStage.result:  return _buildResult();
     }
   }
+
+  /// Dimmed, and announced as disabled, while a picker is open or its file is
+  /// being read: a tap then does nothing.
+  Widget _pickButton({
+    required String label,
+    required ImageSource source,
+    required Widget child,
+  }) =>
+      Semantics(
+        container: true,
+        button: true,
+        enabled: !_picking,
+        label: label,
+        child: GestureDetector(
+          onTap: _picking ? null : () => _pickImage(source),
+          child: Opacity(
+            opacity: _picking ? 0.45 : 1,
+            child: ExcludeSemantics(child: child))),
+      );
 
   Widget _buildIdle() {
     return SingleChildScrollView(
@@ -370,8 +410,9 @@ class _AiScanViewState extends State<AiScanView> {
           ),
           const SizedBox(height: 20),
           // ── Scan Meal button ───────────────────────────────────────
-          GestureDetector(
-            onTap: () => _pickImage(kIsWeb ? ImageSource.gallery : ImageSource.camera),
+          _pickButton(
+            label: 'Scan Meal',
+            source: kIsWeb ? ImageSource.gallery : ImageSource.camera,
             child: Container(
               width: double.infinity,
               height: 54,
@@ -410,8 +451,9 @@ class _AiScanViewState extends State<AiScanView> {
           ),
           const SizedBox(height: 12),
           // ── Choose from Gallery button ─────────────────────────────
-          GestureDetector(
-            onTap: () => _pickImage(ImageSource.gallery),
+          _pickButton(
+            label: 'Choose from Gallery',
+            source: ImageSource.gallery,
             child: Container(
               width: double.infinity,
               height: 50,

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:speech_to_text/speech_to_text.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 import '../../../core/observability/app_failure.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
@@ -104,6 +105,10 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
   Future<File?> _pickPhoto() async {
     if (_pickingPhoto) return null;
     _pickingPhoto = true;
+    // The member this photo belongs to, fixed before the pick.
+    final auth = Supabase.instance.client.auth;
+    final uid = auth.currentUser?.id;
+    bool sameMember() => auth.currentUser?.id == uid;
     try {
       final source = await _showImageSourceSheet();
       if (source == null) return null;
@@ -112,6 +117,7 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
         xfile = await _picker.pickImage(source: source, imageQuality: 80);
       } catch (e, st) {
         reportError('aiNutrition.photo.pick.${source.name}', e, st);
+        if (!sameMember()) return null;
         final camera = source == ImageSource.camera;
         final what = camera ? 'camera' : 'photos';
         // image_picker's permission codes end `_access_denied`.
@@ -127,10 +133,16 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
         // turn the assistant had failed.
         final photo = File(xfile.path);
         await photo.openRead(0, 1).drain<void>();
+        // Another member signed in meanwhile: not their photo to analyze.
+        if (!sameMember()) {
+          reportError('aiNutrition.photo.identity',
+              StateError('the member changed during a pick'));
+          return null;
+        }
         return photo;
       } catch (e, st) {
         reportError('aiNutrition.photo.read', e, st);
-        _say(couldntMessage('use that photo', e));
+        if (sameMember()) _say(couldntMessage('use that photo', e));
         return null;
       }
     } finally {

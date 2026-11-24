@@ -34,6 +34,17 @@ class _Server extends RowCheckingPostgrest {
   bool insertFails = false;
   bool readsFail = false;
   bool removeThrows = false;
+  bool listFails = false;
+  bool pointsFail = false;
+
+  /// Held (after being counted) until completed.
+  Completer<void>? insertGate, uploadGate, deleteGate, listGate, readGate;
+
+  /// Reads of the weight history (one per load of the screen).
+  int loads = 0;
+
+  /// Calls that award points: the daily score's write and the score RPC.
+  final awards = <String>[];
 
   /// What a list of the member's folder answers after the cleanup.
   List<String> left = const [];
@@ -44,6 +55,10 @@ class _Server extends RowCheckingPostgrest {
   void reset() {
     super.reset();
     uploadFails = insertFails = readsFail = removeThrows = false;
+    listFails = pointsFail = false;
+    insertGate = uploadGate = deleteGate = listGate = readGate = null;
+    loads = 0;
+    awards.clear();
     left = const [];
     storage.clear();
     inserts = 0;
@@ -59,6 +74,11 @@ class _Server extends RowCheckingPostgrest {
     }
     if (path.startsWith('/storage/v1/object/list/')) {
       storage.add('LIST');
+      await listGate?.future;
+      if (listFails) {
+        return json({'statusCode': '500', 'error': 'x', 'message': 'SECRET'},
+            500, request);
+      }
       return json([
         for (final n in left) {'name': n}
       ], 200, request);
@@ -66,21 +86,35 @@ class _Server extends RowCheckingPostgrest {
     if (path.startsWith('/storage/v1/object/')) {
       storage.add('${request.method} $path');
       if (request.method == 'DELETE') {
+        await deleteGate?.future;
         return removeThrows
             ? json({'statusCode': '500', 'error': 'x', 'message': 'SECRET'},
                 500, request)
             : json([], 200, request);
       }
+      await uploadGate?.future;
       return uploadFails
           ? json({'statusCode': '403', 'error': 'x', 'message': 'SECRET'}, 403,
               request)
           : json({'Key': 'k'}, 200, request);
     }
+    if (request.method == 'GET' && path.endsWith('/weight_logs')) {
+      loads++;
+      await readGate?.future;
+    }
     if (request.method == 'GET' && readsFail) {
       return json({'message': 'SECRET', 'code': 'XX000'}, 500, request);
     }
+    if (request.method == 'POST' &&
+        (path.endsWith('/daily_scores') || path.endsWith('/award_points'))) {
+      awards.add(path.split('/').last);
+      if (pointsFail) {
+        return json({'message': 'SECRET', 'code': '42501'}, 403, request);
+      }
+    }
     if (request.method == 'POST' && path.endsWith('/progress_photo_logs')) {
       inserts++;
+      await insertGate?.future;
       if (insertFails) {
         return json({'message': 'SECRET', 'code': '42501'}, 403, request);
       }
@@ -301,6 +335,8 @@ void main() {
       expect(server.storage.single, startsWith('POST /storage/v1/object/'
           'progress-photos/$_uid/gallery_'));
       expect(find.byType(SnackBar), findsNothing);
+      expect(server.awards, containsAll(['daily_scores', 'award_points']));
+      expect(server.loads, 2, reason: 'the screen was refreshed');
       expect(origins().where((o) => o.startsWith('progress.photo')), isEmpty);
       expect(find.text('Start Photos'), findsOneWidget);
       await close(t);
@@ -324,7 +360,226 @@ void main() {
     });
   });
 
+  group('the failed refresh: Refresh', () {
+    const failed = "Your photo is saved. Couldn't refresh your progress — "
+        '$tryAgainHint';
+
+    testWidgets('loads the screen again — it does not add the photo again',
+        (t) async {
+      await open(t);
+      server.readsFail = true;
+      await choose(t, 'Add Photo');
+      await waitFor(t, failed);
+      await t.pump(const Duration(milliseconds: 400));
+      final refresh = find.widgetWithText(SnackBarAction, 'Refresh');
+      expect(refresh, findsOneWidget,
+          reason: 'the notice named no way to refresh');
+      expect(t.getSize(find.descendant(
+          of: refresh, matching: find.byType(TextButton))).height,
+          greaterThanOrEqualTo(44));
+
+      server.readsFail = false;
+      final loads = server.loads;
+      await t.tap(refresh);
+      await settle(t);
+      expect(server.loads, loads + 1);
+      expect(server.inserts, 1);
+      expect(find.text(failed), findsNothing);
+      expect(find.text('Start Photos'), findsOneWidget);
+      await close(t);
+    });
+
+    testWidgets('fails again: said again, and the screen is still kept',
+        (t) async {
+      await open(t);
+      server.readsFail = true;
+      await choose(t, 'Add Photo');
+      await waitFor(t, failed);
+      await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.text('Refresh'));
+      await t.pump(const Duration(milliseconds: 600)); // the notice leaves
+      await waitFor(t, failed);
+      expect(
+          origins().where((o) => o == 'ProgressScreen._loadData').length, 2);
+      expect(find.text('Start Photos'), findsOneWidget);
+      expect(find.text('Could not load your progress'), findsNothing);
+      await close(t);
+    });
+
+    testWidgets('a second Refresh while one is loading does not load again',
+        (t) async {
+      await open(t);
+      server.readsFail = true;
+      await choose(t, 'Add Photo'); // fails: notice 1
+      await waitFor(t, failed);
+      await t.pump(const Duration(milliseconds: 400));
+      // A second stored photo, whose refresh also fails: notice 2, queued.
+      await choose(t, 'Front');
+      await pumpUntil(
+          t,
+          () =>
+              origins().where((o) => o == 'ProgressScreen._loadData').length ==
+              2,
+          what: 'the second failed refresh');
+
+      server.readsFail = false;
+      server.readGate = Completer<void>();
+      await t.tap(find.text('Refresh'));
+      await settle(t);
+      final loads = server.loads;
+      for (var i = 0; i < 100 && find.text('Refresh').evaluate().isEmpty; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+      await t.pump(const Duration(milliseconds: 400));
+      await t.tap(find.text('Refresh'));
+      await settle(t);
+      expect(server.loads, loads, reason: 'one refresh is still loading');
+      server.readGate!.complete();
+      await settle(t);
+      await close(t);
+    });
+
+    testWidgets('pressed after B signed in: nothing is loaded, recorded',
+        (t) async {
+      await open(t);
+      server.readsFail = true;
+      await choose(t, 'Add Photo');
+      await waitFor(t, failed);
+      await t.pump(const Duration(milliseconds: 400));
+      await t.runAsync(() => signInAs(_uidB));
+      final loads = server.loads;
+      await t.tap(find.text('Refresh'));
+      await settle(t);
+      expect(server.loads, loads);
+      expect(origins(), contains('progress.photo.refresh.identity'));
+      await close(t);
+    });
+  });
+
+  testWidgets('the points award fails: recorded; the photo is not called '
+      'failed', (t) async {
+    await open(t);
+    server.pointsFail = true;
+    await choose(t, 'Add Photo');
+    await pumpUntil(t, () => origins().contains('progress.photo.points'),
+        what: 'the record of the failed award');
+    await settle(t);
+    expect(server.inserts, 1);
+    expect(find.textContaining("Couldn't"), findsNothing);
+    nothingRaw();
+    await close(t);
+  });
+
+  group('B signs in while A\'s photo is being stored', () {
+    testWidgets("Add Photo: no points and no reload as B, recorded, nothing "
+        'said', (t) async {
+      await open(t);
+      server.insertGate = Completer<void>();
+      final loads = server.loads;
+      await choose(t, 'Add Photo');
+      await pumpUntil(t, () => server.inserts == 1, what: 'the row');
+      await t.runAsync(() => signInAs(_uidB));
+      server.insertGate!.complete();
+      await pumpUntil(
+          t, () => reported.isNotEmpty || server.awards.isNotEmpty,
+          what: 'the refusal');
+      await settle(t);
+      expect(server.awards, isEmpty,
+          reason: "B was given the points for A's photo");
+      expect(server.loads, loads);
+      expect(origins(), ['progress.photo.identity']);
+      expect(find.byType(SnackBar), findsNothing);
+      await close(t);
+    });
+
+    testWidgets("the refresh fails after B signed in: A's data does not stay "
+        'up, and nothing is said about A\'s photo', (t) async {
+      await open(t);
+      server.readGate = Completer<void>();
+      await choose(t, 'Add Photo');
+      await pumpUntil(t, () => server.loads == 2, what: 'the refresh');
+      await t.runAsync(() => signInAs(_uidB));
+      server.readsFail = true;
+      server.readGate!.complete();
+      await pumpUntil(
+          t, () => origins().contains('ProgressScreen._loadData'),
+          what: 'the failed refresh');
+      await settle(t);
+      expect(find.textContaining('Your photo is saved'), findsNothing);
+      expect(find.text('Could not load your progress'), findsOneWidget);
+      await close(t);
+    });
+
+    const cleanup = 'ProgressScreen._setBaselinePhoto.cleanup';
+    const identity = 'progress.baseline.identity';
+
+    testWidgets('baseline, during the upload: nothing is removed or listed as '
+        'B; the unchecked leftover is recorded', (t) async {
+      await open(t);
+      server.uploadGate = Completer<void>();
+      final loads = server.loads;
+      await choose(t, 'Front');
+      await pumpUntil(t, () => server.storage.isNotEmpty, what: 'the upload');
+      await t.runAsync(() => signInAs(_uidB));
+      server.uploadGate!.complete();
+      await pumpUntil(t, () => reported.isNotEmpty, what: 'the record');
+      await settle(t);
+      expect(server.storage, hasLength(1), reason: 'the upload only');
+      expect(origins(), [cleanup, identity]);
+      expect(server.loads, loads);
+      expect(find.byType(SnackBar), findsNothing,
+          reason: 'never "Front photo updated" to B');
+      await close(t);
+    });
+
+    testWidgets("baseline, during the remove: the folder is not listed as B; "
+        'recorded', (t) async {
+      await open(t);
+      server.deleteGate = Completer<void>();
+      await choose(t, 'Front');
+      await pumpUntil(t, () => server.storage.length == 2, what: 'the remove');
+      await t.runAsync(() => signInAs(_uidB));
+      server.deleteGate!.complete();
+      await pumpUntil(t, () => reported.isNotEmpty, what: 'the record');
+      await settle(t);
+      expect(server.storage, isNot(contains('LIST')));
+      expect(origins(), [cleanup, identity]);
+      await close(t);
+    });
+
+    testWidgets('baseline, during the list: an empty folder is not "gone"; '
+        'recorded', (t) async {
+      await open(t);
+      server.listGate = Completer<void>();
+      await choose(t, 'Front');
+      await pumpUntil(t, () => server.storage.contains('LIST'),
+          what: 'the list');
+      await t.runAsync(() => signInAs(_uidB));
+      server.listGate!.complete();
+      await pumpUntil(t, () => reported.isNotEmpty, what: 'the record');
+      await settle(t);
+      expect(origins(), [cleanup, identity]);
+      expect(find.byType(SnackBar), findsNothing);
+      await close(t);
+    });
+  });
+
   group('baseline, after the pick', () {
+    testWidgets('the check for an earlier copy fails: unknown is not "gone" — '
+        'recorded and said', (t) async {
+      await open(t);
+      server.listFails = true;
+      await choose(t, 'Front');
+      await waitFor(
+          t,
+          "Front photo saved. Couldn't remove the earlier one, so it may "
+          'still show — $tryAgainHint');
+      expect(find.text('Front photo updated'), findsNothing);
+      expect(origins(), ['ProgressScreen._setBaselinePhoto.cleanup']);
+      nothingRaw();
+      await close(t);
+    });
+
     testWidgets('a refused upload: said, recorded, nothing removed, never '
         '"updated"', (t) async {
       await open(t);
