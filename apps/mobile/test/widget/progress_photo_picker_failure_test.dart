@@ -403,6 +403,14 @@ void main() {
           origins().where((o) => o == 'ProgressScreen._loadData').length, 2);
       expect(find.text('Start Photos'), findsOneWidget);
       expect(find.text('Could not load your progress'), findsNothing);
+      // And pressed again, it loads again: the busy state was released.
+      await t.pump(const Duration(milliseconds: 400));
+      server.readsFail = false;
+      final loads = server.loads;
+      await t.tap(find.text('Refresh'));
+      await settle(t);
+      expect(server.loads, loads + 1);
+      expect(find.text(failed), findsNothing);
       await close(t);
     });
 
