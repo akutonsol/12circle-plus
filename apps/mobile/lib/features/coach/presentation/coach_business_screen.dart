@@ -413,7 +413,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       // load can start: only the current one is applied.
       if (!mounted || !_isCurrentLoad(seq, uid)) return;
       // A write confirmed since this read began may be missing from it.
-      if (writes != _confirmedWrites) return await _load();
+      if (writes != _confirmedWrites) return _load();
       final team = teamData;
       final p = profileData;
       _takeFresh(_bioCtrl, p['bio'] as String? ?? '');
