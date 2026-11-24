@@ -124,3 +124,15 @@ All are CI 7/7 on their exact heads. Combined branch `integration/p0-flutter-sta
   - staff-screen copy "Assign failed.".
 - **Needs a ruling:** observability decision, certification and intelligence sub-reads return null for both "RPC absent" and "failed" (PGRST202 reading).
 - **Still blocked:** the SEC-R3 / Wave 3B-4 trio (`predictClient`, `evaluateWeek`, `regenerateProgram`). The Copilot late-response remediation proposal is in `docs/COPILOT_LATE_RESPONSE_REMEDIATION_PROPOSAL.md`.
+
+**Status 2026-11-24 (cycle 11):**
+- **#209 (P0-FL-53a):** `getCoachOverlay` / `resolveExerciseMedia` record and rethrow (a real "no row" is still null), and Coach Focus shows a failure, not "Add your coaching"; `createCoachingPack` and `submitForGlobalLibrary` treat 0 rows as failure; `_enrich` no longer shows raw `res.error`; `upsertCoachOverlay` / `clearCoachVoice` failures are recorded and said.
+- **#213 (P0-FL-53b):** a failed challenges read is a failure, not "No active challenges", and a failed refresh keeps the member's earlier list; `joinChallenge` records; booking `_load` / `_selectCoach` record; Packages, Availability and Video Response writes are recorded and said (0 rows = failure; notification separate from save).
+- **#210 (P0-FL-53c):** the intake picker `catch (_) {}` is gone; each source records under its own origin and the member is told.
+- **#211 (P0-FL-54):** identity, not a swallow. The business profile follows the signed-in coach.
+- **#212 (P0-FL-55):** accessibility only, with no error-path change.
+
+Combined branch `integration/p0-flutter-stack-c11` @ f191d48: 4917 tests, CI 7/7 (run 45342689729).
+- **Still open (decision-free):** unguarded `pickImage` (`progress_screen`, `personal_info`, `chat_screen`, `ai_nutrition`, `ai_scan_view`); `enrichWithAI` stringifies errors; `updateExercise` unrecorded; `storage.remove` result ignored on voice-note clear; `package_service` row checks; `coach_marketplace`, `choose_package_screen` `saveSchedule`, `coach_pricing_sheet`; video record/pick; `PaymentService.cancelSubscription` unrecorded.
+- **Needs a ruling:** observability PGRST202 reading (unchanged).
+- **Still blocked (SEC-R3):** staff-screen "Assign failed." lives in `coach_copilot_screen.dart`; the `predictClient` / `evaluateWeek` / `regenerateProgram` trio.

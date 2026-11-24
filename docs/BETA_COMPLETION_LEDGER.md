@@ -10,7 +10,7 @@ evidence. Nothing is marked complete without it.
 |---|---|
 | `origin/main` | `8f2c8a0` (PR #159), CI run `43792727007` **7/7 success** |
 | Live QA evidence on main | security **1173/1173**, AI **51/51**, ENV-3 L-1..L-5 PASS (ledger 188 rows; frontier 192; 182–186 declared excluded) |
-| Open PRs | #14 (owner's, untouched) · #160–#208, all unmerged. Flutter P0 stack CI 7/7 on each exact head. #183 targets `integration/p0-flutter-stack`; #184–#190 target #183's branch; #191 targets #189's; #192–#194 target `-c6`; #195–#198 target `-c7`; #199–#203 target `-c8`; #204–#208 target `-c9`. Combined branches `-c6` @ `6f8918f`, `-c7` @ `df35d5f`, `-c8` @ `185261e`, `-c9` @ `1b94044`, `-c10` @ `b7ec6ef`, all CI 7/7. **None to be merged without explicit authorization** |
+| Open PRs | #14 (owner's, untouched) · #160–#213, all unmerged. Flutter P0 stack CI 7/7 on each exact head. #183 targets `integration/p0-flutter-stack`; #184–#190 target #183's branch; #191 targets #189's; #192–#194 target `-c6`; #195–#198 target `-c7`; #199–#203 target `-c8`; #204–#208 target `-c9`; #209–#213 target `-c10`. Combined branches `-c6` @ `6f8918f`, `-c7` @ `df35d5f`, `-c8` @ `185261e`, `-c9` @ `1b94044`, `-c10` @ `b7ec6ef`, `-c11` @ `f191d48`, all CI 7/7. **None to be merged without explicit authorization** |
 | QA migrations | applied through **192** (182–186 excluded). **Pending, not applied:** 193, 194, 195, 196 |
 | QA Edge Functions | **1 of 19 deployed** (`ai-nutrition` v18, deployed ~2026-09-30 from the pre-rename path) |
 | QA function secrets | `ANTHROPIC_API_KEY` + Supabase defaults only. **No Stripe, no email provider, no `APP_URL`, no YouTube** |
@@ -838,6 +838,51 @@ All final heads: analyze 287, contract exit 0 (unseen 31), coordinator 268/268. 
 - `MyExercisesNotifier.delete` has no screen caller.
 - The history dedupe compares the server's `created_at` with the device clock.
 
+### Cycle 11: P0-FL-53a/b/c, P0-FL-54, P0-FL-55 (2026-11-24)
+
+**Base.** Verified before any branch was cut: `origin/integration/p0-flutter-stack-c10` = `b7ec6ef`, and `-c11` did not exist. All five packages start from `b7ec6ef` and **target `integration/p0-flutter-stack-c10`**, so each PR's diff shows one package. Cycle 9 and cycle 10 branches, PRs and targets were not touched.
+
+**Combined evidence branch.** `integration/p0-flutter-stack-c11` = `b7ec6ef` + `94c3fd9` + `79b45d3` + `dcba6ae` + `ab19413` + `bf98d9a` (`--no-ff`, in that order). All five merge without conflict, and no file is touched by two packages.
+- @ `f191d48`: analyze **285**, **4917** tests pass. That is 4660 + 52 + 66 + 54 + 41 + 44, so nothing overlaps or is lost. Static guards 0, contract exit 0 (unseen 31), coordinator 268/268, CI's 10 negative controls 0 (run locally). `reportFailure(` has 0 callers outside `core/observability`; `valueOrNull` in lib stays 114.
+- CI (push): **7/7 success**, run `45342689729` on `f191d48`. **No cross-package defect found.**
+
+| PR | Package | Final head | Independent verdicts at the final head | Lead mutants | Tests (full) | CI (exact head) |
+|---|---|---|---|---|---|---|
+| #209 | **P0-FL-53a**: exercise library. `getCoachOverlay` / `resolveExerciseMedia` record and rethrow (a missing row is still null), so Coach Focus shows `SectionLoadFailure` ("Editing is paused until it loads.") instead of "Add your coaching" and never offers saved coaching for overwrite; `_loadSeq` makes the newest read win. `createCoachingPack` and `submitForGlobalLibrary` treat 0 rows as failure. `_enrich` uses `couldntMessage` (no backend text) and a failed slug back-fill stops enrichment. A failed Save coaching keeps the sheet open with the text; a failed voice-note removal is said in the sheet | `94c3fd9` | security APPROVE-WITH-NOTES ×2 · UX PASS-WITH-NOTES → **PASS** · QA VERIFIED → **VERIFIED** (r3 closed the low item and QA's mutant-9 gap) | 10/10 · 12/12 · 1/1, plus QA's 9/9 | 4712 | 7/7 `45328683630` |
+| #213 | **P0-FL-53b**: Activity › Challenges: a failed read shows `SectionLoadFailure`; a failed refresh keeps the member's own earlier list ("Showing the challenges loaded earlier."); a genuine empty stays "No active challenges"; failed joins are recorded and signed-out joins throw. Booking `_load` / `_selectCoach` are recorded and blame the network only for a network failure. Staff writes: Packages delete/save, Availability publish/delete (0 rows = failure), Video Response (notification separated from save; "has been notified" only when true). Failures are said inside the sheet. Add-slot sheet and video Done view fit 320–430dp × 1.0–2.0 text | `79b45d3` | security APPROVE-WITH-NOTES · UX PASS-WITH-NOTES ×2 → **PASS** (r3) · QA VERIFIED ×2 → NOT VERIFIED (r3 overflow assertion vacuous: `byType(Flex)`) → **VERIFIED** (r4) | 13/13 · 15/15 · 6/6 | 4726 | 7/7 `45339040341` |
+| #210 | **P0-FL-53c**: intake photo picker failures are recorded per source (`intake.photos.pick.camera` / `.gallery` / `.webGalleryFallback`, `intake.photos.read`) and said inline with Try again; a denied permission says so; a cancel stays silent and keeps an earlier photo; single-flight. `_IntakeStepBar` moves its label to its own line rather than shrinking pills below 3px, is announced "Step N of 24", and Skip is a 44px labelled button. FL-52's 3×/320dp exception removed | `dcba6ae` | security APPROVE-WITH-NOTES · UX PASS-WITH-NOTES → **PASS** · QA VERIFIED → **VERIFIED** | 9/9 · 9/9 | 4714 | 7/7 `45331379755` |
+| #211 | **P0-FL-54**: `CoachBusinessScreen` follows sign-in. It forgets coach A's profile on a switch or sign-out before rendering; load sequence + uid drop late responses; `confirmedProfileRead` gates every apply; an ownership gate never shows A while B's read is pending or failed; a same-coach failed refresh keeps the data with Retry. Every write checks the profile shown belongs to the signed-in coach; the invite re-checks after the insert and after `send-invite-email` (security F1). Upload busy state is per coach (`_uploadingFor`, A→B→A). Tests drive real `signedIn`/`signedOut` transitions, held responses, failures and positives, not only a loading state | `ab19413` | security APPROVE-WITH-NOTES ×2 (F1 fixed) · UX PASS-WITH-NOTES ×2 · QA VERIFIED → NOT VERIFIED (single-slot upload guard; G4/G5 untested) → **VERIFIED** (r3) | 5/10 → 17/17 | 4701 | 7/7 `45334522037` |
+| #212 | **P0-FL-55**: AI Coach chips. Persona chips 44px with button/selected/mutually-exclusive semantics ("Coach style: <name>") and a save guard; memory delete 44×44 "Delete memory: <text>" plus a custom semantics action, per-memory guard and spinner; "Add memory" a 44px labelled button; coach card and daily brief headers wrap. Overflow matrix 320/360/390/430dp × 1.0/1.3/2.0 with rendered text size pinned (no `FittedBox`, no shrinking). A test pins that `cancel-subscription` needs `ok: true` (kills the FL-51 survivor; no lib change) | `bf98d9a` | security APPROVE-WITH-NOTES · UX PASS-WITH-NOTES → **PASS** · QA VERIFIED → **VERIFIED** | 9/9 · 11/11, plus QA's 7/7 | 4704 | 7/7 `45336281515` |
+
+Mutant test lists were taken from each package's test diff. **Surviving mutants at final heads: none.** The FL-51 survivor from cycle 10 (a 200 `cancel-subscription` reply without `ok:true`) is now caught by #212's test. **Flakes: none observed.** Two full runs stalled under disk pressure with 0 failures; their reruns from zero passed.
+
+**What the evidence covers:** automated only. No device, simulator or live-QA run, and nothing here counts as manual or live verification. Real-font fit at 1.3×/2× (step bar at 320dp, chips, Add-slot sheet) needs a device check. **Journeys 2/14, beta-ready conditions 0/4, unchanged.**
+
+**Scope held:**
+- Women's Health code untouched; `home_screen.dart:817` stays out of scope.
+- SEC-R3: Copilot screen, `predictClient`, `evaluateWeek`, `regenerateProgram`, the `reportFailure()` sink and the AI workout-build path untouched. The staff "Assign failed." copy lives in `coach_copilot_screen.dart`, so it stays open under SEC-R3; `continuous_coaching_screen` and `weekly_review_screen` (via `coach_program_service`) also untouched. Risk recorded, no workaround.
+- No migration, QA or production write, Edge Function deploy, secret, Vault, Stripe, email-provider, app-URL or external-configuration change. No merge, no auto-merge. PR #14 untouched.
+- Action Center layout unchanged; `docs/ACTION_CENTER_LAYOUT_OPTIONS.md` still awaits Julia (recommended A).
+
+**Accessibility:** every new retry, button and chip is ≥ 44px; no 44px target was reduced; no `FittedBox` or text shrinking was added.
+
+**New decisions for Julia:**
+- **S-53a-4:** any owner can self-publish to the global library, with no moderation step.
+- **Copy:** "Showing the challenges loaded earlier." and "Your response is saved, but <name> wasn't notified — let them know another way."
+- **Photo permission:** an "Open Settings" action for a permanently denied permission (needs a new dependency).
+- **`send-invite-email` sends to any address** (backend behaviour).
+- **Signed-out business screen:** a Sign in button (routing).
+- **S-55-1:** a coaching memory is deleted with one tap, no confirm or undo.
+
+**Engineering follow-ups:**
+- Unguarded `pickImage`: `progress_screen` :337/:381, `personal_info` :237, `chat_screen` :265, `ai_nutrition` :84, `ai_scan_view` :177.
+- `enrichWithAI` stringifies errors; `updateExercise` doesn't record failures; S-53a-5 (`storage.remove` result ignored on voice-note clear, own package); S-53a-6 (a lost reply to a successful clear can leave "Couldn't remove" up).
+- `challengeNotifierProvider` on the Challenges screen is not member-keyed (S-53b-I1).
+- `package_service` has no row checks and `saveSessionTiers` can save partially; a failed `coach_packages` read has no retry; `coach_marketplace`, `choose_package_screen` `saveSchedule` and `coach_pricing_sheet` swallow failures; video record/pick have no catches; the video note field doesn't rebuild.
+- `PaymentService.cancelSubscription` catch doesn't call `reportError`; `cancelCoach` message is partial with several subscriptions.
+- Overflows that existed before this cycle: Availability slot cards, the video form action buttons, the Activity Performance ring at 2×. Activity Browse/Join/Log food/Explore are under 44px.
+- FL-54: N7 (a refresh overwrites unsaved typed fields), the certification dialog shows A's list until closed, S1 (signed-out `cloud_off` icon), the coach-media storage policy checks only the bucket (backend).
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
@@ -913,24 +958,25 @@ exists.
 
 ## Next autonomous action
 
-**Cycle 11 recommendation (2026-11-23).** Cycle 10 is done:
-- P0-FL-49 is #207, FL-50a #208, FL-50b #205, FL-51 #204, FL-52 #206;
-- combined `-c10` @ `b7ec6ef`, CI 7/7 run `45240757852`.
+**Cycle 12 recommendation (2026-11-24).** Cycle 11 is done:
+- P0-FL-53a is #209, FL-53b #213, FL-53c #210, FL-54 #211, FL-55 #212, all targeting `-c10`;
+- combined `-c11` @ `f191d48`, CI 7/7 (run 45342689729).
 
 Decision-free work, data integrity first:
 
-1. **P0-FL-53: remaining same-class swallows.** `getCoachOverlay` / `resolveExerciseMedia` (Coach Focus shows "Add your coaching" on a failed read); `createCoachingPack` result; `submitForGlobalLibrary` 0-row; `_enrich` raw error text; challenges failed read shown as "No active challenges"; intake picker `catch (_) {}`; booking `_load` / `_selectCoach` unrecorded; staff-screen "Assign failed." outside Copilot.
-2. **P0-FL-54: identity follow-up.** `coach_business_screen` profile row keyed to the signed-in coach (P2), with the identity matrix.
-3. **P0-FL-55: accessibility.** Activity "Enable" / "See All", AI Coach persona and memory chips (44px, button role, a semantic delete action); `_IntakeStepBar` at 3×; business transformation-photo in-flight guard; a test for a 200 `cancel-subscription` reply without `ok:true`.
+1. **P0-FL-56: remaining swallows.** Unguarded `pickImage` (`progress_screen` :337/:381, `personal_info` :237, `chat_screen` :265, `ai_nutrition` :84, `ai_scan_view` :177); `package_service` row checks and the partial `saveSessionTiers`; `coach_packages` read retry; `coach_marketplace`, `choose_package_screen` `saveSchedule`, `coach_pricing_sheet`; video record/pick; `enrichWithAI`, `updateExercise`; `PaymentService.cancelSubscription` `reportError`.
+2. **P0-FL-57: identity and storage.** `challengeNotifierProvider` keyed to the member (S-53b-I1); the business certification dialog after a switch; S-53a-5 (`storage.remove` result on voice-note clear) as its own package.
+3. **P0-FL-58: fit and targets.** Activity Browse/Join/Log food/Explore to 44px; Performance ring at 2×; Availability slot cards and video form buttons at large text; video note field rebuild; FL-54 N7 (refresh overwrites unsaved fields).
 
 **Blocked on Julia (read-only):**
 - the **Copilot late-response remediation** (`docs/COPILOT_LATE_RESPONSE_REMEDIATION_PROPOSAL.md`, options A/B/C);
-- the **SEC-R3 / Wave 3B-4 ruling** for `predictClient`, `evaluateWeek` and `regenerateProgram`;
+- the **SEC-R3 / Wave 3B-4 ruling** for `predictClient`, `evaluateWeek` and `regenerateProgram` (and the Copilot "Assign failed." copy);
 - the **184/185 QA window** (`docs/QA_184_185_WINDOW_DECISION_BRIEF.md`);
 - **Action Center density** (`docs/ACTION_CENTER_LAYOUT_OPTIONS.md`);
 - Decision 19 / F1; server-side PHI read enforcement; client `coaching_calls` status transitions and column authority (011 FOR ALL);
 - P0-SB-2 (Decisions 17, 18), P0-SB-3 (Decision 20) and member list (Decision 22); Decisions 21, 23 and 24;
 - cycle 9 questions: the Workout Zone unit lock, the 42501 wording, the admin/content_manager "Member" label;
 - cycle 10 questions: unconfirmed Activity defaults, observability PGRST202 reading, AI Coach grouped offline banner;
+- cycle 11 questions: S-53a-4 global-library self-publish, the two new copy lines, "Open Settings" for photo permission, `send-invite-email` to any address, a Sign in button on the signed-out business screen, S-55-1 one-tap memory delete;
 - `home_screen.dart:817` (Women's Health held-profile read);
-- merge order for the open stack #172–#208.
+- merge order for the open stack #172–#213.
