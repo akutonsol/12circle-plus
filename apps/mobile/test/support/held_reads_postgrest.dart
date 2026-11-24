@@ -14,7 +14,9 @@ import 'rpc_answering_postgrest.dart';
 ///   (complete it with `true` to answer normally, `false` to answer `500`),
 ///   so two overlapping reads can be landed in either order.
 /// * Storage object removal (`DELETE /storage/v1/object/<bucket>`) answers
-///   `200 []` — or `500` when [failStorageDelete] is set.
+///   like the server: the objects it removed — or `500` when
+///   [failStorageDelete] is set. (`200 []` is what it answers when it removed
+///   NOTHING; see clear_coach_voice_storage_test.dart.)
 class HeldReadsPostgrest extends RpcAnsweringPostgrest {
   HeldReadsPostgrest(super.uid);
 
@@ -39,7 +41,12 @@ class HeldReadsPostgrest extends RpcAnsweringPostgrest {
       writes.add('DELETE $path');
       return failStorageDelete
           ? _json({'message': 'refused', 'statusCode': '500'}, 500, request)
-          : _json([], 200, request);
+          : _json([
+              if (request is http.Request)
+                for (final name
+                    in (jsonDecode(request.body) as Map)['prefixes'] as List)
+                  {'name': name},
+            ], 200, request);
     }
     if (request.method == 'GET' && path.contains('/rest/v1/')) {
       final table = path.split('/').last;

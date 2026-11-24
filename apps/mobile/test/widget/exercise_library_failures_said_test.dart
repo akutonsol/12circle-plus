@@ -369,8 +369,8 @@ void main() {
           reason: 'THE defect: the backend text was shown');
       expect(find.text("Couldn't generate coaching content — $_generic"),
           findsOneWidget);
-      expect(origins(), ['ExerciseDetail.enrich']);
-      expect(reported.single.error, leak, reason: 'kept only in the record');
+      expect(reported, isEmpty,
+          reason: 'P0-FL-57a · the service (faked here) records it, once');
       expect(find.text('Enrich with AI'), findsOneWidget, reason: 'can try again');
       await unmount(tester);
     });
@@ -389,7 +389,8 @@ void main() {
           find.text("Couldn't prepare this exercise for AI enrichment — $_generic"),
           findsOneWidget);
       expect(find.text('Coaching content generated ✨'), findsNothing);
-      expect(origins(), ['ExerciseDetail.enrich.slug']);
+      // P0-FL-57a · the service records the failed write, once.
+      expect(origins(), ['CustomExerciseService.updateExercise']);
       await unmount(tester);
     });
 

@@ -83,7 +83,9 @@ class LiveChallengeService {
         'user_id': uid,
         'current_progress': 0,
       });
-      ScoreEngine().joinChallenge(challengeId); // +25
+      if (_stillSignedIn(uid, 'joinChallenge')) {
+        ScoreEngine().joinChallenge(challengeId); // +25
+      }
     } catch (e) {
       final s = e.toString();
       if (s.contains('23505') || s.contains('duplicate') || s.contains('unique')) {
@@ -101,7 +103,19 @@ class LiveChallengeService {
       'user_id': uid,
       'current_progress': progress,
     }, onConflict: 'challenge_id,user_id');
-    if (progress >= 1.0) ScoreEngine().completeChallenge(challengeId); // +100, once
+    if (progress >= 1.0 && _stillSignedIn(uid, 'updateProgress')) {
+      ScoreEngine().completeChallenge(challengeId); // +100, once
+    }
+  }
+
+  /// P0-FL-57a · points go to whoever is signed in when they are awarded. If
+  /// that is no longer [uid], who made the write, they are not awarded (they
+  /// went to the next member) and the skipped award is recorded.
+  bool _stillSignedIn(String uid, String write) {
+    if (_db.auth.currentUser?.id == uid) return true;
+    reportError('LiveChallengeService.$write.award',
+        StateError('points not awarded: the signed-in member changed'));
+    return false;
   }
 
   Future<void> createChallenge(Map<String, dynamic> data) async {

@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/observability/app_failure.dart';
+import '../../../core/observability/network_failure.dart';
 import 'models/exercise_detail_model.dart';
 import '../../workout/data/models/video_variant_model.dart';
 
@@ -180,13 +181,28 @@ class CustomExerciseService {
             .maybeSingle();
         if (existing != null) {
           final eid = existing['id'] as String;
-          await _db.from('custom_exercises').update(data).eq('id', eid);
+          // P0-FL-57a · .select() so an RLS-filtered update (0 rows, no error)
+          // is not returned as a save.
+          final res = await _db
+              .from('custom_exercises')
+              .update(data)
+              .eq('id', eid)
+              .select('id');
+          if ((res as List).isEmpty) {
+            lastError = "You don't have permission to edit this exercise";
+            reportError('CustomExerciseService.createExercise', lastError!);
+            return null;
+          }
           return eid;
         }
       }
       final row = await _db.from('custom_exercises').insert(data).select().single();
       return row['id'] as String;
-    } catch (e) { lastError = e; return null; }
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.createExercise', e, st);
+      return null;
+    }
   }
 
   /// Fan a master-schema exercise JSON out into the normalized child tables
@@ -205,20 +221,24 @@ class CustomExerciseService {
 
   /// Ask the enrich-exercise edge function to generate + save coaching content
   /// (instructions, cues, mistakes, breathing, AI tips) for [slug].
-  Future<({bool ok, String? error})> enrichWithAI(String slug) async {
+  ///
+  /// P0-FL-57a · `error` is what `couldntMessage` classifies: the failure
+  /// itself when the request never reached the server, otherwise a fixed
+  /// 'Enrichment failed'. It was the function's own text (or the exception
+  /// stringified). What went wrong is recorded here, and in [lastError].
+  Future<({bool ok, Object? error})> enrichWithAI(String slug) async {
+    lastError = null; // never report an earlier call's error
+    const refused = 'Enrichment failed';
     try {
       final res = await _db.functions.invoke('enrich-exercise', body: {'slug': slug});
       if (res.status == 200) return (ok: true, error: null);
-      final d = res.data;
-      final msg = (d is Map && d['error'] != null)
-          ? d['error'].toString() : 'Enrichment failed (${res.status})';
-      return (ok: false, error: msg);
-    } on FunctionException catch (e) {
-      final d = e.details;
-      final msg = (d is Map && d['error'] != null) ? d['error'].toString() : 'Enrichment failed';
-      return (ok: false, error: msg);
-    } catch (e) {
-      return (ok: false, error: e.toString());
+      lastError = FunctionException(status: res.status, details: res.data);
+      reportError('CustomExerciseService.enrichWithAI', lastError!);
+      return (ok: false, error: refused);
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.enrichWithAI', e, st);
+      return (ok: false, error: isNetworkFailure(e) ? e : refused);
     }
   }
 
@@ -822,7 +842,11 @@ class CustomExerciseService {
       await _db.storage.from('coach-media').uploadBinary(path, bytes,
           fileOptions: const FileOptions(contentType: 'audio/mp4', upsert: true));
       return path;
-    } catch (e) { lastError = e; return null; }
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.uploadCoachVoice', e, st);
+      return null;
+    }
   }
 
   /// A short-lived URL for a stored coach voice note.
@@ -866,8 +890,9 @@ class CustomExerciseService {
     if (path == null) return null;
     try {
       return await _db.storage.from('coach-media').createSignedUrl(path, 3600);
-    } catch (e) {
+    } catch (e, st) {
       lastError = e;
+      reportError('CustomExerciseService.signedCoachVoiceUrl', e, st);
       return null;
     }
   }
@@ -884,7 +909,11 @@ class CustomExerciseService {
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }, onConflict: 'coach_id,exercise_id');
       return true;
-    } catch (e) { lastError = e; return false; }
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.setCoachVoice', e, st);
+      return false;
+    }
   }
 
   /// The object path inside `coach-media` for a stored voice **URL**.
@@ -963,7 +992,16 @@ class CustomExerciseService {
       if (path != null) {
         // Deliberately NOT swallowed: if the recording cannot be removed, the
         // app must not report the note as deleted.
-        await _db.storage.from('coach-media').remove([path]);
+        final removed = await _db.storage.from('coach-media').remove([path]);
+        // P0-FL-57a · `remove` does not throw when it may not delete the
+        // object: it answers with the objects it removed. None means already
+        // absent (a retry after a lost reply: carry on) or still there — and
+        // then the note is not deleted.
+        if (removed.isEmpty && await _coachMediaExists(path)) {
+          lastError = 'No voice note was removed';
+          reportError('CustomExerciseService.clearCoachVoice', lastError!);
+          return false;
+        }
       }
 
       if (row == null) return true; // no overlay row: nothing to clear
@@ -981,6 +1019,19 @@ class CustomExerciseService {
       reportError('CustomExerciseService.clearCoachVoice', e, st);
       return false;
     }
+  }
+
+  /// Whether [path] is still in `coach-media`. A failed check throws.
+  ///
+  /// `list`, not `exists()`: that is a HEAD, and the client reads any 400 —
+  /// not only "no such object" — as absent.
+  Future<bool> _coachMediaExists(String path) async {
+    final cut = path.lastIndexOf('/');
+    final name = path.substring(cut + 1);
+    final found = await _db.storage.from('coach-media').list(
+        path: cut < 0 ? '' : path.substring(0, cut),
+        searchOptions: SearchOptions(search: name));
+    return found.any((f) => f.name == name);
   }
 
   /// Raw exercise row by id (for prefilling the edit form with all columns).
@@ -1014,6 +1065,8 @@ class CustomExerciseService {
 
   // ── Update ────────────────────────────────────────────────────────────────
 
+  /// P0-FL-57a · false (with [lastError] set and the failure recorded) when
+  /// the update failed OR changed no row.
   Future<bool> updateExercise(String id, Map<String, dynamic> updates) async {
     lastError = null; // S3: never report an earlier call's error
     try {
@@ -1021,10 +1074,15 @@ class CustomExerciseService {
       final res = await _db.from('custom_exercises').update(updates).eq('id', id).select('id');
       if ((res as List).isEmpty) {
         lastError = "You don't have permission to edit this exercise";
+        reportError('CustomExerciseService.updateExercise', lastError!);
         return false;
       }
       return true;
-    } catch (e) { lastError = e; return false; }
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.updateExercise', e, st);
+      return false;
+    }
   }
 
   // ── Delete ────────────────────────────────────────────────────────────────
