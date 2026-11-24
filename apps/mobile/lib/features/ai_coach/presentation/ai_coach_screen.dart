@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import '../domain/coach_surface.dart';
 import 'widgets/coach_surface_tabs.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -668,8 +669,10 @@ Widget _coachCard({required IconData icon, required String label, Widget? traili
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         Icon(icon, color: _pri, size: 18), const SizedBox(width: 8),
-        Text(label, style: const TextStyle(color: _pri, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
-        const Spacer(), if (trailing != null) trailing,
+        // Expanded, not Text + Spacer: at large text sizes on a narrow phone the label wraps
+        // instead of pushing the trailing control off the card (P0-FL-55).
+        Expanded(child: Text(label, style: const TextStyle(color: _pri, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.2))),
+        if (trailing != null) trailing,
       ]),
       const SizedBox(height: 12),
       child,
@@ -1107,13 +1110,15 @@ class _CoachPersonaCardState extends State<_CoachPersonaCard> {
       if (mounted) setState(() { _loadError = e; _loading = false; });
     }
   }
+  /// A style save is in flight.
+  bool _saving = false;
   Future<void> _select(String style, String tone) async {
     final previous = _style;
-    setState(() => _style = style);
+    setState(() { _style = style; _saving = true; });
     final r = await changeCoachStyle(_svc, style: style, tone: tone);
     if (!mounted) return;
     // A style that was not saved is not shown as chosen.
-    if (!r.saved) setState(() => _style = previous);
+    setState(() { if (!r.saved) _style = previous; _saving = false; });
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(r.message)));
   }
 
@@ -1132,16 +1137,27 @@ class _CoachPersonaCardState extends State<_CoachPersonaCard> {
               const SizedBox(height: 12),
               Wrap(spacing: 8, runSpacing: 8, children: _styles.map((s) {
                 final sel = _style == s.$1;
-                return GestureDetector(
-                  onTap: () => _select(s.$1, s.$2),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                    decoration: BoxDecoration(
-                      color: sel ? _brand.withValues(alpha: 0.18) : _brd,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: sel ? _brand : _brd)),
-                    child: Text(s.$3, style: TextStyle(
-                      color: sel ? _pri : _mut, fontSize: 12, fontWeight: FontWeight.w600))));
+                // A 44px target that says what it is and whether it is the
+                // member's style; one save at a time (a second tap while one
+                // is in flight would race the revert on failure).
+                void tap() { if (!_saving) _select(s.$1, s.$2); }
+                return Semantics(
+                  container: true, button: true, selected: sel, inMutuallyExclusiveGroup: true,
+                  enabled: !_saving, label: 'Coach style: ${s.$3}',
+                  onTap: _saving ? null : tap, excludeSemantics: true,
+                  child: GestureDetector(
+                    onTap: tap,
+                    child: Container(
+                      constraints: const BoxConstraints(minHeight: 44),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      decoration: BoxDecoration(
+                        color: sel ? _brand.withValues(alpha: 0.18) : _brd,
+                        borderRadius: BorderRadius.circular(22),
+                        border: Border.all(color: sel ? _brand : _brd)),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Flexible(child: Text(s.$3, style: TextStyle(
+                          color: sel ? _pri : _mut, fontSize: 12, fontWeight: FontWeight.w600))),
+                      ]))));
               }).toList()),
             ]),
     );
@@ -1195,6 +1211,27 @@ class _CoachingMemoryCardState extends State<_CoachingMemoryCard> {
     }
   }
 
+  /// Memory ids whose delete is in flight — one delete per memory at a time.
+  final _deleting = <String>{};
+
+  // A failed delete used to be silent: the chip simply reappeared after the
+  // refresh, which reads as a glitch rather than "the fact your coach
+  // remembers about you is still there". These rows include injuries.
+  Future<void> _delete(Map<String, dynamic> m) async {
+    final id = m['id'].toString();
+    if (!_deleting.add(id)) return;
+    setState(() {});
+    final ok = await _svc.deleteMemory(id);
+    await _load();
+    if (!mounted) return;
+    setState(() => _deleting.remove(id));
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't remove that — try again.")),
+      );
+    }
+  }
+
   Color _kindColor(String kind) {
     for (final k in _kinds) { if (k.$1 == kind) return k.$3; }
     return _pri;
@@ -1220,29 +1257,36 @@ class _CoachingMemoryCardState extends State<_CoachingMemoryCard> {
                   style: TextStyle(color: _mut, fontSize: 13, height: 1.4))
               : Wrap(spacing: 8, runSpacing: 8, children: _memories.map((m) {
                   final c = _kindColor(m['kind']?.toString() ?? '');
-                  return GestureDetector(
-                    // A failed delete used to be silent: the chip simply
-                    // reappeared after the refresh, which reads as a glitch
-                    // rather than "the fact your coach remembers about you is
-                    // still there". These rows include injuries.
-                    onLongPress: () async {
-                      final ok = await _svc.deleteMemory(m['id'].toString());
-                      await _load();
-                      if (!ok && context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text("Couldn't remove that — try again."),
-                          ),
-                        );
-                      }
+                  final text = m['content']?.toString() ?? '';
+                  final busy = _deleting.contains(m['id'].toString());
+                  // Long-press was the only way to delete, unlabelled and
+                  // invisible to a screen reader: a visible, named 44px
+                  // delete plus a semantic action on the chip.
+                  return Semantics(
+                    container: true,
+                    customSemanticsActions: busy ? null : {
+                      const CustomSemanticsAction(label: 'Delete memory'): () => _delete(m),
                     },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: c.withValues(alpha: 0.35))),
-                      child: Text(m['content']?.toString() ?? '',
-                        style: TextStyle(color: c, fontSize: 12, fontWeight: FontWeight.w600))),
+                    child: GestureDetector(
+                      onLongPress: () => _delete(m),
+                      child: Container(
+                        constraints: const BoxConstraints(minHeight: 44),
+                        padding: const EdgeInsets.only(left: 12),
+                        decoration: BoxDecoration(
+                          color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(22),
+                          border: Border.all(color: c.withValues(alpha: 0.35))),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Flexible(child: Text(text,
+                            style: TextStyle(color: c, fontSize: 12, fontWeight: FontWeight.w600))),
+                          Semantics(
+                            container: true, button: true, enabled: !busy, label: 'Delete memory: $text',
+                            onTap: busy ? null : () => _delete(m), excludeSemantics: true,
+                            child: IconButton(
+                              onPressed: busy ? null : () => _delete(m),
+                              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                              padding: EdgeInsets.zero,
+                              icon: Icon(Icons.close_rounded, size: 16, color: c))),
+                        ]))),
                   );
                 }).toList()),
     );
