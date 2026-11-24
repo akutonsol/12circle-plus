@@ -476,8 +476,13 @@ void main() {
       final seen = <String>[];
       final previous = FlutterError.onError;
       FlutterError.onError = (d) {
+        // Only the renderer's own overflow reports. Anything else — a failed
+        // expect among them, whose message may quote these reports — goes
+        // to the test binding as usual.
         final text = d.toString();
-        if (text.contains('overflowed by')) {
+        if (d.exception is FlutterError &&
+            d.library == 'rendering library' &&
+            text.contains('A RenderFlex overflowed by')) {
           seen.add(text);
         } else {
           previous?.call(d);
@@ -490,7 +495,7 @@ void main() {
     // The overflow messages that name a RenderFlex inside [surface].
     List<String> overflowsIn(WidgetTester tester, List<String> seen, Finder surface) {
       final ids = tester
-          .renderObjectList(find.descendant(of: surface, matching: find.byType(Flex)))
+          .renderObjectList(find.descendant(of: surface, matching: find.bySubtype<Flex>()))
           .map(describeIdentity)
           .toSet();
       return [
