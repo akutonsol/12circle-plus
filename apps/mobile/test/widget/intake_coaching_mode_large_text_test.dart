@@ -436,13 +436,10 @@ void main() {
             reason: '"$mode" title ($title) must end 8px before its check '
                 'circle ($circle) at ${scale}x');
       }
-      // At 3x the shared step bar (_IntakeStepBar, "20 / 24") overflows on
-      // 320dp — outside this package, reported separately; the option cards
-      // themselves are checked at 2x by the no-overflow tests above.
-      if (scale <= 2) {
-        expect(errors, isEmpty,
-            reason: 'no overflow at ${scale}x on 320dp:\n${errors.join('\n')}');
-      }
+      // P0-FL-53c: the shared step bar no longer overflows at 3x on 320dp,
+      // so 3x is held to no overflow too.
+      expect(errors, isEmpty,
+          reason: 'no overflow at ${scale}x on 320dp:\n${errors.join('\n')}');
     });
   }
 
