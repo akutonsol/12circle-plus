@@ -83,11 +83,15 @@ class _Server extends http.BaseClient {
   /// While set, every write waits for it — a save "in flight".
   Completer<void>? writeGate;
 
+  /// Every write answers 500 (a failed save/delete).
+  bool failWrites = false;
+
   void reset() {
     reads.clear();
     failing.clear();
     writes.clear();
     writeGate = null;
+    failWrites = false;
   }
 
   @override
@@ -101,6 +105,7 @@ class _Server extends http.BaseClient {
     if (request.method != 'GET') {
       writes.add('${request.method} $table ${request.url.query}');
       if (writeGate != null) await writeGate!.future;
+      if (failWrites) return _json({'message': 'internal error', 'code': 'XX000'}, 500, request);
       if (request.method == 'DELETE' && table == 'ai_memories') {
         final id = (q['id'] ?? '').replaceFirst('eq.', '');
         (reads['ai_memories'] as List?)?.removeWhere((m) => (m as Map)['id'] == id);
@@ -372,14 +377,156 @@ void main() {
     });
   });
 
+  // P0-FL-55 round 2 (UX F2): the memory card's "Add" was a bare ~18px
+  // GestureDetector with no semantics — the only way to add a memory.
+  group('add memory control', () {
+    Finder add() => find.bySemanticsLabel('Add memory');
+
+    testWidgets('"Add" is a >= 44px button labelled "Add memory", look kept', (tester) async {
+      final handle = tester.ensureSemantics();
+      _seed(server);
+      await pumpScreen(tester);
+      expect(add(), findsOneWidget, reason: 'THE defect: "Add" had no semantics');
+      expect(tester.getSemantics(add()),
+          isSemantics(isButton: true, hasTapAction: true, label: 'Add memory'));
+      final size = tester.getSize(add());
+      expect(size.width, greaterThanOrEqualTo(44));
+      expect(size.height, greaterThanOrEqualTo(44), reason: 'THE defect: it was ~18px tall');
+      // The look is unchanged: the same + icon and "Add" text, same sizes.
+      expect(find.descendant(of: add(), matching: find.byIcon(Icons.add_rounded)), findsOneWidget);
+      expect(tester.widget<Text>(find.descendant(of: add(), matching: find.text('Add'))).style?.fontSize, 12);
+      handle.dispose();
+      await drain(tester);
+    });
+
+    testWidgets('positive control: tapping it opens the dialog and a saved memory is sent',
+        (tester) async {
+      final handle = tester.ensureSemantics();
+      _seed(server);
+      await pumpScreen(tester);
+      await tester.tap(add());
+      await tester.pumpAndSettle();
+      expect(find.text('Tell your coach'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), 'burpees');
+      await tester.tap(find.text('Save'));
+      await pumpUntil(tester, () => server.writes.isNotEmpty, what: 'the memory to be saved');
+      // The dialog's exit transition is animation time, not I/O.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Tell your coach'), findsNothing);
+      expect(server.writes.single, startsWith('POST ai_memories'));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pump();
+      expect(find.text("Couldn't save that for your coach — try again."), findsNothing);
+      handle.dispose();
+      await drain(tester);
+    });
+
+    testWidgets('negative control: with nothing remembered "Add memory" is still offered beside the empty copy',
+        (tester) async {
+      final handle = tester.ensureSemantics();
+      _seed(server, memories: []);
+      await pumpScreen(tester);
+      expect(find.textContaining('Tell your coach what you like'), findsOneWidget);
+      expect(add(), findsOneWidget);
+      expect(find.text("Couldn't load what your coach remembers"), findsNothing);
+      handle.dispose();
+      await drain(tester);
+    });
+  });
+
+  // P0-FL-55 round 2 (UX F3): a save or delete in flight changed nothing a
+  // sighted member could see — taps were silently ignored.
+  group('busy state is visible', () {
+    double chipOpacity(WidgetTester tester, String label) => tester
+        .widget<Opacity>(find.ancestor(of: find.text(label), matching: find.byType(Opacity)).first)
+        .opacity;
+
+    testWidgets('every style chip dims while a style save is in flight, and recovers',
+        (tester) async {
+      _seed(server);
+      await pumpScreen(tester);
+      for (final l in _styles) {
+        expect(find.ancestor(of: find.text(l), matching: find.byType(Opacity)), findsWidgets,
+            reason: 'THE defect: nothing dims a chip');
+        expect(chipOpacity(tester, l), 1.0, reason: 'negative control: idle chips are not dimmed');
+      }
+      final gate = server.writeGate = Completer<void>();
+      await tester.tap(find.text('Scientific'));
+      await pumpUntil(tester, () => server.writes.isNotEmpty, what: 'the save to be sent');
+      await tester.pump();
+      for (final l in _styles) {
+        expect(chipOpacity(tester, l), 0.5, reason: '$l: a save in flight is visible');
+      }
+      gate.complete();
+      server.writeGate = null;
+      await pumpUntil(tester, () => find.text('Coach style updated — your next brief will match.').evaluate().isNotEmpty,
+          what: 'the save to finish');
+      for (final l in _styles) {
+        expect(chipOpacity(tester, l), 1.0, reason: 'positive control: chips recover after the save');
+      }
+      await drain(tester);
+    });
+
+    testWidgets('a memory delete in flight shows a 16px spinner in place of its ✕ only',
+        (tester) async {
+      final handle = tester.ensureSemantics();
+      _seed(server);
+      await pumpScreen(tester);
+      Finder spinnerIn(String t) =>
+          find.descendant(of: deleteOf(t), matching: find.byType(CircularProgressIndicator));
+      Finder crossIn(String t) => find.descendant(of: deleteOf(t), matching: find.byIcon(Icons.close_rounded));
+      expect(spinnerIn('left knee'), findsNothing, reason: 'negative control: idle shows the ✕');
+      expect(crossIn('left knee'), findsOneWidget);
+
+      final gate = server.writeGate = Completer<void>();
+      await tester.tap(deleteOf('left knee'));
+      await pumpUntil(tester, () => server.writes.isNotEmpty, what: 'the delete to be sent');
+      await tester.pump();
+      expect(spinnerIn('left knee'), findsOneWidget,
+          reason: 'THE defect: the disabled ✕ looked exactly like an idle one');
+      expect(crossIn('left knee'), findsNothing);
+      final s = tester.getSize(spinnerIn('left knee'));
+      expect(s.width, 16);
+      expect(s.height, 16);
+      expect(tester.getSize(deleteOf('left knee')).height, greaterThanOrEqualTo(44),
+          reason: 'the target does not shrink while busy');
+      expect(spinnerIn(_longMemory), findsNothing, reason: 'the other memory is not busy');
+      expect(crossIn(_longMemory), findsOneWidget);
+
+      gate.complete();
+      server.writeGate = null;
+      await pumpUntil(tester, () => find.text('left knee').evaluate().isEmpty,
+          what: 'the delete to finish');
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      handle.dispose();
+      await drain(tester);
+    });
+
+    testWidgets('a failed delete restores the ✕ and keeps the memory', (tester) async {
+      final handle = tester.ensureSemantics();
+      _seed(server);
+      await pumpScreen(tester);
+      server.failWrites = true;
+      await tester.tap(deleteOf('left knee'));
+      await pumpUntil(tester, () => find.text("Couldn't remove that — try again.").evaluate().isNotEmpty,
+          what: 'the failed delete to be reported');
+      expect(find.text('left knee'), findsOneWidget);
+      expect(find.descendant(of: deleteOf('left knee'), matching: find.byIcon(Icons.close_rounded)),
+          findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      handle.dispose();
+      await drain(tester);
+    });
+  });
+
   group('no overflow, no text shrinking', () {
     for (final scale in [1.0, 1.3, 2.0]) {
       for (final width in [320.0, 360.0, 390.0, 430.0]) {
         testWidgets('${width.toInt()}dp at ${scale}x', (tester) async {
           _seed(server);
-          // Other cards on this screen (the daily brief header, outside this
-          // package) overflow at these sizes; their errors are collected here
-          // so the two cards in scope can be measured on their own.
+          // Overflow errors are collected so each card in scope is measured
+          // on its own below (round 2 adds the daily brief header, UX F1).
           final elsewhere = <FlutterErrorDetails>[];
           final previous = FlutterError.onError;
           FlutterError.onError = elsewhere.add;
@@ -390,7 +537,7 @@ void main() {
           }
           expect(elsewhere.where((e) => !e.toString().contains('overflowed')), isEmpty);
 
-          for (final card in ['_CoachPersonaCard', '_CoachingMemoryCard']) {
+          for (final card in ['_DailyInsightCard', '_CoachPersonaCard', '_CoachingMemoryCard']) {
             final root = tester.renderObject(
                 find.byWidgetPredicate((w) => w.runtimeType.toString() == card));
             void visit(RenderObject o) {
@@ -414,6 +561,7 @@ void main() {
           }
 
           for (final (t, size) in [
+            ("TODAY'S COACHING BRIEF", 11.0), ('Add', 12.0),
             ('COACH STYLE', 11.0), ('COACHING MEMORY', 11.0),
             ('High Energy', 12.0), ('Tough Love', 12.0), ('left knee', 12.0), (_longMemory, 12.0),
           ]) {
@@ -432,6 +580,11 @@ void main() {
               matching: find.byType(IconButton));
           expect(tester.getSize(del).width, greaterThanOrEqualTo(44));
           expect(tester.getRect(del).right, lessThanOrEqualTo(width));
+          // The Add target stays >= 44px and on screen at every size.
+          final add = find.ancestor(of: find.text('Add'), matching: find.byType(ConstrainedBox)).first;
+          expect(tester.getSize(add).height, greaterThanOrEqualTo(44));
+          expect(tester.getSize(add).width, greaterThanOrEqualTo(44));
+          expect(tester.getRect(add).right, lessThanOrEqualTo(width));
           await drain(tester);
         });
       }

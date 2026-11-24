@@ -575,9 +575,10 @@ class _DailyInsightCardState extends State<_DailyInsightCard> {
         Row(children: [
           const Icon(Icons.auto_awesome_rounded, color: _pri, size: 18),
           const SizedBox(width: 8),
-          const Text("TODAY'S COACHING BRIEF",
-            style: TextStyle(color: _pri, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
-          const Spacer(),
+          // Expanded, not Text + Spacer: at large text on a narrow phone the
+          // label wraps instead of overflowing the card (P0-FL-55 round 2).
+          const Expanded(child: Text("TODAY'S COACHING BRIEF",
+            style: TextStyle(color: _pri, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.2))),
           // The failure notice shows its own busy retry; one spinner only.
           if (_loading && _loadError == null)
             const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _pri)),
@@ -1145,7 +1146,9 @@ class _CoachPersonaCardState extends State<_CoachPersonaCard> {
                   container: true, button: true, selected: sel, inMutuallyExclusiveGroup: true,
                   enabled: !_saving, label: 'Coach style: ${s.$3}',
                   onTap: _saving ? null : tap, excludeSemantics: true,
-                  child: GestureDetector(
+                  // Dimmed while a save is in flight so a sighted member sees
+                  // the taps are paused, not ignored.
+                  child: Opacity(opacity: _saving ? 0.5 : 1, child: GestureDetector(
                     onTap: tap,
                     child: Container(
                       constraints: const BoxConstraints(minHeight: 44),
@@ -1157,7 +1160,7 @@ class _CoachPersonaCardState extends State<_CoachPersonaCard> {
                       child: Row(mainAxisSize: MainAxisSize.min, children: [
                         Flexible(child: Text(s.$3, style: TextStyle(
                           color: sel ? _pri : _mut, fontSize: 12, fontWeight: FontWeight.w600))),
-                      ]))));
+                      ])))));
               }).toList()),
             ]),
     );
@@ -1241,12 +1244,18 @@ class _CoachingMemoryCardState extends State<_CoachingMemoryCard> {
   Widget build(BuildContext context) {
     return _coachCard(
       icon: Icons.psychology_rounded, label: 'COACHING MEMORY',
-      trailing: GestureDetector(
-        onTap: _add,
-        child: const Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.add_rounded, color: _pri, size: 16),
-          Text('Add', style: TextStyle(color: _pri, fontSize: 12, fontWeight: FontWeight.w700)),
-        ])),
+      // The only way to add a memory: a named >= 44px button, same look.
+      trailing: Semantics(
+        container: true, button: true, label: 'Add memory', onTap: _add, excludeSemantics: true,
+        child: GestureDetector(
+          onTap: _add,
+          behavior: HitTestBehavior.opaque,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+            child: const Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: [
+              Icon(Icons.add_rounded, color: _pri, size: 16),
+              Text('Add', style: TextStyle(color: _pri, fontSize: 12, fontWeight: FontWeight.w700)),
+            ])))),
       child: _loadError != null
           ? SectionLoadFailure(
               what: 'what your coach remembers', error: _loadError, busy: _loading, onRetry: _retry)
@@ -1285,7 +1294,12 @@ class _CoachingMemoryCardState extends State<_CoachingMemoryCard> {
                               onPressed: busy ? null : () => _delete(m),
                               constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
                               padding: EdgeInsets.zero,
-                              icon: Icon(Icons.close_rounded, size: 16, color: c))),
+                              // A delete in flight shows a 16px spinner in
+                              // place of the ✕ (the disabled ✕ never dimmed).
+                              icon: busy
+                                  ? SizedBox(width: 16, height: 16,
+                                      child: CircularProgressIndicator(strokeWidth: 2, color: c))
+                                  : Icon(Icons.close_rounded, size: 16, color: c))),
                         ]))),
                   );
                 }).toList()),
