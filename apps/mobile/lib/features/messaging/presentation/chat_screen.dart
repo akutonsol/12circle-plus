@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
@@ -11,6 +13,7 @@ import '../data/chat_media_path.dart';
 import '../data/messaging_service.dart';
 import '../domain/messaging_provider.dart';
 import '../../scoring/data/score_engine.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 const _bg      = Color(0xFF030303);
 const _card    = Color(0xFF0E0B16);
@@ -251,6 +254,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  /// The photo picker is open: a second tap opens no second one (P0-FL-56a).
+  bool _pickingPhoto = false;
+
+  /// What [_showPhotoFailure] says about the photo send that just failed.
+  String _photoFailure = '';
+
   // Photo send, in the order the storage contract requires (DEC-3A-10 §6):
   //   1. upload — authorization needs only the conversation, which exists;
   //   2. send the message carrying the object PATH (the bucket is private,
@@ -258,17 +267,56 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   //   3. if the row did not land, remove exactly the object just uploaded
   //      and report — never claim success.
   Future<void> _sendPhoto() async {
+    if (_sending || _pickingPhoto) return;
     final conversationId = _conversationId;
-    final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (conversationId == null || uid == null || _sending) return;
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
+    final auth = Supabase.instance.client.auth;
+    final uid = auth.currentUser?.id;
+    bool sameMember() => auth.currentUser?.id == uid;
+    // Attach used to do nothing in these two states, without a word.
+    if (conversationId == null) {
+      _showSendFailure(_notReadyMessage);
+      return;
+    }
+    if (uid == null) {
+      _showSendFailure("You're signed out — sign in again to send a photo.");
+      return;
+    }
+    _pickingPhoto = true;
+    final XFile? picked;
+    try {
+      picked = await ImagePicker()
+          .pickImage(source: ImageSource.gallery, imageQuality: 80);
+    } catch (e, st) {
+      // P0-FL-56a · was unguarded: a denied permission was an uncaught error
+      // and Attach did nothing. A denial (image_picker's codes end
+      // `_access_denied`) says where to allow access.
+      reportError('chat.photo.pick.gallery', e, st);
+      _showSendFailure(
+          e is PlatformException && e.code.endsWith('_access_denied')
+              ? "Couldn't open your photos — allow photo access in Settings, "
+                  'then try again.'
+              : couldntMessage('open your photos', e));
+      return;
+    } finally {
+      _pickingPhoto = false;
+    }
+    // Null is the person cancelling: nothing is sent and nothing is said.
     if (picked == null || !mounted) return;
     setState(() => _sending = true);
     final storage = Supabase.instance.client.storage.from(ChatMediaPath.bucket);
     String? uploadedPath;
+    Object? sendError;
     try {
-      final bytes = await picked.readAsBytes();
+      final Uint8List bytes;
+      try {
+        bytes = await picked.readAsBytes();
+      } catch (e, st) {
+        reportError('chat.photo.read', e, st);
+        if (sameMember()) _showSendFailure(couldntMessage('use that photo', e));
+        return;
+      }
+      // Another member signed in meanwhile: not their message to send.
+      if (!sameMember()) throw StateError('the member changed during a pick');
       final ext = picked.path.split('.').last.toLowerCase();
       // messages/<conversation_id>/<uploader_uid>/<epoch>.<ext> — the
       // conversation is the authorization identity, never the uploader.
@@ -282,23 +330,35 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       await storage.uploadBinary(storagePath, bytes,
           fileOptions: FileOptions(contentType: 'image/$ext', upsert: false));
       uploadedPath = storagePath;
+      // Checked again: `sendMessage` writes as whoever is signed in NOW, so a
+      // switch during the upload sent this photo as B, in A's conversation.
+      if (!sameMember()) throw StateError('the member changed during an upload');
       final ok = await _service.sendMessage(
         conversationId: conversationId,
         content: '[photo]',
         metadata: {
           ChatMediaPath.typeKey: ChatMediaPath.imageType,
           ChatMediaPath.mediaPathKey: storagePath,
-        });
+        },
+        onNotSent: (e) => sendError = e);
       if (!ok) {
+        // Recorded by the service (`MessagingService.sendMessage`).
         await _removeOrphan(storage, storagePath);
-        _showPhotoFailure();
+        if (sameMember()) {
+          _photoFailure = couldntMessage('send your photo', sendError);
+          _showPhotoFailure();
+        }
       }
     } catch (e, st) {
       // Upload itself failed, or something after it threw. If the object got
       // as far as storage, it has no message row and must not be left behind.
       reportError('ChatScreen._sendPhoto', e, st);
       if (uploadedPath != null) await _removeOrphan(storage, uploadedPath);
-      _showPhotoFailure();
+      // Another member signed in: it was not their photo, so nothing is said.
+      if (sameMember()) {
+        _photoFailure = couldntMessage('send your photo', e);
+        _showPhotoFailure();
+      }
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -308,20 +368,46 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// message row never landed. The DELETE policy admits only the uploader, so
   /// this can never touch anyone else's media. A cleanup failure is reported,
   /// not hidden, and it never turns the send into a success.
+  ///
+  /// `remove` answers with the objects it removed and does NOT throw for one
+  /// it could not delete, so an empty answer is checked: gone is fine (nothing
+  /// is left behind), still there is a cleanup failure (P0-FL-56a). It is
+  /// checked by listing the folder for the exact name, not with `exists`,
+  /// which reads every 400/404 as "gone".
+  ///
+  /// The uploader is the path's third segment (see [ChatMediaPath]). Once
+  /// someone else (or no one) is signed in, storage hides the object from the
+  /// session, so every answer looks like "gone": nothing is asked as them, and
+  /// the leftover is recorded.
   Future<void> _removeOrphan(StorageFileApi storage, String path) async {
+    final uid = path.split('/')[2];
+    void requireUploader() {
+      if (Supabase.instance.client.auth.currentUser?.id != uid) {
+        throw StateError('an unsent photo could not be cleaned up: '
+            'its uploader is no longer signed in');
+      }
+    }
+
     try {
-      await storage.remove([path]);
-    } catch (e) {
-      reportError('ChatScreen._sendPhoto.cleanup', e);
+      requireUploader();
+      final removed = await storage.remove([path]);
+      if (removed.isNotEmpty) return;
+      requireUploader();
+      final slash = path.lastIndexOf('/');
+      final name = path.substring(slash + 1);
+      final left = await storage.list(
+          path: path.substring(0, slash),
+          searchOptions: SearchOptions(search: name));
+      requireUploader();
+      if (left.any((o) => o.name == name)) {
+        throw StateError('an unsent photo is still in storage after remove');
+      }
+    } catch (e, st) {
+      reportError('ChatScreen._sendPhoto.cleanup', e, st);
     }
   }
 
-  void _showPhotoFailure() {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Failed to send photo'),
-        backgroundColor: Colors.red));
-  }
+  void _showPhotoFailure() => _showSendFailure(_photoFailure);
 
   bool _isMe(Map<String, dynamic> msg) {
     final userId = Supabase.instance.client.auth.currentUser?.id;

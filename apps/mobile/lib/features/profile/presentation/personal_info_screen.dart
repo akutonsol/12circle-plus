@@ -96,6 +96,8 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
   String? _nutritionGoal;
   String? _avatarUrl;
   bool _loadingAvatar = false;
+  /// The photo picker is open: a second tap opens no second one (P0-FL-56a).
+  bool _pickingAvatar = false;
   bool _saving = false;
   bool _loaded = false;
   bool _isCoach = false;
@@ -232,21 +234,56 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
   }
 
   Future<void> _pickAndUploadAvatar() async {
-    if (_isLocked() || _loadingAvatar) return;
-    final picker = ImagePicker();
-    final file = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
+    if (_isLocked() || _loadingAvatar || _pickingAvatar) return;
+    final auth = Supabase.instance.client.auth;
+    final uid = auth.currentUser?.id;
+    bool sameMember() => auth.currentUser?.id == uid;
+    _pickingAvatar = true;
+    final XFile? file;
+    try {
+      file = await ImagePicker()
+          .pickImage(source: ImageSource.gallery, imageQuality: 80);
+    } catch (e, st) {
+      // P0-FL-56a · was unguarded: a denied permission was an uncaught error
+      // and the photo button did nothing. A denial (image_picker's codes end
+      // `_access_denied`) says where to allow access.
+      reportError('profile.avatar.pick.gallery', e, st);
+      if (mounted && sameMember()) {
+        if (e is PlatformException && e.code.endsWith('_access_denied')) {
+          _say("Couldn't open your photos — allow photo access in Settings, "
+              'then try again.');
+        } else {
+          _sayFailure("Couldn't open your photos", e);
+        }
+      }
+      return;
+    } finally {
+      _pickingAvatar = false;
+    }
+    // Null is the person cancelling: nothing changes and nothing is said.
     if (file == null || !mounted) return;
     setState(() => _loadingAvatar = true);
     try {
-      final uid   = Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) throw Exception('Not logged in');
-      final bytes = await file.readAsBytes();
+      final Uint8List bytes;
+      try {
+        bytes = await file.readAsBytes();
+      } catch (e, st) {
+        reportError('profile.avatar.read', e, st);
+        if (mounted && sameMember()) _sayFailure("Couldn't use that photo", e);
+        return;
+      }
+      // Another member signed in meanwhile: never this photo on their profile.
+      if (!sameMember()) throw StateError('the member changed during a pick');
       final ext   = (file.name.contains('.') ? file.name.split('.').last : 'jpg').toLowerCase();
       final path  = '$uid/avatar.$ext';
       await Supabase.instance.client.storage
           .from('avatars')
           .uploadBinary(path, bytes,
               fileOptions: FileOptions(contentType: 'image/$ext', upsert: true));
+      // And again after the upload: the link below is written as whoever is
+      // signed in NOW, who may not be this member any more.
+      if (!sameMember()) throw StateError('the member changed during an upload');
       // Same path is reused (upsert), so the public URL never changes — append
       // a cache-buster so the new image actually shows instead of the cached one.
       final base = Supabase.instance.client.storage.from('avatars').getPublicUrl(path);
@@ -264,10 +301,10 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
         throw StateError('user_profiles avatar update matched no row');
       }
       ref.invalidate(currentUserProfileProvider);
-      if (mounted) setState(() => _avatarUrl = url);
+      if (mounted && sameMember()) setState(() => _avatarUrl = url);
     } catch (e, st) {
       reportError('PersonalInfoScreen._pickAndUploadAvatar', e, st);
-      if (mounted) _sayFailure("Couldn't update your photo", e);
+      if (mounted && sameMember()) _sayFailure("Couldn't update your photo", e);
     } finally {
       if (mounted) setState(() => _loadingAvatar = false);
     }
@@ -361,8 +398,12 @@ class _PersonalInfoScreenState extends ConsumerState<PersonalInfoScreen> {
     final next = isNetworkFailure(e)
         ? 'check your connection and try again.'
         : 'try again in a moment. If it keeps happening, contact support.';
+    _say('$what — $next');
+  }
+
+  void _say(String message) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Semantics(liveRegion: true, child: Text('$what — $next')),
+      content: Semantics(liveRegion: true, child: Text(message)),
       backgroundColor: _err, behavior: SnackBarBehavior.floating,
       duration: const Duration(seconds: 6)));
   }
