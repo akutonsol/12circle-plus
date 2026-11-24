@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../data/challenge_service.dart';
 import '../data/live_challenge_service.dart';
@@ -25,10 +26,18 @@ class ChallengeNotifier extends StateNotifier<List<Challenge>> {
     state = challenges;
   }
 
+  /// The last failed join's error, for the caller's next-step hint
+  /// (connection or not). Null after a join that succeeded.
+  Object? lastJoinError;
+
   Future<bool> joinChallenge(String challengeId) async {
     try {
       await _svc.joinChallenge(challengeId);
-    } catch (_) {
+      lastJoinError = null;
+    } catch (e, st) {
+      // P0-FL-53b · a failed join was swallowed unrecorded.
+      reportError('ChallengeNotifier.joinChallenge', e, st);
+      lastJoinError = e;
       return false;
     }
     state = state.map((c) {

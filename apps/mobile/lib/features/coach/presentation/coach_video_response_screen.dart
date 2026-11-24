@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../../core/observability/app_failure.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const _bg    = Color(0xFF030303);
@@ -10,6 +12,7 @@ const _brand = Color(0xFFA855F7);
 const _tert  = Color(0xFF6FFBBE);
 const _wht   = Colors.white;
 const _mut   = Color(0xFFCFC2D6);
+const _warn  = Color(0xFFF59E0B); // AppTheme.warning
 
 // ── UC18: Coach Video Response ────────────────────────────────────────────────
 class CoachVideoResponseScreen extends StatefulWidget {
@@ -29,6 +32,8 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
   XFile? _videoFile;
   bool _uploading = false;
   bool _done = false;
+  /// The client's notification was confirmed sent (best-effort; P0-FL-53b).
+  bool _notified = false;
   double _progress = 0;
 
   @override
@@ -104,26 +109,38 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
         'created_at': DateTime.now().toUtc().toIso8601String(),
       });
 
-      await _db.from('notifications').insert({
-        'recipient_id': widget.clientId,
-        'type': 'coach_video',
-        'title': 'New video from your coach!',
-        'body': 'Your coach recorded a personal video response for you. Tap to watch.',
-        'read': false,
-      });
+      // P0-FL-53b · best-effort, and reported: the response above is saved.
+      // A failed notification thrown from here read as "Failed to send", and
+      // sending again saved the response twice.
+      var notified = false;
+      try {
+        await _db.from('notifications').insert({
+          'recipient_id': widget.clientId,
+          'type': 'coach_video',
+          'title': 'New video from your coach!',
+          'body': 'Your coach recorded a personal video response for you. Tap to watch.',
+          'read': false,
+        });
+        notified = true;
+      } catch (e, st) {
+        reportError('CoachVideoResponseScreen._send.notify', e, st);
+      }
 
       if (!mounted) return;
-      setState(() { _progress = 1.0; _done = true; _uploading = false; });
-    } catch (e) {
+      setState(() {
+        _progress = 1.0; _done = true; _uploading = false; _notified = notified;
+      });
+    } catch (e, st) {
+      // ERR-2: was `Text('Error: \$e')`. A Postgres/Storage error carries
+      // table, column and constraint text; a coach does not need it and
+      // should not be shown it. P0-FL-53b · recorded, and said in the one voice.
+      reportError('CoachVideoResponseScreen._send', e, st);
       if (!mounted) return;
       setState(() => _uploading = false);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        // ERR-2: was `Text('Error: \$e')`. A Postgres/Storage error carries
-        // table, column and constraint text; a coach does not need it and
-        // should not be shown it. Copy matches this repository's own
-        // `Failed to … Try again.` pattern.
-        const SnackBar(content: Text('Failed to send your response. Try again.'),
-            backgroundColor: Colors.red));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Semantics(liveRegion: true,
+              child: Text(couldntMessage('send your response', e))),
+          backgroundColor: Colors.red));
     }
   }
 
@@ -141,7 +158,7 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
           Text('To ${widget.clientName}', style: const TextStyle(color: _mut, fontSize: 12)),
         ]),
       ),
-      body: _done ? _DoneView(clientName: widget.clientName, onDone: () => Navigator.pop(context))
+      body: _done ? _DoneView(clientName: widget.clientName, notified: _notified, onDone: () => Navigator.pop(context))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(20),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -248,19 +265,36 @@ class _ActionBtn extends StatelessWidget {
 class _DoneView extends StatelessWidget {
   final String clientName;
   final VoidCallback onDone;
-  const _DoneView({required this.clientName, required this.onDone});
+  final bool notified;
+  const _DoneView({required this.clientName, required this.notified, required this.onDone});
   @override
-  Widget build(BuildContext context) => Center(child: Padding(
+  // P0-FL-53b r3 · scrolls when the not-notified line, large text or a
+  // short phone make it taller than the screen; centred otherwise.
+  Widget build(BuildContext context) => LayoutBuilder(builder: (context, box) =>
+    SingleChildScrollView(child: ConstrainedBox(
+    constraints: BoxConstraints(minHeight: box.maxHeight),
+    child: Center(child: Padding(
     padding: const EdgeInsets.all(32),
     child: Column(mainAxisSize: MainAxisSize.min, children: [
+      // P0-FL-53b r2 · not notified: the warning colour and icon, a next step,
+      // and a live region (the Done view replaces the form, so nothing else
+      // would announce it). The notified path is unchanged.
       Container(width: 80, height: 80, decoration: BoxDecoration(
-        color: _tert.withValues(alpha: 0.15), shape: BoxShape.circle),
-        child: const Icon(Icons.check_rounded, color: _tert, size: 44)),
+        color: (notified ? _tert : _warn).withValues(alpha: 0.15), shape: BoxShape.circle),
+        child: notified
+            ? const Icon(Icons.check_rounded, color: _tert, size: 44)
+            : const Icon(Icons.warning_amber_rounded, color: _warn, size: 44)),
       const SizedBox(height: 20),
       const Text('Video Sent!', style: TextStyle(color: _wht, fontSize: 24, fontWeight: FontWeight.w800)),
       const SizedBox(height: 8),
-      Text('$clientName has been notified and can watch your response.',
-        style: const TextStyle(color: _mut, fontSize: 14), textAlign: TextAlign.center),
+      // P0-FL-53b · "has been notified" only when the notification was sent.
+      if (notified)
+        Text('$clientName has been notified and can watch your response.',
+          style: const TextStyle(color: _mut, fontSize: 14), textAlign: TextAlign.center)
+      else
+        Semantics(liveRegion: true, child: Text(
+          "Your response is saved, but $clientName wasn't notified — let them know another way.",
+          style: const TextStyle(color: _warn, fontSize: 14), textAlign: TextAlign.center)),
       const SizedBox(height: 32),
       SizedBox(width: double.infinity, child: ElevatedButton(
         onPressed: onDone,
@@ -270,5 +304,5 @@ class _DoneView extends StatelessWidget {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
         child: const Text('Done', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)))),
     ]),
-  ));
+  )))));
 }
