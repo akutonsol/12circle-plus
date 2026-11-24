@@ -321,6 +321,19 @@ void main() {
       expect(find.text(saveTiers), findsNothing, reason: 'saved: closed');
     });
 
+    testWidgets('Save after a failed tier read deletes no tier', (t) async {
+      seedTiers();
+      await open(t);
+      server.readMode['coach_packages'] = Answer.fails;
+      await editTiers(t);
+      t.takeException(); // f191d48: the read's failure escaped unhandled
+      server.readMode.clear();
+      await tapSave(t);
+      t.takeException();
+      expect([for (final p in server.packages) p['id']], ['b4', 'b8'],
+          reason: 'THE defect: blank (unread) prices deleted every tier');
+    });
+
     testWidgets('tiers still being read: Save is paused', (t) async {
       seedTiers();
       await open(t);

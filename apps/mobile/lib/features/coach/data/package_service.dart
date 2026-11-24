@@ -34,6 +34,14 @@ class PackageService {
   final _db = Supabase.instance.client;
   String? get _uid => _db.auth.currentUser?.id;
 
+  /// The signed-in user's id. Signed out a write writes nothing, and returning
+  /// normally read as saved (P0-FL-56b).
+  String _requireSignedIn() {
+    final uid = _uid;
+    if (uid == null) throw StateError('Signed out — nothing was changed.');
+    return uid;
+  }
+
   // ── Coach packages ────────────────────────────────────────
   Future<List<Map<String, dynamic>>> getMyPackages() async {
     final uid = _uid;
@@ -80,14 +88,6 @@ class PackageService {
       // Monthly + per-session: cheapest first (natural upgrade path).
       return pa.compareTo(pb);
     });
-  }
-
-  /// The signed-in user's id. Signed out a write writes nothing, and returning
-  /// normally read as saved (P0-FL-56b).
-  String _requireSignedIn() {
-    final uid = _uid;
-    if (uid == null) throw StateError('Signed out — nothing was changed.');
-    return uid;
   }
 
   /// Throws if signed out, refused, or (an edit) no row was changed.
