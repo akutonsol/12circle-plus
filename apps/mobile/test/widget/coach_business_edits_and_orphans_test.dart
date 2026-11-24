@@ -1364,10 +1364,11 @@ void main() {
           await addPhoto(tester);
           expectOneRemoveOfTheUpload();
           expect(
+              origins().contains('CoachBusinessScreen._removeUploaded'), !gone,
+              reason: 'recorded unless it is known to be gone');
+          expect(
               find.text(gone ? refusal : "Couldn't add the photo — $_later $_fileLeft"),
               findsOneWidget);
-          expect(
-              origins().contains('CoachBusinessScreen._removeUploaded'), !gone);
           expect(tester.widget<SnackBar>(find.byType(SnackBar)).duration,
               Duration(seconds: gone ? 4 : 10),
               reason: 'the longer text stays longer (UX #4)');
