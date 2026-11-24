@@ -1,9 +1,54 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+/// A package write that matched no row (P0-FL-56b): RLS filtered it, or the
+/// package is no longer there. PostgREST answers that without an error, so it
+/// read as saved / deleted.
+class PackageNotChanged implements Exception {
+  const PackageNotChanged(this.write);
+  final String write;
+  @override
+  String toString() => 'PackageNotChanged: $write matched no row';
+}
+
+/// What [PackageService.deletePackage] did.
+enum PackageRemoval {
+  deleted,
+
+  /// A client schedule uses the package, so it was hidden from clients instead.
+  hidden,
+}
+
+/// [PackageService.saveSessionTiers] changed some tiers and then failed. The
+/// tiers are separate writes (no transaction without a backend change), so the
+/// coach is told which ones were saved and which were not.
+class SessionTiersPartlySaved implements Exception {
+  const SessionTiersPartlySaved(
+      {required this.saved, required this.notSaved, required this.cause});
+
+  /// Tiers (session counts) whose change the server confirmed.
+  final List<int> saved;
+
+  /// Tiers whose change was not confirmed: the one that failed, and the ones
+  /// after it, which were not attempted.
+  final List<int> notSaved;
+  final Object cause;
+  @override
+  String toString() =>
+      'SessionTiersPartlySaved(saved: $saved, notSaved: $notSaved): $cause';
+}
+
 /// Coach packages (per-session / bulk / monthly) + client workout schedules.
 class PackageService {
   final _db = Supabase.instance.client;
   String? get _uid => _db.auth.currentUser?.id;
+
+  /// The signed-in user's id. Signed out a write writes nothing, and returning
+  /// normally read as saved (P0-FL-56b).
+  String _requireSignedIn() {
+    final uid = _uid;
+    if (uid == null) throw StateError('Signed out — nothing was changed.');
+    return uid;
+  }
 
   // ── Coach packages ────────────────────────────────────────
   Future<List<Map<String, dynamic>>> getMyPackages() async {
@@ -53,6 +98,7 @@ class PackageService {
     });
   }
 
+  /// Throws if signed out, refused, or (an edit) no row was changed.
   Future<void> savePackage({
     String? id,
     required String type,
@@ -62,8 +108,7 @@ class PackageService {
     String? description,
     String? cancellationPolicy,
   }) async {
-    final uid = _uid;
-    if (uid == null) return;
+    final uid = _requireSignedIn();
     final payload = {
       'coach_id': uid,
       'type': type,
@@ -76,17 +121,46 @@ class PackageService {
     if (id == null) {
       await _db.from('coach_packages').insert(payload);
     } else {
-      await _db.from('coach_packages').update(payload).eq('id', id);
+      final rows = await _db
+          .from('coach_packages')
+          .update(payload)
+          .eq('id', id)
+          .select('id');
+      if ((rows as List).isEmpty) throw const PackageNotChanged('savePackage');
     }
   }
 
-  Future<void> deletePackage(String id) async {
+  /// Deletes the package, or hides it from clients (`active: false`) when a
+  /// client schedule still references it; answers the [PackageRemoval]. Throws
+  /// if signed out, or neither was confirmed.
+  ///
+  /// Declared `Future<Object?>` so a `Future<void>` fake stays a valid override.
+  ///
+  /// P0-FL-56b: ANY failure of the delete (a refusal, a dropped connection)
+  /// was taken for "a schedule references it" and, unrecorded, turned into a
+  /// deactivation; and a delete or deactivation that matched no row read as
+  /// done. Only the foreign-key refusal (23503) means "deactivate instead".
+  Future<Object?> deletePackage(String id) async {
+    _requireSignedIn();
+    final List<dynamic> deleted;
     try {
-      await _db.from('coach_packages').delete().eq('id', id);
-    } catch (_) {
-      // A client schedule may reference it (FK) — deactivate instead.
-      await _db.from('coach_packages').update({'active': false}).eq('id', id);
+      deleted =
+          await _db.from('coach_packages').delete().eq('id', id).select('id');
+    } on PostgrestException catch (e) {
+      if (e.code != '23503') rethrow;
+      // A client schedule references it (FK) — deactivate instead.
+      final hidden = await _db
+          .from('coach_packages')
+          .update({'active': false})
+          .eq('id', id)
+          .select('id');
+      if ((hidden as List).isEmpty) {
+        throw const PackageNotChanged('deletePackage.deactivate');
+      }
+      return PackageRemoval.hidden;
     }
+    if (deleted.isEmpty) throw const PackageNotChanged('deletePackage');
+    return PackageRemoval.deleted;
   }
 
   static const sessionTiers = [4, 8, 12, 16];
@@ -113,10 +187,14 @@ class PackageService {
 
   /// Saves the four session-package tiers (4/8/12/16) — each with its own
   /// name + price + description. A tier with price <= 0 is removed/deactivated.
+  ///
+  /// Four separate writes: stops at the first that fails. If earlier tiers were
+  /// already changed it throws [SessionTiersPartlySaved] (which ones are saved,
+  /// which are not); if nothing was, the failure itself. Saving again is safe:
+  /// it re-reads which tiers exist.
   Future<void> saveSessionTiers(
       Map<int, ({String name, double price, String description})> tiers) async {
-    final uid = _uid;
-    if (uid == null) return;
+    final uid = _requireSignedIn();
     final existing = await _db
         .from('coach_packages')
         .select('id, sessions')
@@ -125,24 +203,55 @@ class PackageService {
     final byTier = {
       for (final r in existing as List) (r['sessions'] as num).toInt(): r['id'] as String,
     };
-    for (final tier in sessionTiers) {
-      final data = tiers[tier];
-      final id = byTier[tier];
-      if (data == null || data.price <= 0) {
-        if (id != null) await deletePackage(id);
-        continue;
+    // Only the tiers that have something to write: a tier neither offered now
+    // nor before is not "saved" and not "not saved".
+    final todo = [
+      for (final t in sessionTiers)
+        if ((tiers[t]?.price ?? 0) > 0 || byTier[t] != null) t,
+    ];
+    final saved = <int>[];
+    for (final tier in todo) {
+      try {
+        await _saveTier(uid, tier, tiers[tier], byTier[tier]);
+      } catch (e, st) {
+        if (saved.isEmpty) rethrow;
+        Error.throwWithStackTrace(
+            SessionTiersPartlySaved(
+                saved: saved,
+                notSaved: todo.sublist(saved.length),
+                cause: e),
+            st);
       }
-      final payload = {
-        'coach_id': uid, 'type': 'bulk', 'sessions': tier,
-        'price': data.price, 'active': true,
-        'name': data.name.trim().isEmpty ? '$tier-Session Pack' : data.name.trim(),
-        'description': data.description.trim().isEmpty ? null : data.description.trim(),
-      };
-      if (id != null) {
-        await _db.from('coach_packages').update(payload).eq('id', id);
-      } else {
-        await _db.from('coach_packages').insert(payload);
+      saved.add(tier);
+    }
+  }
+
+  Future<void> _saveTier(
+      String uid,
+      int tier,
+      ({String name, double price, String description})? data,
+      String? id) async {
+    if (data == null || data.price <= 0) {
+      if (id != null) await deletePackage(id);
+      return;
+    }
+    final payload = {
+      'coach_id': uid, 'type': 'bulk', 'sessions': tier,
+      'price': data.price, 'active': true,
+      'name': data.name.trim().isEmpty ? '$tier-Session Pack' : data.name.trim(),
+      'description': data.description.trim().isEmpty ? null : data.description.trim(),
+    };
+    if (id != null) {
+      final rows = await _db
+          .from('coach_packages')
+          .update(payload)
+          .eq('id', id)
+          .select('id');
+      if ((rows as List).isEmpty) {
+        throw const PackageNotChanged('saveSessionTiers');
       }
+    } else {
+      await _db.from('coach_packages').insert(payload);
     }
   }
 
@@ -169,6 +278,8 @@ class PackageService {
     return (row?['training_days_per_week'] as num?)?.toInt() ?? 0;
   }
 
+  /// Throws if signed out, refused, or no row came back (P0-FL-56b): the caller
+  /// goes on to booking or payment, so "returned" must mean saved.
   Future<void> saveSchedule({
     required String coachId,
     String? packageId,
@@ -176,16 +287,16 @@ class PackageService {
     required String sessionTime,
     Map<String, String>? dayTimes,
   }) async {
-    final uid = _uid;
-    if (uid == null) return;
-    await _db.from('client_schedules').upsert({
+    final uid = _requireSignedIn();
+    final rows = await _db.from('client_schedules').upsert({
       'client_id': uid,
       'coach_id': coachId,
       'package_id': packageId,
       'days': days,
       'session_time': sessionTime,
       'day_times': dayTimes ?? {},
-    }, onConflict: 'client_id');
+    }, onConflict: 'client_id').select('id');
+    if ((rows as List).isEmpty) throw const PackageNotChanged('saveSchedule');
   }
 
   /// Coach: a specific client's schedule.

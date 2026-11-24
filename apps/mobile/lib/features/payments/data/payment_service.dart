@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../core/observability/app_failure.dart';
 
 /// create-checkout said no to a purchase the user already has (409
 /// `already_subscribed`), with the reason to show them.
@@ -104,7 +105,9 @@ class PaymentService {
       final res = await _db.functions.invoke('cancel-subscription',
           body: {'subscriptionId': subscriptionRowId});
       return (res.data is Map) && res.data['ok'] == true;
-    } catch (_) {
+    } catch (e, st) {
+      // P0-FL-56b: `false` is said by the caller; the cause was lost.
+      reportError('PaymentService.cancelSubscription', e, st);
       return false;
     }
   }

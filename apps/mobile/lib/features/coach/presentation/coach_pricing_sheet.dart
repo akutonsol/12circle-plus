@@ -91,6 +91,9 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
           .select('pricing_monthly')
           .eq('id', uid)
           .maybeSingle();
+      // Closed while reading: the field is disposed, and writing to it was
+      // recorded as a failed read.
+      if (!mounted) return;
       final p = (row?['pricing_monthly'] as num?)?.toDouble();
       if (p != null && p > 0) _price.text = p.toStringAsFixed(0);
     } catch (e, s) {
@@ -124,7 +127,8 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
     });
     try {
       await CoachRelationshipService().setGlobalPrice(value);
-    } catch (e) {
+    } catch (e, s) {
+      reportError('CoachPricingSheet._save', e, s); // P0-FL-56b: was unrecorded
       // A failed or 0-row save said "Pricing updated." or, thrown, left the
       // spinner running with nothing said (P0-FL-3). Keep the sheet open and
       // say why inside it. A generic failure (e.g. a timeout) may still have
