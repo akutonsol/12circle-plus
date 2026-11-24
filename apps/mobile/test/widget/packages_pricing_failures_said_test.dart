@@ -983,6 +983,7 @@ void main() {
         expectLoadFailure(t, 'your training schedule');
         expect(find.textContaining('Saving is paused until it loads.'), findsOneWidget);
         expect(find.text('Mon'), findsNothing);
+        expect(enabled(t, pay), isFalse, reason: 'paused, and looks it');
         await tapLabel(t, pay);
         expect(server.writes, isEmpty,
             reason: 'THE defect: a schedule never read could be replaced');
@@ -998,10 +999,32 @@ void main() {
         } else {
           expect(find.text('Monday'), findsOneWidget, reason: '3 days: Mon/Wed/Fri');
         }
+        expect(enabled(t, pay), isTrue);
         await tapLabel(t, pay);
         expect(payments.checkouts, 1);
       });
     }
+
+    testWidgets('a schedule still being read pauses Save', (t) async {
+      server.schedules[userA] = {
+        'client_id': userA, 'package_id': 'paid', 'days': ['friday'],
+        'session_time': '18:30', 'day_times': {'friday': '18:30'},
+      };
+      final gate = server.readGate['client_schedules'] = Completer();
+      await open(t);
+      await choose(t, 'Paid Plan');
+      expect(find.bySemanticsLabel('Loading your training schedule'), findsOneWidget);
+      expect(find.text('Mon'), findsNothing);
+      expect(enabled(t, pay), isFalse);
+      await tapLabel(t, pay);
+      expect(server.writes, isEmpty);
+      gate.complete();
+      await settle(t);
+      expect(enabled(t, pay), isTrue);
+      await tapLabel(t, pay);
+      expect(server.schedules[userA]!['days'], ['friday']);
+      expect(payments.checkouts, 1);
+    });
 
     testWidgets('negative control: no schedule and no onboarding days is an '
         'answer — the client picks their own', (t) async {
