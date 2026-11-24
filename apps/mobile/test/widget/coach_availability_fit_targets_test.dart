@@ -48,6 +48,12 @@ class _Server extends FailingReadsPostgrest {
   _Server(super.uid);
   Completer<void>? deleteGate;
   @override
+  void reset() {
+    super.reset();
+    deleteGate = null;
+  }
+
+  @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     if (request.method == 'DELETE') await deleteGate?.future;
     return super.send(request);
@@ -299,8 +305,24 @@ void main() {
       h.dispose();
     });
 
-    testWidgets('positive control: the choices made are the ones published',
+    testWidgets('positive control: the choices touched are the ones published',
         (tester) async {
+      fitWindow(tester, 900, 2400, 1);
+      await open(tester);
+      await openSheet(tester);
+      await tester.tap(find.descendant(of: sheet, matching: find.text('Strategy Consultation')));
+      await tester.tap(find.descendant(of: sheet, matching: find.text('60 min')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Publish Slot'));
+      await tester.pumpAndSettle();
+      final post = server.writes.singleWhere((w) => w.startsWith('POST'));
+      expect(post, contains('"type":"consultation"'));
+      expect(post, contains('"duration_minutes":60'));
+      expect(reported, isEmpty);
+    });
+
+    testWidgets('choices made by screen reader, or at the edge of a target, are the '
+        'ones published', (tester) async {
       final h = tester.ensureSemantics();
       fitWindow(tester, 390, 2000, 1);
       await open(tester);

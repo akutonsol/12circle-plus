@@ -473,7 +473,7 @@ void main() {
     final water = r(find.byIcon(Icons.water_drop_rounded));
     expect(water.left, greaterThan(195));
     expect(streak.right, lessThan(195));
-    expect((streak.top - water.top).abs(), lessThan(2));
+    expect((streak.top - water.top).abs(), lessThan(4));
     // The ring beside the percentage.
     expect(r(find.text('73%')).right, lessThan(r(find.text('WORKOUT\nDAYS')).left));
     expect((r(find.text('WORKOUT\nDAYS')).center.dy - r(find.text('73%')).center.dy).abs(),

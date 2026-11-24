@@ -18,7 +18,12 @@ const fitScales = [1.0, 1.3, 2.0, 3.0];
 /// [height] is usually far taller than a phone: everything in a scroll view
 /// is then laid out AND painted (a RenderFlex reports its overflow when it
 /// paints), and no tap target is skipped for touching the screen edge.
+///
+/// Overflows are recorded from here on ([recordOverflows]): only the fit tests
+/// assert on them, so a target or behaviour test fails for its own reason and
+/// a control passes on a base that overflows.
 void fitWindow(WidgetTester tester, num width, double height, double scale) {
+  recordOverflows();
   tester.view
     ..devicePixelRatio = 1
     ..physicalSize = Size(width.toDouble(), height);
@@ -32,8 +37,12 @@ void fitWindow(WidgetTester tester, num width, double height, double scale) {
 /// Everything else (a failed `expect` among them, whose message may quote an
 /// overflow report) is forwarded to the test binding: swallowing it would
 /// hang the test until its timeout.
+///
+/// Asking again in the same test returns the same list.
 List<String> recordOverflows() {
-  final seen = <String>[];
+  final current = _recording;
+  if (current != null) return current;
+  final seen = _recording = <String>[];
   final previous = FlutterError.onError;
   FlutterError.onError = (d) {
     final text = d.toString();
@@ -45,9 +54,14 @@ List<String> recordOverflows() {
       previous?.call(d);
     }
   };
-  addTearDown(() => FlutterError.onError = previous);
+  addTearDown(() {
+    FlutterError.onError = previous;
+    _recording = null;
+  });
   return seen;
 }
+
+List<String>? _recording;
 
 /// The overflow reports in [seen] that name a Row/Column inside [surface].
 /// (`bySubtype`: `byType(Flex)` never matches a Row or a Column.)

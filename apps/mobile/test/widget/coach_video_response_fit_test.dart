@@ -194,7 +194,7 @@ void main() {
       expect(send(tester).onPressed, isNull);
     });
 
-    testWidgets('positive control: a typed note sends, once, as typed', (tester) async {
+    testWidgets('the success path: a typed note sends, once, as typed', (tester) async {
       await show(tester);
       await tester.enterText(find.byType(TextField), ' Great week ');
       await tester.pump();
