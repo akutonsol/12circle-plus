@@ -150,7 +150,12 @@ class _Server extends http.BaseClient {
       return storageFails
           ? _json({'statusCode': '500', 'error': 'x', 'message': 'boom'}, 500,
               request)
-          : _json({'Key': 'coach-media/x.jpg'}, 200, request);
+          // Like storage: a removal answers with what it removed (FL-57b).
+          : request.method == 'DELETE'
+              ? _json([
+                  {'name': 'x.jpg', 'bucket_id': 'coach-media'}
+                ], 200, request)
+              : _json({'Key': 'coach-media/x.jpg'}, 200, request);
     }
     if (path == '/functions/v1/send-invite-email') {
       return _json({'sent': emailSent}, 200, request);

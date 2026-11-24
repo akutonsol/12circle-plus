@@ -588,6 +588,18 @@ void main() {
     testWidgets(
         'a certification typed for A and submitted after B signed in is '
         "refused — never written into B's row", (tester) async {
+      // P0-FL-57b: the dialog closes when the screen hears of the switch, so
+      // the only Add that can still be pressed is the one on A's last frame,
+      // in the window before that (a listener registered before the screen's;
+      // see 'in the window between …' below).
+      VoidCallback? addOnAsFrame;
+      final sub = auth().onAuthStateChange.listen((_) {
+        final add = addOnAsFrame;
+        if (add == null || auth().currentUser?.id != _b) return;
+        addOnAsFrame = null;
+        add();
+      });
+      addTearDown(sub.cancel);
       await open(tester);
       await tester.tap(find.text('+ Add').first);
       await tester.pumpAndSettle();
@@ -596,9 +608,13 @@ void main() {
               of: find.byType(AlertDialog), matching: find.byType(TextField)),
           'CSCS');
       await tester.pump();
-      await switchTo(tester, _b);
-      await tester.tap(find.text('Add'));
+      addOnAsFrame =
+          tester.widget<TextButton>(find.widgetWithText(TextButton, 'Add'))
+              .onPressed;
+      await tester.runAsync(() => auth().recoverSession(_session(_b)));
       await settle(tester);
+      expect(addOnAsFrame, isNull, reason: 'premise: Add pressed as B');
+      expect(find.byType(AlertDialog), findsNothing);
       expect(profileWrites(), isEmpty,
           reason: "A's certification (and A's list) into B's row");
       expect(
