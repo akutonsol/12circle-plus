@@ -65,15 +65,33 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
   /// another view's overlay).
   String? _loadedKey;
 
+  /// P0-FL-53a · the last read of the overlay failed (the service recorded
+  /// it). Null = the shown [_overlay] (or its absence) is what the server said.
+  ///
+  /// A failed read returned null — "no overlay" — so a coach was offered "Add
+  /// your coaching" and could save a blank editor over their real overlay.
+  /// While this is set nothing offers authoring; an overlay shown before a
+  /// failed REFRESH stays on screen, but its Edit is held.
+  Object? _loadError;
+  bool _retrying = false;
+
   /// Loads the overlay for [key] (`uid|staff` or `uid|client`); a response
   /// that lands after the member or view changed is dropped.
   Future<void> _loadFor(String key, bool staff) async {
     _loadedKey = key;
-    final data = staff
-        ? await _svc.getCoachOverlay(widget.exerciseId)
-        : await _svc.resolveExerciseMedia(widget.exerciseId);
-    if (!mounted || _loadedKey != key) return;
-    setState(() { _isStaff = staff; _overlay = data; _loading = false; });
+    try {
+      final data = staff
+          ? await _svc.getCoachOverlay(widget.exerciseId)
+          : await _svc.resolveExerciseMedia(widget.exerciseId);
+      if (!mounted || _loadedKey != key) return;
+      setState(() {
+        _isStaff = staff; _overlay = data; _loadError = null; _loading = false;
+      });
+    } catch (e) {
+      if (!mounted || _loadedKey != key) return;
+      // Keep whatever was shown for this member + view; say the read failed.
+      setState(() { _isStaff = staff; _loadError = e; _loading = false; });
+    }
   }
 
   /// Re-reads for the member and view currently shown (after an edit).
@@ -82,6 +100,25 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
     if (key == null) return;
     _loadFor(key, key.endsWith('|staff'));
   }
+
+  Future<void> _retry() async {
+    final key = _loadedKey;
+    if (_retrying || key == null) return;
+    setState(() => _retrying = true);
+    await _loadFor(key, key.endsWith('|staff'));
+    if (mounted) setState(() => _retrying = false);
+  }
+
+  Widget _failure() => SectionLoadFailure(
+        what: _isStaff ? 'your coaching for this exercise' : "your coach's focus",
+        error: _loadError,
+        busy: _retrying,
+        accent: _brand,
+        textColor: _text,
+        mutedColor: _muted,
+        detail: _isStaff ? 'Editing is paused until it loads.' : null,
+        onRetry: _retry,
+      );
 
   List<String> _focusOf(Map<String, dynamic>? m) {
     final f = m?['focus'];
@@ -98,6 +135,7 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
       if (_loadedKey != null) {
         _loadedKey = null;
         _overlay = null;
+        _loadError = null;
         _loading = true;
       }
       return const SizedBox.shrink();
@@ -106,25 +144,37 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
     final key = '${user.id}|${staff ? 'staff' : 'client'}';
     if (key != _loadedKey) {
       _overlay = null;
+      _loadError = null;
       _loading = true;
       _loadFor(key, staff); // async: its setState lands after this build
     }
     if (_loading) return const SizedBox.shrink();
+    final failed = _loadError != null;
 
-    // Coach/admin: always show the editor entry (add or edit their overlay).
+    // Coach/admin: always show the editor entry (add or edit their overlay)
+    // — unless the read failed: then no authoring is offered.
     if (_isStaff) {
       final has = _overlay != null;
       return Padding(
         padding: const EdgeInsets.only(bottom: 20),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          if (has) _card(_overlay!, editable: true) else _addPrompt(),
+          if (failed) _failure(),
+          if (failed && has) const SizedBox(height: 8),
+          if (has) _card(_overlay!, editable: !failed)
+          else if (!failed) _addPrompt(),
         ]),
       );
     }
 
     // Client: only show when their coach has an overlay for this exercise.
-    if (_overlay?['has_coach_overlay'] != true) return const SizedBox.shrink();
-    return Padding(padding: const EdgeInsets.only(bottom: 20), child: _card(_overlay!, editable: false));
+    final shows = _overlay?['has_coach_overlay'] == true;
+    if (!failed && !shows) return const SizedBox.shrink();
+    return Padding(padding: const EdgeInsets.only(bottom: 20),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (failed) _failure(),
+        if (failed && shows) const SizedBox(height: 8),
+        if (shows) _card(_overlay!, editable: false),
+      ]));
   }
 
   Widget _addPrompt() => GestureDetector(
@@ -220,6 +270,24 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
     }
     await loadPacks();
     var sheetOverlay = _overlay;
+    // P0-FL-53a · a failed re-read of the overlay inside the sheet (after a
+    // voice note was cleared or recorded) is said in place of the voice note
+    // — never shown as "no voice note" — with a retry.
+    Object? sheetReadError;
+    var sheetRetrying = false;
+    Future<void> rereadSheet() async {
+      try {
+        sheetOverlay = await _svc.getCoachOverlay(widget.exerciseId);
+        sheetReadError = null;
+      } catch (e) {
+        sheetReadError = e;
+      }
+    }
+    // P0-FL-53a · a pack save that failed is said in the sheet, and the name
+    // typed is kept for the next try (the cues stay in the focus field).
+    final packNameCtl = TextEditingController();
+    String? packSaveError;
+    var savingPack = false;
     var expiry = 'never';
     var saving = false;
     if (!mounted) return;
@@ -233,7 +301,8 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (ctx) => StatefulBuilder(builder: (ctx, setSheet) {
         Future<void> saveAsPack() async {
-          final nameCtl = TextEditingController();
+          if (savingPack) return;
+          final nameCtl = packNameCtl;
           final name = await showDialog<String>(context: ctx, builder: (dctx) => AlertDialog(
             backgroundColor: _panel2,
             title: const Text('Save cue pack', style: TextStyle(color: _text, fontSize: 16)),
@@ -248,9 +317,18 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
           ));
           final cues = focusCtl.text.split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
           if (name != null && name.isNotEmpty && cues.isNotEmpty) {
-            await _svc.createCoachingPack(name, cues);
+            setSheet(() { savingPack = true; packSaveError = null; });
+            final ok = await _svc.createCoachingPack(name, cues);
+            if (!ok) {
+              savingPack = false;
+              packSaveError = couldntMessage('save your cue pack', _svc.lastError);
+              if (ctx.mounted) setSheet(() {});
+              return;
+            }
+            packNameCtl.clear();
             await loadPacks();
-            setSheet(() {});
+            savingPack = false;
+            if (ctx.mounted) setSheet(() {});
           }
         }
         Widget field(String label, TextEditingController c, String hint, {int min = 1}) => Column(
@@ -331,16 +409,36 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
             ],
             field('COACH FOCUS TODAY', focusCtl, 'Control the descent\nPush through your heels\nIgnore weight today', min: 3),
             Align(alignment: Alignment.centerRight, child: GestureDetector(
-              onTap: saveAsPack,
+              onTap: savingPack ? null : saveAsPack,
               child: const Padding(padding: EdgeInsets.only(bottom: 14),
                 child: Text('＋ Save these as a pack', style: TextStyle(color: _brand, fontSize: 12, fontWeight: FontWeight.w700))))),
+            if (packSaveError != null)
+              Padding(padding: const EdgeInsets.only(bottom: 14),
+                child: Semantics(liveRegion: true, container: true,
+                  child: Text(packSaveError!, style: const TextStyle(color: _text, fontSize: 12.5, height: 1.4)))),
             field('NOTE (optional)', noteCtl, 'A short message to your clients…', min: 2),
             field('YOUR VIDEO (optional — YouTube link or id)', videoCtl, 'https://youtu.be/…'),
             // ── Voice note ──
             const Text('VOICE NOTE (optional)',
                 style: TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1)),
             const SizedBox(height: 6),
-            if ((sheetOverlay?['voice_url']?.toString() ?? '').isNotEmpty)
+            if (sheetReadError != null)
+              Padding(padding: const EdgeInsets.only(bottom: 8),
+                child: SectionLoadFailure(
+                  what: 'your voice note',
+                  error: sheetReadError,
+                  busy: sheetRetrying,
+                  accent: _brand,
+                  textColor: _text,
+                  mutedColor: _muted,
+                  onRetry: () async {
+                    if (sheetRetrying) return;
+                    setSheet(() => sheetRetrying = true);
+                    await rereadSheet();
+                    sheetRetrying = false;
+                    if (ctx.mounted) setSheet(() {});
+                  }))
+            else if ((sheetOverlay?['voice_url']?.toString() ?? '').isNotEmpty)
               Padding(padding: const EdgeInsets.only(bottom: 8),
                 child: Row(children: [
                   Expanded(child: CoachVoicePlayer(
@@ -349,8 +447,8 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                   IconButton(icon: const Icon(Icons.delete_outline_rounded, color: _muted, size: 20),
                     onPressed: () async {
                       await _svc.clearCoachVoice(widget.exerciseId);
-                      sheetOverlay = await _svc.getCoachOverlay(widget.exerciseId);
-                      _load(); setSheet(() {});
+                      await rereadSheet();
+                      _load(); if (ctx.mounted) setSheet(() {});
                     }),
                 ])),
             Wrap(spacing: 6, children: [
@@ -371,8 +469,8 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
               exerciseId: widget.exerciseId,
               resolveExpiry: expiryDate,
               onRecorded: () async {
-                sheetOverlay = await _svc.getCoachOverlay(widget.exerciseId);
-                _load(); setSheet(() {});
+                await rereadSheet();
+                _load(); if (ctx.mounted) setSheet(() {});
               }),
             const SizedBox(height: 16),
             SizedBox(width: double.infinity, child: FilledButton(

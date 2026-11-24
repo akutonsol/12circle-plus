@@ -9,6 +9,8 @@ import '../data/custom_exercise_service.dart';
 import '../data/models/exercise_detail_model.dart';
 import '../../workout/data/models/video_variant_model.dart';
 import '../../workout/presentation/widgets/youtube_embed.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart' show couldntMessage;
+import '../../../core/observability/app_failure.dart' show reportError;
 import '../../auth/domain/auth_provider.dart';
 import '../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
 import 'widgets/coach_focus_section.dart';
@@ -491,14 +493,31 @@ class _EnrichFabState extends ConsumerState<_EnrichFab> {
     var slug = widget.exercise.slug;
     if (slug == null || slug.isEmpty) {
       slug = CustomExerciseService.slugify(widget.exercise.name);
-      await svc.updateExercise(widget.exercise.id, {'slug': slug});
+      // P0-FL-53a · the back-fill's result was ignored: enrichment then ran
+      // for a slug the exercise does not have. A failed back-fill stops here.
+      final slugged =
+          await svc.updateExercise(widget.exercise.id, {'slug': slug});
+      if (!slugged) {
+        final why = svc.lastError;
+        reportError('ExerciseDetail.enrich.slug', why ?? 'No slug was saved');
+        if (!mounted) return;
+        setState(() => _loading = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(couldntMessage(
+                'prepare this exercise for AI enrichment', why))));
+        return;
+      }
     }
     final res = await svc.enrichWithAI(slug);
     if (!mounted) return;
     if (!res.ok) {
+      // P0-FL-53a · the backend's own text was shown; it is recorded, and the
+      // member is told in the one voice.
+      reportError('ExerciseDetail.enrich', res.error ?? 'Enrichment failed');
       setState(() => _loading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(res.error ?? 'Enrichment failed')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              couldntMessage('generate coaching content', res.error))));
       return;
     }
     // P0-FL-50a · a failed re-read is not "nothing to refresh": the content

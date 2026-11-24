@@ -663,6 +663,10 @@ class CustomExerciseService {
   // ── Layered exercise media (coach overlay) ────────────────────────────────
   /// Resolve the highest-priority coaching overlay for the current viewer
   /// (client → coach → official). Null/`has_coach_overlay:false` if none.
+  ///
+  /// P0-FL-53a · a FAILED read throws (after being recorded): it returned
+  /// null, which is also "no overlay", so a client was silently shown no
+  /// coaching.
   Future<Map<String, dynamic>?> resolveExerciseMedia(String exerciseId) async {
     try {
       final uid = _db.auth.currentUser?.id;
@@ -670,17 +674,27 @@ class CustomExerciseService {
           params: {'p_exercise_id': exerciseId, 'p_viewer_id': uid});
       if (res is Map) return res.cast<String, dynamic>();
       return null;
-    } catch (e) { lastError = e; return null; }
+    } catch (e, st) {
+      reportError('CustomExerciseService.resolveExerciseMedia', e, st);
+      rethrow;
+    }
   }
 
   /// The current coach's own overlay for an exercise (for editing). Null if none.
+  ///
+  /// P0-FL-53a · a FAILED read throws (after being recorded): it returned
+  /// null, so Coach Focus offered "Add your coaching" — and saving that blank
+  /// editor overwrote the coach's existing overlay.
   Future<Map<String, dynamic>?> getCoachOverlay(String exerciseId) async {
     try {
       final uid = _db.auth.currentUser?.id;
       final r = await _db.from('coach_exercise_media').select()
           .eq('coach_id', uid ?? '').eq('exercise_id', exerciseId).maybeSingle();
       return r?.cast<String, dynamic>();
-    } catch (e) { lastError = e; return null; }
+    } catch (e, st) {
+      reportError('CustomExerciseService.getCoachOverlay', e, st);
+      rethrow;
+    }
   }
 
   /// Create/replace the coach's overlay (a partial override — any field optional).
@@ -715,14 +729,33 @@ class CustomExerciseService {
   }
 
   /// Save a named cue set for reuse across exercises.
+  ///
+  /// P0-FL-53a · false (with [lastError] set and the failure recorded) when
+  /// the insert failed or returned no row; the caller ignored the result and
+  /// carried on as if the pack were saved.
   Future<bool> createCoachingPack(String name, List<String> cues) async {
+    lastError = null; // never report an earlier call's error
     try {
       final uid = _db.auth.currentUser?.id;
-      if (uid == null || name.trim().isEmpty) return false;
-      await _db.from('coach_coaching_packs')
-          .insert({'coach_id': uid, 'name': name.trim(), 'cues': cues});
+      if (uid == null || name.trim().isEmpty) {
+        lastError = 'No cue pack was saved';
+        reportError('CustomExerciseService.createCoachingPack', lastError!);
+        return false;
+      }
+      final res = await _db.from('coach_coaching_packs')
+          .insert({'coach_id': uid, 'name': name.trim(), 'cues': cues})
+          .select('id');
+      if ((res as List).isEmpty) {
+        lastError = 'No cue pack was saved';
+        reportError('CustomExerciseService.createCoachingPack', lastError!);
+        return false;
+      }
       return true;
-    } catch (e) { lastError = e; return false; }
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.createCoachingPack', e, st);
+      return false;
+    }
   }
 
   Future<bool> deleteCoachingPack(String id) async {
@@ -980,16 +1013,29 @@ class CustomExerciseService {
 
   // ── Submit to Global Library ──────────────────────────────────────────────
 
+  /// P0-FL-53a · false (with [lastError] set and the failure recorded) when
+  /// the update failed OR changed no row — an RLS-filtered update answers
+  /// with no error and no row, which was reported as "Published".
   Future<bool> submitForGlobalLibrary(String exerciseId) async {
+    lastError = null; // never report an earlier call's error
     try {
-      await _db.from('custom_exercises').update({
+      final res = await _db.from('custom_exercises').update({
         // Platform-wide publishing: goes live for all clients immediately.
         'submission_status': 'approved',
         'submitted_at': DateTime.now().toUtc().toIso8601String(),
         'visibility': 'global',
-      }).eq('id', exerciseId);
+      }).eq('id', exerciseId).select('id');
+      if ((res as List).isEmpty) {
+        lastError = 'No exercise was submitted';
+        reportError('CustomExerciseService.submitForGlobalLibrary', lastError!);
+        return false;
+      }
       return true;
-    } catch (e) { lastError = e; return false; }
+    } catch (e, st) {
+      lastError = e;
+      reportError('CustomExerciseService.submitForGlobalLibrary', e, st);
+      return false;
+    }
   }
 
   // ── Admin: Global Library moderation (EL-005) ─────────────────────────────
