@@ -58,13 +58,10 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
   /// predate it, so it is read again instead of being applied.
   int _confirmedWrites = 0;
 
-  /// The certification dialog's route, while it is open: its typed text and
-  /// list belong to the coach it was opened for.
-  Route<Object?>? _certDialog;
-
-  /// The open invite dialog's field (that coach's invitee): emptied with the
-  /// rest. The dialog itself stays and its Invite refuses out loud (P0-FL-54).
-  TextEditingController? _inviteCtrl;
+  /// The certification or invite dialog's route, from the moment it is opened
+  /// (before its first frame): what is typed in it belongs to the coach it was
+  /// opened for.
+  Route<Object?>? _dialog;
 
   // Team members
   List<Map<String, dynamic>> _team = [];
@@ -132,8 +129,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
 
   /// Nothing of the previous coach's stays: form, lists, team, reviews.
   void _forget() {
-    _closeCertDialog();
-    _inviteCtrl?.clear();
+    _closeDialog();
     _formEpoch++;
     _confirmedText.clear();
     _confirmedSpecialties = [];
@@ -151,14 +147,31 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     _yearsErrorText = null;
   }
 
-  /// P0-FL-57b: the open certification dialog goes with the coach it was
-  /// opened for — at once (no closing animation still showing what they
-  /// typed), and silently (the coach now signed in did not open it). Nothing
-  /// is submitted.
-  void _closeCertDialog() {
-    final route = _certDialog;
-    _certDialog = null;
+  /// P0-FL-57b: the open dialog goes with the coach it was opened for — at
+  /// once (no closing animation still showing what they typed), and silently
+  /// (the coach now signed in did not open it). Nothing is submitted.
+  void _closeDialog() {
+    final route = _dialog;
+    _dialog = null;
     if (route != null && route.isActive) route.navigator?.removeRoute(route);
+  }
+
+  /// [showDialog], with the route known at once: one whose first frame has not
+  /// been built yet closes with its coach too. One at a time (a second one
+  /// would go untracked), and only over the signed-in coach's own profile;
+  /// null when it did not open.
+  Future<String?> _openDialog(String what, Widget dialog) {
+    if (_dialog?.isActive ?? false) return Future.value();
+    if (_requireShownCoach(what) == null) return Future.value();
+    final nav = Navigator.of(context, rootNavigator: true);
+    final route = DialogRoute<String>(
+        context: context,
+        builder: (_) => dialog,
+        barrierColor: DialogTheme.of(context).barrierColor ?? Colors.black54,
+        themes: InheritedTheme.capture(from: context, to: nav.context),
+        traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop);
+    _dialog = route;
+    return nav.push(route);
   }
 
   /// [c] takes the server's value unless the coach changed it meanwhile.
@@ -282,22 +295,24 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     return uid;
   }
 
-  void _say(String msg, {bool error = false, SnackBarAction? action}) {
+  void _say(String msg,
+      {bool error = false, SnackBarAction? action, bool long = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
-        .showSnackBar(_snack(msg, error: error, action: action));
+        .showSnackBar(_snack(msg, error: error, action: action, long: long));
   }
 
   /// The one SnackBar style on this screen (also used where only a captured
   /// messenger is available, e.g. after a dialog closed). With an [action]
-  /// it stays longer (time to reach it) but still goes by itself.
+  /// it stays longer (time to reach it) but still goes by itself; so does a
+  /// [long] text.
   static SnackBar _snack(String msg,
-          {bool error = false, SnackBarAction? action}) =>
+          {bool error = false, SnackBarAction? action, bool long = false}) =>
       SnackBar(
           content: Text(msg),
           action: action,
           persist: action == null ? null : false,
-          duration: action == null
+          duration: action == null && !long
               ? const Duration(milliseconds: 4000)
               : const Duration(seconds: 10),
           backgroundColor:
@@ -416,6 +431,15 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       if (writes != _confirmedWrites) return _load();
       final team = teamData;
       final p = profileData;
+      if (!refresh) {
+        // Not the coach whose form was shown: nothing to merge. Text or a tap
+        // that reached the previous coach's fields after they were dropped
+        // (before the form was rebuilt) is theirs, not an edit of this one.
+        for (final c in [_bioCtrl, _priceCtrl, _yearsCtrl, _taglineCtrl]) {
+          c.clear();
+        }
+        _specialties = [];
+      }
       _takeFresh(_bioCtrl, p['bio'] as String? ?? '');
       _takeFresh(_priceCtrl, _numText(p['pricing_monthly']));
       _takeFresh(_yearsCtrl, _numText(p['years_experience']));
@@ -570,7 +594,8 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     }
   }
 
-  static const _photoFileLeft = "The uploaded file couldn't be removed.";
+  static const _photoFileLeft =
+      'A copy may remain in storage — mention it to support.';
   static const _photoUnconfirmed =
       "Couldn't confirm the photo was added — look for it here before adding "
       'it again.';
@@ -608,45 +633,45 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     }
   }
 
-  /// The database answered and refused: nothing was written. A gateway answer
-  /// (a bare 5xx, e.g. a timeout) or no answer says nothing about the write.
+  /// The database answered and refused: nothing was written. Anything else —
+  /// no answer, a gateway's (a bare 5xx), or a code that says the connection
+  /// or the server went away (PGRST00x; SQLSTATE 08, 57P, 58, 40003) — says
+  /// nothing about the write.
   static bool _refused(Object e) =>
+      !isNetworkFailure(e) &&
       e is PostgrestException &&
       e.code != null &&
-      !RegExp(r'^5\d\d$').hasMatch(e.code!);
-
-  /// True only when [uid]'s own profile was read and does not list [path].
-  Future<bool> _photoNotListed(String path, String uid) async {
-    if (_db.auth.currentUser?.id != uid) return false;
-    try {
-      final row = await _db
-          .from('user_profiles')
-          .select('transformation_photo_urls')
-          .eq('id', uid)
-          .maybeSingle();
-      if (row == null || _db.auth.currentUser?.id != uid) return false;
-      final urls = row['transformation_photo_urls'] as List? ?? const [];
-      return !urls.any((u) => '$u'.contains(path));
-    } catch (e, s) {
-      reportError('CoachBusinessScreen._photoNotListed', e, s);
-      return false;
-    }
-  }
+      !_saysNothingAboutTheWrite.hasMatch(e.code!);
+  static final _saysNothingAboutTheWrite =
+      RegExp(r'^(5\d\d|PGRST00\w|08\w{3}|57P\w{2}|58\w{3}|40003)$');
 
   /// Removes exactly [path], the object this tap uploaded for [uid]. True when
   /// it is gone; a failure is recorded and never makes the photo a success.
   ///
+  /// Only as [uid]: with another account (or none) signed in, nothing is sent
+  /// under their login — the file is kept and recorded.
+  ///
   /// `remove` answers with what it removed and does not throw for an object it
-  /// may not delete, so an empty answer is checked: gone is fine, still there
-  /// is a failure. The check is believed only while [uid] is signed in — for
-  /// anyone else "not found" can also mean "not yours to see".
+  /// may not delete, so an empty answer is checked in the folder's listing, by
+  /// exact name (`exists` would read any 400 as "not there"): gone is fine,
+  /// still there is a failure. The listing is believed only while [uid] is
+  /// signed in — for anyone else "not found" can also mean "not yours to see".
   Future<bool> _removeUploaded(String path, String uid) async {
     const origin = 'CoachBusinessScreen._removeUploaded';
     final bucket = _db.storage.from('coach-media');
+    final slash = path.lastIndexOf('/');
+    final name = path.substring(slash + 1);
     bool isOwner() => _db.auth.currentUser?.id == uid;
     try {
-      if ((await bucket.remove([path])).isNotEmpty) return true;
-      if (isOwner() && !await bucket.exists(path) && isOwner()) return true;
+      if (isOwner()) {
+        if ((await bucket.remove([path])).isNotEmpty) return true;
+        if (isOwner()) {
+          final found = await bucket.list(
+              path: path.substring(0, slash),
+              searchOptions: SearchOptions(search: name));
+          if (isOwner() && !found.any((f) => f.name == name)) return true;
+        }
+      }
       reportError(
           origin,
           StateError('coach-media: an uploaded photo that is in no profile '
@@ -665,8 +690,8 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     final uid = _requireShownCoach('add the photo');
     if (uid == null) return;
     setState(() => _uploadingFor.add(uid));
-    // Set once the object is in storage: from then on every way out that does
-    // not put it in the profile removes it again (P0-FL-57b).
+    // Set once the object is in storage: from then on every way out that
+    // certainly does not put it in the profile removes it again (P0-FL-57b).
     String? uploaded;
     try {
       final picked = await _pickPhoto(uid);
@@ -704,7 +729,8 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
                 ? _couldntNothingChanged('add the photo')
                 : "Couldn't add the photo — try again in a moment. If it keeps "
                     'happening, contact support. $_photoFileLeft',
-            error: true);
+            error: true,
+            long: !gone);
         return;
       }
       if (!_writeConfirmed(uid, epoch)) {
@@ -716,25 +742,29 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       _say('Photo added');
       await _load();
     } catch (e, s) {
-      reportError('CoachBusinessScreen._uploadTransformationPhoto', e, s);
+      const origin = 'CoachBusinessScreen._uploadTransformationPhoto';
       final path = uploaded;
       if (path == null) {
+        reportError(origin, e, s);
         if (_shows(uid)) _say(_couldnt('add the photo', e), error: true);
         return;
       }
-      // Removed only when the photo is known not to be in the profile: with no
-      // answer the update may have landed, and removing the object then would
-      // leave a broken photo on the coach's public profile.
-      if (!_refused(e) && !await _photoNotListed(path, uid)) {
+      // Removed only when the photo is certainly not in the profile. Otherwise
+      // the update may have landed, or may still land after any read, and
+      // removing the file would leave a broken photo on the coach's public
+      // profile: the file is kept (it may be an orphan) and recorded.
+      if (!_refused(e)) {
+        reportError('$origin.unconfirmed', e, s);
         if (!_shows(uid)) return;
-        _say(_photoUnconfirmed, error: true);
+        _say(_photoUnconfirmed, error: true, long: true);
         await _load(); // the next photo is added to the list read now
         return;
       }
+      reportError(origin, e, s);
       final gone = await _removeUploaded(path, uid);
       if (!_shows(uid)) return;
       final said = _couldnt('add the photo', e);
-      _say(gone ? said : '$said $_photoFileLeft', error: true);
+      _say(gone ? said : '$said $_photoFileLeft', error: true, long: !gone);
     } finally {
       // Only this coach's own guard is cleared (another coach may have
       // started a photo of their own meanwhile).
@@ -874,77 +904,96 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     // popped left the closing animation rendering a disposed controller.
     // P0-FL-54: what is typed here is for the coach shown when it opened.
     final forCoach = _loadedFor;
-    final existing = List<String>.unmodifiable(_certifications);
-    final text = await showDialog<String>(
-        context: context,
-        builder: (dctx) {
-          _certDialog = ModalRoute.of(dctx);
-          return _AddCertDialog(existing: existing);
-        });
+    final text = await _openDialog(
+        'add the certification',
+        _AddCertDialog(
+            existing: List<String>.unmodifiable(_certifications)));
     if (text != null && text.isNotEmpty) {
       await _addCertification(text, forCoach: forCoach);
     }
   }
 
-  void _showInviteTeam() => showDialog(context: context, builder: (dctx) {
-    final ctrl = _inviteCtrl = TextEditingController();
+  Future<void> _showInviteTeam() async {
     final messenger = ScaffoldMessenger.of(context);
     // P0-FL-54: the invite joins the team of the coach shown when it opened.
     final forCoach = _loadedFor;
-    return AlertDialog(
-      backgroundColor: _card,
-      title: const Text('Invite Team Member', style: TextStyle(color: _wht)),
-      content: TextField(controller: ctrl, style: const TextStyle(color: _wht),
-        decoration: const InputDecoration(hintText: 'Email address', hintStyle: TextStyle(color: _mut))),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(dctx), child: const Text('Cancel', style: TextStyle(color: _mut))),
-        TextButton(onPressed: () async {
-          final email = ctrl.text.trim();
-          Navigator.pop(dctx);
-          final uid = _db.auth.currentUser?.id;
-          // Refused out loud before the empty check: an account change has
-          // emptied the field.
-          if (email.isEmpty && uid != null && uid == forCoach && uid == _loadedFor) return;
-          if (uid == null) {
-            messenger.showSnackBar(_snack(_signedOutMsg, error: true));
-            return;
-          }
-          if (uid != forCoach || uid != _loadedFor) {
-            messenger.showSnackBar(
-                _snack(_otherAccount('save the invite'), error: true));
-            return;
-          }
-          try {
-            await _db.from('coach_team_invites')
-                .insert({'coach_id': uid, 'email': email, 'role': 'assistant_coach'});
-          } catch (e, s) {
-            // The invite was not saved, so no email goes out claiming one.
-            reportError('CoachBusinessScreen._showInviteTeam', e, s);
-            if (_stillInvitingAs(uid)) {
-              messenger.showSnackBar(
-                  _snack(_couldnt('save the invite', e), error: true));
-            }
-            return;
-          }
-          // P0-FL-54 · the account may have changed while the insert was in
-          // flight. The email goes out under the login of whoever is signed
-          // in (it names them), so it is sent — and announced — only while
-          // the inviting coach is still the one signed in and shown.
-          if (!_stillInvitingAs(uid)) return;
-          var ok = true;
-          try {
-            final res = await _db.functions.invoke('send-invite-email',
-                body: {'email': email, 'type': 'team'});
-            ok = (res.data is Map) && res.data['sent'] == true;
-          } catch (_) { ok = false; }
-          if (!_stillInvitingAs(uid)) return;
-          messenger.showSnackBar(ok
-              ? SnackBar(content: Text('Invite email sent to $email'))
-              : _snack(_inviteEmailNotSent, error: true));
-        }, child: const Text('Invite', style: TextStyle(color: _brand))),
-      ],
-    );
-  });
+    final email = await _openDialog('save the invite', const _InviteDialog());
+    if (email == null || email.isEmpty) return;
+    final uid = _db.auth.currentUser?.id;
+    if (uid == null) {
+      messenger.showSnackBar(_snack(_signedOutMsg, error: true));
+      return;
+    }
+    if (uid != forCoach || uid != _loadedFor) {
+      messenger.showSnackBar(
+          _snack(_otherAccount('save the invite'), error: true));
+      return;
+    }
+    try {
+      await _db.from('coach_team_invites')
+          .insert({'coach_id': uid, 'email': email, 'role': 'assistant_coach'});
+    } catch (e, s) {
+      // The invite was not saved, so no email goes out claiming one.
+      reportError('CoachBusinessScreen._showInviteTeam', e, s);
+      if (_stillInvitingAs(uid)) {
+        messenger.showSnackBar(
+            _snack(_couldnt('save the invite', e), error: true));
+      }
+      return;
+    }
+    // P0-FL-54 · the account may have changed while the insert was in
+    // flight. The email goes out under the login of whoever is signed
+    // in (it names them), so it is sent — and announced — only while
+    // the inviting coach is still the one signed in and shown.
+    if (!_stillInvitingAs(uid)) return;
+    var ok = true;
+    try {
+      final res = await _db.functions.invoke('send-invite-email',
+          body: {'email': email, 'type': 'team'});
+      ok = (res.data is Map) && res.data['sent'] == true;
+    } catch (_) { ok = false; }
+    if (!_stillInvitingAs(uid)) return;
+    messenger.showSnackBar(ok
+        ? SnackBar(content: Text('Invite email sent to $email'))
+        : _snack(_inviteEmailNotSent, error: true));
+  }
+}
+
+/// Answers the typed email (trimmed); null when cancelled.
+class _InviteDialog extends StatefulWidget {
+  const _InviteDialog();
+  @override
+  State<_InviteDialog> createState() => _InviteDialogState();
+}
+
+class _InviteDialogState extends State<_InviteDialog> {
+  final _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  /// Pops this dialog only while it is still open (see [_AddCertDialogState]).
+  void _close([String? email]) {
+    if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
+      Navigator.pop(context, email);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    backgroundColor: _card,
+    title: const Text('Invite Team Member', style: TextStyle(color: _wht)),
+    content: TextField(controller: _ctrl, style: const TextStyle(color: _wht),
+      decoration: const InputDecoration(hintText: 'Email address', hintStyle: TextStyle(color: _mut))),
+    actions: [
+      TextButton(onPressed: _close, child: const Text('Cancel', style: TextStyle(color: _mut))),
+      TextButton(onPressed: () => _close(_ctrl.text.trim()),
+        child: const Text('Invite', style: TextStyle(color: _brand))),
+    ],
+  );
 }
 
 class _AddCertDialog extends StatefulWidget {

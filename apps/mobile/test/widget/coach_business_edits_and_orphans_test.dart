@@ -24,6 +24,16 @@ import '../support/pump_until.dart';
 //
 // HOW TO SEE IT FAIL: `git checkout f191d48 -- \
 //   apps/mobile/lib/features/coach/presentation/coach_business_screen.dart`.
+//
+// Round 2 (review of 9607c80; check that commit's screen out to see it fail):
+//   S1    text or a specialty tap in the frame after A→B became B's "edit";
+//   S2    a coded connection failure counted as a refusal, and after no answer
+//         the list was read and the file deleted — the update could have
+//         landed, or land later: a photo on the profile with no file;
+//   S4/S5 the removal went out under B's login, `exists` read a 400 as "not
+//         there", and a percent-encoded URL as "not listed";
+//   the invite dialog stayed open over B; a dialog opened but not yet built
+//   was not closed with its coach.
 
 const _a = 'c0ac0000-0000-4000-8000-00000000000a';
 const _b = 'c0ac0000-0000-4000-8000-00000000000b';
@@ -69,9 +79,29 @@ enum _Patch {
 
   /// No answer, but the write DID land.
   networkLanded,
+
+  /// No answer; the write lands right after the next profile read answered.
+  landsAfterRead,
+
+  /// Answers [_Server.patchCode], but the write DID land.
+  codedLanded,
 }
 
-enum _Remove { removed, absent, stillThere, thrown, checkThrown }
+enum _Remove {
+  removed,
+
+  /// Removed nothing, and the listing does not have it.
+  absent,
+
+  /// Removed nothing, and the listing still has it.
+  stillThere,
+  thrown,
+
+  /// Removed nothing, and the existence check fails: a 500, or a 400 (which
+  /// `exists()` reads as "not there").
+  checkThrown,
+  check400,
+}
 
 class _Server extends http.BaseClient {
   final rows = <String, Map<String, Object?>>{};
@@ -80,9 +110,6 @@ class _Server extends http.BaseClient {
 
   /// Every `user_profiles` read answers 500 while set.
   bool readsFail = false;
-
-  /// Reads of the photo list only (`select=transformation_photo_urls`) fail.
-  bool photoReadFails = false;
 
   /// The NEXT full profile read of `uid` is held, and answers with the row as
   /// it was when the read arrived.
@@ -93,12 +120,24 @@ class _Server extends http.BaseClient {
 
   Completer<void>? uploadGate;
   Completer<void>? patchGate;
+  Completer<void>? removeGate;
   bool uploadFails = false;
+
+  /// The error `code` of [_Patch.codedLanded].
+  String patchCode = '';
+
+  /// Lands the pending [_Patch.landsAfterRead] write.
+  VoidCallback? _lateLand;
 
   final calls = <String>[];
   final patches = <String>[];
   final uploads = <String>[];
   final removes = <List<String>>[];
+
+  /// Whose login (JWT `sub`) each removal was sent under.
+  final removedAs = <Object?>[];
+
+  /// Every existence check, whichever way it is made.
   final checks = <String>[];
 
   void reset() {
@@ -108,11 +147,13 @@ class _Server extends http.BaseClient {
       ..[_b] = _rowB();
     patchMode = _Patch.ok;
     remove = _Remove.removed;
-    readsFail = photoReadFails = uploadFails = false;
+    readsFail = uploadFails = false;
     holdOnce.clear();
     held.clear();
-    uploadGate = patchGate = null;
-    for (final l in [calls, patches, uploads, removes, checks]) {
+    uploadGate = patchGate = removeGate = null;
+    patchCode = '';
+    _lateLand = null;
+    for (final l in [calls, patches, uploads, removes, removedAs, checks]) {
       l.clear();
     }
   }
@@ -138,6 +179,12 @@ class _Server extends http.BaseClient {
           final prefixes =
               List<String>.from((jsonDecode(body) as Map)['prefixes'] as List);
           removes.add(prefixes);
+          final jwt = request.headers['Authorization']!.split('.');
+          removedAs.add(jwt.length < 2
+              ? null // not a session: the publishable key
+              : (jsonDecode(utf8.decode(base64Url
+                  .decode(base64Url.normalize(jwt[1])))) as Map)['sub']);
+          if (removeGate != null) await removeGate!.future;
           return switch (remove) {
             _Remove.removed => _json([
                 {'name': prefixes.single, 'bucket_id': 'coach-media'}
@@ -150,12 +197,19 @@ class _Server extends http.BaseClient {
           final status = switch (remove) {
             _Remove.stillThere => 200,
             _Remove.checkThrown => 500,
+            _Remove.check400 => 400,
             _ => 404,
           };
           return http.StreamedResponse(const Stream.empty(), status,
               request: request);
         default:
-          uploads.add(path.substring(object.length + 1));
+          if (path == '/storage/v1/object/list/coach-media') {
+            return _list(
+                jsonDecode(await request.finalize().bytesToString()) as Map,
+                request);
+          }
+          // Stored under the decoded name, as storage does.
+          uploads.add(Uri.decodeComponent(path.substring(object.length + 1)));
           if (uploadGate != null) await uploadGate!.future;
           return uploadFails
               ? _json({'message': 'boom'}, 500, request)
@@ -184,6 +238,12 @@ class _Server extends http.BaseClient {
         case _Patch.networkLanded:
           land();
           throw http.ClientException('offline', u);
+        case _Patch.landsAfterRead:
+          _lateLand = land;
+          throw http.ClientException('offline', u);
+        case _Patch.codedLanded:
+          land();
+          return _json({'message': 'lost', 'code': patchCode}, 503, request);
         case _Patch.ok:
           land();
       }
@@ -195,10 +255,10 @@ class _Server extends http.BaseClient {
     }
     if (table == 'user_profiles') {
       final then = rows[id];
+      _lateLand?.call(); // after this read took its answer
+      _lateLand = null;
       if (u.queryParameters['select'] == 'transformation_photo_urls') {
-        return photoReadFails
-            ? _json({'message': 'boom', 'code': 'XX000'}, 500, request)
-            : _json(then, 200, request);
+        return _json(then, 200, request);
       }
       final hold = holdOnce.remove(id);
       if (hold != null) {
@@ -211,6 +271,28 @@ class _Server extends http.BaseClient {
       return _json(then, 200, request);
     }
     return _json([], 200, request);
+  }
+
+  /// Like storage: names that start with `search`, at most `limit` of them, in
+  /// name order. The folder has 120 older photos and one whose name starts
+  /// with the uploaded one's.
+  http.StreamedResponse _list(Map body, http.BaseRequest request) {
+    final search = body['search'] as String? ?? '';
+    checks.add('${body['prefix']}/$search');
+    if (remove == _Remove.checkThrown || remove == _Remove.check400) {
+      final status = remove == _Remove.check400 ? 400 : 500;
+      return _json({'statusCode': '$status', 'message': 'boom'}, status,
+          request);
+    }
+    final name = uploads.last.split('/').last;
+    final names = [
+      for (var i = 0; i < 120; i++) '${1000000000000 + i}.jpg',
+      if (remove == _Remove.stillThere) name,
+      '$name.copy',
+    ].where((n) => n.startsWith(search)).take(body['limit'] as int);
+    return _json([
+      for (final n in names) {'name': n, 'id': n}
+    ], 200, request);
   }
 
   http.StreamedResponse _json(Object? body, int status, http.BaseRequest r) =>
@@ -279,7 +361,7 @@ class _OnRemove extends NavigatorObserver {
 
 const _later =
     'try again in a moment. If it keeps happening, contact support.';
-const _fileLeft = "The uploaded file couldn't be removed.";
+const _fileLeft = 'A copy may remain in storage — mention it to support.';
 const _unconfirmed =
     "Couldn't confirm the photo was added — look for it here before adding "
     'it again.';
@@ -545,22 +627,218 @@ void main() {
       await close(tester);
     });
 
-    testWidgets("sibling: the invite dialog shows nothing of A's after a "
-        'switch, and its Invite is refused out loud', (tester) async {
-      await open(tester);
+    // Security S3 / UX #2 (round 2): the invite dialog goes the same way.
+    Future<void> typeInvite(WidgetTester tester) async {
       await showTab(tester, 'Team');
       await tester.tap(find.text('Invite Assistant Coach'));
       await tester.pumpAndSettle();
       await tester.enterText(dialogField(), 'invitee-of-a@example.com');
-      await switchTo(tester, _b);
-      expect(find.text('invitee-of-a@example.com'), findsNothing);
-      await tester.tap(find.text('Invite'));
+      await tester.pump(const Duration(seconds: 1)); // into the undo history
+    }
+
+    bool invited() => server.calls.any((c) =>
+        c.contains('coach_team_invites') || c.contains('send-invite-email'));
+
+    for (final to in [_b, null]) {
+      testWidgets(
+          "${to == null ? 'sign-out' : 'A → B'}: the invite dialog and A's "
+          'typed email are gone, undo does not bring it back, nothing is '
+          'written, sent or said', (tester) async {
+        await open(tester);
+        await typeInvite(tester);
+        final invite = tester
+            .widget<TextButton>(find.widgetWithText(TextButton, 'Invite'));
+        final cancel = tester
+            .widget<TextButton>(find.widgetWithText(TextButton, 'Cancel'));
+        await switchTo(tester, to);
+        expect(find.byType(AlertDialog), findsNothing,
+            reason: "THE defect: A's dialog open on B's screen");
+        Future<void> undo() async {
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+          await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+          await tester.pump(const Duration(seconds: 1));
+        }
+
+        await undo();
+        expect(find.text('invitee-of-a@example.com'), findsNothing);
+        // A press that still reaches the closed dialog's buttons does nothing.
+        invite.onPressed!();
+        cancel.onPressed!();
+        await settle(tester);
+        expect(find.byType(CoachBusinessScreen), findsOneWidget);
+        expect(invited(), isFalse);
+        expect(find.byType(SnackBar), findsNothing);
+        if (to == _b) {
+          // B's own dialog starts empty, with nothing of A's to undo.
+          await tester.tap(find.text('Invite Assistant Coach'));
+          await tester.pumpAndSettle();
+          await tester.tap(dialogField());
+          await tester.pump();
+          await undo();
+          expect(textOf(tester, dialogField()), '');
+          await tester.tap(find.text('Cancel'));
+          await tester.pumpAndSettle();
+        }
+        await close(tester);
+      });
+    }
+
+    testWidgets('negative control: the same coach\'s session event keeps the '
+        "invite dialog; Invite then joins that coach's team", (tester) async {
+      await open(tester);
+      await typeInvite(tester);
+      await tester.runAsync(() => auth().recoverSession(_session(_a)));
       await settle(tester);
-      expect(server.calls.where((c) => c.contains('coach_team_invites')),
-          isEmpty);
-      expect(find.textContaining("Couldn't save the invite"), findsOneWidget);
+      expect(textOf(tester, dialogField()), 'invitee-of-a@example.com');
+      await tester.tap(find.text('Invite'));
+      await waitFor(tester, invited, 'the invite');
+      await settle(tester);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(CoachBusinessScreen), findsOneWidget);
       await close(tester);
     });
+
+    testWidgets('negative control: Cancel, or Invite with no email, only '
+        'closes the invite dialog', (tester) async {
+      await open(tester);
+      await showTab(tester, 'Team');
+      for (final button in ['Cancel', 'Invite']) {
+        await tester.tap(find.text('Invite Assistant Coach'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(button));
+        await tester.pumpAndSettle();
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(find.byType(CoachBusinessScreen), findsOneWidget);
+      }
+      expect(invited(), isFalse);
+      expect(find.byType(SnackBar), findsNothing);
+      await close(tester);
+    });
+
+    // QA point 4 (round 2): the route is known before its first frame.
+    for (final (tab, button) in const [
+      ('Profile', '+ Add'),
+      ('Team', 'Invite Assistant Coach'),
+    ]) {
+      testWidgets('$button tapped, B signs in before its first frame: no '
+          'dialog opens over B', (tester) async {
+        await open(tester);
+        await showTab(tester, tab);
+        await tester.tap(find.text(button).first); // no frame
+        await tester.runAsync(() => auth().recoverSession(_session(_b)));
+        await settle(tester);
+        expect(find.byType(AlertDialog), findsNothing,
+            reason: "THE defect: A's dialog opened over B's screen");
+        expect(find.byType(CoachBusinessScreen), findsOneWidget);
+        expect(find.byType(SnackBar), findsNothing);
+        await showTab(tester, 'Profile');
+        expect(textOf(tester, bio()), 'Bravo bio');
+        await close(tester);
+      });
+
+      testWidgets('$button tapped twice in one frame opens one dialog, and a '
+          'switch leaves none', (tester) async {
+        await open(tester);
+        await showTab(tester, tab);
+        final spot = tester.getCenter(find.text(button).first);
+        await tester.tapAt(spot);
+        await tester.tapAt(spot);
+        await settle(tester);
+        expect(find.byType(AlertDialog), findsOneWidget);
+        await switchTo(tester, _b);
+        expect(find.byType(AlertDialog), findsNothing,
+            reason: 'a second, untracked dialog stayed over B');
+        await close(tester);
+      });
+
+      testWidgets('$button tapped on A\'s last frame after the screen heard of '
+          'the switch is refused out loud: no dialog', (tester) async {
+        await open(tester);
+        await showTab(tester, tab);
+        await tester.runAsync(() => auth().recoverSession(_session(_b)));
+        await tester.tap(find.text(button).first); // still A's frame
+        await settle(tester);
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(
+            find.textContaining("you're signed in to a different account now"),
+            findsOneWidget);
+        await close(tester);
+      });
+    }
+
+    // QA mutant M2 (round 2). The dialog answered for A, and the answer is
+    // delivered only after B is signed in AND B's profile is shown: then the
+    // screen's own "is this the coach shown?" passes, and only "is this the
+    // coach the dialog was opened for?" refuses. The delivery is a microtask,
+    // so it is held by running the opening tap in a zone that holds them.
+    for (final toB in [true, false]) {
+      for (final (tab, button, action) in const [
+        ('Profile', '+ Add', 'Add'),
+        ('Team', 'Invite Assistant Coach', 'Invite'),
+      ]) {
+        testWidgets(
+            "A's $action delivered late, "
+            '${toB ? 'once B is shown: refused, nothing written' : 'A still shown (control): written for A'}',
+            (tester) async {
+          var holding = false;
+          final held = <void Function()>[];
+          final zone = Zone.current.fork(
+              specification: ZoneSpecification(
+                  scheduleMicrotask: (_, parent, z, f) => holding
+                      ? held.add(f)
+                      : parent.scheduleMicrotask(z, f)));
+          await open(tester);
+          await showTab(tester, tab);
+          if (action == 'Add') {
+            zone.run(tester
+                .widget<GestureDetector>(find
+                    .ancestor(
+                        of: find.text(button).first,
+                        matching: find.byType(GestureDetector))
+                    .first)
+                .onTap!);
+          } else {
+            zone.run(tester
+                .widget<OutlinedButton>(find.ancestor(
+                    of: find.text(button),
+                    matching: find.bySubtype<OutlinedButton>()))
+                .onPressed!);
+          }
+          await settle(tester);
+          await tester.enterText(dialogField(), 'late-from-a');
+          await tester.pump();
+          holding = true;
+          await tester.tap(find.widgetWithText(TextButton, action));
+          await settle(tester);
+          expect(held, isNotEmpty, reason: 'premise: the answer is held');
+          if (toB) {
+            await switchTo(tester, _b);
+            await showTab(tester, 'Profile');
+            expect(textOf(tester, bio()), 'Bravo bio', reason: 'premise');
+          }
+          holding = false;
+          held.forEach(zone.run);
+          await settle(tester);
+          await settle(tester);
+          if (toB) {
+            expect(server.patches, isEmpty,
+                reason: "A's certification into B's row");
+            expect(invited(), isFalse, reason: "A's invite into B's team");
+            expect(
+                find.textContaining(
+                    "you're signed in to a different account now"),
+                findsOneWidget);
+          } else if (action == 'Add') {
+            expect(server.patches.single, contains('id=eq.$_a'));
+            expect(lastPatch()['certifications'], ['NASM-CPT', 'late-from-a']);
+          } else {
+            expect(invited(), isTrue);
+          }
+          await close(tester);
+        });
+      }
+    }
   });
 
   // ── (b) unsaved edits ─────────────────────────────────────────────────────
@@ -793,6 +1071,46 @@ void main() {
       await close(tester);
     });
 
+    // Security S1 (round 2): text or a tap that still reaches A's fields after
+    // they were dropped, before the form is rebuilt, is not B's edit.
+    for (final to in [_b, _a]) {
+      testWidgets(
+          '${to == _b ? 'A → B' : 'A signs out and in again'}: text arriving '
+          'in the frame before the form rebuilds is not kept or saved',
+          (tester) async {
+        await open(tester);
+        await tester.enterText(bio(), 'Typed by A');
+        if (to == _a) await tester.runAsync(() => auth().signOut());
+        await tester.runAsync(() => auth().recoverSession(_session(to)));
+        // The platform's text still reaches the field on A's last frame.
+        expect(bio().evaluate(), isNotEmpty, reason: 'premise: no frame yet');
+        tester.testTextInput
+            .updateEditingValue(const TextEditingValue(text: 'Typed by A!'));
+        expect(textOf(tester, bio()), 'Typed by A!', reason: 'premise');
+        await settle(tester);
+        expect(textOf(tester, bio()), to == _b ? 'Bravo bio' : 'Alpha bio',
+            reason: "THE defect: A's text kept as an unsaved edit");
+        await tapSave(tester);
+        expect(server.patches.single, contains('id=eq.$to'));
+        expect(lastPatch()['bio'], to == _b ? 'Bravo bio' : 'Alpha bio');
+        await close(tester);
+      });
+    }
+
+    testWidgets('A → B: a specialty tapped in the frame before the form '
+        "rebuilds is not saved into B's row", (tester) async {
+      await open(tester);
+      await showTab(tester, 'Specialties');
+      await tester.runAsync(() => auth().recoverSession(_session(_b)));
+      await tester.tap(find.text('Powerlifting')); // A's last frame
+      await settle(tester);
+      await tapSave(tester);
+      expect(server.patches.single, contains('id=eq.$_b'));
+      expect(lastPatch()['specialties'], ['Yoga'],
+          reason: "THE defect: A's late tap replaced B's specialties");
+      await close(tester);
+    });
+
     testWidgets("a same-frame switch, then B's read fails: nothing A typed is "
         'shown; once B is read, B takes B\'s values', (tester) async {
       await open(tester);
@@ -888,17 +1206,15 @@ void main() {
       await settle(tester);
     }
 
+    Set<String> removalFailures() =>
+        origins().where((o) => o.endsWith('_removeUploaded')).toSet();
+
     for (final (patch, said) in const [
       (_Patch.refused, "Couldn't add the photo — $_later"),
       (
         _Patch.zeroRows,
         "Couldn't add the photo — nothing was changed. Try again in a moment. "
             'If it keeps happening, contact support.'
-      ),
-      (_Patch.gateway, "Couldn't add the photo — $_later"),
-      (
-        _Patch.networkLost,
-        "Couldn't add the photo — check your connection and try again."
       ),
     ]) {
       testWidgets('update ${patch.name}: the file is removed, the failure is '
@@ -908,48 +1224,46 @@ void main() {
         await addPhoto(tester);
         expect(find.text(said), findsOneWidget);
         expectOneRemoveOfTheUpload();
+        expect(server.removedAs, [_a]);
         expect(find.text('Photo added'), findsNothing);
         expect(server.rows[_a]!['transformation_photo_urls'], isEmpty);
-        expect(origins(), isNot(contains('CoachBusinessScreen._removeUploaded')),
-            reason: 'the cleanup worked');
+        expect(removalFailures(), isEmpty, reason: 'the cleanup worked');
         expect(find.text('Add Photo'), findsOneWidget);
         await close(tester);
       });
     }
 
+    // Security S4 (round 2): nothing is removed under another account's login
+    // (it could not be anyway): the file is kept, and that is recorded.
     for (final to in [_b, null]) {
-      for (final remove in [_Remove.removed, _Remove.stillThere, _Remove.absent]) {
-        testWidgets(
-            '${to == null ? 'sign-out' : 'A → B'} while the photo uploads '
-            '(removal: ${remove.name}): one removal of that file, no profile '
-            'write, nothing said', (tester) async {
-          server.remove = remove;
-          await open(tester);
-          final upload = server.uploadGate = Completer<void>();
-          await tester.tap(find.text('Add Photo'));
-          await pumpUntil(tester, () => server.uploads.isNotEmpty,
-              what: "A's upload");
-          await switchTo(tester, to);
-          upload.complete();
-          await settle(tester);
-          await settle(tester);
-          expectOneRemoveOfTheUpload();
-          expect(server.patches, isEmpty);
-          expect(find.byType(SnackBar), findsNothing);
-          // With A gone, "not found" is not proof: anything but a removal is
-          // recorded.
-          expect(
-              origins().contains('CoachBusinessScreen._removeUploaded'),
-              remove != _Remove.removed);
-          if (to == _b) expect(textOf(tester, bio()), 'Bravo bio');
-          await close(tester);
-        });
-      }
+      testWidgets(
+          '${to == null ? 'sign-out' : 'A → B'} while the photo uploads: no '
+          'removal is sent, the kept file is recorded, no profile write, '
+          'nothing said', (tester) async {
+        await open(tester);
+        final upload = server.uploadGate = Completer<void>();
+        await tester.tap(find.text('Add Photo'));
+        await pumpUntil(tester, () => server.uploads.isNotEmpty,
+            what: "A's upload");
+        await switchTo(tester, to);
+        upload.complete();
+        await settle(tester);
+        await settle(tester);
+        expect(server.removes, isEmpty,
+            reason: "THE defect: a DELETE of A's file under $to's login");
+        expect(server.checks, isEmpty);
+        expect(removalFailures(), hasLength(1));
+        expect(server.patches, isEmpty);
+        expect(find.byType(SnackBar), findsNothing);
+        if (to == _b) expect(textOf(tester, bio()), 'Bravo bio');
+        await close(tester);
+      });
     }
 
     for (final patch in [_Patch.zeroRows, _Patch.refused]) {
       testWidgets('A → B while the update is on its way, then it is '
-          '${patch.name}: one removal, nothing said to B', (tester) async {
+          '${patch.name}: no removal under B, recorded, nothing said to B',
+          (tester) async {
         await open(tester);
         final gate = server.patchGate = Completer<void>();
         await tester.tap(find.text('Add Photo'));
@@ -960,12 +1274,55 @@ void main() {
         gate.complete();
         await settle(tester);
         await settle(tester);
-        expectOneRemoveOfTheUpload();
+        expect(server.removes, isEmpty);
+        expect(removalFailures(), hasLength(1));
         expect(find.byType(SnackBar), findsNothing);
         expect(textOf(tester, bio()), 'Bravo bio');
         await close(tester);
       });
     }
+
+    testWidgets('A → B while the removal is on its way (it removes nothing): '
+        'not checked under B, recorded, nothing said to B', (tester) async {
+      server
+        ..patchMode = _Patch.refused
+        ..remove = _Remove.absent;
+      final gate = server.removeGate = Completer<void>();
+      await open(tester);
+      await tester.tap(find.text('Add Photo'));
+      await pumpUntil(tester, () => server.removes.isNotEmpty,
+          what: 'the removal');
+      await switchTo(tester, _b);
+      gate.complete();
+      await settle(tester);
+      await settle(tester);
+      expect(server.removedAs, [_a]);
+      expect(server.checks, isEmpty);
+      expect(removalFailures(), hasLength(1));
+      expect(find.byType(SnackBar), findsNothing);
+      await close(tester);
+    });
+
+    testWidgets('positive control: A signs out and in again while the photo '
+        "uploads: the file is removed, under A's own login", (tester) async {
+      await open(tester);
+      final upload = server.uploadGate = Completer<void>();
+      await tester.tap(find.text('Add Photo'));
+      await pumpUntil(tester, () => server.uploads.isNotEmpty,
+          what: "A's upload");
+      // Back, but not read yet: the upload is for a form no longer shown.
+      final read = server.holdOnce[_a] = Completer<void>();
+      await switchTo(tester, _a);
+      upload.complete();
+      await settle(tester);
+      expectOneRemoveOfTheUpload();
+      expect(server.removedAs, [_a]);
+      expect(server.patches, isEmpty);
+      expect(removalFailures(), isEmpty);
+      read.complete();
+      await settle(tester);
+      await close(tester);
+    });
 
     testWidgets("A → B while the update is on its way and it IS saved: A's "
         'photo is kept (no removal)', (tester) async {
@@ -1007,6 +1364,9 @@ void main() {
               findsOneWidget);
           expect(
               origins().contains('CoachBusinessScreen._removeUploaded'), !gone);
+          expect(tester.widget<SnackBar>(find.byType(SnackBar)).duration,
+              Duration(seconds: gone ? 4 : 10),
+              reason: 'the longer text stays longer (UX #4)');
           // An empty answer is checked — that object, once; nothing else is.
           expect(
               server.checks,
@@ -1020,16 +1380,131 @@ void main() {
       }
     }
 
-    testWidgets('no answer, but the update landed: the listed photo is NOT '
-        'removed, not called added, and shows after the re-read; the next '
-        'photo keeps it', (tester) async {
+    // Security S2 (round 2): no answer, or one that says nothing about the
+    // write. Whatever the profile says when read, the file is never deleted.
+    void expectKeptAndUnconfirmed() {
+      expect(server.uploads, hasLength(1), reason: 'premise');
+      expect(server.removes, isEmpty,
+          reason: 'THE defect: a photo that is (or will be) on the profile '
+              'has no file');
+      expect(find.text(_unconfirmed), findsOneWidget);
+      expect(find.text('Photo added'), findsNothing);
+      expect(find.textContaining('lost'), findsNothing);
+      expect(
+          origins(),
+          contains(
+              'CoachBusinessScreen._uploadTransformationPhoto.unconfirmed'));
+      expect(find.text('Add Photo'), findsOneWidget, reason: 'ready again');
+    }
+
+    for (final code in [
+      'PGRST000', 'PGRST001', 'PGRST002', 'PGRST003', //
+      '08000', '08006', '08P01', '57P01', '57P05', '58000', '58030', '40003',
+    ]) {
+      testWidgets('answered $code, but the update landed: the file is kept, '
+          'the photo is listed', (tester) async {
+        server
+          ..patchMode = _Patch.codedLanded
+          ..patchCode = code;
+        await open(tester);
+        await addPhoto(tester);
+        expectKeptAndUnconfirmed();
+        expect(server.rows[_a]!['transformation_photo_urls'], hasLength(1));
+        await close(tester);
+      });
+    }
+
+    // Not those classes: the database did refuse (rolled back).
+    for (final code in ['57014', '40001', '42501', '23514', 'PGRST204']) {
+      testWidgets('negative control: refused with $code → the file is removed',
+          (tester) async {
+        server
+          ..patchMode = _Patch.codedLanded
+          ..patchCode = code;
+        await open(tester);
+        await addPhoto(tester);
+        expectOneRemoveOfTheUpload();
+        expect(
+            find.text("Couldn't add the photo — $_later"), findsOneWidget);
+        await close(tester);
+      });
+    }
+
+    for (final patch in [_Patch.gateway, _Patch.networkLost]) {
+      testWidgets('update ${patch.name}, not landed: the file is kept (an '
+          'accepted orphan), recorded, and nothing is called added',
+          (tester) async {
+        server.patchMode = patch;
+        await open(tester);
+        final reads = server.calls
+            .where((c) => c.startsWith('GET /rest/v1/user_profiles'))
+            .length;
+        await addPhoto(tester);
+        expectKeptAndUnconfirmed();
+        expect(tester.widget<SnackBar>(find.byType(SnackBar)).duration,
+            const Duration(seconds: 10),
+            reason: 'the longer text stays longer (UX #4)');
+        expect(
+            server.calls
+                .where((c) => c.startsWith('GET /rest/v1/user_profiles'))
+                .length,
+            reads + 1,
+            reason: 'the profile is read again');
+        expect(server.rows[_a]!['transformation_photo_urls'], isEmpty);
+        await close(tester);
+      });
+    }
+
+    testWidgets('no answer, and the update lands AFTER the profile was read '
+        'again: the file is kept', (tester) async {
+      server.patchMode = _Patch.landsAfterRead;
+      await open(tester);
+      await addPhoto(tester);
+      expectKeptAndUnconfirmed();
+      expect(server.rows[_a]!['transformation_photo_urls'], hasLength(1),
+          reason: 'premise: landed after the read');
+      await close(tester);
+    });
+
+    testWidgets('no answer, landed, and the stored URL is percent-encoded: '
+        'the file is kept (S5)', (tester) async {
+      final odd = File('${tmp.path}/after.j^g')
+        ..writeAsBytesSync([0xFF, 0xD8, 0xFF, 0xD9]);
+      picker = () async => odd.path;
       server.patchMode = _Patch.networkLanded;
       await open(tester);
       await addPhoto(tester);
-      expect(server.removes, isEmpty,
-          reason: 'a photo listed on the profile would be broken');
-      expect(find.text(_unconfirmed), findsOneWidget);
-      expect(find.text('Photo added'), findsNothing);
+      expect(
+          '${(server.rows[_a]!['transformation_photo_urls'] as List).single}',
+          contains('%5E'),
+          reason: 'premise: not the raw path');
+      expectKeptAndUnconfirmed();
+      await close(tester);
+    });
+
+    testWidgets('a raw-named file that is still there is found in the listing '
+        '(not taken for gone because its URL is percent-encoded)',
+        (tester) async {
+      final odd = File('${tmp.path}/after.j^g')
+        ..writeAsBytesSync([0xFF, 0xD8, 0xFF, 0xD9]);
+      picker = () async => odd.path;
+      server
+        ..patchMode = _Patch.refused
+        ..remove = _Remove.stillThere;
+      await open(tester);
+      await addPhoto(tester);
+      expect(find.text("Couldn't add the photo — $_later $_fileLeft"),
+          findsOneWidget);
+      expect(removalFailures(), hasLength(1));
+      await close(tester);
+    });
+
+    testWidgets('no answer, but the update landed: the photo shows after the '
+        're-read; the next photo keeps it', (tester) async {
+      server.patchMode = _Patch.networkLanded;
+      await open(tester);
+      await addPhoto(tester);
+      expectKeptAndUnconfirmed();
       server.patchMode = _Patch.ok;
       await tester.tap(find.text('Add Photo'));
       await pumpUntil(tester, () => server.patches.length == 2,
@@ -1039,16 +1514,37 @@ void main() {
       await close(tester);
     });
 
-    testWidgets('no answer and the list cannot be read: unknown, so the file '
-        'is kept and the failure recorded', (tester) async {
-      server
-        ..patchMode = _Patch.networkLost
-        ..photoReadFails = true;
+    testWidgets('no answer and the profile cannot be read again: the file is '
+        'kept, the profile shown stays, the failed refresh is recorded',
+        (tester) async {
+      server.patchMode = _Patch.networkLost;
       await open(tester);
+      server.readsFail = true;
       await addPhoto(tester);
+      expectKeptAndUnconfirmed();
+      expect(textOf(tester, bio()), 'Alpha bio');
+      expect(origins(), contains('CoachBusinessScreen._load'));
+      await close(tester);
+    });
+
+    testWidgets('A → B while the update is on its way and it gets no answer: '
+        'kept and recorded, nothing said to B', (tester) async {
+      server.patchMode = _Patch.networkLanded;
+      await open(tester);
+      final gate = server.patchGate = Completer<void>();
+      await tester.tap(find.text('Add Photo'));
+      await pumpUntil(tester, () => server.patches.isNotEmpty,
+          what: "A's photo update");
+      await switchTo(tester, _b);
+      gate.complete();
+      await settle(tester);
+      await settle(tester);
       expect(server.removes, isEmpty);
-      expect(find.text(_unconfirmed), findsOneWidget);
-      expect(origins(), contains('CoachBusinessScreen._photoNotListed'));
+      expect(
+          origins(),
+          {'CoachBusinessScreen._uploadTransformationPhoto.unconfirmed'});
+      expect(find.byType(SnackBar), findsNothing);
+      expect(server.rows[_b]!['transformation_photo_urls'], isEmpty);
       await close(tester);
     });
 

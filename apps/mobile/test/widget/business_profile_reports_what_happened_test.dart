@@ -308,6 +308,28 @@ void main() {
     server.calls.clear();
   }
 
+  /// P0-FL-57b: a dialog closes when the screen hears of a sign-out, so its
+  /// button can only still be pressed just before that: from a listener that
+  /// hears of it first ([hearFirst] registered before the screen opened).
+  VoidCallback? onSignedOut;
+  void hearFirst() {
+    final auth = Supabase.instance.client.auth;
+    final sub = auth.onAuthStateChange.listen((_) {
+      if (auth.currentUser != null) return;
+      onSignedOut?.call();
+      onSignedOut = null;
+    });
+    addTearDown(sub.cancel);
+  }
+
+  Future<void> pressAsSignedOut(WidgetTester tester, String button) async {
+    onSignedOut = tester
+        .widget<TextButton>(find.widgetWithText(TextButton, button))
+        .onPressed;
+    await signOut(tester);
+    expect(onSignedOut, isNull, reason: 'premise: pressed signed out');
+  }
+
   Finder priceField() => find.byType(TextField).at(2);
   Finder yearsField() => find.byType(TextField).at(3);
   String? errorOf(WidgetTester tester, Finder f) =>
@@ -593,7 +615,10 @@ void main() {
         (tester) async {
       await open(tester);
       await signOut(tester);
-      await addCert(tester, 'ACE-CPT');
+      // FL-57b: refused before a dialog opens (it used to open, then refuse).
+      await tester.tap(find.text('+ Add').first);
+      await settle(tester);
+      expect(find.byType(AlertDialog), findsNothing);
       expect(patchCount(), 0);
       expect(find.widgetWithText(Chip, 'ACE-CPT'), findsNothing);
       expect(find.text(_signedOut), findsOneWidget);
@@ -648,10 +673,7 @@ void main() {
 
   // ── E. Team invite ─────────────────────────────────────────────────────────
   group('E. team invite', () {
-    /// [beforeSubmit] runs with the dialog open (P0-FL-54: a sign-out takes
-    /// the Team tab away, so a signed-out submit happens from an open dialog).
-    Future<void> invite(WidgetTester tester,
-        {Future<void> Function()? beforeSubmit}) async {
+    Future<void> invite(WidgetTester tester, {bool signedOut = false}) async {
       await tester.tap(find.text('Team'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Invite Assistant Coach'));
@@ -660,8 +682,11 @@ void main() {
           find.descendant(
               of: find.byType(AlertDialog), matching: find.byType(TextField)),
           'assistant@example.com');
-      if (beforeSubmit != null) await beforeSubmit();
-      await tester.tap(find.text('Invite'));
+      if (signedOut) {
+        await pressAsSignedOut(tester, 'Invite');
+      } else {
+        await tester.tap(find.text('Invite'));
+      }
       await settleOnSnackBar(tester, 'the invite outcome (a SnackBar)');
     }
 
@@ -687,8 +712,10 @@ void main() {
     });
 
     testWidgets('signed out: says so, no insert, no email', (tester) async {
+      hearFirst();
       await open(tester);
-      await invite(tester, beforeSubmit: () => signOut(tester));
+      await invite(tester, signedOut: true);
+      expect(find.byType(AlertDialog), findsNothing);
       expect(server.calls, isNot(contains('POST /rest/v1/coach_team_invites')));
       expect(emailed(), isFalse);
       expect(find.text(_signedOut), findsOneWidget);
@@ -907,10 +934,7 @@ void main() {
 
   // ── K. N7 — invite failures use the error style ────────────────────────────
   group('K. invite SnackBars', () {
-    /// [beforeSubmit] runs with the dialog open (P0-FL-54: a sign-out takes
-    /// the Team tab away, so a signed-out submit happens from an open dialog).
-    Future<void> invite(WidgetTester tester,
-        {Future<void> Function()? beforeSubmit}) async {
+    Future<void> invite(WidgetTester tester, {bool signedOut = false}) async {
       await tester.tap(find.text('Team'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Invite Assistant Coach'));
@@ -919,8 +943,11 @@ void main() {
           find.descendant(
               of: find.byType(AlertDialog), matching: find.byType(TextField)),
           'assistant@example.com');
-      if (beforeSubmit != null) await beforeSubmit();
-      await tester.tap(find.text('Invite'));
+      if (signedOut) {
+        await pressAsSignedOut(tester, 'Invite');
+      } else {
+        await tester.tap(find.text('Invite'));
+      }
       await settleOnSnackBar(tester, 'the invite outcome (a SnackBar)');
     }
 
@@ -934,8 +961,10 @@ void main() {
     });
 
     testWidgets('signed out is shown in the error style', (tester) async {
+      hearFirst();
       await open(tester);
-      await invite(tester, beforeSubmit: () => signOut(tester));
+      await invite(tester, signedOut: true);
+      expect(find.byType(AlertDialog), findsNothing);
       expect(find.text(_signedOut), findsOneWidget);
       expect(snackColor(tester), _errorRed);
     });
