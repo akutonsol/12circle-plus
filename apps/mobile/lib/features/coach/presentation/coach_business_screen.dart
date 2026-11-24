@@ -68,12 +68,13 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
   int _loadSeq = 0;
   StreamSubscription<AuthState>? _authSub;
 
-  /// The coach whose transformation photo is on its way (null: none). While
-  /// it is the coach shown, a second tap would copy the same list and one of
-  /// the two photos would be lost. Keyed to the coach so another coach who
-  /// signs in meanwhile is not shown "Adding…" for the previous coach's pick.
-  String? _uploadingFor;
-  bool get _uploadingPhoto => _uploadingFor != null && _uploadingFor == _loadedFor;
+  /// The coaches whose transformation photo is on its way. While the coach
+  /// shown has one, a second tap would copy the same list and one of the two
+  /// photos would be lost. Keyed per coach so another coach who signs in
+  /// meanwhile is not shown "Adding…" for the previous coach's pick — and
+  /// (r3) so that coach's own guard is still there when they come back.
+  final _uploadingFor = <String>{};
+  bool get _uploadingPhoto => _loadedFor != null && _uploadingFor.contains(_loadedFor);
 
   @override
   void initState() {
@@ -277,6 +278,8 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       mounted && seq == _loadSeq && _db.auth.currentUser?.id == uid;
 
   Future<void> _load() async {
+    // r3 · a Retry SnackBar can outlive the screen: nothing to load into.
+    if (!mounted) return;
     final uid = _db.auth.currentUser?.id;
     final seq = ++_loadSeq;
     if (uid == null) {
@@ -485,7 +488,7 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     // P0-FL-54: the list copied below must be the signed-in coach's.
     final uid = _requireShownCoach('add the photo');
     if (uid == null) return;
-    setState(() => _uploadingFor = uid);
+    setState(() => _uploadingFor.add(uid));
     try {
       final picker = ImagePicker();
       final img = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
@@ -526,12 +529,10 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
     } finally {
       // Only this coach's own guard is cleared (another coach may have
       // started a photo of their own meanwhile).
-      if (_uploadingFor == uid) {
-        if (mounted) {
-          setState(() => _uploadingFor = null);
-        } else {
-          _uploadingFor = null;
-        }
+      if (mounted) {
+        setState(() => _uploadingFor.remove(uid));
+      } else {
+        _uploadingFor.remove(uid);
       }
     }
   }

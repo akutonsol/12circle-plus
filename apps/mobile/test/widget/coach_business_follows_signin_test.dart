@@ -93,6 +93,9 @@ class _Server extends http.BaseClient {
   /// Holds the answer to a write (PATCH/POST) on `<table>` (recorded first).
   final writeGates = <String, Completer<void>>{};
   Completer<void>? storageGate;
+
+  /// Writes (PATCH/POST) on these tables answer 500 (after any write gate).
+  final failWrites = <String>{};
   final writes = <String>[];
   final calls = <String>[];
 
@@ -106,6 +109,7 @@ class _Server extends http.BaseClient {
     holdOnce.clear();
     writeGates.clear();
     storageGate = null;
+    failWrites.clear();
     writes.clear();
     calls.clear();
   }
@@ -134,6 +138,9 @@ class _Server extends http.BaseClient {
       writes.add('${request.method} /$table?${u.query} $body');
       final wg = writeGates[table];
       if (wg != null) await wg.future;
+      if (failWrites.contains(table)) {
+        return _json({'message': 'refused', 'code': 'XX000'}, 500, request);
+      }
       final id = _eq(u, 'id');
       // Like the database: a profile update is what later reads return.
       final row = id == null ? null : rows[id];
@@ -1118,6 +1125,176 @@ void main() {
       await tester.tap(find.text('Try again'));
       await settle(tester);
       expect(find.text('Alpha bio'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    });
+  });
+  // ── round 3 (QA r2: per-coach upload guard; G4, G5; Retry after close) ──
+  group('round 3', () {
+    bool tileBusy(WidgetTester tester) =>
+        find.text('Adding…').evaluate().isNotEmpty &&
+        find.text('Add Photo').evaluate().isEmpty;
+
+    Future<void> typeInvite(WidgetTester tester) async {
+      await showTab(tester, 'Team');
+      await tester.tap(find.text('Invite Assistant Coach'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.descendant(
+              of: find.byType(AlertDialog), matching: find.byType(TextField)),
+          'assistant@example.com');
+    }
+
+    testWidgets(
+        "A uploading → B signs in and taps Add Photo → A back: A's photo is "
+        'still on its way, so A\'s Add Photo stays busy', (tester) async {
+      await open(tester);
+      pickerGate = Completer<void>();
+      await tester.tap(find.text('Add Photo'));
+      await tester.pump();
+      expect(tileBusy(tester), isTrue, reason: 'premise: A busy');
+      await switchTo(tester, _b);
+      expect(tileBusy(tester), isFalse, reason: "B is not shown A's pick");
+      await tester.tap(find.text('Add Photo'));
+      await tester.pump();
+      expect(tileBusy(tester), isTrue, reason: "premise: B's own pick");
+      await switchTo(tester, _a);
+      expect(find.text('Alpha bio'), findsOneWidget, reason: 'premise: A back');
+      expect(tileBusy(tester), isTrue,
+          reason: "THE r2 defect: B's tap replaced A's guard, so A could "
+              'start a second copy of the same list');
+      // The single-flight guard still holds for A: a tap starts nothing.
+      final before = picks;
+      await tester.tap(find.text('Adding…'));
+      await tester.pump();
+      expect(picks, before, reason: 'a second picker for A');
+      pickerGate!.complete();
+      await settle(tester);
+      await settle(tester);
+      expect(tileBusy(tester), isFalse, reason: 'all done: A idle again');
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    // G5: the finally clears only the finishing coach's own guard.
+    testWidgets(
+        "A's pick ends while B's upload is running: B's guard is not cleared",
+        (tester) async {
+      await open(tester);
+      pickerGate = Completer<void>();
+      await tester.tap(find.text('Add Photo'));
+      await tester.pump();
+      await switchTo(tester, _b);
+      await tester.tap(find.text('Add Photo'));
+      await tester.pump();
+      final bUpload = server.storageGate = Completer<void>();
+      pickerGate!.complete(); // A's pick (refused: B shown) and B's pick land
+      await pumpUntil(tester,
+          () => server.writes.any((w) => w.startsWith('POST /storage/')),
+          what: "B's upload");
+      await settle(tester);
+      expect(server.writes.where((w) => w.startsWith('POST /storage/')),
+          hasLength(1), reason: "only B's photo is uploaded");
+      expect(tileBusy(tester), isTrue,
+          reason: "A's finished pick cleared B's guard while B's upload runs");
+      bUpload.complete();
+      for (var i = 0; i < 6 && find.text('Photo added').evaluate().isEmpty; i++) {
+        await settle(tester); // also takes the shown photo's image-load failure
+      }
+      expect(find.text('Photo added'), findsOneWidget);
+      expect(profileWrites().single, contains('id=eq.$_b'));
+      expectNoWriteOfAInto(_b);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    // G4: the check AFTER send-invite-email.
+    testWidgets(
+        'B signs in while A\'s invite email is being sent → its outcome is '
+        'not announced to B', (tester) async {
+      await open(tester);
+      await typeInvite(tester);
+      final mail = server.writeGates['send-invite-email'] = Completer<void>();
+      await tester.tap(find.text('Invite'));
+      await pumpUntil(tester,
+          () => server.writes.any((w) => w.contains('send-invite-email')),
+          what: "A's invite email (sent while A is signed in)");
+      await switchTo(tester, _b);
+      mail.complete();
+      await settle(tester);
+      await settle(tester);
+      expect(find.byType(SnackBar), findsNothing,
+          reason: "A's invite outcome announced on B's screen");
+      expect(find.textContaining('invite'), findsNothing,
+          reason: "nothing about A's invite is announced to B");
+      expect(find.text('Bea Backup'), findsOneWidget, reason: "B's own team");
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    // G4: the check in the insert-failure branch.
+    testWidgets(
+        "B signs in while A's invite insert is failing → \"Couldn't save the "
+        'invite" is not said to B', (tester) async {
+      await open(tester);
+      await typeInvite(tester);
+      server.failWrites.add('coach_team_invites');
+      final insert = server.writeGates['coach_team_invites'] = Completer<void>();
+      await tester.tap(find.text('Invite'));
+      await pumpUntil(tester,
+          () => server.writes.any((w) => w.contains('coach_team_invites')),
+          what: "A's invite insert");
+      await switchTo(tester, _b);
+      insert.complete();
+      await settle(tester);
+      await settle(tester);
+      expect(find.textContaining("Couldn't save the invite"), findsNothing,
+          reason: "A's failure announced on B's screen");
+      expect(find.byType(SnackBar), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets(
+        "control: with no switch a failing insert IS said, and no email is sent",
+        (tester) async {
+      await open(tester);
+      await typeInvite(tester);
+      server.failWrites.add('coach_team_invites');
+      await tester.tap(find.text('Invite'));
+      await pumpUntil(tester,
+          () => find.textContaining("Couldn't save the invite").evaluate().isNotEmpty,
+          what: 'the insert failure');
+      expect(server.writes.any((w) => w.contains('send-invite-email')), isFalse);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    // QA r2 note: Retry on a SnackBar that outlives the screen.
+    testWidgets('Retry tapped after the screen closed and the coach signed out '
+        'does nothing (no disposed-controller error, no read)', (tester) async {
+      tester.view
+        ..devicePixelRatio = 1
+        ..physicalSize = const Size(1000, 2400);
+      addTearDown(tester.view.reset);
+      final nav = GlobalKey<NavigatorState>();
+      await tester.pumpWidget(MaterialApp(
+          navigatorKey: nav,
+          home: const Scaffold(body: Text('home'))));
+      nav.currentState!.push(
+          MaterialPageRoute<void>(builder: (_) => const CoachBusinessScreen()));
+      await settle(tester);
+      server.modes[_a] = _Mode.fails;
+      await tester.tap(find.text('Add Photo'));
+      await pumpUntil(tester,
+          () => find.widgetWithText(SnackBarAction, 'Retry').evaluate().isNotEmpty,
+          what: 'the Retry notice',
+          step: const Duration(milliseconds: 500));
+      nav.currentState!.pop();
+      await settle(tester);
+      expect(find.byType(CoachBusinessScreen), findsNothing, reason: 'premise');
+      await switchTo(tester, null);
+      final retry = find.widgetWithText(SnackBarAction, 'Retry');
+      expect(retry, findsOneWidget, reason: 'premise: the notice outlived it');
+      final reads = server.calls.length;
+      await tester.tap(retry);
+      await settle(tester);
+      expect(tester.takeException(), isNull);
+      expect(server.calls.length, reads, reason: 'a load for a closed screen');
       await tester.pumpWidget(const SizedBox());
     });
   });
