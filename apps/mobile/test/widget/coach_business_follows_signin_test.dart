@@ -588,6 +588,18 @@ void main() {
     testWidgets(
         'a certification typed for A and submitted after B signed in is '
         "refused — never written into B's row", (tester) async {
+      // P0-FL-57b: the dialog closes when the screen hears of the switch, so
+      // the only Add that can still be pressed is the one on A's last frame,
+      // in the window before that (a listener registered before the screen's;
+      // see 'in the window between …' below).
+      VoidCallback? addOnAsFrame;
+      final sub = auth().onAuthStateChange.listen((_) {
+        final add = addOnAsFrame;
+        if (add == null || auth().currentUser?.id != _b) return;
+        addOnAsFrame = null;
+        add();
+      });
+      addTearDown(sub.cancel);
       await open(tester);
       await tester.tap(find.text('+ Add').first);
       await tester.pumpAndSettle();
@@ -596,9 +608,13 @@ void main() {
               of: find.byType(AlertDialog), matching: find.byType(TextField)),
           'CSCS');
       await tester.pump();
-      await switchTo(tester, _b);
-      await tester.tap(find.text('Add'));
+      addOnAsFrame =
+          tester.widget<TextButton>(find.widgetWithText(TextButton, 'Add'))
+              .onPressed;
+      await tester.runAsync(() => auth().recoverSession(_session(_b)));
       await settle(tester);
+      expect(addOnAsFrame, isNull, reason: 'premise: Add pressed as B');
+      expect(find.byType(AlertDialog), findsNothing);
       expect(profileWrites(), isEmpty,
           reason: "A's certification (and A's list) into B's row");
       expect(
@@ -639,8 +655,8 @@ void main() {
     });
 
     testWidgets(
-        "an invite typed on A's team and sent after B signed in is refused",
-        (tester) async {
+        "an invite typed on A's team is gone once B signed in: nothing is "
+        'written or sent, and B sees nothing of it', (tester) async {
       await open(tester);
       await showTab(tester, 'Team');
       await tester.tap(find.text('Invite Assistant Coach'));
@@ -649,9 +665,52 @@ void main() {
           find.descendant(
               of: find.byType(AlertDialog), matching: find.byType(TextField)),
           'assistant@example.com');
+      final invite =
+          tester.widget<TextButton>(find.widgetWithText(TextButton, 'Invite'));
       await switchTo(tester, _b);
-      await tester.tap(find.text('Invite'));
+      // P0-FL-57b: the dialog closes with its coach (it used to stay, and its
+      // Invite was refused).
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.text('assistant@example.com'), findsNothing);
+      invite.onPressed!(); // a press that still reaches the closed dialog
       await settle(tester);
+      expect(server.writes.where((w) => w.contains('coach_team_invites')),
+          isEmpty,
+          reason: "A's invite joined B's team");
+      expect(server.writes.where((w) => w.contains('send-invite-email')),
+          isEmpty);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(find.byType(CoachBusinessScreen), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets(
+        "an invite sent on A's last frame, before the screen hears that B "
+        'signed in, is refused', (tester) async {
+      // The same window as the certification's Add, above.
+      VoidCallback? inviteOnAsFrame;
+      final sub = auth().onAuthStateChange.listen((_) {
+        final invite = inviteOnAsFrame;
+        if (invite == null || auth().currentUser?.id != _b) return;
+        inviteOnAsFrame = null;
+        invite();
+      });
+      addTearDown(sub.cancel);
+      await open(tester);
+      await showTab(tester, 'Team');
+      await tester.tap(find.text('Invite Assistant Coach'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.descendant(
+              of: find.byType(AlertDialog), matching: find.byType(TextField)),
+          'assistant@example.com');
+      inviteOnAsFrame =
+          tester.widget<TextButton>(find.widgetWithText(TextButton, 'Invite'))
+              .onPressed;
+      await tester.runAsync(() => auth().recoverSession(_session(_b)));
+      await settle(tester);
+      expect(inviteOnAsFrame, isNull, reason: 'premise: Invite pressed as B');
+      expect(find.byType(AlertDialog), findsNothing);
       expect(server.writes.where((w) => w.contains('coach_team_invites')),
           isEmpty,
           reason: "A's invite joined B's team");
