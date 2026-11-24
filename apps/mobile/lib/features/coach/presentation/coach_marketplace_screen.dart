@@ -473,6 +473,10 @@ class _CoachCard extends StatelessWidget {
             child: Semantics(
               button: true,
               enabled: canRequest && !requesting,
+              // The notice that says why tops the list, off screen from most cards.
+              hint: !canRequest && !requesting
+                  ? 'Unavailable until your coach connections load'
+                  : null,
               child: GestureDetector(
               onTap: canRequest && !requesting ? () => onRequest(coachId) : null,
               child: Container(

@@ -47,10 +47,12 @@ class _Payments extends PaymentService {
   int checkouts = 0;
   bool answer = true;
   Object? error;
+  Completer<void>? hold;
   @override
   Future<bool> startCheckout({required String kind, String? coachId,
       String? eventId, String? packageId, String? tier}) async {
     checkouts++;
+    await hold?.future;
     final e = error;
     if (e != null) throw e;
     return answer;
@@ -265,6 +267,25 @@ void main() {
           reason: 'THE defect: the card looked untouched');
       expect(find.textContaining("Couldn't"), findsNothing);
       expect(reported, isEmpty);
+      const said = "Can't delete a package clients are using — "
+          'hidden from clients instead.';
+      expect(find.text(said), findsOneWidget,
+          reason: 'THE defect: Delete became hide and nothing was announced');
+      expect(live(t, find.text(said)), isTrue);
+    });
+
+    testWidgets("A's package hidden after B signed in is not announced to B", (t) async {
+      server.packages.add(_pkg('p1', userA, 'Solo Monthly'));
+      await open(t);
+      server.writeMode =
+          (l) => l.startsWith('DELETE') ? Answer.foreignKey : Answer.ok;
+      final gate = server.writeGate = Completer();
+      await delete(t);
+      await switchTo(t, userB);
+      gate.complete();
+      await settle(t);
+      expect(server.packages.single['active'], isFalse, reason: 'premise');
+      expect(find.textContaining('hidden from clients instead'), findsNothing);
     });
 
     testWidgets('positive control: a delete removes it and says nothing', (t) async {
@@ -273,6 +294,7 @@ void main() {
       await delete(t);
       expect(find.text('Solo Monthly'), findsNothing);
       expect(find.textContaining('No packages yet'), findsOneWidget);
+      expect(find.byType(SnackBar), findsNothing);
       expect(reported, isEmpty);
     });
 
@@ -332,6 +354,45 @@ void main() {
       t.takeException();
       expect([for (final p in server.packages) p['id']], ['b4', 'b8'],
           reason: 'THE defect: blank (unread) prices deleted every tier');
+    });
+
+    testWidgets('Save tapped in the same frame as "Session Package": the button '
+        'is still the enabled "Save package", and no tier is deleted', (t) async {
+      seedTiers();
+      await open(t);
+      await t.tap(find.text('New Package'));
+      await settle(t);
+      await t.ensureVisible(button('Save package'));
+      await t.pump();
+      expect(enabled(t, 'Save package'), isTrue, reason: 'premise');
+      // No frame between the two taps, and the tiers are not read yet (only that
+      // read is held: the save's own would answer).
+      final gate = server.readGate['coach_packages'] = Completer();
+      await t.tap(find.text('Session Package').last);
+      server.readGate.remove('coach_packages');
+      expect(enabled(t, 'Save package'), isTrue, reason: 'premise: still enabled');
+      await t.tap(button('Save package'));
+      await settle(t);
+      expect(server.writes, isEmpty,
+          reason: 'blank (unread) prices would delete every tier');
+      expect([for (final p in server.packages) p['id']], ['b4', 'b8']);
+      gate.complete();
+      await settle(t);
+      expect(find.text('400'), findsOneWidget, reason: 'still open, tiers read');
+    });
+
+    testWidgets('while a save is in flight the button says "Saving"', (t) async {
+      await open(t);
+      await editTiers(t);
+      await t.enterText(find.widgetWithText(TextField, 'Price').first, '350');
+      server.writeGate = Completer();
+      expect(find.bySemanticsLabel('Saving'), findsNothing);
+      await tapSave(t);
+      expect(find.bySemanticsLabel('Saving'), findsOneWidget);
+      server.writeGate!.complete();
+      await settle(t);
+      expect(find.bySemanticsLabel('Saving'), findsNothing);
+      expect(server.packages.single['price'], 350);
     });
 
     testWidgets('tiers still being read: Save is paused', (t) async {
@@ -436,18 +497,40 @@ void main() {
       }
     }
 
-    testWidgets("A's failed read is not B's, and A's late answer is dropped",
+    for (final late in ['answer', 'failure']) {
+      testWidgets("A's late $late is dropped: B sees B's packages", (t) async {
+        server.packages.addAll([
+          _pkg('pa', userA, 'Alpha Monthly'), _pkg('pb', userB, 'Bravo Monthly')]);
+        final gateA = server.readGate['coach_packages'] = Completer();
+        await open(t);
+        server.readGate.remove('coach_packages');
+        await switchTo(t, userB);
+        expect(find.text('Bravo Monthly'), findsOneWidget, reason: 'premise');
+        if (late == 'failure') server.readMode['coach_packages'] = Answer.fails;
+        gateA.complete();
+        await settle(t);
+        expect(find.text('Alpha Monthly'), findsNothing);
+        expect(find.text('Bravo Monthly'), findsOneWidget);
+        expect(find.textContaining("Couldn't"), findsNothing);
+      });
+    }
+
+    testWidgets("A's failed read is not B's: B is loading, then B's packages",
         (t) async {
-      server.packages.addAll([
-        _pkg('pa', userA, 'Alpha Monthly'), _pkg('pb', userB, 'Bravo Monthly')]);
-      final gateA = server.readGate['coach_packages'] = Completer();
+      server.packages.add(_pkg('pb', userB, 'Bravo Monthly'));
+      server.readMode['coach_packages'] = Answer.fails;
       await open(t);
-      await switchTo(t, userB);
+      expectLoadFailure(t, 'your packages');
+      server.readMode.clear();
+      final gateB = server.readGate['coach_packages'] = Completer();
+      await switchTo(t, userB, observe: false);
+      expect(find.textContaining("Couldn't"), findsNothing, reason: "A's failure");
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
       server.readGate.remove('coach_packages');
-      gateA.complete();
+      gateB.complete();
       await settle(t);
-      expect(find.text('Alpha Monthly'), findsNothing);
       expect(find.text('Bravo Monthly'), findsOneWidget);
+      expect(find.textContaining("Couldn't"), findsNothing);
     });
 
     testWidgets("A's open editor is dropped when B signs in: nothing of A's is "
@@ -513,13 +596,14 @@ void main() {
       expect(find.text('Bravo Monthly'), findsOneWidget);
     });
 
-    testWidgets('one read per opening, not one per drag', (t) async {
+    testWidgets('one read per opening: a rotation does not read again', (t) async {
       server.packages.add(_pkg('pb', userB, 'Bravo Monthly'));
       await open(t);
       expect(server.readsOf('coach_packages'), 1);
-      await t.drag(find.text('Bravo Monthly'), const Offset(0, -200));
+      t.view.physicalSize = const Size(900, 430);
       await settle(t);
-      expect(server.readsOf('coach_packages'), 1);
+      expect(server.readsOf('coach_packages'), 1,
+          reason: 'THE defect: the read was started in build');
       expect(find.text('Bravo Monthly'), findsOneWidget);
     });
 
@@ -537,6 +621,9 @@ void main() {
         pumpApp(t, const MaterialApp(home: CoachMarketplaceScreen()),
             size: size, textScale: textScale);
     const request = 'Request to Connect';
+    const paused = 'Unavailable until your coach connections load';
+    String hint(WidgetTester t) =>
+        t.getSemantics(find.text(request)).getSemanticsData().hint;
     List<String> requests() =>
         server.writes.where((w) => w.contains('coach_client_relationships')).toList();
 
@@ -593,11 +680,13 @@ void main() {
       await open(t);
       expectLoadFailure(t, 'your coach connections');
       expect(origins(), ['coachMarketplace.relationshipStatus']);
+      // Readable again: the request's own check would pass, so only the paused
+      // button stops it.
+      server.readMode.clear();
       await t.tap(find.text(request));
       await settle(t);
       expect(requests(), isEmpty,
           reason: 'THE defect: an unread status read as "no relationship"');
-      server.readMode.clear();
       await t.tap(find.text('Try again'));
       await settle(t);
       expect(find.text('Request Sent'), findsOneWidget);
@@ -607,12 +696,14 @@ void main() {
 
     testWidgets('a status still being read does not offer a request', (t) async {
       server.coaches = [_coach('c1', 'Avery')];
-      server.readGate['coach_client_relationships'] = Completer();
+      final gate = server.readGate['coach_client_relationships'] = Completer();
       await open(t);
+      // Only the status read stays held (not the request's own check).
+      server.readGate.remove('coach_client_relationships');
       await t.tap(find.text(request));
       await settle(t);
       expect(requests(), isEmpty);
-      server.readGate.remove('coach_client_relationships')!.complete();
+      gate.complete();
       await settle(t);
       await t.tap(find.text(request));
       await settle(t);
@@ -695,16 +786,20 @@ void main() {
         await open(t);
         expect(find.text('Your Coach'), findsOneWidget, reason: 'premise');
         if (b == 'fails') server.readMode['coach_client_relationships'] = Answer.fails;
-        if (b == 'pending') server.readGate['coach_client_relationships'] = Completer();
+        final gate = Completer<void>();
+        if (b == 'pending') server.readGate['coach_client_relationships'] = gate;
         await switchTo(t, userB, observe: false);
         expect(find.text('Your Coach'), findsNothing, reason: "A's coach");
         if (b != 'ok') {
+          // The request's own check would pass: only the button stops it.
+          server.readMode.clear();
+          server.readGate.clear();
           await t.tap(find.text(request));
           await settle(t);
           expect(requests(), isEmpty, reason: "B's status is not known");
         }
         if (b == 'pending') {
-          server.readGate.remove('coach_client_relationships')!.complete();
+          gate.complete();
           await settle(t);
         }
         if (b != 'fails') expect(find.text('Request Sent'), findsOneWidget);
@@ -727,10 +822,42 @@ void main() {
       await settle(t);
       expect(find.text('Your Coach'), findsOneWidget);
       expectLoadFailure(t, 'your coach connections');
+      expect(hint(t), paused, reason: 'a known status is not a current one');
       server.writes.clear();
+      // Readable again (so the request's own check would pass), but the status
+      // shown was not re-read: only the paused button stops the request.
+      server.readMode.clear();
       await t.tap(find.text(request));
       await settle(t);
-      expect(requests(), isEmpty);
+      expect(requests(), isEmpty,
+          reason: 'a known but out-of-date status offered the request again');
+
+      // Positive control: once it is re-read, the request goes.
+      await t.tap(find.text('Try again'));
+      await settle(t);
+      expect(hint(t), isEmpty);
+      await t.tap(find.text(request));
+      await settle(t);
+      expect(requests(), hasLength(1));
+    });
+
+    testWidgets('a request paused by an unread status says why to a screen reader; '
+        'one that is offered, or being sent, does not', (t) async {
+      server.coaches = [_coach('c1', 'Avery')];
+      server.readMode['coach_client_relationships'] = Answer.fails;
+      await open(t);
+      expect(hint(t), paused, reason: 'THE defect: a dimmed button with no reason');
+      server.readMode.clear();
+      await t.tap(find.text('Try again'));
+      await settle(t);
+      expect(hint(t), isEmpty, reason: 'offered');
+      server.writeGate = Completer();
+      await t.tap(find.text(request));
+      await t.pump(const Duration(milliseconds: 50));
+      expect(hint(t), isEmpty, reason: 'being sent: the connections are known');
+      server.writeGate!.complete();
+      await settle(t);
+      expect(requests(), hasLength(1));
     });
   });
 
@@ -975,6 +1102,68 @@ void main() {
       await settle(t);
       expect(payments.checkouts, 0, reason: 'B chose nothing');
       expect(t.takeException(), isNull);
+    });
+
+    for (final (outcome, a) in [
+      ('is confirmed', Answer.ok),
+      ('fails', Answer.fails),
+    ]) {
+      testWidgets('A → B → A during a held save that then $outcome: it is not the '
+          "save on A's new screen", (t) async {
+        await open(t);
+        await choose(t, 'Paid Plan');
+        final held = server.writeGate = Completer();
+        await t.ensureVisible(find.text(pay));
+        await t.tap(find.text(pay));
+        await t.pump(const Duration(milliseconds: 50));
+        server.writeGate = null;
+        await switchTo(t, userB, observe: false);
+        await switchTo(t, userA, observe: false);
+        await choose(t, 'Paid Plan');
+        expect(enabled(t, pay), isTrue, reason: 'premise: a second Save is possible');
+        server.writeMode = (_) => a;
+        held.complete();
+        await settle(t);
+        expect(payments.checkouts, 0,
+            reason: 'THE defect: the stale save opened a checkout of its own');
+        expect(find.textContaining("Couldn't"), findsNothing);
+        expect(enabled(t, pay), isTrue);
+
+        // Positive control: the save on this screen opens exactly one checkout.
+        server.writeMode = null;
+        await tapLabel(t, pay);
+        expect(payments.checkouts, 1);
+        expect(t.takeException(), isNull);
+      });
+    }
+
+    testWidgets('A → B → A while a checkout is opening: its answer does not close '
+        "A's new screen", (t) async {
+      await open(t);
+      await choose(t, 'Paid Plan');
+      payments.hold = Completer();
+      await tapLabel(t, pay);
+      expect(payments.checkouts, 1, reason: 'premise');
+      await switchTo(t, userB, observe: false);
+      await switchTo(t, userA, observe: false);
+      payments.hold!.complete();
+      await settle(t);
+      expect(find.text('HOME'), findsNothing,
+          reason: 'THE defect: the stale checkout popped the screen');
+      expect(find.byType(SnackBar), findsNothing);
+      expect(find.text('Choose a package'), findsOneWidget);
+    });
+
+    testWidgets('while a save is in flight the button says "Saving"', (t) async {
+      await open(t);
+      await choose(t, 'Free Plan');
+      expect(find.bySemanticsLabel('Saving'), findsNothing);
+      server.writeGate = Completer();
+      await tapLabel(t, free);
+      expect(find.bySemanticsLabel('Saving'), findsOneWidget);
+      server.writeGate!.complete();
+      await settle(t);
+      expect(find.text('BOOKING'), findsOneWidget);
     });
 
     testWidgets('leaving mid-save starts no checkout and throws nothing', (t) async {

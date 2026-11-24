@@ -19,8 +19,10 @@ Future<T> _recorded<T>(String origin, Future<T> Function() read) async {
 /// The signed-in coach's own packages.
 final myPackagesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   ref.watch(currentUserProvider);
-  return _recorded('myPackagesProvider',
-      ref.watch(packageServiceProvider).getMyPackages);
+  final svc = ref.watch(packageServiceProvider);
+  // Called, not torn off: per_user_provider_scope_test finds a delegated user
+  // read by its call, and a tear-off hid this provider from it.
+  return _recorded('myPackagesProvider', () => svc.getMyPackages());
 });
 
 /// A coach's active packages, for clients browsing/selecting.
@@ -33,8 +35,8 @@ final coachPackagesProvider =
 /// The signed-in client's current schedule (null if not set).
 final myScheduleProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
   ref.watch(currentUserProvider);
-  return _recorded('myScheduleProvider',
-      ref.watch(packageServiceProvider).getMySchedule);
+  final svc = ref.watch(packageServiceProvider);
+  return _recorded('myScheduleProvider', () => svc.getMySchedule());
 });
 
 /// Coach view: a specific client's training schedule.

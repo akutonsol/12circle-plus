@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/coach/data/package_service.dart';
 import 'package:circle_fitness/features/coach/domain/package_provider.dart';
@@ -118,6 +120,13 @@ void main() {
           (l) => l.startsWith('DELETE') ? Answer.foreignKey : Answer.zeroRows;
       expect(await errorOf(() => svc.deletePackage('p1')), isNotNull);
       expect(row('p1')!['active'], isTrue);
+    });
+
+    test('signed out is a failure, and nothing is sent', () async {
+      await Supabase.instance.client.auth.signOut();
+      expect(await errorOf(() => svc.deletePackage('p1')), isNotNull);
+      expect(server.writes, isEmpty);
+      expect(row('p1'), isNotNull);
     });
 
     test('positive control: the package is deleted', () async {
@@ -256,6 +265,56 @@ void main() {
         expect(v.hasError, isFalse);
         expect(v.value, anyOf(isNull, isEmpty));
         expect(reported, isEmpty);
+      });
+    }
+  });
+
+  group("myScheduleProvider: A → B (a real sign-in switch), B's read", () {
+    for (final b in ['ok', 'none', 'fails', 'pending']) {
+      test("$b: B never sees A's schedule", () async {
+        server.schedules[userA] = {'client_id': userA, 'package_id': 'plan-A'};
+        if (b != 'none') {
+          server.schedules[userB] = {'client_id': userB, 'package_id': 'plan-B'};
+        }
+        final c = ProviderContainer();
+        addTearDown(c.dispose);
+        // What a screen renders for a state: `when` shows a reload's loading and
+        // a failure, never the previous value they carry.
+        String shown(AsyncValue<Map<String, dynamic>?> v) => v.when(
+            data: (s) => '${s?['package_id']}',
+            error: (_, __) => 'failed',
+            loading: () => 'loading');
+        final seen = <String>[];
+        c.listen(myScheduleProvider, (_, v) => seen.add(shown(v)));
+        Future<void> until(String want) async {
+          for (var i = 0; i < 100 && shown(c.read(myScheduleProvider)) != want; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 10));
+          }
+          expect(shown(c.read(myScheduleProvider)), want);
+        }
+
+        await until('plan-A'); // premise, and the positive control
+
+        if (b == 'fails') server.readMode['client_schedules'] = Answer.fails;
+        final gate = Completer<void>();
+        if (b == 'pending') server.readGate['client_schedules'] = gate;
+        seen.clear();
+        await Supabase.instance.client.auth.recoverSession(sessionFor(userB));
+        switch (b) {
+          case 'ok':
+            await until('plan-B');
+          case 'none':
+            await until('null'); // negative control: no schedule is an answer
+          case 'fails':
+            await until('failed');
+            expect(reported.map((f) => f.origin), ['myScheduleProvider']);
+          case 'pending':
+            await until('loading');
+            gate.complete();
+            await until('plan-B');
+        }
+        expect(seen, isNotEmpty);
+        expect(seen, isNot(contains('plan-A')));
       });
     }
   });

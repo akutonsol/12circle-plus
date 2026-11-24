@@ -10,6 +10,14 @@ class PackageNotChanged implements Exception {
   String toString() => 'PackageNotChanged: $write matched no row';
 }
 
+/// What [PackageService.deletePackage] did.
+enum PackageRemoval {
+  deleted,
+
+  /// A client schedule uses the package, so it was hidden from clients instead.
+  hidden,
+}
+
 /// [PackageService.saveSessionTiers] changed some tiers and then failed. The
 /// tiers are separate writes (no transaction without a backend change), so the
 /// coach is told which ones were saved and which were not.
@@ -123,13 +131,17 @@ class PackageService {
   }
 
   /// Deletes the package, or hides it from clients (`active: false`) when a
-  /// client schedule still references it. Throws if neither was confirmed.
+  /// client schedule still references it; answers the [PackageRemoval]. Throws
+  /// if signed out, or neither was confirmed.
+  ///
+  /// Declared `Future<Object?>` so a `Future<void>` fake stays a valid override.
   ///
   /// P0-FL-56b: ANY failure of the delete (a refusal, a dropped connection)
   /// was taken for "a schedule references it" and, unrecorded, turned into a
   /// deactivation; and a delete or deactivation that matched no row read as
   /// done. Only the foreign-key refusal (23503) means "deactivate instead".
-  Future<void> deletePackage(String id) async {
+  Future<Object?> deletePackage(String id) async {
+    _requireSignedIn();
     final List<dynamic> deleted;
     try {
       deleted =
@@ -145,9 +157,10 @@ class PackageService {
       if ((hidden as List).isEmpty) {
         throw const PackageNotChanged('deletePackage.deactivate');
       }
-      return;
+      return PackageRemoval.hidden;
     }
     if (deleted.isEmpty) throw const PackageNotChanged('deletePackage');
+    return PackageRemoval.deleted;
   }
 
   static const sessionTiers = [4, 8, 12, 16];

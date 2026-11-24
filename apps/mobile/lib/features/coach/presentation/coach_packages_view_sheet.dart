@@ -45,8 +45,9 @@ class _CoachPackagesSheetState extends State<_CoachPackagesSheet> {
     _load();
   }
 
-  /// One read per opening (the read was started in `build`, so it ran again on
-  /// every drag of the sheet), recorded and retryable when it fails (P0-FL-56b).
+  /// One read per opening (the read was started in `build`, so it ran again
+  /// whenever the sheet was rebuilt — a rotation, the keyboard), recorded and
+  /// retryable when it fails (P0-FL-56b).
   Future<void> _load() async {
     if (_busy) return;
     _busy = true;

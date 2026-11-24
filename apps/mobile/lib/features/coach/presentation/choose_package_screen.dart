@@ -142,6 +142,9 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
   Future<void> _save() async {
     if (_selected == null || _days.isEmpty || _saving || !_seedReady) return;
     final client = _seedFor;
+    // The sign-in this save belongs to: after A → B → A the client is A again,
+    // but the screen was reset and this save is not the one on it (P0-FL-56b).
+    final seq = _seedSeq;
     if (ref.read(currentUserProvider)?.id != client) return;
     // Read now: leaving the screen mid-save must not leave the saved schedule
     // unread elsewhere, and `ref` is unusable after dispose.
@@ -173,7 +176,7 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
       // good. Nothing was confirmed saved, so neither booking nor payment
       // follows; what the client chose stays.
       reportError('ChoosePackageScreen._save', e, st);
-      if (!mounted || _seedFor != client) return;
+      if (!mounted || seq != _seedSeq) return;
       setState(() {
         _saving = false;
         _saveError = couldntMessage('save your schedule', e);
@@ -183,6 +186,8 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
     container.invalidate(myScheduleProvider);
     // Left, or another client signed in: no booking or payment for them.
     if (!mounted || ref.read(currentUserProvider)?.id != client) return;
+    // Signed out and in again: a save started since may pay for this too.
+    if (seq != _seedSeq) return;
 
     final price = (selected['price'] as num?)?.toDouble() ?? 0;
     // Free package (price 0) — nothing to charge. Hand off to booking.
@@ -208,7 +213,7 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
     } catch (e, st) {
       reportError('ChoosePackageScreen._save.checkout', e, st);
     }
-    if (!mounted || _seedFor != client) return;
+    if (!mounted || seq != _seedSeq) return;
     setState(() => _saving = false);
     if (ok) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -338,7 +343,7 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
                   onPressed: (_selected == null || _days.isEmpty || _saving || !_seedReady) ? null : _save,
                   child: _saving
-                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: _white))
+                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: _white, semanticsLabel: 'Saving'))
                       : Text(_buttonLabel(),
                           style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
                 )),

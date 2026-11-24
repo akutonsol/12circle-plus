@@ -139,8 +139,9 @@ class _CoachPackagesScreenState extends ConsumerState<CoachPackagesScreen> {
     // P0-FL-53b · a failed delete escaped unhandled: no message, the package
     // simply stayed. Recorded and said.
     final messenger = ScaffoldMessenger.of(context);
+    final Object? removal;
     try {
-      await ref.read(packageServiceProvider).deletePackage(id);
+      removal = await ref.read(packageServiceProvider).deletePackage(id);
     } catch (e, st) {
       reportError('CoachPackagesScreen.deletePackage', e, st);
       // Left, or another coach signed in: not theirs to hear.
@@ -154,7 +155,16 @@ class _CoachPackagesScreenState extends ConsumerState<CoachPackagesScreen> {
     } finally {
       _deleting.remove(id);
     }
-    if (mounted) ref.invalidate(myPackagesProvider);
+    if (!mounted) return;
+    ref.invalidate(myPackagesProvider);
+    // Delete hid the package instead: the card says so, and so does this — only
+    // the badge changed, so a screen reader heard nothing (P0-FL-56b).
+    if (removal == PackageRemoval.hidden && _for == owner) {
+      messenger.showSnackBar(SnackBar(content: Semantics(
+          liveRegion: true,
+          child: const Text("Can't delete a package clients are using — "
+              'hidden from clients instead.'))));
+    }
   }
 
   Future<void> _edit({Map<String, dynamic>? existing}) async {
@@ -668,7 +678,7 @@ class _PackageEditorState extends ConsumerState<_PackageEditor> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
               onPressed: _saving || (isBulk && !_tiersReady) ? null : _save,
               child: _saving
-                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: _white))
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: _white, semanticsLabel: 'Saving'))
                   : Text(isBulk ? 'Save session packages' : 'Save package',
                       style: const TextStyle(fontWeight: FontWeight.w700)),
             )),
