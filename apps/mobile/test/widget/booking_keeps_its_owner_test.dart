@@ -2,7 +2,8 @@
 // to, booked, cancelled, announced or scored for another.
 //
 // HOW TO SEE IT FAIL: put back a82f993's booking_screen.dart; every test but
-// the POSITIVE / NEGATIVE CONTROLs fails.
+// the POSITIVE / NEGATIVE CONTROLs fails. (Added in round 2: "switched before
+// the dialog is drawn" and the signed-out copy fail on 5f8b7f3 too.)
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -228,12 +229,157 @@ void main() {
     await close(t);
   });
 
+  testWidgets("A's cancel dialog, switched before it is drawn: never drawn for "
+      'B, and it goes', (t) async {
+    await open(t);
+    await t.tap(find.text('Cancel'));
+    await switchTo(t, memberB); // pushed; no frame yet
+    await t.pump();
+    expect(find.text('Cancel session?'), findsNothing);
+    await settle(t);
+    expect(find.byType(ModalBarrier), findsOneWidget,
+        reason: 'only the page: an invisible dialog would swallow every tap');
+    expect(server.writes(), isEmpty);
+    await close(t);
+  });
+
+  testWidgets("B signs in while A's name is read for the notification: it is "
+      'not sent as B, no points', (t) async {
+    await open(t);
+    final hold = server.holds['GET user_profiles:$memberA'] = Completer();
+    server.seen.clear();
+    await t.tap(bookButton());
+    await settle(t, 4);
+    expect(server.reads('user_profiles', memberA), hasLength(1),
+        reason: 'premise');
+    await switchTo(t, memberB);
+    hold.complete();
+    await settle(t);
+    expect(server.writes('coaching_calls'), hasLength(1));
+    expect(server.writes('notifications'), isEmpty);
+    expect(asB(), isEmpty);
+    expect(find.byType(SnackBar), findsNothing);
+    await close(t);
+  });
+
+  group("two coaches", () {
+    setUp(() {
+      Map<String, Object?> rel(String c) => {
+            'coach_id': c,
+            'status': 'active',
+            'activated_at': '2026-10-01T00:00:00Z',
+          };
+      server.rows['coach_client_relationships']![memberA] = [
+        rel('coach-a'), rel('coach-c'),
+      ];
+      server.rows['public_profiles']![memberA] = [
+        {'id': 'coach-a', 'first_name': 'Avery', 'last_name': 'Stone'},
+        {'id': 'coach-c', 'first_name': 'Casey', 'last_name': 'Moss'},
+      ];
+    });
+
+    List<Map<String, Object?>> slotOf(String id) => [
+          {
+            'id': id,
+            'coach_id': id,
+            'type': 'check_in',
+            'duration_minutes': 30,
+            'slot_time': DateTime.now()
+                .toUtc()
+                .add(const Duration(days: 2))
+                .toIso8601String(),
+          },
+        ];
+
+    for (final fails in [false, true]) {
+      testWidgets(
+          "A's other coach's slots ${fails ? 'fail' : 'answer'} after B signed "
+          "in and B's are shown: dropped", (t) async {
+        await open(t);
+        final key = 'GET coach_availability:$memberA';
+        final hold = server.holds[key] = Completer();
+        await t.tap(find.text('Casey Moss'));
+        await settle(t, 2);
+        if (fails) server.fails.add(key);
+        await switchTo(t, memberB);
+        await settle(t);
+        expect(find.textContaining('Blake'), findsWidgets, reason: 'premise');
+        hold.complete();
+        await settle(t);
+        expect(find.textContaining('Blake'), findsWidgets);
+        expect(find.textContaining('Casey'), findsNothing);
+        expect(find.text("Couldn't load your bookings"), findsNothing);
+        await close(t);
+      });
+    }
+
+    testWidgets('picked in the undrawn list once B is signed in: nothing of '
+        "A's is read as B", (t) async {
+      await open(t);
+      server.seen.clear();
+      await switchTo(t, memberB);
+      await t.tap(find.text('Casey Moss'));
+      await settle(t);
+      expect(
+          server.seen.where((r) =>
+              r.who == memberB && '${r.query}'.contains('coach-c')),
+          isEmpty);
+      expect(find.textContaining('Casey'), findsNothing);
+      await close(t);
+    });
+
+    testWidgets('the first coach\'s late slots are not shown as the second\'s',
+        (t) async {
+      await open(t);
+      final key = 'GET coach_availability:$memberA';
+      server.rows['coach_availability']![memberA] = slotOf('slot-c');
+      final first = server.holds[key] = Completer();
+      await t.tap(find.text('Casey Moss'));
+      await settle(t, 2);
+      server.rows['coach_availability']![memberA] = slotOf('slot-a2');
+      final second = server.holds[key] = Completer();
+      // Casey's slots are still out: back to Avery.
+      await t.tap(find.text('Avery Stone').first);
+      await settle(t, 2);
+      second.complete();
+      await settle(t);
+      first.complete();
+      await settle(t);
+      await t.tap(bookButton());
+      await settle(t);
+      final call = server.writes('coaching_calls').single.row;
+      expect((call['coach_id'], call['availability_slot_id']),
+          ('coach-a', 'slot-a2'));
+      await close(t);
+    });
+
+    testWidgets('another coach is picked while a booking is out: the one that '
+        'was booked is told', (t) async {
+      await open(t);
+      final hold = server.holds['POST coaching_calls:$memberA'] = Completer();
+      await t.tap(bookButton());
+      await settle(t, 2);
+      await t.tap(find.text('Casey Moss'));
+      await settle(t);
+      hold.complete();
+      await settle(t);
+      expect(server.writes('coaching_calls').single.row['coach_id'], 'coach-a');
+      expect(server.writes('notifications').single.row['recipient_id'],
+          'coach-a');
+      await close(t);
+    });
+  });
+
   testWidgets("signed out: A's calls go away; A back in: theirs again",
       (t) async {
     await open(t);
     await t.runAsync(signOut);
     await settle(t);
     nothingOfA();
+    expect(find.text('No Coach Selected Yet'), findsNothing,
+        reason: 'a claim about a member nobody knows');
+    expect(find.text("You're signed out — sign in again to book a call."),
+        findsOneWidget);
     await switchTo(t, memberA);
     await settle(t);
     expect(find.text('Your Upcoming Calls'), findsOneWidget);

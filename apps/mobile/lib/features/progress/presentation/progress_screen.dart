@@ -67,6 +67,10 @@ class _ProgressScreenState extends State<ProgressScreen>
   Object? _photoError;
   bool _reopeningPhotos = false;
 
+  /// Gallery photos whose log is there and whose file is not. Nothing to try
+  /// again: asking cannot bring the file back.
+  Set<String> _missing = {};
+
   /// P0-FL-59e · whose weights, measurements and body photos these are. Drawn,
   /// read and written only while this is the member signed in.
   String? _owner = _signedIn;
@@ -74,8 +78,6 @@ class _ProgressScreenState extends State<ProgressScreen>
   /// Bumped by every load and every account change; a late answer is dropped.
   int _loadSeq = 0;
 
-  /// Photos of [_owner] on their way to storage.
-  int _storing = 0;
   StreamSubscription<AuthState>? _authSub;
 
   static String? get _signedIn =>
@@ -99,10 +101,9 @@ class _ProgressScreenState extends State<ProgressScreen>
   /// the one signed in now is read for themselves.
   void _followAccount() {
     if (!mounted || _signedIn == _owner) return;
-    // A member's photo still on its way stays theirs (P0-FL-56a: nothing is
-    // reloaded on the back of it as the next member); they load with Try again.
-    final storing = _storing > 0;
     _loadSeq++;
+    // The previous member's pick and refresh are not this one's to wait for.
+    _picking = _refreshing = null;
     ScaffoldMessenger.maybeOf(context)?.clearSnackBars();
     // The photo source sheet, a filter menu: they go with the member.
     Navigator.of(context).popUntil((r) => r is! PopupRoute);
@@ -116,14 +117,14 @@ class _ProgressScreenState extends State<ProgressScreen>
       _galleryUrls = {};
       _frontUrl = _sideUrl = _backUrl = null;
       _unopened = {};
+      _missing = {};
       _photoError = null;
       _reopeningPhotos = false;
       _loadedOnce = false;
-      _storing = 0;
       _loading = false;
-      _loadFailed = storing && _owner != null;
+      _loadFailed = false;
     });
-    if (_owner != null && !storing) _loadData();
+    if (_owner != null) _loadData();
   }
 
   /// Opens one photo, or says why not: null and no failure is a photo that is
@@ -234,15 +235,18 @@ class _ProgressScreenState extends State<ProgressScreen>
 
       // Generate signed URLs for each gallery photo upload
       final galleryUrls = <String, String>{};
+      final missing = <String>{};
       for (final log in (photoLogs as List)) {
         final path = log['storage_path'] as String?;
         if (path != null && path.isNotEmpty && path.contains('gallery_')) {
           final (url, error) = await _openPhoto(path);
           if (!mounted || stale()) return;
           if (url != null) galleryUrls[path] = url;
-          if (url == null) unopened.add(path);
+          if (error != null) unopened.add(path);
           if (url == null && error == null) {
-            // Not "no photo yet": its log says it was stored.
+            // Not "no photo yet": its log says it was stored. Not a failure to
+            // try again either: the file is gone.
+            missing.add(path);
             reportError('ProgressScreen.openPhoto',
                 StateError('a logged photo is not in storage'));
           }
@@ -253,6 +257,7 @@ class _ProgressScreenState extends State<ProgressScreen>
       {
         setState(() {
           _unopened = unopened;
+          _missing = missing;
           _photoError = photoError;
           _loadedOnce = true;
           _profile = profile;
@@ -296,23 +301,24 @@ class _ProgressScreenState extends State<ProgressScreen>
   bool _isSignedIn(String uid) =>
       Supabase.instance.client.auth.currentUser?.id == uid;
 
-  /// True while a Refresh is loading: another one does nothing until then.
-  bool _refreshingAfterPhoto = false;
+  /// The Refresh that is loading: another one does nothing until it is done.
+  Object? _refreshing;
 
   /// The failed-refresh notice's Refresh, for the member it was said to.
   Future<void> _refresh(String uid, {String? afterPhotoOf}) async {
-    if (!mounted || _refreshingAfterPhoto) return;
+    if (!mounted) return;
     if (!_isSignedIn(uid)) {
       reportError('progress.photo.refresh.identity',
           StateError('the member changed before a refresh'));
       _followAccount();
       return;
     }
-    _refreshingAfterPhoto = true;
+    if (_refreshing != null) return;
+    final mine = _refreshing = Object();
     try {
       await _loadData(afterPhotoOf: afterPhotoOf);
     } finally {
-      _refreshingAfterPhoto = false;
+      if (identical(_refreshing, mine)) _refreshing = null;
     }
   }
 
@@ -463,6 +469,7 @@ class _ProgressScreenState extends State<ProgressScreen>
                         latestGalleryUrl: _latestGalleryUrl,
                         frontUnopened: _unopened.contains('front'),
                         latestUnopened: _latestUnopened,
+                        latestMissing: _missing.contains(_latestGalleryPath),
                         onLog: () => _showLogMeasurementSheet(context),
                       ),
                       _PhotosTab(
@@ -472,6 +479,7 @@ class _ProgressScreenState extends State<ProgressScreen>
                         photoLogs: _photoLogs,
                         galleryUrls: _galleryUrls,
                         unopened: _unopened,
+                        missing: _missing,
                         photoError: _photoError,
                         reopening: _reopeningPhotos,
                         onReopen: _reopenPhotos,
@@ -509,29 +517,32 @@ class _ProgressScreenState extends State<ProgressScreen>
 
   void _showLogWeightSheet(BuildContext context) {
     if (_signedIn != _owner) return _followAccount();
+    // Made now, for this member: the builder runs at the next frame.
+    final sheet = LogWeightSheet(
+      owner: _owner,
+      initialKg: _currentWeightKg,
+      onSaved: _loadData,
+    );
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => LogWeightSheet(
-        owner: _owner,
-        initialKg: _currentWeightKg,
-        onSaved: _loadData,
-      ),
+      builder: (_) => sheet,
     );
   }
 
   void _showLogMeasurementSheet(BuildContext context) {
     if (_signedIn != _owner) return _followAccount();
+    final sheet = LogMeasurementSheet(
+      owner: _owner,
+      initial: _latestMeasurements,
+      onSaved: _loadData,
+    );
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => LogMeasurementSheet(
-        owner: _owner,
-        initial: _latestMeasurements,
-        onSaved: _loadData,
-      ),
+      builder: (_) => sheet,
     );
   }
 
@@ -546,8 +557,9 @@ class _ProgressScreenState extends State<ProgressScreen>
         content: Text(message)));
   }
 
-  /// Source sheet → picker → read in flight: a second tap opens nothing.
-  bool _pickingPhoto = false;
+  /// Source sheet → picker → read in flight: a second tap opens nothing (this
+  /// member's: the next one's does not wait for it).
+  Object? _picking;
 
   /// P0-FL-56a · one photo, picked and read, with the member it belongs to.
   /// Null is the person cancelling (silent: legitimate absence) or a failure
@@ -556,8 +568,8 @@ class _ProgressScreenState extends State<ProgressScreen>
   /// nothing.
   Future<({XFile file, Uint8List bytes, String uid})?> _pickPhoto(String origin,
       {bool webUsesGallery = false}) async {
-    if (_pickingPhoto) return null;
-    _pickingPhoto = true;
+    if (_picking != null) return null;
+    final mine = _picking = Object();
     try {
       final auth = Supabase.instance.client.auth;
       // The member whose screen this is, not whoever is signed in by now.
@@ -570,6 +582,12 @@ class _ProgressScreenState extends State<ProgressScreen>
       }
       var source = await _showPhotoSourceSheet();
       if (source == null) return null;
+      if (auth.currentUser?.id != uid) {
+        reportError('$origin.identity',
+            StateError('the member changed before a pick'));
+        _followAccount();
+        return null;
+      }
       if (uid == null) {
         reportError('$origin.signedOut', StateError('no session'));
         _say("You're signed out — sign in again to add your photo.");
@@ -613,7 +631,7 @@ class _ProgressScreenState extends State<ProgressScreen>
       }
       return (file: file, bytes: bytes, uid: uid);
     } finally {
-      _pickingPhoto = false;
+      if (identical(_picking, mine)) _picking = null;
     }
   }
 
@@ -631,7 +649,6 @@ class _ProgressScreenState extends State<ProgressScreen>
     if (photo == null) return;
     final uid = photo.uid;
     var step = 'upload';
-    _storing++;
     try {
       final ext = photo.file.path.split('.').last.toLowerCase();
       final ts = DateTime.now().millisecondsSinceEpoch;
@@ -662,8 +679,6 @@ class _ProgressScreenState extends State<ProgressScreen>
       // Another member is never told about this one's photo.
       if (_isSignedIn(uid)) _say(couldntMessage('save your photo', e));
       return;
-    } finally {
-      _stored(uid);
     }
     // Both read the session: the points would be B's for A's photo.
     if (!_isSignedIn(uid)) {
@@ -676,10 +691,6 @@ class _ProgressScreenState extends State<ProgressScreen>
     _loadData(afterPhotoOf: uid);
   }
 
-  void _stored(String uid) {
-    if (_owner == uid && _storing > 0) _storing--;
-  }
-
   // Sets one of the baseline (start) photos — front / side / back — writing to
   // the SAME `<uid>/<side>.<ext>` path the onboarding step uses, so it shows in
   // the Comparison Tool here and in the coach's client view.
@@ -688,7 +699,6 @@ class _ProgressScreenState extends State<ProgressScreen>
     if (photo == null) return;
     final uid = photo.uid;
     Object? cleanupError;
-    _storing++;
     try {
       final ext = _baselineExt(photo.file);
       final mime = ext == 'png' ? 'image/png'
@@ -735,8 +745,6 @@ class _ProgressScreenState extends State<ProgressScreen>
       reportError('progress.baseline.upload', e, st);
       if (_isSignedIn(uid)) _say(couldntMessage('update your $side photo', e));
       return;
-    } finally {
-      _stored(uid);
     }
     if (!_isSignedIn(uid)) {
       reportError('progress.baseline.identity',
@@ -1028,7 +1036,7 @@ class _MeasurementsTab extends StatelessWidget {
   final List<Map<String, dynamic>> history;
   final String? frontPhotoUrl;
   final String? latestGalleryUrl;
-  final bool frontUnopened, latestUnopened;
+  final bool frontUnopened, latestUnopened, latestMissing;
   final VoidCallback onLog;
   const _MeasurementsTab({
     this.measurements,
@@ -1037,6 +1045,7 @@ class _MeasurementsTab extends StatelessWidget {
     this.latestGalleryUrl,
     this.frontUnopened = false,
     this.latestUnopened = false,
+    this.latestMissing = false,
     required this.onLog,
   });
 
@@ -1336,11 +1345,15 @@ class _MeasurementsTab extends StatelessWidget {
           const SizedBox(height: 12),
           _VisualComparison(
             firstUrl: frontPhotoUrl,
-            latestUrl: latestUnopened
+            latestUrl: latestUnopened || latestMissing
                 ? null
                 : latestGalleryUrl ?? frontPhotoUrl,
-            firstUnopened: frontUnopened,
-            latestUnopened: latestUnopened,
+            firstNote: frontUnopened ? _couldntOpen : null,
+            latestNote: latestUnopened
+                ? _couldntOpen
+                : latestMissing
+                    ? progressPhotoMissingMessage
+                    : null,
             history: history,
           ),
           const SizedBox(height: 16),
@@ -1379,11 +1392,17 @@ int _calcPhotoStreak(List<Map<String, dynamic>> logs) {
   return streak;
 }
 
+/// A photo that was logged and whose file is no longer stored.
+const progressPhotoMissingMessage = 'This photo is no longer available.';
+
+/// There is a photo; it could not be opened.
+const _couldntOpen = "Couldn't open";
+
 class _PhotosTab extends StatelessWidget {
   final String? frontUrl, sideUrl, backUrl;
   final List<Map<String, dynamic>> photoLogs;
   final Map<String, String> galleryUrls;
-  final Set<String> unopened;
+  final Set<String> unopened, missing;
   final Object? photoError;
   final bool reopening;
   final VoidCallback onReopen;
@@ -1393,7 +1412,7 @@ class _PhotosTab extends StatelessWidget {
   const _PhotosTab({
     this.frontUrl, this.sideUrl, this.backUrl,
     required this.photoLogs, required this.galleryUrls,
-    required this.unopened, required this.photoError,
+    required this.unopened, required this.missing, required this.photoError,
     required this.reopening, required this.onReopen,
     required this.onRefresh, required this.onAddPhoto,
     required this.onSetBaseline,
@@ -1401,9 +1420,63 @@ class _PhotosTab extends StatelessWidget {
 
   // One baseline angle (front / side / back). Always tappable — empty shows an
   // "Add" placeholder; set shows the photo with an edit affordance.
-  Widget _baselineSlot(String side, String label, String? url) => GestureDetector(
+  Widget _baselineSlot(String side, String label, String? url) {
+    final slot = GestureDetector(
+      onTap: () => onSetBaseline(side),
+      child: Column(children: [
+        _baselinePhoto(side, label, url),
+        const SizedBox(height: 6),
+        _baselineLabel(label, url),
+      ]),
+    );
+    return url == null && unopened.contains(side)
+        ? _unopenedSemantics(side, label, slot)
+        : slot;
+  }
+
+  /// Large text: photo on the left, its words beside it, where they can wrap
+  /// and grow. In a third of the width they were cut off.
+  Widget _baselineRow(BuildContext context, String side, String label, String? url) {
+    final isUnopened = url == null && unopened.contains(side);
+    final slot = GestureDetector(
+      onTap: () => onSetBaseline(side),
+      behavior: HitTestBehavior.opaque,
+      child: Row(children: [
+        SizedBox(width: 86,
+            child: _baselinePhoto(side, label, url, words: false)),
+        const SizedBox(width: 12),
+        Expanded(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _baselineLabel(label, url),
+            if (isUnopened)
+              const Text(_couldntOpen,
+                  style: TextStyle(color: _C.onSurfaceVar, fontSize: 11))
+            else if (url == null)
+              const Text('Add',
+                  style: TextStyle(color: _C.outline, fontSize: 11)),
+          ])),
+      ]),
+    );
+    return isUnopened ? _unopenedSemantics(side, label, slot) : slot;
+  }
+
+  Widget _unopenedSemantics(String side, String label, Widget slot) => Semantics(
+    container: true,
+    button: true,
+    label: "$label photo, couldn't open",
+    excludeSemantics: true,
     onTap: () => onSetBaseline(side),
-    child: Column(children: [
+    child: slot,
+  );
+
+  Widget _baselineLabel(String label, String? url) => Text(label,
+      style: TextStyle(
+        color: url != null ? _C.onSurface : _C.outline,
+        fontSize: 12, fontWeight: FontWeight.w600));
+
+  Widget _baselinePhoto(String side, String label, String? url,
+      {bool words = true}) =>
       AspectRatio(
         aspectRatio: 3 / 4,
         child: Container(
@@ -1419,7 +1492,11 @@ class _PhotosTab extends StatelessWidget {
           child: url != null
               ? Stack(fit: StackFit.expand, children: [
                   Image.network(url, fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => _slotUnopened()),
+                    errorBuilder: (_, __, ___) => Semantics(
+                        container: true,
+                        label: "$label photo, couldn't open",
+                        excludeSemantics: true,
+                        child: _slotUnopened(words: words))),
                   Positioned(bottom: 6, right: 6, child: Container(
                     padding: const EdgeInsets.all(4),
                     decoration: BoxDecoration(
@@ -1427,33 +1504,33 @@ class _PhotosTab extends StatelessWidget {
                       borderRadius: BorderRadius.circular(6)),
                     child: const Icon(Icons.edit, color: Colors.white, size: 13))),
                 ])
-              : unopened.contains(side) ? _slotUnopened() : _slotEmpty(),
+              : unopened.contains(side)
+                  ? _slotUnopened(words: words)
+                  : _slotEmpty(words: words),
         ),
-      ),
-      const SizedBox(height: 6),
-      Text(label, style: TextStyle(
-        color: url != null ? _C.onSurface : _C.outline,
-        fontSize: 12, fontWeight: FontWeight.w600)),
-    ]),
-  );
+      );
 
   /// There is a photo; it could not be opened.
-  Widget _slotUnopened() => const Center(child: Column(
+  Widget _slotUnopened({bool words = true}) => Center(child: Column(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Icon(Icons.broken_image_outlined, color: _C.outline, size: 24),
-      SizedBox(height: 4),
-      Text("Couldn't open", textAlign: TextAlign.center,
-          style: TextStyle(color: _C.onSurfaceVar, fontSize: 11)),
+      const Icon(Icons.broken_image_outlined, color: _C.outline, size: 24),
+      if (words) ...const [
+        SizedBox(height: 4),
+        Text(_couldntOpen, textAlign: TextAlign.center,
+            style: TextStyle(color: _C.onSurfaceVar, fontSize: 11)),
+      ],
     ],
   ));
 
-  Widget _slotEmpty() => const Center(child: Column(
+  Widget _slotEmpty({bool words = true}) => Center(child: Column(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Icon(Icons.add_a_photo_outlined, color: _C.outline, size: 24),
-      SizedBox(height: 4),
-      Text('Add', style: TextStyle(color: _C.outline, fontSize: 11)),
+      const Icon(Icons.add_a_photo_outlined, color: _C.outline, size: 24),
+      if (words) ...const [
+        SizedBox(height: 4),
+        Text('Add', style: TextStyle(color: _C.outline, fontSize: 11)),
+      ],
     ],
   ));
 
@@ -1482,6 +1559,13 @@ class _PhotosTab extends StatelessWidget {
               accent: _C.primary),
             const SizedBox(height: 12),
           ],
+          if (MediaQuery.textScalerOf(context).scale(11) > 11 * 1.3) ...[
+            _baselineRow(context, 'front', 'Front', frontUrl),
+            const SizedBox(height: 10),
+            _baselineRow(context, 'side', 'Side', sideUrl),
+            const SizedBox(height: 10),
+            _baselineRow(context, 'back', 'Back', backUrl),
+          ] else
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1569,6 +1653,7 @@ class _PhotosTab extends StatelessWidget {
             photoLogs: photoLogs,
             galleryUrls: galleryUrls,
             unopened: unopened,
+            missing: missing,
             frontUrl: frontUrl,
             sideUrl: sideUrl,
             backUrl: backUrl,
@@ -2234,11 +2319,11 @@ class _InsightRow extends StatelessWidget {
 class _ProgressGallery extends StatefulWidget {
   final List<Map<String, dynamic>> photoLogs;
   final Map<String, String> galleryUrls;
-  final Set<String> unopened;
+  final Set<String> unopened, missing;
   final String? frontUrl, sideUrl, backUrl;
   const _ProgressGallery({
     required this.photoLogs, required this.galleryUrls,
-    required this.unopened,
+    required this.unopened, required this.missing,
     this.frontUrl, this.sideUrl, this.backUrl,
   });
   @override
@@ -2270,6 +2355,9 @@ class _ProgressGalleryState extends State<_ProgressGallery> {
       widget.unopened.contains(log['storage_path'] ?? log['side']) ||
       (_urlFor(log) == null && widget.unopened.contains(log['side']));
 
+  bool _missing(Map<String, dynamic> log) =>
+      widget.missing.contains(log['storage_path']);
+
   String _dateOf(Map<String, dynamic> log) {
     final raw = (log['logged_at'] ?? log['created_at']) as String?;
     final d = raw != null ? DateTime.tryParse(raw)?.toLocal() : null;
@@ -2284,6 +2372,10 @@ class _ProgressGalleryState extends State<_ProgressGallery> {
   @override
   Widget build(BuildContext context) {
     final logs = _filtered;
+    // A tile has no room for a sentence: a photo that is gone is a row, under
+    // the grid, where it can wrap.
+    final tiles = _grid ? [for (final l in logs) if (!_missing(l)) l] : logs;
+    final rows = _grid ? [for (final l in logs) if (_missing(l)) l] : logs;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2338,25 +2430,27 @@ class _ProgressGalleryState extends State<_ProgressGallery> {
                   style: TextStyle(color: _C.outlineVar, fontSize: 12)),
             ]),
           )
-        else if (_grid)
+        else if (_grid && tiles.isNotEmpty)
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 2, crossAxisSpacing: 12, mainAxisSpacing: 12, childAspectRatio: 0.8),
-            itemCount: logs.length,
+            itemCount: tiles.length,
             itemBuilder: (_, i) => _GalleryCard(
-                date: _dateOf(logs[i]), label: _labelOf(logs[i]), url: _urlFor(logs[i]),
-                unopened: _unopened(logs[i])),
-          )
-        else
+                date: _dateOf(tiles[i]), label: _labelOf(tiles[i]), url: _urlFor(tiles[i]),
+                unopened: _unopened(tiles[i])),
+          ),
+        if (_grid && tiles.isNotEmpty && rows.isNotEmpty)
+          const SizedBox(height: 12),
+        if (rows.isNotEmpty)
           ListView.separated(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            itemCount: logs.length,
+            itemCount: rows.length,
             separatorBuilder: (_, __) => const SizedBox(height: 10),
             itemBuilder: (_, i) {
-              final url = _urlFor(logs[i]);
+              final url = _urlFor(rows[i]);
               return Container(
                 decoration: BoxDecoration(
                   color: _C.glassCard,
@@ -2372,17 +2466,22 @@ class _ProgressGalleryState extends State<_ProgressGallery> {
                                 child: const Icon(Icons.image_outlined, color: _C.outline)))
                         : Container(color: _C.surfaceContainer,
                             child: Icon(
-                                _unopened(logs[i])
+                                _unopened(rows[i]) || _missing(rows[i])
                                     ? Icons.broken_image_outlined
                                     : Icons.image_outlined,
                                 color: _C.outline)),
                   ),
                   const SizedBox(width: 14),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(_labelOf(logs[i]),
+                    Text(_labelOf(rows[i]),
                         style: const TextStyle(color: _C.onSurface, fontSize: 14, fontWeight: FontWeight.w700)),
                     const SizedBox(height: 3),
-                    Text(_dateOf(logs[i]), style: const TextStyle(color: _C.onSurfaceVar, fontSize: 12)),
+                    Text(_dateOf(rows[i]), style: const TextStyle(color: _C.onSurfaceVar, fontSize: 12)),
+                    if (_missing(rows[i])) ...const [
+                      SizedBox(height: 3),
+                      Text(progressPhotoMissingMessage,
+                          style: TextStyle(color: _C.onSurfaceVar, fontSize: 12)),
+                    ],
                   ])),
                   const Padding(
                     padding: EdgeInsets.only(right: 14),
@@ -2456,10 +2555,11 @@ class _GalleryCard extends StatelessWidget {
 class _VisualComparison extends StatelessWidget {
   final String? firstUrl;
   final String? latestUrl;
-  final bool firstUnopened, latestUnopened;
+  /// Why a photo that exists is not shown; null when there is none.
+  final String? firstNote, latestNote;
   final List<Map<String, dynamic>> history;
   const _VisualComparison({this.firstUrl, this.latestUrl,
-    this.firstUnopened = false, this.latestUnopened = false,
+    this.firstNote, this.latestNote,
     required this.history});
 
   String _firstDate() {
@@ -2471,20 +2571,26 @@ class _VisualComparison extends StatelessWidget {
     return '${_monthShort(d.month)} ${d.year}';
   }
 
-  Widget _photoCard(String? url, String label, bool isLatest, bool unopened) {
+  Widget _photoCard(String? url, String label, bool isLatest, String? note) {
     final borderColor = isLatest ? _C.primary : Colors.white.withValues(alpha: 0.1);
     Widget image;
     if (url != null) {
       image = Image.network(url, fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => _placeholder(unopened: true));
+        errorBuilder: (_, __, ___) => _placeholder(_couldntOpen));
     } else {
-      image = _placeholder(unopened: unopened);
+      image = _placeholder(note);
     }
-    return Column(
+    final height = isLatest ? 150.0 : 130.0;
+    // As tall as ever (the card's 220 less its border and padding); taller for
+    // words at large text, which were cut off.
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 186),
+      child: Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Container(
-          height: isLatest ? 150 : 130,
+          height: url != null ? height : null,
+          constraints: BoxConstraints(minHeight: height),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: borderColor, width: isLatest ? 1.5 : 1),
@@ -2505,43 +2611,43 @@ class _VisualComparison extends StatelessWidget {
               child: const Text('Today', style: TextStyle(color: _C.primary, fontSize: 11, fontWeight: FontWeight.w700)))
           : Text(label, style: TextStyle(color: _C.outline.withValues(alpha: 0.8), fontSize: 10, fontWeight: FontWeight.w600)),
       ],
-    );
+    ));
   }
 
-  Widget _placeholder({bool unopened = false}) => Container(
+  Widget _placeholder(String? note) => Container(
     color: _C.surfaceContainer,
     child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-      Icon(unopened ? Icons.broken_image_outlined : Icons.add_a_photo_outlined,
+      Icon(note != null ? Icons.broken_image_outlined : Icons.add_a_photo_outlined,
           color: _C.outline, size: 28),
       const SizedBox(height: 4),
-      Text(unopened ? "Couldn't open" : 'No photo',
+      Text(note ?? 'No photo',
           textAlign: TextAlign.center,
           style: TextStyle(
-              color: unopened ? _C.onSurfaceVar : _C.outlineVar, fontSize: 10)),
+              color: note != null ? _C.onSurfaceVar : _C.outlineVar, fontSize: 10)),
     ])),
   );
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 220,
+      constraints: const BoxConstraints(minHeight: 220),
       decoration: BoxDecoration(
         color: _C.glassCard,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: const Color(0x0DFFFFFF)),
       ),
       clipBehavior: Clip.antiAlias,
-      child: Stack(fit: StackFit.expand, children: [
+      child: Stack(children: [
         if (latestUrl != null)
-          Image.network(latestUrl!, fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => Container(color: _C.surfaceContainer)),
-        Container(color: Colors.black.withValues(alpha: 0.45)),
+          Positioned.fill(child: Image.network(latestUrl!, fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => Container(color: _C.surfaceContainer))),
+        Positioned.fill(child: Container(color: Colors.black.withValues(alpha: 0.45))),
         Padding(
           padding: const EdgeInsets.all(16),
           child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            Expanded(child: _photoCard(firstUrl, _firstDate(), false, firstUnopened)),
+            Expanded(child: _photoCard(firstUrl, _firstDate(), false, firstNote)),
             const SizedBox(width: 12),
-            Expanded(child: _photoCard(latestUrl, 'Today', true, latestUnopened)),
+            Expanded(child: _photoCard(latestUrl, 'Today', true, latestNote)),
           ]),
         ),
       ]),

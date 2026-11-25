@@ -10,7 +10,8 @@
 // whose token wrote which row.
 //
 // HOW TO SEE IT FAIL: put back a82f993's intake_flow_screen.dart; every test
-// but the POSITIVE / NEGATIVE CONTROLs fails.
+// but the POSITIVE / NEGATIVE CONTROLs fails. (Round 2's "correction", "finished
+// elsewhere", "nothing new" and Done-page tests fail on 5f8b7f3 too.)
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -186,6 +187,58 @@ void main() {
       await close(t);
     });
 
+    testWidgets("B edits, hides (saved), then puts it back and hides: the "
+        'correction is saved too', (t) async {
+      members();
+      await open(t);
+      await switchTo(t, memberB);
+      await settle(t);
+      await t.enterText(find.widgetWithText(TextField, 'Bob'), 'Bobby');
+      await hide(t);
+      expect(server.writes('user_profiles').last.row['first_name'], 'Bobby',
+          reason: 'premise');
+      server.seen.clear();
+      await t.enterText(find.widgetWithText(TextField, 'Bobby'), 'Bob');
+      await hide(t);
+      expect(server.writes('user_profiles'), isNotEmpty,
+          reason: "B's correction was lost: the row keeps the wrong answer");
+      expect(server.writes('user_profiles').last.row['first_name'], 'Bob');
+      expect(server.writes('user_profiles').map((w) => w.who).toSet(),
+          {memberB});
+      await close(t);
+    });
+
+    testWidgets("A's challenges are not B's: B has none, and saves none",
+        (t) async {
+      members();
+      server.rows['user_profiles']![memberA]!.single['biggest_challenges'] = [
+        'consistency', 'motivation',
+      ];
+      await open(t);
+      await switchTo(t, memberB);
+      await settle(t);
+      await t.tap(find.text('Continue'));
+      await settle(t);
+      final w = server.writes('user_profiles').last;
+      expect((w.who, w.query['id']), (memberB, 'eq.$memberB'));
+      expect('${w.body}', isNot(contains('consistency')));
+      await close(t);
+    });
+
+    testWidgets('B, who finished intake long ago, arrives by a switch: they are '
+        'done, nothing marks them incomplete', (t) async {
+      members();
+      server.rows['user_profiles']![memberB]!.single['onboarding_complete'] =
+          true;
+      await open(t);
+      await switchTo(t, memberB);
+      await settle(t);
+      expect(find.text("That's everything we needed."), findsOneWidget);
+      await hide(t);
+      expect(server.writes(), isEmpty);
+      await close(t);
+    });
+
     testWidgets("B's read pending: nothing of A's, and no save of any kind",
         (t) async {
       members();
@@ -321,12 +374,97 @@ void main() {
       await t.tap(find.text('Enter 12 Circle'));
       await settle(t);
       expect(find.text('Retry'), findsOneWidget, reason: 'premise');
-      expect(origins(), contains('intake.finish'));
       await switchTo(t, memberB);
       await t.tap(find.text('Retry'));
       await settle(t);
       expect(asB(), isEmpty);
       expect(find.text('Retry'), findsNothing);
+      expect(origins(), contains('intake.finish'));
+      await close(t);
+    });
+
+    testWidgets("Finish fails after B signed in: recorded; B is not told that "
+        'their answers were not saved', (t) async {
+      members(a: _finalPage, b: _finalPage);
+      await open(t);
+      final hold = server.holds['POST user_profiles:$memberA'] = Completer();
+      server.fails.add('POST user_profiles:$memberA');
+      await t.tap(find.text('Enter 12 Circle'));
+      await settle(t, 2);
+      await switchTo(t, memberB);
+      await settle(t); // B's own answers are up
+      hold.complete();
+      await settle(t);
+      expect(find.textContaining('could not save'), findsNothing);
+      expect(find.text('Retry'), findsNothing);
+      expect(asB(), isEmpty);
+      expect(origins(), contains('intake.finish'));
+      await close(t);
+    });
+
+    testWidgets("B signs in while A's answers (phase 2) are being saved and "
+        'fail: theirs, B is not told', (t) async {
+      members();
+      await open(t);
+      final key = 'PATCH user_profiles:$memberA';
+      final phase1 = server.holds[key] = Completer();
+      await t.tap(find.text('Continue'));
+      await settle(t, 2);
+      final phase2 = server.holds[key] = Completer();
+      phase1.complete();
+      await settle(t, 3);
+      expect(server.writes('user_profiles'), hasLength(2),
+          reason: 'premise: phase 2 is out');
+      server.fails.add(key);
+      await switchTo(t, memberB);
+      await settle(t);
+      phase2.complete();
+      await settle(t);
+      expect(server.writes('user_profiles').map((w) => (w.who, w.query['id'])),
+          List.filled(2, (memberA, 'eq.$memberA')));
+      expect(find.text(kIntakeProgressNotSavedMessage), findsNothing);
+      expect(origins(), contains('intake.saveProgress.data'));
+      nothingOfAlice();
+      await close(t);
+    });
+
+    testWidgets("A -> B -> A while A's step is being saved: what was in memory "
+        "then is not sent; A's own answers are read again", (t) async {
+      members();
+      await open(t);
+      await t.enterText(find.widgetWithText(TextField, 'Alice'), 'Alicia');
+      final hold = server.holds['PATCH user_profiles:$memberA'] = Completer();
+      await t.tap(find.text('Continue'));
+      await settle(t, 2);
+      await switchTo(t, memberB);
+      await settle(t);
+      await switchTo(t, memberA);
+      await settle(t);
+      hold.complete();
+      await settle(t);
+      expect(server.writes('user_profiles'), hasLength(1),
+          reason: 'phase 2 of the first visit');
+      expect(find.text('Alice'), findsOneWidget);
+      expect(asB(), isEmpty);
+      await close(t);
+    });
+
+    testWidgets('POSITIVE CONTROL: the same member, token refreshed while the '
+        'step is being saved: their answers follow, once', (t) async {
+      members();
+      await open(t);
+      await t.enterText(find.widgetWithText(TextField, 'Alice'), 'Alicia');
+      final hold = server.holds['PATCH user_profiles:$memberA'] = Completer();
+      await t.tap(find.text('Continue'));
+      await settle(t, 2);
+      await t.runAsync(refreshSession);
+      await settle(t, 2);
+      hold.complete();
+      await settle(t);
+      final w = server.writes('user_profiles').toList();
+      expect(w, hasLength(2));
+      expect((w.last.who, w.last.row['first_name']), (memberA, 'Alicia'));
+      expect(reported, isEmpty);
       await close(t);
     });
   });
@@ -364,6 +502,57 @@ void main() {
       expect(asB(), isEmpty);
       expect(server.writes('notifications'), isEmpty);
       expect(find.textContaining('Meet Coach'), findsNothing);
+      await close(t);
+    });
+
+    testWidgets("B signs in while A's other coaches are read: none is ended as "
+        'B, nothing is said', (t) async {
+      members(a: _coachPage);
+      server.rows['coach_client_relationships'] = {
+        memberA: [
+          {'coach_id': 'coach-9'},
+        ],
+      };
+      await open(t);
+      final hold =
+          server.holds['GET coach_client_relationships:$memberA'] = Completer();
+      await t.tap(find.text('Select Coach'));
+      await settle(t, 4);
+      expect(server.reads('coach_client_relationships', memberA), isNotEmpty,
+          reason: 'premise');
+      await switchTo(t, memberB);
+      hold.complete();
+      await settle(t);
+      expect(server.seen.where((r) => r.who == memberB && r.target == 'subscriptions'),
+          isEmpty, reason: 'the end of a coaching was started as B');
+      expect(asB(), isEmpty);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(origins(), contains('IntakeFlow.selectCoach.identity'));
+      await close(t);
+    });
+
+    testWidgets("A's previous coaching could not be ended, B signed in "
+        'meanwhile: B is not told', (t) async {
+      members(a: _coachPage);
+      server.rows['coach_client_relationships'] = {
+        memberA: [
+          {'coach_id': 'coach-9'},
+        ],
+      };
+      await open(t);
+      final key = 'PATCH coach_client_relationships:$memberA';
+      final hold = server.holds[key] = Completer();
+      server.fails.add(key);
+      await t.tap(find.text('Select Coach'));
+      await settle(t, 6);
+      expect(server.writes('coach_client_relationships'), hasLength(2),
+          reason: 'premise: the end is out');
+      await switchTo(t, memberB);
+      hold.complete();
+      await settle(t);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(server.writes('notifications'), isEmpty);
+      expect(origins(), contains('IntakeFlow.selectCoach.endPrevious'));
       await close(t);
     });
 
@@ -480,6 +669,62 @@ void main() {
       await close(t);
     });
 
+    testWidgets('A signs out and back in with nothing new: hiding the tab writes '
+        'nothing; what they change next is saved', (t) async {
+      members();
+      await open(t);
+      await t.runAsync(signOut);
+      await settle(t);
+      await switchTo(t, memberA);
+      await settle(t);
+      expect(find.text('Alice'), findsOneWidget);
+      await hide(t);
+      expect(server.writes(), isEmpty,
+          reason: 'a save marks them incomplete: ${server.writes().toList()}');
+      await t.enterText(find.widgetWithText(TextField, 'Alice'), 'Alicia');
+      await hide(t);
+      expect(server.writes('user_profiles').last.row['first_name'], 'Alicia');
+      await close(t);
+    });
+
+    testWidgets('A signs out with an unsaved edit, finishes elsewhere, signs back '
+        'in here: they are done; the old edit is not written over it',
+        (t) async {
+      members();
+      await open(t);
+      await t.enterText(find.widgetWithText(TextField, 'Alice'), 'Alicia');
+      await t.runAsync(signOut);
+      await settle(t);
+      server.rows['user_profiles']![memberA]!.single['onboarding_complete'] =
+          true;
+      await switchTo(t, memberA);
+      await settle(t);
+      expect(find.text("That's everything we needed."), findsOneWidget);
+      await hide(t);
+      expect(server.writes(), isEmpty);
+      await close(t);
+    });
+
+    testWidgets('A is back and their row cannot be read: nothing is sent, the '
+        'edit is still theirs after Try again', (t) async {
+      members();
+      await open(t);
+      await t.enterText(find.widgetWithText(TextField, 'Alice'), 'Alicia');
+      await t.runAsync(signOut);
+      await settle(t);
+      server.fails.add('GET user_profiles:$memberA');
+      await switchTo(t, memberA);
+      await settle(t);
+      expect(find.textContaining("Couldn't load your answers"), findsOneWidget);
+      await hide(t);
+      expect(server.writes(), isEmpty);
+      server.fails.clear();
+      await t.tap(find.text('Try again'));
+      await settle(t);
+      expect(find.text('Alicia'), findsOneWidget);
+      await close(t);
+    });
+
     testWidgets("A signs out, B signs in: B's own answers; A's are dropped for "
         'good', (t) async {
       members();
@@ -571,6 +816,71 @@ void main() {
       expect(server.writes('generate_client_plan').single.who, memberA);
       expect(find.text("That's everything we needed."), findsOneWidget);
       await close(t);
+    });
+
+    group('the Done page', () {
+      Future<void> finish(WidgetTester t) async {
+        members(a: _finalPage);
+        await open(t);
+        await t.tap(find.text('Enter 12 Circle'));
+        await settle(t);
+        expect(find.text("That's everything we needed."), findsOneWidget,
+            reason: 'premise');
+        server.seen.clear();
+      }
+
+      testWidgets('hiding the tab on it does not mark them incomplete again',
+          (t) async {
+        await finish(t);
+        await hide(t);
+        expect(server.writes(), isEmpty,
+            reason: '${server.writes().toList()}');
+        await close(t);
+      });
+
+      testWidgets('signed out and back in on it: still done; hiding the tab '
+          'does not mark them incomplete', (t) async {
+        await finish(t);
+        await t.runAsync(signOut);
+        await settle(t);
+        await hide(t);
+        await switchTo(t, memberA);
+        await settle(t);
+        expect(find.text("That's everything we needed."), findsOneWidget);
+        await hide(t);
+        expect(server.writes(), isEmpty,
+            reason: '${server.writes().toList()}');
+        await close(t);
+      });
+
+      testWidgets("B signs in on it: B's own flow, not A's; A back: still done",
+          (t) async {
+        await finish(t);
+        await switchTo(t, memberB);
+        await settle(t);
+        expect(find.text("That's everything we needed."), findsNothing);
+        expect(find.text('Bob'), findsOneWidget);
+        await switchTo(t, memberA);
+        await settle(t);
+        expect(find.text("That's everything we needed."), findsOneWidget);
+        await hide(t);
+        expect(server.writes(), isEmpty);
+        await close(t);
+      });
+
+      testWidgets('hiding the tab while Finish is being saved sends no '
+          '"incomplete" after it', (t) async {
+        members(a: _finalPage);
+        await open(t);
+        final hold = server.holds['POST user_profiles:$memberA'] = Completer();
+        await t.tap(find.text('Enter 12 Circle'));
+        await settle(t, 2);
+        await hide(t);
+        expect(server.writes('user_profiles').map((w) => w.method), ['POST']);
+        hold.complete();
+        await settle(t);
+        await close(t);
+      });
     });
 
     testWidgets('NEGATIVE CONTROL: a member with no stored answers starts '

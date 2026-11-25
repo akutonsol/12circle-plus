@@ -187,8 +187,14 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
   /// hiding the tab: a save marks their onboarding incomplete.
   bool _arrivedBySwitch = false;
 
-  /// What the last successful read put in the flow (see [_arrivedBySwitch]).
+  /// What is stored, as far as known: the last read or save that succeeded
+  /// (see [_arrivedBySwitch]). These are health answers too: '' whenever the
+  /// flow holds nobody's.
   String _base = '';
+
+  /// The member whose intake was finished in this flow. Back on it they are
+  /// still finished: the questions again would mark them incomplete.
+  String? _doneOf;
 
   static String? get _signedIn =>
       Supabase.instance.client.auth.currentUser?.id;
@@ -226,8 +232,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
         base: _base,
       );
     }
-    final back = uid != null && _held?.uid == uid ? _held : null;
-    if (uid != null) _held = null;
+    if (uid != null && _held?.uid != uid) _held = null;
     _owner = uid;
 
     // Pickers and sheets this flow opened go with the member.
@@ -241,25 +246,23 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
 
     final old = _pageController;
     WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
+    final finished = uid != null && uid == _doneOf;
     setState(() {
-      _data = back?.data ?? IntakeData();
-      _challenges
-        ..clear()
-        ..addAll(back?.challenges ?? const {});
+      _data = IntakeData();
+      _challenges.clear();
+      _base = '';
       _saving = false;
       _progressNoticeShown = false;
       _retryingResume = false;
-      if (back != null) {
-        _step = back.step;
-        _base = back.base;
-      } else if (uid != null) {
-        // Another member: their own answers, read for them.
+      if (uid != null) {
+        // Their own answers, read for them — the same member's too: they may
+        // have finished elsewhere meanwhile, and a save here would undo it.
         _step = 0;
-        _saveError = null;
-        _done = false;
+        if (_held == null) _saveError = null;
+        _done = finished;
         _resumeError = null;
         _arrivedBySwitch = true;
-        _loading = true;
+        _loading = !finished;
       } else {
         // Signed out: the step stays, its answers do not. A read that failed
         // is still the failure it was.
@@ -268,7 +271,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
       }
       _pageController = PageController(initialPage: _step);
     });
-    if (uid != null && back == null) _readProgress(uid);
+    if (uid != null && !finished) _readProgress(uid);
   }
 
   /// False (recorded, the previous member's answers withdrawn) once [owner],
@@ -361,7 +364,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
       final profile = await Supabase.instance.client
           .from('user_profiles')
           .select(
-            'onboarding_step, first_name, last_name, gender, date_of_birth, '
+            'onboarding_step, onboarding_complete, first_name, last_name, gender, date_of_birth, '
             'fitness_goal, activities, activity_level, '
             'training_days_per_week, training_location, nutrition_goal, '
             'protein_confidence, biggest_challenges, height_cm, '
@@ -375,6 +378,35 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
           .eq('id', uid)
           .maybeSingle();
       if (!mounted || stale()) return;
+      final held = _held?.uid == uid ? _held : null;
+      _held = null;
+      if (_arrivedBySwitch && profile?['onboarding_complete'] == true) {
+        // Finished already, and they did not come here to start again: nothing
+        // is asked, so nothing marks them incomplete.
+        setState(() {
+          _doneOf = uid;
+          _done = true;
+          _saveError = null;
+          _loading = false;
+          _resumeError = null;
+        });
+        return;
+      }
+      if (held != null) {
+        // Signed out and back in: the draft they left. Not sent for merely
+        // hiding the tab unless it differs from what was last stored.
+        _pageController.dispose();
+        _pageController = PageController(initialPage: held.step);
+        setState(() {
+          _data = held.data;
+          _challenges.addAll(held.challenges);
+          _step = held.step;
+          _base = held.base;
+          _loading = false;
+          _resumeError = null;
+        });
+        return;
+      }
       if (profile != null) {
         final savedStep = (profile['onboarding_step'] as num?)?.toInt() ?? 0;
         final saved = IntakeData.fromSupabase(profile);
@@ -444,6 +476,9 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     // Never while the stored answers are unknown (loading, or the resume read
     // failed): what is in memory is blank and would overwrite them.
     if (_loading || _resumeError != null) return;
+    // Nor over a finish, done or on its way: it stores everything, and a save
+    // of progress marks the member incomplete again.
+    if (_saving || _done) return;
     final uid = _owner;
     if (uid == null && _signedIn == null) return;
     if (uid == null || !_stillOwner(uid, 'progress save')) {
@@ -452,6 +487,9 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     }
     final generation = _generation;
     final db = Supabase.instance.client;
+    // From here on they have answered: every later correction is saved too.
+    _arrivedBySwitch = false;
+    final sent = _snapshot();
 
     // P0-FL-9. Both phases used to be `catch (_) {}` with no row check, so a
     // refused or 0-row write lost the person's resume point in silence. Each
@@ -482,6 +520,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     // (After a switch `_data` is already someone else's, and so is the notice
     // below.)
     if (!_stillOwner(uid, 'progress save') || generation != _generation) return;
+    if (_saving || _done) return; // finished meanwhile: that stored it all
     try {
       _data.biggestChallenges = _challenges.toList();
       final rows = await db
@@ -501,6 +540,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     if (generation != _generation || _signedIn != uid) return;
 
     if (saved) {
+      _base = sent;
       _progressNoticeShown = false;
     } else if (!_progressNoticeShown && mounted) {
       _progressNoticeShown = true;
@@ -684,7 +724,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     // "Success is quiet: a mark, a sentence, what happens next. No confetti,
     // no celebration animation."
     if (mounted && generation == _generation && _signedIn == uid) {
-      setState(() { _saving = false; _done = true; });
+      setState(() { _saving = false; _done = true; _doneOf = uid; });
     }
   }
 

@@ -31,7 +31,7 @@ const _wht   = Colors.white;
 const _mut   = Color(0xFFCFC2D6);
 
 // ── State ─────────────────────────────────────────────────────────────────────
-enum _BookingState { loading, noCoach, pending, noSlots, ready, booked, error }
+enum _BookingState { loading, signedOut, noCoach, pending, noSlots, ready, booked, error }
 
 class BookingScreen extends ConsumerStatefulWidget {
   const BookingScreen({super.key});
@@ -129,7 +129,8 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
     final uid = _owner;
     bool stale() => seq != _loadSeq || _signedIn != uid;
     setState(() => _state = _BookingState.loading);
-    if (uid == null) { setState(() => _state = _BookingState.noCoach); return; }
+    // "No coach selected" would be a claim about a member nobody knows.
+    if (uid == null) { setState(() => _state = _BookingState.signedOut); return; }
 
     try {
       // UIX-1 / M-03. This query used to embed the coach profile as
@@ -339,6 +340,17 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       context: context,
       builder: (dctx) {
         _confirmCtx = dctx;
+        // Never drawn once its member has left (no frame in between).
+        if (_signedIn != owner) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!dctx.mounted) return;
+            final route = ModalRoute.of(dctx);
+            if (route != null && route.isActive) {
+              route.navigator?.removeRoute(route);
+            }
+          });
+          return const SizedBox.shrink();
+        }
         return AlertDialog(
         backgroundColor: _card,
         title: const Text('Cancel session?', style: TextStyle(color: _wht, fontWeight: FontWeight.w800)),
@@ -514,7 +526,9 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         title: const Text('Book a Call',
           style: TextStyle(color: _wht, fontSize: 18, fontWeight: FontWeight.w700)),
         actions: [
-          if (_state != _BookingState.loading && _state != _BookingState.noCoach)
+          if (_state != _BookingState.loading &&
+              _state != _BookingState.signedOut &&
+              _state != _BookingState.noCoach)
             IconButton(
               icon: const Icon(Icons.refresh_rounded, color: _mut, size: 20),
               onPressed: _load),
@@ -531,6 +545,12 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
     }
     final content = switch (_state) {
       _BookingState.loading  => const Center(child: CircularProgressIndicator(color: _brand)),
+      _BookingState.signedOut => const Center(
+          child: Padding(
+              padding: EdgeInsets.all(32),
+              child: Text("You're signed out — sign in again to book a call.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: _mut, fontSize: 15)))),
       _BookingState.noCoach  => _NoCoachState(),
       _BookingState.pending  => _PendingCoachState(
         coachName:    _coachName    ?? 'Your Coach',

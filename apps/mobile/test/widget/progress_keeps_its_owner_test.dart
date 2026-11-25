@@ -7,13 +7,17 @@
 // with A's values) inserted under a fresh `currentUser` — B.
 //
 // HOW TO SEE IT FAIL: put back a82f993's progress_screen.dart; every test but
-// the POSITIVE / NEGATIVE CONTROLs fails.
+// the POSITIVE / NEGATIVE CONTROLs fails. (Round 2's "while A's photo is being
+// stored", "B's Add Photo", missing-photo and large-text tests fail on 5f8b7f3
+// too.)
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/progress/presentation/progress_screen.dart';
 import 'package:circle_fitness/features/workout/presentation/widgets/section_load_failure.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -68,8 +72,9 @@ void main() {
     }
   }
 
-  Future<void> open(WidgetTester t, {String? tab}) async {
-    await t.binding.setSurfaceSize(const Size(500, 2600));
+  Future<void> open(WidgetTester t,
+      {String? tab, Size size = const Size(500, 2600)}) async {
+    await t.binding.setSurfaceSize(size);
     addTearDown(() => t.binding.setSurfaceSize(null));
     await t.pumpWidget(
         const ProviderScope(child: MaterialApp(home: ProgressScreen())));
@@ -111,6 +116,38 @@ void main() {
       previous?.call(d);
     };
     addTearDown(() => FlutterError.onError = previous);
+  }
+
+  /// The whole text is laid out, unshrunk, inside every box that clips it.
+  void expectWhole(WidgetTester t, Finder text, double scale) {
+    final widget = t.widget<Text>(text);
+    expect(widget.overflow, isNull);
+    expect(widget.maxLines, isNull);
+    expect(
+        find.ancestor(of: text, matching: find.byType(FittedBox)), findsNothing);
+    final box = t.getRect(text);
+    final lines = t.renderObject<RenderParagraph>(
+        find.descendant(of: text, matching: find.byType(RichText)));
+    expect(lines.textScaler.scale(widget.style!.fontSize!),
+        closeTo(widget.style!.fontSize! * scale, .01));
+    expect(lines.didExceedMaxLines, isFalse);
+    for (final clip in find
+        .ancestor(of: text, matching: find.byType(ClipPath))
+        .evaluate()
+        .followedBy(
+            find.ancestor(of: text, matching: find.byType(Stack)).evaluate())) {
+      final r = t.getRect(find.byElementPredicate((e) => e == clip));
+      expect(r.top, lessThanOrEqualTo(box.top + .01));
+      expect(r.bottom, greaterThanOrEqualTo(box.bottom - .01),
+          reason: 'cut off by ${clip.widget}');
+    }
+    for (final slot in find
+        .ancestor(of: text, matching: find.byType(AspectRatio))
+        .evaluate()) {
+      final r = t.getRect(find.byElementPredicate((e) => e == slot));
+      expect(r.bottom, greaterThanOrEqualTo(box.bottom - .01),
+          reason: 'taller than its slot');
+    }
   }
 
   group('what is shown', () {
@@ -384,6 +421,109 @@ void main() {
       await close(t);
     });
 
+    testWidgets("B signs in while A's photo is being stored: B's own progress "
+        'is read and shown, and no failure is claimed', (t) async {
+      await open(t, tab: 'Photos');
+      final hold = server.holds['POST progress_photo_logs:$memberA'] =
+          Completer();
+      await t.tap(find.text('Add Photo'));
+      await settle(t);
+      await t.tap(find.text('Choose from Gallery'));
+      await pumpUntil(
+          t, () => server.writes('progress_photo_logs').isNotEmpty,
+          what: 'the row');
+      server.seen.clear();
+      await switchTo(t, memberB);
+      await settle(t);
+      expect(find.text('Could not load your progress'), findsNothing);
+      expect(server.reads('weight_logs', memberB), hasLength(1));
+      hold.complete();
+      await settle(t);
+      expect(server.reads('weight_logs', memberB), hasLength(1),
+          reason: "A's photo reloaded B's screen");
+      expect(
+          server.seen.where(
+              (r) => r.who == memberB && '${r.query}'.contains(memberA)),
+          isEmpty);
+      await t.tap(find.text('Weight'));
+      await settle(t);
+      expect(find.text('62.3'), findsWidgets);
+      expect(asB(), isEmpty);
+      await close(t);
+    });
+
+    testWidgets("A's picker is unanswered: B's Add Photo opens; A's late answer "
+        "neither stores as B nor unlocks B's", (t) async {
+      await open(t, tab: 'Photos');
+      final gate = Completer<Object?>();
+      picker.answer = (_) => gate.future;
+      await t.tap(find.text('Add Photo'));
+      await settle(t);
+      await t.tap(find.text('Choose from Gallery'));
+      await settle(t);
+      await switchTo(t, memberB);
+      await settle(t);
+      await t.tap(find.text('Add Photo'));
+      await settle(t);
+      expect(find.text('Take Photo'), findsOneWidget,
+          reason: "B's Add Photo did nothing");
+      gate.complete(picker.photoPath);
+      await settle(t);
+      expect(server.writes(), isEmpty);
+      // B's own source sheet is still the one up, and only one.
+      expect(find.text('Take Photo'), findsOneWidget);
+      await close(t);
+    });
+
+    for (final kind in ['fails', 'unreadable']) {
+      testWidgets("A's pick $kind after B signed in: recorded, B is not told",
+          (t) async {
+        await open(t, tab: 'Photos');
+        final gate = Completer<Object?>();
+        picker.answer = (_) => gate.future;
+        await t.tap(find.text('Add Photo'));
+        await settle(t);
+        await t.tap(find.text('Choose from Gallery'));
+        await settle(t);
+        await switchTo(t, memberB);
+        kind == 'fails'
+            ? gate.completeError(
+                PlatformException(code: 'photo_access_denied'))
+            : gate.complete('/nowhere/none.png');
+        await pumpUntil(
+            t, () => origins().any((o) => o.startsWith('progress.photo.')),
+            what: 'the record');
+        await settle(t);
+        expect(find.byType(SnackBar), findsNothing);
+        expect(server.writes(), isEmpty);
+        await close(t);
+      });
+    }
+
+    testWidgets("A's baseline upload fails after B signed in: recorded, B is "
+        'not told', (t) async {
+      await open(t, tab: 'Photos');
+      final key = 'POST progress-photos/$memberA/front.png:$memberA';
+      final hold = server.holds[key] = Completer();
+      server.fails.add(key);
+      await t.tap(find.text('Front'));
+      await settle(t);
+      await t.tap(find.text('Choose from Gallery'));
+      await pumpUntil(
+          t,
+          () => server.writes().any((w) => w.target.contains('front.png')),
+          what: 'the upload');
+      await switchTo(t, memberB);
+      await settle(t);
+      hold.complete();
+      await pumpUntil(t, () => origins().contains('progress.baseline.upload'),
+          what: 'the record');
+      await settle(t);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(asB(), isEmpty);
+      await close(t);
+    });
+
     testWidgets("A's photo source sheet goes with A", (t) async {
       await open(t, tab: 'Photos');
       await t.tap(find.text('Add Photo'));
@@ -431,6 +571,106 @@ void main() {
       expect(photos(t).where((u) => u.contains('front.jpg')), isNotEmpty);
       await close(t);
     });
+
+    group('a logged photo whose file is gone', () {
+      setUp(() {
+        server.objects.add('$memberA/gallery_1.jpg');
+        server.rows['progress_photo_logs'] = {
+          memberA: [
+            for (final n in [2, 1])
+              {
+                'storage_path': '$memberA/gallery_$n.jpg',
+                'side': 'gallery',
+                'logged_at': '2026-11-2${n}T08:00:00Z',
+              },
+          ],
+        };
+      });
+
+      testWidgets('is said to be gone, recorded; there is no Try again for it, '
+          'and it is not "Today" from another day', (t) async {
+        await open(t, tab: 'Photos');
+        expect(find.text(progressPhotoMissingMessage), findsOneWidget);
+        expect(find.text('This photo is no longer available.'), findsOneWidget);
+        expect(find.byType(SectionLoadFailure), findsNothing,
+            reason: 'asking again cannot bring the file back');
+        expect(find.text('Nov 22, 2026'), findsOneWidget);
+        expect(photos(t).where((u) => u.contains('gallery_1')), hasLength(1));
+        expect(origins(), ['ProgressScreen.openPhoto']);
+        await t.tap(find.byIcon(Icons.view_list_rounded));
+        await settle(t);
+        expect(find.text(progressPhotoMissingMessage), findsOneWidget);
+        await t.tap(find.text('Measurements'));
+        await settle(t);
+        expect(photos(t).where((u) => u.contains('gallery_1')), isEmpty);
+        expect(find.text(progressPhotoMissingMessage), findsOneWidget);
+        await close(t);
+      });
+
+      testWidgets('beside one that cannot be opened: only that one has a Try '
+          'again, and it does not go round for the missing one', (t) async {
+        server.objects.add('$memberA/gallery_3.jpg');
+        server.unsignable.add('$memberA/gallery_3.jpg');
+        server.rows['progress_photo_logs']![memberA]!.add({
+          'storage_path': '$memberA/gallery_3.jpg',
+          'side': 'gallery',
+          'logged_at': '2026-11-01T08:00:00Z',
+        });
+        await open(t, tab: 'Photos');
+        expect(find.byType(SectionLoadFailure), findsOneWidget);
+        expect(find.text(progressPhotoMissingMessage), findsOneWidget);
+        server.unsignable.clear();
+        await t.tap(find.widgetWithText(TextButton, 'Try again'));
+        await settle(t);
+        expect(find.byType(SectionLoadFailure), findsNothing);
+        expect(find.text(progressPhotoMissingMessage), findsOneWidget);
+        await close(t);
+      });
+
+      for (final scale in [1.0, 2.0, 3.0]) {
+        testWidgets('320 wide, ${scale}x text: whole, at its size, in both '
+            'places', (t) async {
+          t.platformDispatcher.textScaleFactorTestValue = scale;
+          addTearDown(t.platformDispatcher.clearTextScaleFactorTestValue);
+          await quiet(t);
+          await open(t, tab: 'Photos', size: const Size(320, 9000));
+          for (final where in ['Photos', 'Measurements']) {
+            await t.tap(find.text(where).first, warnIfMissed: false);
+            await settle(t);
+            final text = find.text(progressPhotoMissingMessage);
+            expect(text, findsOneWidget, reason: where);
+            expectWhole(t, text, scale);
+          }
+          await close(t);
+        });
+      }
+    });
+
+    for (final scale in [1.0, 2.0, 3.0]) {
+      testWidgets('320 wide, ${scale}x text: a baseline that cannot be opened '
+          'is named to a screen reader, and its words are whole', (t) async {
+        final handle = t.ensureSemantics();
+        server.objects.addAll(['$memberA/front.jpg', '$memberA/side.jpg']);
+        server.unsignable.add('$memberA/front.jpg');
+        t.platformDispatcher.textScaleFactorTestValue = scale;
+        addTearDown(t.platformDispatcher.clearTextScaleFactorTestValue);
+        await quiet(t);
+        await open(t, tab: 'Photos', size: const Size(320, 9000));
+        final slot = find.bySemanticsLabel("Front photo, couldn't open");
+        expect(slot, findsOneWidget);
+        final data = t.getSemantics(slot).getSemanticsData();
+        expect(data.hasAction(SemanticsAction.tap), isTrue);
+        expect(find.bySemanticsLabel("Back photo, couldn't open"), findsNothing,
+            reason: 'there is none');
+        expectWhole(t, find.text("Couldn't open").first, scale);
+        // It still opens the source sheet.
+        await t.tap(find.text('Front'));
+        await settle(t);
+        expect(find.text('Take Photo'), findsOneWidget);
+        handle.dispose();
+        await close(t);
+      });
+    }
 
     testWidgets('a gallery photo that cannot be opened is not shown as another '
         'photo, nor an older one as "Today"', (t) async {
