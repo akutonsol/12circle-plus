@@ -170,7 +170,7 @@ void main() {
     }
   });
 
-  test('the sign-out never began:the session is still there, and it is said',
+  test('the sign-out never began: the session is still there, and it is said',
       () async {
     final error =
         await signOutOfDevice('test', () async => throw StateError('no'));

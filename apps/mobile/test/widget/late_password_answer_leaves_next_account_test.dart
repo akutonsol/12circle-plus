@@ -60,7 +60,8 @@ void main() {
       return call.method == 'initialize' ? true : null;
     });
     await initAccountSupabase(_server, _realtime, _store, session: _stored);
-    _auth.onAuthStateChange.listen((_) {}, onError: (Object _) {});  });
+    _auth.onAuthStateChange.listen((_) {}, onError: (Object _) {});
+  });
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
