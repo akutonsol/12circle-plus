@@ -294,9 +294,9 @@ void main() {
         reason: 'premise: in flight');
     expect(text('For A one'), findsOneWidget, reason: 'control: A keeps it');
     await become(tester, memberB);
-    expect(reads(memberB), isNotEmpty, reason: "premise: B's is pending");
     expect(text('For A one'), findsNothing,
         reason: "THE defect: A's notifications were shown to B");
+    expect(reads(memberB), isNotEmpty, reason: "premise: B's is pending");
     holdA.complete();
     await settle(tester);
     expect(text('For A one'), findsNothing);

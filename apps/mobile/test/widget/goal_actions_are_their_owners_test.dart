@@ -362,9 +362,9 @@ void main() {
       expect(reads(memberA) - asked, 1, reason: 'premise: in flight');
       expect(text('Bench 100 kg'), findsOneWidget, reason: 'control: A keeps it');
       await become(tester, memberB);
-      expect(reads(memberB), 1, reason: "premise: B's is pending");
       expect(text('Bench 100 kg'), findsNothing,
           reason: "THE defect: A's goals were shown to B");
+      expect(reads(memberB), 1, reason: "premise: B's is pending");
       expect(text('No goals yet'), findsNothing);
       holdA.complete();
       await settle(tester);
