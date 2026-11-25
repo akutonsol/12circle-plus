@@ -435,4 +435,13 @@ void main() {
   }
 }
 
-const _pinned390 = <String, String>{};
+/// Card size, text offset within the card, text size: measured at 1ead31b
+/// (before the change) with A's totals, 390dp, 1x.
+const _pinned390 = <String, String>{
+  'card 1840': 'Size(169.0, 157.0) @Offset(15.0, 59.0) Size(97.0, 24.0)',
+  'card kcal': 'Size(169.0, 157.0) @Offset(15.0, 83.0) Size(49.0, 17.0)',
+  'card goal': 'Size(169.0, 157.0) @Offset(15.0, 114.0) Size(139.0, 28.0)',
+  'cell 1840 kcal': 'Size(170.0, 70.8) @Offset(13.0, 39.8) Size(128.3, 20.0)',
+  'cell 132g': 'Size(170.0, 70.8) @Offset(13.0, 39.8) Size(57.0, 20.0)',
+  'cell FAT': 'Size(170.0, 70.8) @Offset(31.0, 11.0) Size(126.0, 13.0)',
+};
