@@ -173,6 +173,28 @@ void main() {
       await close(t);
     });
 
+    testWidgets("(a) in order: swap 2's save answering last does not bring swap 1 back",
+        (t) async {
+      await aTrains(t);
+      final first = Completer<void>();
+      final second = Completer<void>();
+      scripted(Outcome.refused, first);
+      scripted(Outcome.ok, second);
+      final y1 = await swap(t, 0);
+      await settle(t, 3);
+      final y2 = await swap(t, 1);
+      await settle(t, 3);
+      first.complete();
+      await settle(t, 5);
+      second.complete();
+      await settle(t, 10);
+      expect(nameAt(0), x);
+      expect(nameAt(1), y2);
+      expectStoredAsShown();
+      expect(jsonEncode(stored()), isNot(contains(y1)));
+      await close(t);
+    });
+
     testWidgets('(b) the save landed but its answer was lost: X is stored', (t) async {
       await aTrains(t);
       scripted(Outcome.lost);
