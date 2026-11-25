@@ -591,6 +591,33 @@ void main() {
       });
     }
 
+    testWidgets("A leaves the page while its message is queued behind another "
+        "screen's: that one stays for its time, and the page's never comes up",
+        (tester) async {
+      await dismissed(tester);
+      await frames(tester, 20);
+      expect(said(), findsNothing, reason: 'premise: its second is over');
+      final messenger =
+          ScaffoldMessenger.of(tester.element(find.byType(ClientDetailScreen)));
+      messenger.showSnackBar(const SnackBar(
+          content: Text("another screen's"), duration: Duration(seconds: 2)));
+      await frames(tester, 4);
+      await tester.tap(find.widgetWithText(TextButton, 'Dismiss').first);
+      await tester.pump();
+      tester.state<NavigatorState>(find.byType(Navigator).first).popUntil(
+          (r) => r.isFirst);
+      await frames(tester, 6);
+      expect(find.byType(ClientDetailScreen), findsNothing);
+      expect(find.text("another screen's"), findsOneWidget,
+          reason: "THE defect: the page took down another screen's message");
+      await pumpUntil(tester, () => !seen(find.text("another screen's")),
+          what: 'its time is over', step: const Duration(milliseconds: 100));
+      await frames(tester, 3);
+      expect(find.byType(SnackBar), findsNothing,
+          reason: "the page's queued message came up after it had gone");
+      await unmount(tester);
+    });
+
     testWidgets("A's 'Program assigned!' is not in the next frame for B",
         (tester) async {
       await page(tester);
