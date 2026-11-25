@@ -90,6 +90,74 @@ void main() {
     });
   });
 
+  group('whose failure it is', () {
+    Future<Object> failureOf(String uid, [Object? thrown]) async {
+      try {
+        await ownedRead<int>(uid, () async => throw thrown ?? Exception('off'));
+      } catch (e) {
+        return e;
+      }
+      throw StateError('did not fail');
+    }
+
+    AsyncValue<_Rows> held(Object e, {required bool loading, _Rows? rows}) {
+      final failed = AsyncError<_Rows>(e, StackTrace.empty)
+          .copyWithPrevious(rows == null
+              ? const AsyncLoading<_Rows>()
+              : AsyncData(rows));
+      return loading
+          ? const AsyncLoading<_Rows>().copyWithPrevious(failed)
+          : failed;
+    }
+
+    test("A's, over A's rows, is not B's: B's is still being read, whatever "
+        'state it is in', () async {
+      final e = await failureOf(memberA);
+      await signInAs(memberB);
+      for (final loading in [true, false]) {
+        final v = held(e, loading: loading, rows: ownedBy(memberA, _rows()));
+        expect(v, isA<AsyncError<_Rows>>(), reason: 'premise');
+        expect(leftBehind(v), isTrue);
+        expect(stillReading(v, uid: memberB), isTrue);
+        expect(heldFor(memberB, v), isA<AsyncLoading<_Rows>>());
+        expect(heldFor(memberB, v, keepUnmarked: true),
+            isA<AsyncLoading<_Rows>>());
+      }
+    });
+
+    test("B's, over A's rows, is B's; read again it stays and is busy",
+        () async {
+      await signInAs(memberB);
+      for (final thrown in [Exception('off'), StateError('signed out')]) {
+        final e = await failureOf(memberB, thrown);
+        for (final loading in [true, false]) {
+          final v = heldFor(memberB,
+              held(e, loading: loading, rows: ownedBy(memberA, _rows())));
+          expect(v.error, same(e));
+          expect(v.hasValue, isFalse, reason: "A's rows");
+          expect(v.isLoading, loading, reason: 'its retry is busy');
+          expect(leftBehind(v), isFalse);
+        }
+      }
+    });
+
+    test('control: their own failed refresh keeps their own rows', () async {
+      final rows = ownedBy(memberA, _rows());
+      final v = held(await failureOf(memberA), loading: false, rows: rows);
+      expect(heldFor(memberA, v).value, same(rows));
+      expect(heldFor(memberA, v).hasError, isTrue);
+      expect(stillReading(v, uid: memberA), isFalse);
+    });
+
+    test('a failure nobody marked is kept only when that is asked for, and a '
+        'bare string cannot be marked', () async {
+      final v = held('offline', loading: true);
+      expect(heldFor(memberA, v).hasError, isFalse);
+      expect(heldFor(memberA, v, keepUnmarked: true).error, 'offline');
+      expect(await failureOf(memberA, 'offline'), 'offline');
+    });
+  });
+
   group('CoachNoteService.addNote', () {
     test("A's note is not stored once B is signed in, and it is recorded",
         () async {

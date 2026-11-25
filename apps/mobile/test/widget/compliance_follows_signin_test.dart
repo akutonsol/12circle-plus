@@ -6,6 +6,7 @@ import 'package:circle_fitness/core/realtime/realtime.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/compliance/domain/compliance_provider.dart';
 import 'package:circle_fitness/features/compliance/presentation/compliance_dashboard_screen.dart';
+import 'package:circle_fitness/features/dashboard/domain/still_reading.dart';
 import 'package:circle_fitness/features/dashboard/presentation/client_detail_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -283,6 +284,25 @@ void main() {
       hold.complete();
       await frames(tester, 10);
       expect(alma(), findsNothing);
+      await unmount(tester);
+    });
+
+    testWidgets("B's session is in and its event not yet: a read asked then is "
+        "not sent as B and kept as A's", (tester) async {
+      await show(tester);
+      await tester.runAsync(() async {
+        final signingIn = signInAs(memberB);
+        c.invalidate(complianceRosterProvider);
+        final read = c.read(complianceRosterProvider.future);
+        unawaited(read.then<void>((_) {}, onError: (_) {}));
+        expect(c.read(currentUserProvider)?.id, memberA, reason: 'premise');
+        expect(isSignedIn(memberB), isTrue, reason: 'premise');
+        await signingIn;
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        expect(server.calls, isEmpty, // B's own read waits for a frame
+            reason: "THE defect: B's clients read for A's roster");
+      });
+      await pumpUntil(tester, () => seen(boris()), what: "B's own");
       await unmount(tester);
     });
 

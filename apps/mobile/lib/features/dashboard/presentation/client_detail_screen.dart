@@ -193,11 +193,11 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
     if (hasAuthClient) ref.watch(currentUserProvider.select((u) => u?.id));
     if (!isSignedIn(_owner)) return _goneFor(context);
     _gone = false;
-    final detailAsync = pageRead(ref.watch(clientDetailProvider(widget.clientId)));
+    final detailAsync = ref.watch(clientDetailProvider(widget.clientId));
     // P0-FL-37: the assessment is read separately, through the logged RPC, and
     // watched HERE so it is read once per page open whichever tab is showing.
     // Its failure fails only the assessment areas, not the page.
-    final assessment = pageRead(ref.watch(clientAssessmentProvider(widget.clientId)));
+    final assessment = ref.watch(clientAssessmentProvider(widget.clientId));
 
     return Scaffold(
       backgroundColor: _bg,
@@ -319,7 +319,7 @@ class _OverviewTab extends ConsumerWidget {
     // P0-FL-12: a check that has not answered (still loading, or failed) is
     // NOT "not subscribed" — [paidPlan] is null then, and the lock message is
     // kept for a check that answered no.
-    final paidAsync  = pageRead(ref.watch(clientHasPaidPlanProvider(clientId)));
+    final paidAsync  = ref.watch(clientHasPaidPlanProvider(clientId));
     final bool? paidPlan = answeredPaidPlan(paidAsync);
     final paidCheckFailed = paidPlan == null && paidAsync.hasError && !paidAsync.isLoading;
     // Consecutive failed checks, so a Try again that fails again reads
@@ -981,7 +981,7 @@ class _ClientScheduleCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final schedAsync = pageRead(ref.watch(clientScheduleProvider(clientId)));
+    final schedAsync = ref.watch(clientScheduleProvider(clientId));
     final sched = schedAsync.valueOrNull;
     final unread = unreadNote(schedAsync, failed: "Couldn't load the schedule.");
     final dayKeys = (sched?['days'] as List?)?.map((d) => '$d').toList() ?? [];
@@ -1733,7 +1733,7 @@ class _ClientScoreCard extends ConsumerWidget {
   const _ClientScoreCard({required this.clientId});
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final async = pageRead(ref.watch(clientScoreProvider(clientId)));
+    final async = ref.watch(clientScoreProvider(clientId));
     final s = async.valueOrNull;
     // Not read yet, or not readable: no figure. `valueOrNull` made both read
     // "0 · 0 · Lvl 1 Bronze" — a client's real score shown as a beginner's.

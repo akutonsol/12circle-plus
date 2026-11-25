@@ -225,11 +225,6 @@ T Function<T>(T answer) readAsClientPageOwner(Ref ref, String clientId) {
       accountLeft(uid) ? throw const ClientPageLeft() : answer;
 }
 
-/// What [read] says on a page: a refusal is not its failure. It was asked again
-/// as the page opened ([OpenClientPages.opened]), and is still being read.
-AsyncValue<T> pageRead<T>(AsyncValue<T> read) =>
-    read.error is ClientPageLeft ? AsyncLoading<T>() : read;
-
 /// Nothing was read: the open page about the client is another account's, and
 /// it shows nothing any more. Reaches no screen.
 class ClientPageLeft implements Exception {

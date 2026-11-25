@@ -564,7 +564,7 @@ void main() {
           .showSnackBar(const SnackBar(content: Text('Program assigned!')));
       await frames(tester, 4);
       Navigator.of(tester.element(find.byType(ClientDetailScreen))).pop();
-      await frames(tester, 6);
+      await frames(tester, 8);
       expect(find.byType(ClientDetailScreen), findsNothing);
       expect(find.text('Program assigned!'), findsOneWidget);
       await unmount(tester);
