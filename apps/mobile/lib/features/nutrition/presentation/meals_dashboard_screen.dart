@@ -96,7 +96,9 @@ class _MealsDashboardScreenState
         onSelect: (t) => setState(() => _mealFilter = t)),
       const SizedBox(height: 16),
     ];
-    if (_isToday && today == null && totals.error != null) {
+    // This member's read failed, and nothing of theirs was read before it.
+    final totalsFailed = today == null && totals.error != null;
+    if (_isToday && totalsFailed) {
       // FIT-022 · "Loading & failure". Until now a failed totals read rendered
       // `?? 0.0` — a client who had logged three meals was shown **zero
       // calories**, and may well have logged them again.
