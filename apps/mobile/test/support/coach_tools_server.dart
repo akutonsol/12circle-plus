@@ -147,6 +147,57 @@ Future<void> switchTo(WidgetTester t, String uid) async {
   await settleReal(t);
 }
 
+/// Real time for the fake server and the auth stream, and NO frame: everything
+/// that is waiting goes on, and nothing is drawn (a hidden tab).
+Future<void> settleNoFrame(WidgetTester t, {int rounds = 8}) async {
+  for (var i = 0; i < rounds; i++) {
+    await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 5)));
+  }
+}
+
+/// [uid] (null: nobody) is signed in, everything has heard of it, and nothing
+/// has been drawn since.
+Future<void> switchNoFrame(WidgetTester t, String? uid) async {
+  await t.runAsync(() => uid == null ? signOut() : signInAs(uid));
+  expect(Supabase.instance.client.auth.currentUser?.id, uid, reason: 'premise');
+  await settleNoFrame(t);
+}
+
+/// The same account, as a new [User] on the real stream, and nothing drawn.
+Future<void> refreshNoFrame(WidgetTester t) async {
+  final auth = Supabase.instance.client.auth;
+  final before = auth.currentSession?.accessToken;
+  await t.runAsync(refreshSession);
+  expect(auth.currentSession?.accessToken, isNot(before), reason: 'premise: a new token');
+  await settleNoFrame(t);
+}
+
+/// The routes pushed and not yet gone, and how many were ever pushed.
+class Routes extends NavigatorObserver {
+  final open = <Route<dynamic>>[];
+  int pushed = 0;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    open.add(route);
+    pushed++;
+  }
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) => open.remove(route);
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) => open.remove(route);
+}
+
+/// [page] over a page that must still be under it afterwards: a pop that comes
+/// too late closes the page itself.
+Widget pushedPage(Routes routes, Widget page) => MaterialApp(
+    navigatorObservers: [routes],
+    home: Builder(builder: (c) => Scaffold(body: TextButton(
+        onPressed: () => Navigator.of(c).push(
+            MaterialPageRoute<void>(builder: (_) => page)),
+        child: const Text('go')))));
+
 Future<void> signOutNow(WidgetTester t) async {
   await t.runAsync(signOut);
   expect(Supabase.instance.client.auth.currentUser, isNull, reason: 'premise');

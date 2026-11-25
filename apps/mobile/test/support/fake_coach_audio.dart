@@ -27,6 +27,15 @@ class FakeCoachAudio {
   Completer<void>? permissionGate;
   Completer<void>? startGate;
 
+  /// When set, the recorder's stop waits for it.
+  Completer<void>? stopGate;
+
+  /// When set, the player's source waits for it.
+  Completer<void>? playGate;
+
+  /// Where the player says it is, in ms.
+  int? position;
+
   String? _path;
   String? _playerEvents;
 
@@ -43,7 +52,8 @@ class FakeCoachAudio {
     permission = true;
     permissionFails = startFails = stopFails = playFails = pauseFails = null;
     stopsEmpty = false;
-    permissionGate = startGate = null;
+    permissionGate = startGate = stopGate = playGate = null;
+    position = null;
     const codec = StandardMethodCodec();
     _m.allMessagesHandler = (channel, handler, message) async {
       if (channel == 'plugins.flutter.io/path_provider') {
@@ -96,16 +106,21 @@ class FakeCoachAudio {
         return null;
       case 'stop':
         if ((call.arguments as Map).containsKey('recorderId')) {
-          failIf(stopFails);
-          return stopsEmpty ? null : _path;
+          final path = _path, fails = stopFails;
+          await stopGate?.future;
+          failIf(fails);
+          return stopsEmpty ? null : path;
         }
         return null;
       case 'setSourceUrl':
+        await playGate?.future;
         failIf(playFails);
         playing.add((call.arguments as Map)['url'] as String);
         // The platform says it is ready to play.
         scheduleMicrotask(() => event({'event': 'audio.onPrepared', 'value': true}));
         return null;
+      case 'getCurrentPosition':
+        return position;
       case 'pause':
         failIf(pauseFails);
         return null;

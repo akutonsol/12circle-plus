@@ -70,6 +70,70 @@ void main() {
     });
   });
 
+  // sec N-2 · callers show a StateError's message, which is written for people.
+  // This one is not: it is told apart by type, and what it carries to a screen
+  // names no action and nobody.
+  group('AccountChangedError', () {
+    late CoachRelationshipService svc;
+    setUp(() => svc = CoachRelationshipService());
+
+    final refused = <String, Future<void> Function(String owner)>{
+      'setGlobalPrice': (o) => svc.setGlobalPrice(150, expectedUid: o),
+      'cancelCoach': (o) => svc.cancelCoach('coach-1', null, null, expectedUid: o),
+      'approveRequest': (o) => svc.approveRequest('rel-1', 'client-1', expectedUid: o),
+      'declineRequest': (o) => svc.declineRequest('rel-1', 'client-1', expectedUid: o),
+      'sendInvite': (o) => svc.sendInvite(o, 'x@example.com'),
+    };
+    refused.forEach((name, call) {
+      for (final out in [false, true]) {
+        test('$name (${out ? 'signed out' : 'as B for A'}): nothing is sent; told '
+            'apart; recorded', () async {
+          out ? await signOut() : await signInAs(memberB);
+          Object? e;
+          try {
+            await call(memberA);
+          } catch (caught) {
+            e = caught;
+          }
+          expect(e, isA<AccountChangedError>());
+          expect(e, isA<StateError>(), reason: 'existing callers stop on it');
+          expect((e! as AccountChangedError).message,
+              'Not done: the signed-in account changed',
+              reason: 'the same for every action: it names none');
+          expect('$e', startsWith((e as AccountChangedError).what));
+          expect(e.what, isNotEmpty);
+          expect(server.log, isEmpty);
+          expect(reported.map((f) => f.origin), ['CoachRelationshipService.$name']);
+          expect(reported.single.error, same(e));
+        });
+      }
+    });
+
+    test('negative control: a refusal written for people is not one', () async {
+      server.zeroRows = (s) => true;
+      await expectLater(
+          svc.cancelCoach('coach-1', null, null, expectedUid: memberA),
+          throwsA(allOf(isA<StateError>(), isNot(isA<AccountChangedError>()))));
+      await expectLater(svc.approveRequest('rel-1', 'client-1', expectedUid: memberA),
+          throwsA(allOf(isA<StateError>(), isNot(isA<AccountChangedError>()))));
+      await signOut();
+      await expectLater(svc.cancelCoach('coach-1', null, null),
+          throwsA(allOf(isA<StateError>(), isNot(isA<AccountChangedError>()))));
+      expect(reported, isEmpty);
+    });
+
+    test('control: the coach expected answers', () async {
+      await refreshSession();
+      await svc.approveRequest('rel-1', 'client-1', expectedUid: memberA);
+      await svc.declineRequest('rel-2', 'client-2', expectedUid: memberA);
+      expect(server.writes.map((s) => s.table), [
+        'coach_client_relationships', 'notifications',
+        'coach_client_relationships', 'notifications',
+      ]);
+      expect(server.writes.map((s) => s.who).toSet(), {memberA});
+    });
+  });
+
   group('CustomExerciseService', () {
     late CustomExerciseService svc;
     setUp(() => svc = CustomExerciseService());

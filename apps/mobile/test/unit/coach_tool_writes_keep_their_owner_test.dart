@@ -99,6 +99,115 @@ void main() {
       expect('${reported.single.error}', accountMessage);
     });
 
+    test("cancelCoach: a switch while the client's name is read — nobody is told by B",
+        () async {
+      final out = await switchDuring(
+          () => svc.cancelCoach('coach-1', 'client_cancelled', null),
+          (s) => s.table == 'user_profiles');
+      expect(out, isA<CoachingEnd>(), reason: "A's coaching did end");
+      expect(server.to('notifications'), isEmpty);
+      expect(server.writesBy(memberB), isEmpty);
+      expect(reported.map((f) => f.origin), ['CoachRelationshipService.cancelCoach.notify']);
+    });
+
+    // ── sec N-3 / N-4 / N-5 ──
+    test('sendInvite: a switch after the insert — no email goes out as B', () async {
+      final out = await switchDuring(
+          () => svc.sendInvite(memberA, 'x@example.com'), (s) => s.table == 'coach_invites');
+      expect(out, accountChanged());
+      expect(server.to('send-invite-email'), isEmpty,
+          reason: "A's prospect got B's name, B's reply-to and A's token");
+      expect(server.writes.map((s) => s.who), [memberA]);
+      expect(reported.map((f) => f.origin), ['CoachRelationshipService.sendInvite']);
+      expect('${reported.single.error}', accountMessage);
+    });
+
+    test("sendInvite: for a coach who is not signed in nothing is sent", () async {
+      await signInAs(memberB);
+      await expectLater(svc.sendInvite(memberA, 'x@example.com'), throwsA(accountChanged()));
+      await signOut();
+      await expectLater(svc.sendInvite(memberA, 'x@example.com'), throwsA(accountChanged()));
+      expect(server.log, isEmpty);
+      expect(reported, hasLength(2));
+    });
+
+    test('sendInvite: the same coach, after a token refresh (control)', () async {
+      server.answers['send-invite-email'] = {'sent': true};
+      await refreshSession();
+      await svc.sendInvite(memberA, 'x@example.com');
+      expect(server.writes.map((s) => s.table), ['coach_invites', 'send-invite-email']);
+      expect(server.writes.map((s) => s.who).toSet(), {memberA});
+      expect(server.writes.first.json, {'coach_id': memberA, 'invitee_email': 'x@example.com'});
+      expect(reported, isEmpty);
+    });
+
+    final answers = <String, Future<void> Function()>{
+      'approveRequest': () => svc.approveRequest('rel-1', memberB),
+      'declineRequest': () => svc.declineRequest('rel-1', memberB),
+    };
+    answers.forEach((name, answer) {
+      test('$name: a switch after the update — the client is not told by B', () async {
+        final out = await switchDuring(
+            answer, (s) => s.table == 'coach_client_relationships');
+        expect(out, isNull, reason: 'the answer is saved');
+        expect(server.to('notifications'), isEmpty);
+        expect(server.writes.map((s) => s.who), [memberA]);
+        expect(reported.map((f) => f.origin), ['CoachRelationshipService.$name.notify']);
+      });
+
+      test('$name: an answer that matched nothing is not said to B', () async {
+        server.zeroRows = (s) => true;
+        final out = await switchDuring(
+            answer, (s) => s.table == 'coach_client_relationships');
+        expect(out, accountChanged(), reason: '"That request is no longer pending"');
+        expect('$out', isNot(contains('pending')));
+      });
+
+      test('$name: the same coach, after a token refresh (control)', () async {
+        await refreshSession();
+        await answer();
+        expect(server.writes.map((s) => '${s.table} ${s.who == memberA}'),
+            ['coach_client_relationships true', 'notifications true']);
+        expect(reported, isEmpty);
+      });
+    });
+
+    test('requestCoach: a switch after the read — no request is made', () async {
+      final out = await switchDuring(() => svc.requestCoach('coach-1'),
+          (s) => s.table == 'coach_client_relationships');
+      expect(out, accountChanged());
+      expect(server.writes, isEmpty, reason: "A's request went out on B's session");
+      expect(reported.map((f) => f.origin), ['CoachRelationshipService.requestCoach']);
+    });
+
+    test('requestCoach: "already your coach" is not said to B', () async {
+      server.tables['coach_client_relationships'] = [
+        {'client_id': memberA, 'coach_id': 'coach-1', 'status': 'active'},
+      ];
+      final out = await switchDuring(() => svc.requestCoach('coach-1'),
+          (s) => s.table == 'coach_client_relationships');
+      expect(out, accountChanged());
+      expect(server.writes, isEmpty);
+    });
+
+    test('requestCoach: a switch after the request — the coach is not told by B',
+        () async {
+      final out = await switchDuring(() => svc.requestCoach('coach-1'),
+          (s) => s.table == 'coach_client_relationships' && s.isWrite);
+      expect(out, isNull, reason: 'the request is saved');
+      expect(server.to('notifications'), isEmpty,
+          reason: "a notification naming A's client id went out as B");
+      expect(reported.map((f) => f.origin), ['CoachRelationshipService.requestCoach.notify']);
+    });
+
+    test('requestCoach: the same client, after a token refresh (control)', () async {
+      await refreshSession();
+      await svc.requestCoach('coach-1');
+      expect(server.writes.map((s) => '${s.table} ${s.who == memberA}'),
+          ['coach_client_relationships true', 'notifications true']);
+      expect(reported, isEmpty);
+    });
+
     test('cancelCoach: the same client ends it and the coach is told (control)',
         () async {
       await refreshSession(); // the same account
