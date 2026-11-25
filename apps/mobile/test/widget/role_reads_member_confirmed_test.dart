@@ -27,6 +27,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../support/row_checking_postgrest.dart';
+import '../support/two_member_postgrest.dart' show signInAs;
 
 // P0-FL-45b · every role/profile-derived decision outside the shell and the
 // paywall uses a role read CONFIRMED for the member signed in now.
@@ -60,6 +61,8 @@ User _user(String id) => User(
       aud: 'authenticated',
       createdAt: '2026-11-01T00:00:00Z',
     );
+
+String? get _authUid => Supabase.instance.client.auth.currentUser?.id;
 
 const _names = {'user-a': 'Alice', 'user-b': 'Bruno'};
 
@@ -269,10 +272,11 @@ void main() {
     await initSignedInSupabase(server);
   });
 
-  setUp(() {
+  setUp(() async {
     server.reset();
     server.views.clear();
     server.clientGate = null;
+    if (_authUid != 'user-a') await signInAs('user-a');
   });
 
   Future<void> settle(WidgetTester tester) async {
@@ -322,6 +326,13 @@ void main() {
       {required bool observeSignOut}) async {
     c.read(_signedIn.notifier).state = null; // A signs out
     if (observeSignOut) await settle(tester);
+    // P0-FL-59d r4 · Coach Focus reads as the account the auth client holds, and
+    // refuses to read for another: the client is switched too (it was not, so
+    // "B's" overlay was asked for with A's session). No frame is drawn here.
+    if (find.byType(CoachFocusSection).evaluate().isNotEmpty) {
+      await tester.runAsync(() => signInAs(uid));
+      expect(_authUid, uid, reason: 'premise');
+    }
     c.read(_signedIn.notifier).state = _user(uid); // B signs in
     await settle(tester);
   }
