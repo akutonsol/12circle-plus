@@ -113,9 +113,10 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
   }
 
   /// False (recorded, the previous member's content cleared) once [owner] is
-  /// no longer the member signed in.
+  /// no longer the member signed in, or what is on screen is no longer theirs
+  /// (A -> B -> A with no frame between: A's row, over B's coach).
   bool _stillOwner(String? owner, String what) {
-    if (owner != null && _signedIn == owner) return true;
+    if (owner != null && _signedIn == owner && owner == _owner) return true;
     reportError('BookingScreen.identity',
         StateError('$what: the signed-in account changed'));
     _followAccount();

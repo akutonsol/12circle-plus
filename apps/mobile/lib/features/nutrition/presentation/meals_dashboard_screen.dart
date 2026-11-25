@@ -18,6 +18,7 @@ import 'widgets/ai_scan_view.dart';
 import 'widgets/barcode_scan_view.dart';
 import 'nutrition_palette.dart';
 import 'widgets/meal_row_tile.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 // ── Colors ─────────────────────────────────────────────────────────────────
 // The palette moved to `nutrition_palette.dart` so `MealRowTile` could be
@@ -41,8 +42,8 @@ final nutritionTotalsProvider = todayNutritionProvider;
 // Read again on each visit: a meal logged on another screen appears here.
 final _logsForDateProvider =
     FutureProvider.autoDispose.family<List<Map<String, dynamic>>, DateTime>((ref, date) async {
-  ref.watch(currentUserProvider);
-  return ref.watch(_svcProvider).getLogsForDate(date);
+  final svc = ref.watch(_svcProvider);
+  return readForMember(ref, () => svc.getLogsForDate(date));
 });
 
 // ── Screen ─────────────────────────────────────────────────────────────────
@@ -59,7 +60,12 @@ class _MealsDashboardScreenState
   String _mealFilter = 'breakfast';
   // Glasses tapped on this screen. It began at 3, so every visit showed
   // "3 / 8" glasses drunk before the member had tapped anything. Not saved.
-  int    _water      = 0;
+  // Theirs alone: whoever taps next starts from none.
+  ({String? uid, int glasses}) _water = (uid: null, glasses: 0);
+
+  static String? get _signedIn =>
+      Supabase.instance.client.auth.currentUser?.id;
+
   @override
   void initState() {
     super.initState();
@@ -74,21 +80,23 @@ class _MealsDashboardScreenState
         _selectedDate.day == now.day;
   }
 
-  List<Widget> _innerChildren(
-    double cal, double protein, double carbs, double fat,
-    double calGoal, double proteinGoal, double carbGoal, double fatGoal,
-    AsyncValue<List<Map<String, dynamic>>> logsAsync,
-    BuildContext context, {
-    required bool totalsFailed,
-    required bool targetsFailed,
-  }) {
+  List<Widget> _innerChildren(BuildContext context) {
+    // Drawn for the member signed in, and only what was read for them.
+    ref.watch(currentUserProvider.select((u) => u?.id));
+    final logs    = ownRead(ref.watch(_logsForDateProvider(_selectedDate)));
+    final totals  = ownRead(ref.watch(nutritionTotalsProvider));
+    final goals   = ownRead(ref.watch(nutritionGoalsProvider));
+    final today   = totals.value;
+    final targets = goals.value;
+    final owner   = _signedIn;
+    final glasses = _water.uid == owner ? _water.glasses : 0;
     final items = <Widget>[
       _MealTabs(
         active: _mealFilter,
         onSelect: (t) => setState(() => _mealFilter = t)),
       const SizedBox(height: 16),
     ];
-    if (_isToday && totalsFailed) {
+    if (_isToday && today == null && totals.error != null) {
       // FIT-022 · "Loading & failure". Until now a failed totals read rendered
       // `?? 0.0` — a client who had logged three meals was shown **zero
       // calories**, and may well have logged them again.
@@ -102,62 +110,94 @@ class _MealsDashboardScreenState
       ]);
     } else if (_isToday) {
       items.addAll([
+        // A refresh that failed: what was read for them stays up, and it is said.
+        if (totals.error != null)
+          SectionLoadFailure(
+            what: "today's totals",
+            error: totals.error,
+            busy: totals.busy,
+            detail: 'Showing what was last loaded.',
+            onRetry: () => ref.invalidate(nutritionTotalsProvider)),
+        if (targets != null && goals.error != null)
+          SectionLoadFailure(
+            what: 'your targets',
+            error: goals.error,
+            busy: goals.busy,
+            detail: 'Showing what was last loaded.',
+            onRetry: () => ref.invalidate(nutritionGoalsProvider)),
         // Targets that could not be read are not shown -- not replaced by
         // defaults that read as the client's plan (nor advice built on them).
-        if (targetsFailed) ...[
+        if (targets == null && goals.error != null) ...[
           const NutritionTargetsLoadFailed(),
           const SizedBox(height: 12),
-        ] else ...[
-          _CalorieCard(cal: cal, protein: protein, carbs: carbs, fat: fat,
-            calGoal: calGoal, proteinGoal: proteinGoal, carbGoal: carbGoal, fatGoal: fatGoal),
+        ] else if (today == null || targets == null)
+          const Padding(
+            padding: EdgeInsets.all(40),
+            child: Center(child: CircularProgressIndicator(color: _brand)))
+        else ...[
+          _CalorieCard(
+            cal:     today['calories'] ?? 0.0,
+            protein: today['protein']  ?? 0.0,
+            carbs:   today['carbs']    ?? 0.0,
+            fat:     today['fat']      ?? 0.0,
+            calGoal:     targets['calories'] ?? 2000.0,
+            proteinGoal: targets['protein']  ?? 120.0,
+            carbGoal:    targets['carbs']    ?? 220.0,
+            fatGoal:     targets['fat']      ?? 65.0),
           const SizedBox(height: 12),
-          _CoachCard(protein: protein, cal: cal, proteinGoal: proteinGoal, calGoal: calGoal),
+          _CoachCard(
+            protein: today['protein']  ?? 0.0,
+            cal:     today['calories'] ?? 0.0,
+            proteinGoal: targets['protein']  ?? 120.0,
+            calGoal:     targets['calories'] ?? 2000.0),
           const SizedBox(height: 12),
         ],
         _WaterCard(
-          glasses: _water,
-          onTap: (i) => setState(() =>
-            _water = i + 1 == _water ? i : i + 1)),
+          glasses: glasses,
+          onTap: (i) {
+            if (_signedIn != owner) {
+              reportError('MealsDashboard.water.identity',
+                  StateError('water: the signed-in account changed'));
+              return;
+            }
+            setState(() => _water =
+                (uid: owner, glasses: i + 1 == glasses ? i : i + 1));
+          }),
         const SizedBox(height: 12),
       ]);
     }
-    items.add(logsAsync.when(
-      loading: () => const Padding(
+    final all = logs.value;
+    if (logs.error != null) {
+      items.add(SectionLoadFailure(
+        what: 'your meals',
+        error: logs.error,
+        busy: logs.busy,
+        detail: all == null ? null : 'Showing what was last loaded.',
+        onRetry: () => ref.invalidate(_logsForDateProvider(_selectedDate))));
+    } else if (all == null) {
+      items.add(const Padding(
         padding: EdgeInsets.all(40),
-        child: Center(child: CircularProgressIndicator(color: _brand))),
-      error: (_, __) => const SizedBox.shrink(),
-      data: (all) {
-        final logs = all
-          .where((m) => (m['meal_type'] as String?) == _mealFilter)
-          .toList();
-        if (logs.isEmpty) {
-          return _EmptyMeals(
+        child: Center(child: CircularProgressIndicator(color: _brand))));
+    }
+    if (all != null) {
+      final meals = all
+        .where((m) => (m['meal_type'] as String?) == _mealFilter)
+        .toList();
+      items.add(meals.isEmpty
+        ? _EmptyMeals(
             mealType: _mealFilter,
-            onAdd: () => _showAddSheet(context));
-        }
-        return Column(
-          children: logs.map((m) => Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: MealRowTile(meal: m))).toList());
-      }));
+            onAdd: () => _showAddSheet(context))
+        : Column(
+            children: meals.map((m) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: MealRowTile(meal: m))).toList()));
+    }
     items.add(const SizedBox(height: 16));
     return items;
   }
 
   @override
   Widget build(BuildContext context) {
-    final logsAsync = ref.watch(_logsForDateProvider(_selectedDate));
-    final totals    = ref.watch(nutritionTotalsProvider);
-    final goals     = ref.watch(nutritionGoalsProvider);
-    final cal     = totals.valueOrNull?['calories'] ?? 0.0;
-    final protein = totals.valueOrNull?['protein']  ?? 0.0;
-    final carbs   = totals.valueOrNull?['carbs']    ?? 0.0;
-    final fat     = totals.valueOrNull?['fat']      ?? 0.0;
-    final calGoal     = goals.valueOrNull?['calories'] ?? 2000.0;
-    final proteinGoal = goals.valueOrNull?['protein']  ?? 120.0;
-    final carbGoal    = goals.valueOrNull?['carbs']    ?? 220.0;
-    final fatGoal     = goals.valueOrNull?['fat']      ?? 65.0;
-
     return Scaffold(
       backgroundColor: _bg,
       body: SafeArea(
@@ -233,12 +273,7 @@ class _MealsDashboardScreenState
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
-                          children: _innerChildren(
-                            cal, protein, carbs, fat,
-                            calGoal, proteinGoal, carbGoal, fatGoal,
-                            logsAsync, context,
-                            totalsFailed: totals is AsyncError,
-                            targetsFailed: goals is AsyncError))),
+                          children: _innerChildren(context))),
                     ])))),
           ])));
   }
@@ -1551,17 +1586,22 @@ class _CustomFoodSheetState extends State<_CustomFoodSheet> {
   void _save() {
     final n = _name.text.trim();
     if (n.isEmpty) return;
-    if (widget.scanned != null) {
-      final asked = [
-        for (final (field, label) in [
-          (_cal, 'calories'), (_protein, 'protein'),
-          (_carbs, 'carbs'), (_fat, 'fat'),
-        ])
-          if (double.tryParse(field.text.trim()) == null) label,
-      ];
-      setState(() => _asked = asked.isEmpty ? null : asked.join(', '));
-      if (asked.isNotEmpty) return;
+    // NaN and Infinity parse, and are not an amount: asked for in any food.
+    bool missing(TextEditingController field) {
+      final v = double.tryParse(field.text.trim());
+      return v == null ? widget.scanned != null : !v.isFinite;
     }
+
+    final asked = [
+      for (final (field, label) in [
+        (_cal, 'calories'), (_protein, 'protein'),
+        (_carbs, 'carbs'), (_fat, 'fat'),
+      ])
+        if (missing(field)) label,
+    ];
+    setState(() => _asked = asked.isEmpty ? null : asked.join(', '));
+    if (asked.isNotEmpty) return;
+    final serving = double.tryParse(_serving.text);
     final food = Food(
       id:          'custom_${DateTime.now().millisecondsSinceEpoch}',
       name:        n,
@@ -1572,7 +1612,7 @@ class _CustomFoodSheetState extends State<_CustomFoodSheet> {
       fat:         double.tryParse(_fat.text)      ?? 0,
       fiber:       0,
       sugar:       0,
-      servingSize: double.tryParse(_serving.text) ?? 100,
+      servingSize: serving != null && serving.isFinite ? serving : 100,
       servingUnit: 'g');
     widget.onSaved(food);
     // Only itself: gone with its member, the route under it is not it.

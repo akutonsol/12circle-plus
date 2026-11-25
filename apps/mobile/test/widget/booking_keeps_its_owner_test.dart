@@ -4,7 +4,8 @@
 // HOW TO SEE IT FAIL: put back a82f993's booking_screen.dart; every test but
 // the POSITIVE / NEGATIVE CONTROLs fails. (Added in round 2: "switched before
 // the dialog is drawn" and the signed-out copy fail on 5f8b7f3 too; round 3's,
-// tapped "with B's own loaded" or before they are, fail on 3a90049 too.)
+// tapped "with B's own loaded" or before they are, fail on 3a90049 too; round
+// 4's "A -> B -> A" fails on e0736a6 too.)
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -22,6 +23,7 @@ void main() {
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
     await initTwoMemberSupabase(server);
+    watchAuthChanges();
   });
 
   setUp(() async {
@@ -298,6 +300,28 @@ void main() {
     await settle(t);
     expect(find.text('Cancel session?'), findsNothing);
     expect(server.writes(), isEmpty);
+    await close(t);
+  });
+
+  testWidgets("A -> B -> A with no frame, B's own loaded between: A's old slot "
+      "is not booked with B's coach; A's own are read again", (t) async {
+    await open(t);
+    final book = t.widget<ElevatedButton>(bookButton()).onPressed!;
+    await bLoaded(t);
+    // The instant A is back: the screen has not heard, and holds B's.
+    await t.runAsync(() => switchAnd(memberA, book));
+    await settle(t);
+    expect(server.writes(), isEmpty,
+        reason: "A's slot, B's coach: ${server.writes().toList()}");
+    expect(reported.map((f) => f.origin), ['BookingScreen.identity']);
+    expect(find.byType(SnackBar), findsNothing);
+    expect(find.textContaining('Avery'), findsWidgets);
+    expect(find.textContaining('Blake'), findsNothing);
+    // And theirs works.
+    await t.tap(bookButton());
+    await settle(t);
+    final call = server.writes('coaching_calls').single;
+    expect((call.who, call.row['coach_id']), (memberA, 'coach-a'));
     await close(t);
   });
 

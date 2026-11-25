@@ -798,6 +798,17 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
     return false;
   }
 
+  static void _rereadCoaches(ProviderContainer container) {
+    try {
+      container.invalidate(myCoachesProvider);
+      container.invalidate(assignedCoachProvider);
+      container.invalidate(clientRelationshipProvider);
+    } on StateError {
+      // Disposed (the same member signed out and in again meanwhile): nothing
+      // of it is drawn any more, and its successor reads for itself.
+    }
+  }
+
   Future<void> _apply() async {
     if (!_stillOwner('coaching mode')) return;
     final messenger = ScaffoldMessenger.of(context);
@@ -837,7 +848,7 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
               // coaching lasts until then (owner decision 2): say so.
               // (Asked as the owner just above: no await in between.)
               final end = await svc.cancelCoach(coachId, 'switched_to_self_serve', null);
-              if (end.scheduled && _signedIn == _owner) {
+              if (end.scheduled && _signedIn == _owner && messenger.mounted) {
                 messenger.showSnackBar(SnackBar(content: Text(end.describe())));
               }
             }
@@ -847,9 +858,7 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
           reportError('CoachingModeSheet.apply.cancelCoach', e, st);
           if (!_stillOwner('end coaching')) return;
           // One of several may have ended: re-read even if the sheet is gone.
-          container.invalidate(myCoachesProvider);
-          container.invalidate(assignedCoachProvider);
-          container.invalidate(clientRelationshipProvider);
+          _rereadCoaches(container);
           if (!mounted) return;
           setState(() => _saving = false);
           messenger.showSnackBar(const SnackBar(
@@ -859,9 +868,7 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
         // Ended: the coach lists are re-read even if the sheet was swiped away
         // meanwhile (they are the page's, not the sheet's).
         if (!_stillOwner('coaching mode')) return;
-        container.invalidate(myCoachesProvider);
-        container.invalidate(assignedCoachProvider);
-        container.invalidate(clientRelationshipProvider);
+        _rereadCoaches(container);
         if (!mounted) return;
       }
     }
@@ -883,9 +890,7 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
     if (!mounted || !_stillOwner('coaching mode')) return;
     // Refresh coach-dependent views so a mode change is reflected immediately
     // (e.g. the profile's My Coach section), even if the prompt path didn't run.
-    container.invalidate(assignedCoachProvider);
-    container.invalidate(clientRelationshipProvider);
-    container.invalidate(myCoachesProvider);
+    _rereadCoaches(container);
     Navigator.pop(context);
     if (_selected == CoachingMode.coachGuided) {
       context.push('/coach-marketplace');

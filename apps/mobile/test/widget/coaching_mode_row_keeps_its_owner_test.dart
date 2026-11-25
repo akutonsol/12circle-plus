@@ -10,7 +10,9 @@
 //
 // HOW TO SEE IT FAIL: put back 3a90049's settings_screen and
 // coaching_mode_provider; every test but the POSITIVE CONTROL and "invalidated
-// before" fails.
+// before" fails. (Round 4's "its container disposed" fails on e0736a6: an
+// uncaught StateError. The same member's message is not shown through a
+// messenger that is gone.)
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -258,6 +260,41 @@ void main() {
           hasLength(1),
           reason: 'the ended coach is still listed');
       expect(find.byType(SnackBar), findsNothing);
+      await close(t);
+    });
+  }
+
+  for (final fails in [false, true]) {
+    testWidgets(
+        'the same member signed out and in again while the coaching is ended'
+        '${fails ? ' (and it fails)' : ''}, its container disposed: nothing is '
+        'thrown', (t) async {
+      await open(t);
+      await t.tap(find.text('Coach Guided'));
+      await settle(t);
+      await t.tap(find.text('Self Guided'));
+      await settle(t);
+      const key = 'PATCH coach_client_relationships:$memberA';
+      final hold = server.holds[key] = Completer();
+      if (fails) server.fails.add(key);
+      await t.tap(find.text('Apply'));
+      await settle(t);
+      await t.tap(find.text('End & switch'));
+      await settle(t, 4);
+      expect(server.writes('coach_client_relationships'), hasLength(1),
+          reason: 'premise');
+      await t.runAsync(signOut);
+      await switchTo(t, memberA);
+      await t.pumpWidget(const SizedBox()); // as AccountScope replaces it
+      container.dispose();
+      server.seen.clear();
+      hold.complete();
+      await settle(t);
+      expect(t.takeException(), isNull);
+      expect(server.writes('user_profiles'), isEmpty,
+          reason: 'the sheet is gone: the mode is not changed');
+      expect(origins(),
+          fails ? ['CoachingModeSheet.apply.cancelCoach'] : isEmpty);
       await close(t);
     });
   }

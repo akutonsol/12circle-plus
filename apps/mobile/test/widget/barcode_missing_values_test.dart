@@ -8,7 +8,8 @@
 // HOW TO SEE IT FAIL: put back 3a90049's nutrition_service and
 // meals_dashboard_screen: every test but the POSITIVE CONTROLs fails. (The
 // service tests need `openFoodFacts`, new here: there they do not compile, so
-// put back the two files one at a time for the sheet's.)
+// put back the two files one at a time for the sheet's.) Round 4's "not an
+// amount" fail on e0736a6.
 import 'dart:async';
 import 'dart:convert';
 
@@ -88,7 +89,8 @@ void main() {
   }
 
   var logged = 0;
-  Future<void> open(WidgetTester t, {Size size = const Size(500, 1600)}) async {
+  Future<void> open(WidgetTester t,
+      {Size size = const Size(500, 1600), String mode = 'barcode'}) async {
     logged = 0;
     await t.binding.setSurfaceSize(size);
     addTearDown(() => t.binding.setSurfaceSize(null));
@@ -101,7 +103,7 @@ void main() {
                 context: ctx,
                 isScrollControlled: true,
                 builder: (_) => AddMealSheet(
-                    initialMode: 'barcode', onLogged: () => logged++),
+                    initialMode: mode, onLogged: () => logged++),
               ),
               child: const Text('open'),
             ),
@@ -292,6 +294,89 @@ void main() {
       expect(logged, 1);
       expect(find.text('Food Added!'), findsOneWidget);
       expect(reported, isEmpty);
+      await close(t);
+    });
+  });
+
+  group('custom food: what is not an amount', () {
+    Finder field(String hint) => find.ancestor(
+        of: find.text(hint), matching: find.byType(TextField));
+
+    Future<void> openCustom(WidgetTester t, {required bool scanned}) async {
+      if (scanned) {
+        await open(t);
+        await scan(t, {'name': 'Granola', ..._whole, 'fat': null});
+        await t.tap(find.text('Add manually'));
+      } else {
+        await open(t, mode: 'manual');
+        await t.enterText(find.byType(TextField), 'z'); // matches no food
+        await settle(t);
+        await t.tap(find.textContaining('manually'));
+        await settle(t);
+        await t.enterText(field('Food name'), 'Granola');
+        await t.enterText(field('Calories'), '250');
+      }
+      await settle(t);
+      expect(find.text('Add Custom Food'), findsOneWidget, reason: 'premise');
+    }
+
+    /// A new food is listed, last, to be picked.
+    Future<void> pickNew(WidgetTester t) async {
+      await t.scrollUntilVisible(find.text('Granola'), 200,
+          scrollable: find
+              .descendant(
+                  of: find.byType(AddMealSheet),
+                  matching: find.byType(Scrollable))
+              .last);
+      await t.tap(find.text('Granola'));
+      await settle(t);
+    }
+
+    for (final scanned in [false, true]) {
+      for (final text in ['NaN', 'Infinity', '-Infinity', '1e999']) {
+        testWidgets('$text is refused (${scanned ? 'a scanned' : 'a new'} food), '
+            'then a number is taken', (t) async {
+          await openCustom(t, scanned: scanned);
+          await t.enterText(field('Fat (g)'), text);
+          await t.tap(find.text('Add to List'));
+          await settle(t);
+          expect(find.text('Add Custom Food'), findsOneWidget,
+              reason: '$text was saved as an amount');
+          expect(find.text('Enter the fat — 0 if there is none.'),
+              findsOneWidget);
+          expect(t.takeException(), isNull);
+          await t.enterText(
+              find.ancestor(
+                  of: find.text(text), matching: find.byType(TextField)),
+              '2.5');
+          await t.enterText(
+              find.ancestor(
+                  of: find.text('100'), matching: find.byType(TextField)),
+              text); // the serving: as any that cannot be read, 100
+          await t.tap(find.text('Add to List'));
+          await settle(t);
+          if (!scanned) await pickNew(t);
+          await t.tap(find.text('Log Granola'));
+          await settle(t);
+          final meal = meals().single;
+          expect((meal.who, meal.row['fat'], meal.row['amount_g']),
+              (memberA, 2.5, 100));
+          await close(t);
+        });
+      }
+    }
+
+    testWidgets('POSITIVE CONTROL (old too): a new food as entered, blanks as '
+        'before', (t) async {
+      await openCustom(t, scanned: false);
+      await t.tap(find.text('Add to List'));
+      await settle(t);
+      expect(find.text('Add Custom Food'), findsNothing);
+      await pickNew(t);
+      await t.tap(find.text('Log Granola'));
+      await settle(t);
+      final meal = meals().single.row;
+      expect((meal['calories'], meal['fat'], meal['amount_g']), (250, 0, 100));
       await close(t);
     });
   });

@@ -4,6 +4,8 @@ import '../../../core/theme/app_theme.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 import '../../../core/observability/app_failure.dart';
 import '../../../shared/theme/app_background.dart';
+import '../../auth/domain/auth_provider.dart';
+import '../../nutrition/domain/nutrition_provider.dart' show ownRead;
 import '../../workout/presentation/widgets/section_load_failure.dart'
     show couldntMessage;
 import '../data/models/action_item.dart';
@@ -16,7 +18,17 @@ class ActionCenterScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final itemsAsync = ref.watch(myActionItemsProvider);
+    // The rows are redrawn for whoever is signed in, whatever the read is doing.
+    ref.watch(currentUserProvider.select((u) => u?.id));
+    final own = ownRead(ref.watch(myActionItemsProvider));
+    // Theirs is kept through a refresh that fails, and that is said.
+    ref.listen(myActionItemsProvider, (_, next) {
+      final now = ownRead(next);
+      final e = now.error;
+      if (e == null || now.value == null || now.busy || !context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(couldntMessage('refresh your action items', e))));
+    });
     return AppGradientBackground(
       child: Scaffold(
       backgroundColor: Colors.transparent,
@@ -28,13 +40,13 @@ class ActionCenterScreen extends ConsumerWidget {
             style: TextStyle(color: AppColors.white, fontWeight: FontWeight.bold)),
         iconTheme: const IconThemeData(color: AppColors.white),
       ),
-      body: itemsAsync.when(
-        loading: () => const Center(
+      body: switch (own.value) {
+        null when own.error == null => const Center(
             child: CircularProgressIndicator(color: AppColors.purple)),
-        error: (_, __) => const Center(
+        null => const Center(
             child: Text('Could not load your action items',
                 style: TextStyle(color: AppColors.textTertiary))),
-        data: (items) {
+        final items => Builder(builder: (_) {
           if (items.isEmpty) return const _EmptyState();
           final pending = items.where((i) => !i.isCompleted).toList();
           final completed = items.where((i) => i.isCompleted).toList();
@@ -65,8 +77,8 @@ class ActionCenterScreen extends ConsumerWidget {
               ],
             ),
           );
-        },
-      ),
+        }),
+      },
     ));
   }
 }
@@ -252,8 +264,13 @@ class _ActionTile extends ConsumerWidget {
     }
     // Another member's by now: theirs to read, and nothing to say to them.
     if (auth.currentUser?.id != owner) return;
-    container.invalidate(myActionItemsProvider);
-    if (failed != null) {
+    try {
+      container.invalidate(myActionItemsProvider);
+    } on StateError {
+      // Disposed (the same member signed out and in again meanwhile): nothing
+      // of it is drawn any more, and its successor reads for itself.
+    }
+    if (failed != null && messenger.mounted) {
       messenger.showSnackBar(SnackBar(content: Text(failed)));
     }
   }
