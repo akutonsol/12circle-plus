@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/core/realtime/realtime.dart';
+import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/workout/data/models/workout_model.dart';
 import 'package:circle_fitness/features/workout/data/workout_service.dart';
 import 'package:circle_fitness/features/workout/domain/workout_provider.dart';
@@ -200,6 +201,39 @@ void main() {
       expect(server.writes(by: memberB), isEmpty);
     });
 
+    testWidgets('the auth client has changed, the providers not yet told: nothing is said',
+        (t) async {
+      // The real auth stream, delivered late.
+      Completer<void>? gate;
+      c.dispose();
+      c = ProviderContainer(overrides: [
+        tableTickerProvider.overrideWith((ref, t) => Stream.value(0)),
+        authStateProvider.overrideWith((ref) => ref
+            .watch(authServiceProvider)
+            .authStateChanges
+            .asyncMap((e) async => gate == null ? e : await gate.future.then((_) => e))),
+      ]);
+      c.listen(restoringUserIdProvider, (_, __) {});
+      await mount(t, const ResumeWorkoutBanner());
+      final hold = server.holds['PATCH workout_sessions:$memberA'] = Completer<void>();
+      server.fails.add('PATCH workout_sessions:$memberA');
+      await t.tap(find.byIcon(Icons.close_rounded));
+      await t.idle();
+      gate = Completer<void>();
+      await switchUnseen(t, memberB);
+      final told = c.read(restoringUserIdProvider);
+      hold.complete();
+      for (var i = 0; i < 20; i++) {
+        await t.idle();
+      }
+      expect(told, memberA, reason: 'premise: the stream has not delivered the change');
+      await t.pump();
+      expect(find.byType(SnackBar), findsNothing, reason: "A's failure said to B");
+      await t.runAsync(() async => gate!.complete());
+      await settle(t);
+      expect(find.textContaining("Couldn't"), findsNothing);
+    });
+
     testWidgets('a resume whose program fails says so to A, and nothing to B', (t) async {
       server.fails.add('GET workout_program_assignments:$memberA');
       final hold =
@@ -320,6 +354,43 @@ void main() {
       hold.complete();
       await settle(t);
       expect(c.read(selectedWorkoutProvider), isNull);
+    });
+
+    for (final fails in [false, true]) {
+      testWidgets('the program in flight across the switch, then '
+          '${fails ? 'failing' : 'answered'}: nothing is selected', (t) async {
+        // A's open session is of this workout, so its own workout is bound.
+        server.seedSession(memberA, workoutId: _w.id, title: _w.title);
+        if (fails) server.fails.add('GET workout_program_assignments:$memberA');
+        final hold =
+            server.holds['GET workout_program_assignments:$memberA'] = Completer<void>();
+        await mount(t, Consumer(builder: (context, ref, _) {
+          ref.watch(assignedWorkoutsProvider);
+          return opener();
+        }));
+        await t.tap(find.text('open'));
+        await t.idle();
+        await switchUnseen(t, memberB);
+        hold.complete();
+        for (var i = 0; i < 20; i++) {
+          await t.idle(); // acted on; nothing is drawn
+        }
+        await settle(t);
+        expect(t.takeException(), isNull, reason: "A's failure raised on B's screen");
+        expect(c.read(selectedWorkoutProvider), isNull,
+            reason: "THE defect: A's tap selected A's workout for B");
+      });
+    }
+
+    testWidgets('control: A\'s own tap binds A\'s open session', (t) async {
+      server.seedSession(memberA, workoutId: _w.id, title: _w.title);
+      await mount(t, Consumer(builder: (context, ref, _) {
+        ref.watch(assignedWorkoutsProvider);
+        return opener();
+      }));
+      await t.tap(find.text('open'));
+      await settle(t);
+      expect(c.read(selectedWorkoutProvider)?.id, _w.id);
     });
 
     testWidgets('control: A\'s own tap selects it, also when the lookup fails', (t) async {

@@ -27,7 +27,6 @@ Future<bool> selectWorkoutForZone(WidgetRef ref, Workout workout,
   final owner = builtFor ?? workout.readFor ?? signedInNow(ref);
   bool sameMember() =>
       ref.context.mounted && _mayOpen(ref, workout, owner, origin);
-  if (!sameMember()) return false;
 
   WorkoutSessionRecord? session;
   try {

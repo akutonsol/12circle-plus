@@ -16,6 +16,7 @@ import 'package:circle_fitness/features/workout/presentation/active_workout_scre
 import 'package:circle_fitness/features/workout/presentation/train_hub_screen.dart';
 import 'package:circle_fitness/features/workout/presentation/workout_detail_screen.dart';
 import 'package:circle_fitness/features/workout/presentation/workout_list_screen.dart';
+import 'package:circle_fitness/features/workout/presentation/widgets/week_row_tile.dart';
 import 'package:circle_fitness/features/workout/presentation/zone_entry.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -504,10 +505,15 @@ void main() {
             what: 'the generator to be asked');
         seen ? await switchSeen(t) : await switchUnseen(t);
         hold.complete();
-        for (var i = 0; i < 10; i++) {
+        // The answer is decoded off the test's clock. Waited for without a
+        // frame (`idle` turns the queue, and draws nothing) until it has been
+        // acted on, one way or the other; seen, there is no one left to act.
+        bool acted() => failures.isNotEmpty || c.read(selectedWorkoutProvider) != null;
+        for (var i = 0; i < (seen ? 60 : 1500) && !acted(); i++) {
           await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-          await t.pump(const Duration(milliseconds: 50));
+          await t.idle();
         }
+        await settle(t);
         expectNothingStarted(recorded: !seen);
         await close(t);
       });
@@ -637,6 +643,18 @@ void main() {
         await close(t);
       });
     }
+
+    testWidgets('a week row drawn for B with A\'s workout opens nothing', (t) async {
+      final ofA = await readAsA(t, assignedWorkoutsProvider);
+      await switchUnseen(t);
+      await asB(t, () => const []);
+      await mount(t, Scaffold(body: WeekRowTile(workout: ofA.single)));
+      await t.tap(find.text(_a));
+      await settle(t);
+      expect(find.byType(WorkoutDetailScreen), findsNothing);
+      expectNothingStarted();
+      await close(t);
+    });
 
     testWidgets('the Zone does not open on A\'s restored workout; B\'s is then resumed',
         (t) async {

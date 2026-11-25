@@ -1060,8 +1060,11 @@ void main() {
       await t.tap(find.textContaining('Warmed Up'));
       await settle(t, 3);
       await switchUnseen(t);
+      failures.clear();
       hold.complete();
-      await t.pump();
+      for (var i = 0; i < 20; i++) {
+        await t.idle(); // the answer is acted on; nothing is drawn
+      }
       expectRecorded();
       await settle(t);
       expect(find.text('No workout selected'), findsOneWidget);
@@ -1425,6 +1428,35 @@ void main() {
         await settle(t);
         expect(c.read(selectedWorkoutProvider), same(_aWorkout));
         expect(c.read(activeWorkoutProvider), isNotEmpty);
+        await close(t);
+      });
+
+      // No switch at all: A leaves by a tab while it saves, and begins another.
+      testWidgets('$what: another workout picked meanwhile, not yet open, is kept', (t) async {
+        await aTrains(t);
+        final hold = await start(t);
+        router.go('/home');
+        await settle(t);
+        final w2 = another('w2');
+        c.read(selectedWorkoutProvider.notifier).state = w2; // its session is not bound yet
+        hold.complete();
+        await settle(t);
+        expect(c.read(selectedWorkoutProvider), same(w2), reason: 'THE defect: W2 cleared');
+        await close(t);
+      });
+
+      testWidgets('$what: the same workout begun again by the same member is kept', (t) async {
+        await aTrains(t);
+        final hold = await start(t);
+        router.go('/home');
+        await settle(t);
+        c.read(activeWorkoutProvider.notifier)
+          ..beginSession('s2')
+          ..setSetData(_aWorkout.exercises.first.sets.first, {'reps': 7});
+        hold.complete();
+        await settle(t);
+        expect(c.read(activeWorkoutProvider), isNotEmpty, reason: 'THE defect: its sets lost');
+        expect(c.read(selectedWorkoutProvider), same(_aWorkout));
         await close(t);
       });
 
