@@ -1168,7 +1168,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
             TextButton(
               onPressed: () {
                 _popRoute(dctx);
-                if (_accountChanged('_submitForGlobal', form, 'Submitting an exercise')) return;
+                if (_accountChanged('_showSuccess', form, 'Submitting an exercise')) return;
                 ref.read(myExercisesNotifierProvider.notifier).submitForGlobal(savedId).then((ok) {
                   if (!mounted || !_still(form)) return;
                   // The result was ignored: a submission that failed still said

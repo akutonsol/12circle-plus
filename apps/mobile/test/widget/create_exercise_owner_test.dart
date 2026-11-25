@@ -274,7 +274,7 @@ void main() {
       submit();
       await settleReal(t);
       expect(server.writes.length, before, reason: "A's exercise was published by B");
-      expect(changed(), ['CreateExerciseScreen._submitForGlobal']);
+      expect(changed(), ['CreateExerciseScreen._showSuccess']);
       expect(find.byType(SnackBar), findsNothing);
       await unmountAll(t);
     });

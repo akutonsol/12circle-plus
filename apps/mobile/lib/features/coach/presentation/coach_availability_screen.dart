@@ -229,17 +229,18 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
         // P0-FL-53b · said, but was never recorded.
         reportError('CoachAvailabilityScreen._delete',
             StateError('coach_availability delete matched no row'));
-        messenger.showSnackBar(const SnackBar(content: Text(
-            "Couldn't remove this slot — it may already be gone or booked. "
-            'Refreshing your list.')));
+        _endWithAccount(messenger, owner, messenger.showSnackBar(
+            const SnackBar(content: Text(
+                "Couldn't remove this slot — it may already be gone or booked. "
+                'Refreshing your list.'))));
       }
       _load();
     } catch (e, st) {
       reportError('CoachAvailabilityScreen._delete', e, st);
       if (!mounted || !mine()) return;
       setState(() => _deleting.remove(id));
-      messenger.showSnackBar(SnackBar(content: Text(
-          "Couldn't remove this slot — ${_nextStep(e)}")));
+      _endWithAccount(messenger, owner, messenger.showSnackBar(SnackBar(
+          content: Text("Couldn't remove this slot — ${_nextStep(e)}"))));
     }
   }
 
@@ -290,10 +291,10 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
         if (!mounted || !mine()) return;
         setState(() => _cancelling.remove(id));
         // P0-FL-46 review N2 · a failure notice is announced (live region).
-        messenger.showSnackBar(SnackBar(
+        _endWithAccount(messenger, owner, messenger.showSnackBar(SnackBar(
             content: Semantics(liveRegion: true, child: const Text(
                 "Couldn't cancel this session — it may already be cancelled. "
-                'Refreshing your sessions.'))));
+                'Refreshing your sessions.')))));
         _load();
         return;
       }
@@ -301,9 +302,9 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
       reportError('CoachAvailabilityScreen._cancelSession', e, st);
       if (!mounted || !mine()) return;
       setState(() => _cancelling.remove(id));
-      messenger.showSnackBar(SnackBar(
+      _endWithAccount(messenger, owner, messenger.showSnackBar(SnackBar(
           content: Semantics(liveRegion: true, child: Text(
-              "Couldn't cancel this session — ${_nextStep(e)}"))));
+              "Couldn't cancel this session — ${_nextStep(e)}")))));
       return;
     }
     // Step 2, the slot. The call IS cancelled from here on, so a slot that

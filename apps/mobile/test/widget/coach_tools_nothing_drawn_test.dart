@@ -460,7 +460,7 @@ void main() {
         await settleNoFrame(t);
         await settleReal(t);
         expect(server.writes.length, writes, reason: "A's exercise was published by B");
-        expect(changed(), answer == 'Back to Library' ? isEmpty : ['CreateExerciseScreen._submitForGlobal']);
+        expect(changed(), answer == 'Back to Library' ? isEmpty : ['CreateExerciseScreen._showSuccess']);
         pageIsThere();
         await unmountAll(t);
       }
@@ -614,6 +614,61 @@ void main() {
       expect(reported, isEmpty);
       await unmountAll(t);
     });
+
+    // Round 5 (R4-2). Fails on 30e2472: the same, for the four failures.
+    for (final (what, write, zero, says) in <(String, String, bool, String)>[
+      ('a slot that is gone', 'coach_availability', true, "Couldn't remove this slot — it may"),
+      ('a slot not removed', 'coach_availability', false, "Couldn't remove this slot — try"),
+      ('a session already cancelled', 'coaching_calls', true, "Couldn't cancel this session — it may"),
+      ('a session not cancelled', 'coaching_calls', false, "Couldn't cancel this session — try"),
+    ]) {
+      Future<void> leaveWith(WidgetTester t) async {
+        server.tables['coach_availability'] = [
+          {'id': 'slot-9', 'coach_id': memberA, 'is_booked': false, 'duration_minutes': 30,
+            'call_type': 'check_in', 'slot_time': DateTime.now().toUtc()
+                .add(const Duration(hours: 40)).toIso8601String()},
+        ];
+        await open(t, const CoachAvailabilityScreen());
+        bool refused(Sent s) => s.table == write && s.isWrite;
+        zero ? server.zeroRows = refused : server.failing = refused;
+        if (write == 'coach_availability') {
+          await t.tap(find.byIcon(Icons.delete_outline_rounded));
+        } else {
+          await t.tap(find.widgetWithText(TextButton, 'Cancel'));
+          await settleReal(t);
+          await t.tap(find.text('Cancel session'));
+        }
+        await settleReal(t);
+        expect(find.textContaining(says), findsOneWidget, reason: 'premise');
+        await t.tap(find.byTooltip('Back'));
+        await settleReal(t, rounds: 8);
+        expect(under, findsNothing, reason: 'premise: the page is left');
+        expect(find.textContaining(says), findsOneWidget, reason: 'premise: still said');
+      }
+
+      for (final to in [memberB, null]) {
+        testWidgets('$what, said as the page is left, goes with its account '
+            '(${to == null ? 'signed out' : 'A→B'})', (t) async {
+          await leaveWith(t);
+          await switchNoFrame(t, to);
+          await t.pump();
+          await settleReal(t, rounds: 2);
+          expect(find.byType(SnackBar), findsNothing,
+              reason: "A's action is told to the next account");
+          await unmountAll(t);
+        });
+      }
+
+      testWidgets("control: $what is still said through the same coach's token refresh",
+          (t) async {
+        await leaveWith(t);
+        await heardBy(t, () => refreshNoFrame(t));
+        await t.pump();
+        await settleReal(t, rounds: 2);
+        expect(find.textContaining(says), findsOneWidget);
+        await unmountAll(t);
+      });
+    }
 
     const closedForm = "Couldn't save again — this form was closed. Open the "
         'exercise from your library to finish it.';

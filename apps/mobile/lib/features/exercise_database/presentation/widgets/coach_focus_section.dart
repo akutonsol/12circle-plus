@@ -116,6 +116,27 @@ void _popRoute(BuildContext context, [Object? result]) {
   route.isCurrent ? Navigator.pop(context, result) : route.navigator?.removeRoute(route);
 }
 
+/// P0-FL-59d r5 · counts the times the signed-in account has changed, by what
+/// the auth events say. A uid read after an await cannot tell "the same coach
+/// all along" from "away, and back": an answer is kept only when both agree.
+class _SignIns {
+  int changes = 0;
+  String? _last = Supabase.instance.client.auth.currentUser?.id;
+  late final StreamSubscription<AuthState> _sub;
+
+  _SignIns() {
+    _sub = Supabase.instance.client.auth.onAuthStateChange.listen((s) {
+      final uid = s.session?.user.id;
+      if (uid == _last) return; // a token refresh, the stream's replay
+      _last = uid;
+      changes++;
+    }, onError: (Object e, StackTrace s) =>
+        reportError('CoachFocusSection._SignIns', e, s));
+  }
+
+  void dispose() => _sub.cancel();
+}
+
 class CoachFocusSection extends ConsumerStatefulWidget {
   final String exerciseId;
   /// Lowercased searchable attributes of the exercise (name/muscle/equipment)
@@ -178,6 +199,14 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
   /// gave Edit back over a copy the newest read could not confirm.
   int _loadSeq = 0;
 
+  final _signIns = _SignIns();
+
+  @override
+  void dispose() {
+    _signIns.dispose();
+    super.dispose();
+  }
+
   static String? _uidOf(String? key) => key?.split('|').first;
   static String? get _signedInUid => Supabase.instance.client.auth.currentUser?.id;
 
@@ -201,18 +230,20 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
     }
     _loadedKey = key;
     final seq = ++_loadSeq;
+    final since = _signIns.changes;
+    bool mine() => _signedInUid == _uidOf(key) && _signIns.changes == since;
     try {
       final data = staff
           ? await _svc.getCoachOverlay(widget.exerciseId)
           : await _svc.resolveExerciseMedia(widget.exerciseId);
       if (!mounted || _loadedKey != key || seq != _loadSeq) return;
-      if (_signedInUid != _uidOf(key)) return _forget(_uidOf(key));
+      if (!mine()) return _forget(_uidOf(key));
       setState(() {
         _isStaff = staff; _overlay = data; _loadError = null; _loading = false;
       });
     } catch (e) {
       if (!mounted || _loadedKey != key || seq != _loadSeq) return;
-      if (_signedInUid != _uidOf(key)) return _forget(_uidOf(key));
+      if (!mine()) return _forget(_uidOf(key));
       // Keep whatever was shown for this member + view; say the read failed.
       setState(() { _isStaff = staff; _loadError = e; _loading = false; });
     }
@@ -392,39 +423,44 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
           StateError('Coaching editor: the signed-in account changed'));
       return;
     }
-    final focusCtl = TextEditingController(text: _focusOf(_overlay).join('\n'));
-    final noteCtl = TextEditingController(text: _overlay?['note']?.toString() ?? '');
-    final videoCtl = TextEditingController(text: _overlay?['video_ref']?.toString() ?? '');
+    // The text and the voice note are of one read: after the packs' await the
+    // section may hold the next coach's overlay, and theirs was played to A.
+    var sheetOverlay = _overlay;
+    final focusCtl = TextEditingController(text: _focusOf(sheetOverlay).join('\n'));
+    final noteCtl = TextEditingController(text: sheetOverlay?['note']?.toString() ?? '');
+    final videoCtl = TextEditingController(text: sheetOverlay?['video_ref']?.toString() ?? '');
+    // P0-FL-59d r5 · each read of the sheet's goes out as its coach or not at
+    // all, and is said (or its failure is) to the sign-in it was asked in: one
+    // the coach was away during is asked for again.
+    final signIns = _SignIns();
+    Future<void> read<T>(Future<T> Function() ask,
+        void Function(T) answered, void Function(Object) failed) async {
+      while (mine()) {
+        final since = signIns.changes;
+        bool still() => mine() && signIns.changes == since;
+        try {
+          final answer = await ask();
+          if (still()) return answered(answer);
+        } catch (e) {
+          if (still()) return failed(e);
+        }
+      }
+    }
     // P0-FL-50a · a failed packs read is not "no packs": the editor says it
     // couldn't load them and offers a retry (the service has recorded it).
     var packs = const <Map<String, dynamic>>[];
     Object? packsError;
     var packsRetrying = false;
-    Future<void> loadPacks() async {
-      try {
-        packs = await _svc.getCoachingPacks();
-        packsError = null;
-      } catch (e) {
-        packsError = e;
-      }
-    }
+    Future<void> loadPacks() => read(_svc.getCoachingPacks,
+        (p) { packs = p; packsError = null; }, (e) => packsError = e);
     await loadPacks();
-    var sheetOverlay = _overlay;
     // P0-FL-53a · a failed re-read of the overlay inside the sheet (after a
     // voice note was cleared or recorded) is said in place of the voice note
     // — never shown as "no voice note" — with a retry.
     Object? sheetReadError;
     var sheetRetrying = false;
-    Future<void> rereadSheet() async {
-      try {
-        final fresh = await _svc.getCoachOverlay(widget.exerciseId);
-        if (!mine()) return;
-        sheetOverlay = fresh;
-        sheetReadError = null;
-      } catch (e) {
-        sheetReadError = e;
-      }
-    }
+    Future<void> rereadSheet() => read(() => _svc.getCoachOverlay(widget.exerciseId),
+        (o) { sheetOverlay = o; sheetReadError = null; }, (e) => sheetReadError = e);
     // P0-FL-53a · a pack save that failed is said in the sheet, and the name
     // typed is kept for the next try (the cues stay in the focus field).
     final packNameCtl = TextEditingController();
@@ -437,7 +473,7 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
     String? voiceClearError;
     var expiry = 'never';
     var saving = false;
-    if (!mounted || !mine()) return;
+    if (!mounted || !mine()) return signIns.dispose();
     DateTime? expiryDate() => switch (expiry) {
       'today' => DateTime.now().add(const Duration(hours: 18)),
       'week' => DateTime.now().add(const Duration(days: 7)),
@@ -688,6 +724,6 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
           ]),
         ));
       })),
-    );
+    ).whenComplete(signIns.dispose);
   }
 }
