@@ -158,6 +158,12 @@ void main() {
     await mount(t, title: 'PERFORMANCE');
     expect(header(t), const Rect.fromLTRB(0, 0, 390, 64));
     expect(t.getRect(lead.first), const Rect.fromLTWH(20, 11.5, 40, 40));
+    // Round 3: the avatar's 44px target lies around it; nothing else moved.
+    expect(
+        t.getRect(find
+            .ancestor(of: lead.first, matching: find.byType(GestureDetector))
+            .first),
+        const Rect.fromLTWH(18, 9.5, 44, 44));
     expect(t.getRect(find.text('PERFORMANCE')), const Rect.fromLTRB(72, 18.5, 344, 44.5));
     expect(t.getRect(bell), const Rect.fromLTWH(344, 18.5, 26, 26));
   });
@@ -175,6 +181,7 @@ void main() {
     fitWindow(t, 390, 844, 1);
     await mount(t, name: 'Alex');
     expect(header(t), const Rect.fromLTRB(0, 0, 390, 64));
+    expect(t.getRect(lead.first), const Rect.fromLTWH(20, 11.5, 40, 40));
     expect(t.getRect(find.textContaining('GOOD ')).topLeft, const Offset(72, 10));
     expect(t.getRect(find.text('Alex')), const Rect.fromLTRB(72, 24, 150, 53));
     expect(t.getRect(find.byIcon(Icons.bolt)), const Rect.fromLTWH(154, 28.5, 20, 20));

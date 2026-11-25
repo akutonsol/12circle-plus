@@ -12,6 +12,8 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../support/fit_matrix.dart';
+import '../support/pump_until.dart';
+import '../support/pump_until_quiet.dart';
 import '../support/row_checking_postgrest.dart';
 import '../support/session_switch.dart';
 
@@ -41,21 +43,34 @@ void main() {
     await initSignedInSupabase(server);
   });
 
+  /// Reads asked for and not yet answered; and the answers the test holds.
+  var busy = 0;
+  final holding = <Completer<int>>[];
+
+  /// An answer the test gives when it chooses.
+  Completer<int> hold() {
+    final c = Completer<int>();
+    holding.add(c);
+    return c;
+  }
+
   setUp(() async {
     server.reset();
     answers.clear();
     reads.clear();
+    busy = 0;
+    holding.clear();
     await signInAs(_a);
   });
 
   final icon = find.byIcon(Icons.notifications);
   final header = find.byType(AppScaffold);
 
-  Future<void> settle(WidgetTester t) async {
-    for (var i = 0; i < 6; i++) {
-      await t.pump(const Duration(milliseconds: 20));
-    }
-  }
+  /// Until every read is answered or held by the test, and what the answers
+  /// changed is drawn (round 3: no fixed budget of frames).
+  Future<void> settle(WidgetTester t) => pumpUntilQuiet(
+      t, () => busy <= holding.where((c) => !c.isCompleted).length,
+      what: 'every read to be answered');
 
   /// Real auth; only the unread read itself is answered by the test (the real
   /// one is driven by a websocket).
@@ -68,7 +83,14 @@ void main() {
       unreadCountProvider.overrideWith((ref) async {
         final uid = ref.watch(currentUserProvider)?.id;
         reads.add('$uid');
-        return uid == null ? 0 : await answers[uid]!();
+        if (uid == null) return 0;
+        final answer = answers[uid]!();
+        busy++;
+        try {
+          return await answer;
+        } finally {
+          busy--;
+        }
       }),
     ]);
     addTearDown(container.dispose);
@@ -80,7 +102,7 @@ void main() {
               const AppScaffold(title: 'PLAN', body: SizedBox.expand())),
       GoRoute(
           path: '/notifications', builder: (_, __) => const Text('the list')),
-      GoRoute(path: '/profile', builder: (_, __) => const SizedBox()),
+      GoRoute(path: '/profile', builder: (_, __) => const Text('the profile')),
     ]);
     addTearDown(router.dispose);
     await t.pumpWidget(UncontrolledProviderScope(
@@ -215,7 +237,7 @@ void main() {
     });
 
     for (final (name, answer) in <(String, Future<int> Function())>[
-      ('pending', () => Completer<int>().future),
+      ('pending', () => hold().future),
       (
         'failed',
         () async =>
@@ -270,6 +292,72 @@ void main() {
     });
   });
 
+  // P0-FL-61 round 3 (ux P3) · the header avatar opens Profile. At 28f29ce
+  // (and a82f993) its target was the 40×40 picture and a screen reader found
+  // no name and no button.
+  group('the avatar', () {
+    Finder avatar() => find.bySemanticsLabel('Profile');
+
+    for (final width in fitPhones.keys) {
+      for (final scale in fitScales) {
+        testWidgets('${width}dp, text $scale×: "Profile", a button, >= 44, '
+            'taking the tap at its edge', (t) async {
+          final handle = t.ensureSemantics();
+          fitWindow(t, width, 700, scale);
+          answers[_a] = () async => 3;
+          await mount(t, reduceMotion: ValueNotifier(true));
+          expect(avatar(), findsOneWidget, reason: 'THE defect: no name');
+          final node = t.getSemantics(avatar());
+          final d = node.getSemanticsData();
+          expect(d.flagsCollection.isButton, isTrue);
+          expect(d.hasAction(SemanticsAction.tap), isTrue);
+          expect(node.rect.width, greaterThanOrEqualTo(44));
+          expect(node.rect.height, greaterThanOrEqualTo(44));
+          expect(tapNodes(t, header).where((x) => x.label == 'Profile'),
+              hasLength(1));
+          // The picture has not moved or shrunk: 40 wide, 20 from the left.
+          final pic = t.getRect(find.byWidgetPredicate((w) =>
+              w is Container &&
+              w.constraints == BoxConstraints.tight(const Size(40, 40))));
+          expect(pic.size, const Size(40, 40));
+          expect(pic.left, closeTo(20, 0.01));
+          // A touch 1 inside the target's corner, outside the picture.
+          await t.tapAt(pic.topLeft + const Offset(-1, -1));
+          await pumpUntil(
+              t, () => find.text('the profile').evaluate().isNotEmpty,
+              what: 'Profile');
+          handle.dispose();
+          await close(t);
+        });
+      }
+    }
+
+    testWidgets('a screen reader opens Profile', (t) async {
+      final handle = t.ensureSemantics();
+      answers[_a] = () async => 3;
+      await mount(t, reduceMotion: ValueNotifier(true));
+      final node = t.getSemantics(avatar());
+      node.owner!.performAction(node.id, SemanticsAction.tap);
+      await pumpUntil(t, () => find.text('the profile').evaluate().isNotEmpty,
+          what: 'Profile');
+      handle.dispose();
+      await close(t);
+    });
+
+    testWidgets('NEGATIVE CONTROL: a touch just outside the target is not it',
+        (t) async {
+      answers[_a] = () async => 3;
+      await mount(t, reduceMotion: ValueNotifier(true));
+      final pic = t.getRect(find.byWidgetPredicate((w) =>
+          w is Container &&
+          w.constraints == BoxConstraints.tight(const Size(40, 40))));
+      await t.tapAt(pic.topLeft + const Offset(-3, -3));
+      await settle(t);
+      expect(find.text('the profile'), findsNothing);
+      await close(t);
+    });
+  });
+
   group("the count is the signed-in account's", () {
     Future<void> switchTo(WidgetTester t, String uid) async {
       await t.runAsync(() => signInAs(uid));
@@ -277,7 +365,7 @@ void main() {
     }
 
     for (final (name, answer) in <(String, Future<int> Function())>[
-      ('pending', () => Completer<int>().future),
+      ('pending', () => hold().future),
       (
         'failed',
         () async =>
@@ -303,7 +391,7 @@ void main() {
     testWidgets("A's delayed answer landing after B, before B's own: not said "
         "to B; then B's own is", (t) async {
       final handle = t.ensureSemantics();
-      final aLate = Completer<int>(), bOwn = Completer<int>();
+      final aLate = hold(), bOwn = hold();
       answers[_a] = () => aLate.future;
       answers[_b] = () => bOwn.future;
       await mount(t);
@@ -320,7 +408,7 @@ void main() {
 
     testWidgets("CONTROL: A's delayed answer landing after B's own changes "
         'nothing', (t) async {
-      final aLate = Completer<int>();
+      final aLate = hold();
       answers[_a] = () => aLate.future;
       answers[_b] = () async => 5;
       await mount(t);

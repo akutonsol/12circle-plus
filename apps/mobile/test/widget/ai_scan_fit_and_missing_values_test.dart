@@ -115,7 +115,8 @@ void main() {
     await start(t);
     await pumpUntil(t, () => find.text('Retake').evaluate().isNotEmpty,
         what: 'the result stage');
-    await t.pump(const Duration(milliseconds: 300));
+    // Until its entrance has finished drawing (round 3: no fixed wait).
+    await t.pumpAndSettle();
   }
 
   void tall(WidgetTester t) => fitWindow(t, 400, 2400, 1);
@@ -194,9 +195,13 @@ void main() {
         await mount(t);
         picker.fails('photo_access_denied');
         await t.tap(find.text('Choose from Gallery'));
-        for (var i = 0; i < 5; i++) {
-          await t.pump(const Duration(milliseconds: 100));
-        }
+        await pumpUntil(
+            t,
+            () => find
+                .textContaining("Couldn't open your photos")
+                .evaluate()
+                .isNotEmpty,
+            what: 'the notice');
         expect(
             find.textContaining("Couldn't open your photos"), findsOneWidget);
         expect(seen, isEmpty);
@@ -210,11 +215,13 @@ void main() {
         server.hold = Completer<void>();
         await mount(t);
         await start(t);
-        await t.pump(const Duration(milliseconds: 400));
+        await pumpUntil(
+            t, () => find.text('Analyzing your meal...').evaluate().isNotEmpty,
+            what: 'the analysing stage');
         seen.clear(); // the idle stage has its own test
         // Re-lay the stage in the room a Log Meal sheet leaves it.
         t.view.physicalSize = Size(width.toDouble(), 340);
-        await t.pump(const Duration(milliseconds: 50));
+        await t.pump(); // one frame lays it out again
         expect(find.text('Analyzing your meal...'), findsOneWidget);
         expect(seen, isEmpty);
         expectTextNotShrunk(t, view, scale);

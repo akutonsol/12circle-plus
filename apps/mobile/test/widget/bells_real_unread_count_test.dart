@@ -13,9 +13,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
-import 'package:supabase_flutter/supabase_flutter.dart' show AuthChangeEvent, Supabase;
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthChangeEvent, Supabase, User;
 
 import '../support/fit_matrix.dart';
+import '../support/pump_until.dart';
+import '../support/pump_until_quiet.dart';
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-61 round 2 · both header bells, over the REAL `unreadCountProvider`,
@@ -29,22 +31,83 @@ import '../support/two_member_postgrest.dart';
 //
 // HOW TO SEE IT FAIL: run against 924bbf0's app_top_nav.dart (the shell's
 // bell) or a82f993's app_scaffold.dart (the other).
+//
+// Round 3 (sec N3): the same file passes with and without P0-FL-60c, which
+// changes the notifications providers' shapes (the feed becomes a
+// `Provider<AsyncValue>` keyed by uid, the count a `FutureProvider<int?>`
+// that publishes AsyncData(null) on a switch, `fetchUnreadCount` takes
+// `owner:`, and a token refresh re-reads nothing). Only PREMISES differ
+// between the two; every display assertion holds for both. Nothing waits a
+// fixed time: each step polls until the fake server is quiet.
+
+/// The live feed the count follows, in whichever shape the provider has, and
+/// watching what the real one watches: the whole user (a StreamProvider here)
+/// or only the uid (FL-60c's `Provider<AsyncValue>`).
+Override _liveFeed(Stream<List<AppNotification>> Function() stream) {
+  final dynamic real = notificationsStreamProvider;
+  final Object shape = notificationsStreamProvider;
+  if (shape is StreamProvider) {
+    Stream<List<AppNotification>> create(dynamic ref) {
+      ref.watch(currentUserProvider);
+      return stream();
+    }
+
+    return real.overrideWith(create) as Override;
+  }
+  final feed = StreamProvider<List<AppNotification>>((ref) => stream());
+  AsyncValue<List<AppNotification>> follow(dynamic ref) {
+    ref.watch(currentUserProvider.select((User? u) => u?.id));
+    return ref.watch(feed) as AsyncValue<List<AppNotification>>;
+  }
+
+  return real.overrideWith(follow) as Override;
+}
+
+/// The real service's read of [uid]'s count, with or without `owner:`.
+Future<dynamic> _countFor(String uid) {
+  final dynamic svc = NotificationService();
+  try {
+    return svc.fetchUnreadCount(owner: uid) as Future<dynamic>;
+  } on NoSuchMethodError {
+    return svc.fetchUnreadCount() as Future<dynamic>;
+  }
+}
 
 /// Answers the unread read of the member its bearer token names.
 class _Server extends TwoMemberPostgrest {
   final unread = <String, int>{};
 
+  /// Every unread read answered (or failed), in order.
+  final answered = <String>[];
+
+  /// Requests taken and not yet answered, less those the test is holding.
+  int _busy = 0;
+
+  /// Nothing is on its way that the test is not holding on purpose.
+  bool get quiet => _busy == 0;
+
   @override
   void reset() {
     super.reset();
     unread.clear();
+    answered.clear();
+    _busy = 0;
   }
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
-    if (!request.url.path.endsWith('/rest/v1/notifications')) {
-      return super.send(request);
+    _busy++;
+    try {
+      if (!request.url.path.endsWith('/rest/v1/notifications')) {
+        return await super.send(request);
+      }
+      return await _unread(request);
+    } finally {
+      _busy--;
     }
+  }
+
+  Future<http.StreamedResponse> _unread(http.BaseRequest request) async {
     final who = TwoMemberPostgrest.who(request);
     final key = 'GET notifications:$who';
     calls.add(key);
@@ -52,8 +115,14 @@ class _Server extends TwoMemberPostgrest {
     final n = request.url.queryParameters['recipient_id'] == 'eq.$who'
         ? unread[who] ?? 0
         : 0; // RLS: nobody reads another member's.
-    await holds[key]?.future;
+    final hold = holds[key];
+    if (hold != null && !hold.isCompleted) {
+      _busy--;
+      await hold.future;
+      _busy++;
+    }
     final fail = fails.contains(key);
+    answered.add(key);
     return http.StreamedResponse(
         Stream.value(utf8.encode(jsonEncode(fail
             ? {'message': 'refused SECRET', 'code': 'XX000'}
@@ -103,10 +172,14 @@ void main() {
       late ProviderContainer container;
       late StreamController<List<AppNotification>> live;
 
-      Future<void> settle(WidgetTester t) async {
-        for (var i = 0; i < 8; i++) {
-          await t.pump(const Duration(milliseconds: 20));
-        }
+      /// Until every request is answered or held by the test, and what the
+      /// answers changed is drawn.
+      Future<void> settle(WidgetTester t) =>
+          pumpUntilQuiet(t, () => server.quiet, what: 'the server to be quiet');
+
+      Future<void> until(WidgetTester t, bool Function() c, String what) async {
+        await pumpUntil(t, c, what: what);
+        await settle(t);
       }
 
       /// [bySelect]: the same read, watching only the uid — the shape riverpod
@@ -116,14 +189,11 @@ void main() {
         live = StreamController.broadcast();
         container = ProviderContainer(overrides: [
           confirmedCurrentProfileProvider.overrideWith((ref) => null),
-          notificationsStreamProvider.overrideWith((ref) {
-            ref.watch(currentUserProvider);
-            return live.stream;
-          }),
+          _liveFeed(() => live.stream),
           if (bySelect)
-            unreadCountProvider.overrideWith((ref) {
-              ref.watch(currentUserProvider.select((u) => u?.id));
-              return NotificationService().fetchUnreadCount();
+            unreadCountProvider.overrideWith((ref) async {
+              final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+              return uid == null ? null : await _countFor(uid);
             }),
         ]);
         addTearDown(container.dispose);
@@ -180,7 +250,8 @@ void main() {
                   .where((x) => x.label.startsWith('Notifications')),
               hasLength(1));
           node.owner!.performAction(node.id, SemanticsAction.tap);
-          await settle(t);
+          await until(t, () => find.text('the list').evaluate().isNotEmpty,
+              'the list');
           expect(find.text('the list'), findsOneWidget);
           handle.dispose();
           await close(t);
@@ -200,7 +271,7 @@ void main() {
           expect(said(t), 'Notifications');
           expect(mark, findsNothing);
           hold.complete();
-          await settle(t);
+          await until(t, () => server.answered.contains(_readA), 'the answer');
           if (pending) expect(said(t), 'Notifications, 3 unread');
           handle.dispose();
           await close(t);
@@ -220,7 +291,8 @@ void main() {
             expect(node.rect.height, greaterThanOrEqualTo(44));
             // (At large text the badge lies over the icon's centre.)
             await t.tapAt(t.getCenter(icon));
-            await settle(t);
+            await until(t, () => find.text('the list').evaluate().isNotEmpty,
+                'the list');
             expect(find.text('the list'), findsOneWidget);
             handle.dispose();
             await close(t);
@@ -240,7 +312,7 @@ void main() {
           final hold = Completer<void>();
           pending ? server.holds[_readB] = hold : server.fails.add(_readB);
           await switchNoFrame(t, memberB);
-          await settle(t);
+          await until(t, () => server.calls.contains(_readB), "B's read");
           expect(server.calls, contains(_readB), reason: 'premise: B was read');
           expect(mark, findsNothing, reason: "THE defect: A's mark, to B");
           expect(said(t), 'Notifications');
@@ -250,7 +322,11 @@ void main() {
           server.fails.clear();
           hold.complete();
           if (!pending) container.invalidate(unreadCountProvider);
-          await settle(t);
+          await until(
+              t,
+              () => server.answered.where((k) => k == _readB).length ==
+                  (pending ? 1 : 2),
+              "B's answer");
           expect(mark, pending ? findsNothing : findsOneWidget,
               reason: 'the held answer was true when it was asked: 0');
           handle.dispose();
@@ -268,17 +344,29 @@ void main() {
             await mount(t, bySelect: bySelect);
             final hold = Completer<void>();
             pending ? server.holds[_readB] = hold : server.fails.add(_readB);
-            final states = <AsyncValue<int>>[];
+            // (Object?: the count is `int` here and `int?` with FL-60c.)
+            final states = <AsyncValue<Object?>>[];
             container.listen(unreadCountProvider, (_, s) => states.add(s));
             await switchNoFrame(t, memberB);
             // What a live notification, a pull to refresh or a retry does.
             container.invalidate(unreadCountProvider);
-            await settle(t);
-            expect(states.first,
-                bySelect ? isA<AsyncData<int>>() : isA<AsyncLoading<int>>(),
-                reason: 'premise: the trap, and only for a uid select');
-            expect((states.first.isLoading, states.first.value), (true, 3),
-                reason: "premise: A's value is carried into B's read");
+            await until(t, () => server.calls.contains(_readB), "B's read");
+            expect(states, isNotEmpty, reason: 'premise: it was told');
+            final first = states.first;
+            // Either A's value is carried into B's read (the trap: the
+            // provider here, and a uid-select one anywhere), or the provider
+            // itself has already dropped it (FL-60c's AsyncData(null)).
+            expect(first.value, anyOf(3, isNull),
+                reason: "premise: A's 3, carried, or nothing");
+            if (first.value == 3) {
+              expect(first.isLoading, isTrue,
+                  reason: "premise: A's value is carried into B's read");
+              expect(first, bySelect ? isA<AsyncData>() : isA<AsyncLoading>(),
+                  reason: 'premise: the trap, and only for a uid select');
+            } else {
+              expect(bySelect, isFalse,
+                  reason: 'premise: a uid select always carries it');
+            }
             expect(server.calls, contains(_readB), reason: 'premise: B was read');
             expect(mark, findsNothing);
             expect(said(t), 'Notifications');
@@ -297,12 +385,13 @@ void main() {
         final b = server.holds[_readB] = Completer<void>();
         await mount(t);
         await switchNoFrame(t, memberB);
+        await until(t, () => server.calls.contains(_readB), "B's read");
         a.complete();
-        await settle(t);
+        await until(t, () => server.answered.contains(_readA), "A's answer");
         expect(mark, findsNothing);
         expect(said(t), 'Notifications');
         b.complete();
-        await settle(t);
+        await until(t, () => server.answered.contains(_readB), "B's answer");
         expect(said(t), 'Notifications, 5 unread');
         handle.dispose();
         await close(t);
@@ -315,9 +404,10 @@ void main() {
         final a = server.holds[_readA] = Completer<void>();
         await mount(t);
         await switchNoFrame(t, memberB);
-        await settle(t);
+        await until(t, () => server.answered.contains(_readB), "B's answer");
+        expect(said(t), 'Notifications, 5 unread', reason: 'premise');
         a.complete();
-        await settle(t);
+        await until(t, () => server.answered.contains(_readA), "A's answer");
         expect(said(t), 'Notifications, 5 unread');
         handle.dispose();
         await close(t);
@@ -329,13 +419,16 @@ void main() {
         server.unread[memberA] = 3;
         await mount(t);
         await t.runAsync(signOut);
-        await settle(t);
+        await until(t, () => container.read(currentUserProvider) == null,
+            'the sign-out');
         expect(Supabase.instance.client.auth.currentUser, isNull,
             reason: 'premise');
         expect(mark, findsNothing);
         expect(said(t), 'Notifications');
+        int answers() => server.answered.where((k) => k == _readA).length;
+        final n = answers();
         await switchNoFrame(t, memberA);
-        await settle(t);
+        await until(t, () => answers() > n, "A's answer");
         expect(said(t), 'Notifications, 3 unread');
         handle.dispose();
         await close(t);
@@ -356,16 +449,19 @@ void main() {
           final events = <AuthChangeEvent>[];
           final sub = Supabase.instance.client.auth.onAuthStateChange
               .listen((s) => events.add(s.event));
-          final before = server.calls.where((c) => c == _readA).length;
+          final before = server.calls.length;
           final hold = Completer<void>();
           if (held) server.holds[_readA] = hold;
           if (fails) server.fails.add(_readA);
           await t.runAsync(refreshSession);
-          await settle(t);
+          await until(t, () => events.contains(AuthChangeEvent.tokenRefreshed),
+              'the token refresh');
           expect(events, contains(AuthChangeEvent.tokenRefreshed),
               reason: 'premise: the event really arrived');
-          expect(server.calls.where((c) => c == _readA).length,
-              greaterThan(before), reason: 'premise: re-read');
+          // Here it re-reads A's count (held, failed or answered as named);
+          // with FL-60c it reads nothing. Either way, only A's.
+          expect(server.calls.skip(before), everyElement(_readA),
+              reason: "premise: nothing but A's is read");
           expect(mark, findsOneWidget);
           expect(said(t), 'Notifications, 3 unread');
           hold.complete();
@@ -380,18 +476,22 @@ void main() {
         final handle = t.ensureSemantics();
         server.unread[memberA] = 3;
         await mount(t);
+        int answers() => server.answered.where((k) => k == _readA).length;
+        var n = answers();
         server.unread[memberA] = 4;
         live.add(const []);
-        await settle(t);
+        await until(t, () => answers() > n, 'the re-count');
         expect(said(t), 'Notifications, 4 unread');
         server.fails.add(_readA);
+        n = answers();
         container.invalidate(unreadCountProvider);
-        await settle(t);
+        await until(t, () => answers() > n, 'the failed re-count');
         expect(said(t), 'Notifications, 4 unread');
         server.fails.clear();
         server.unread[memberA] = 0;
+        n = answers();
         container.invalidate(unreadCountProvider);
-        await settle(t);
+        await until(t, () => answers() > n, 'the re-count');
         expect(said(t), 'Notifications, none unread');
         expect(mark, findsNothing);
         handle.dispose();

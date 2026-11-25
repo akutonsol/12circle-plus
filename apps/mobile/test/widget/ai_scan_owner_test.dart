@@ -11,6 +11,7 @@ import 'package:supabase_flutter/supabase_flutter.dart' show AuthChangeEvent, Su
 
 import '../support/fake_image_picker.dart';
 import '../support/pump_until.dart';
+import '../support/pump_until_quiet.dart';
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-61 round 2 · Log Meal › Scan: whose meal it is, and what the notice
@@ -41,8 +42,20 @@ class _Server extends TwoMemberPostgrest {
   /// `<who>: photo` or `<who>: <description>`, one per analysis asked for.
   final analyses = <String>[];
 
+  /// Requests taken and not yet answered.
+  int busy = 0;
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    busy++;
+    try {
+      return await _send(request);
+    } finally {
+      busy--;
+    }
+  }
+
+  Future<http.StreamedResponse> _send(http.BaseRequest request) async {
     if (!request.url.path.endsWith('/analyze-food-image')) {
       return super.send(request);
     }
@@ -72,6 +85,7 @@ void main() {
     server
       ..reset()
       ..result = _result
+      ..busy = 0
       ..analyses.clear();
     picker.reset();
     reported.clear();
@@ -98,11 +112,13 @@ void main() {
     await t.pump();
   }
 
-  Future<void> settle(WidgetTester t) async {
-    for (var i = 0; i < 8; i++) {
-      await t.pump(const Duration(milliseconds: 50));
-    }
-  }
+  /// Until nothing is on its way to the server, then the frames that draw
+  /// what came back (round 3: polled, not a fixed budget).
+  Future<void> settle(WidgetTester t) => pumpUntilQuiet(
+      t, () => server.busy == 0,
+      what: 'the server to be quiet',
+      calm: 8,
+      step: const Duration(milliseconds: 50));
 
   Future<void> waitFor(WidgetTester t, String text) => pumpUntil(
       t, () => find.text(text).evaluate().isNotEmpty, what: '"$text"');

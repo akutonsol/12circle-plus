@@ -90,7 +90,9 @@ class _AppHeader extends StatelessWidget {
     final top = MediaQuery.of(context).padding.top;
     return Container(
       // The right margin is 20: the last 18 of it are the bell's own target.
-      padding: EdgeInsets.only(left: showBackButton ? 8 : 20, right: 2, top: top),
+      // The left margin is 20 before the avatar; 2 of it are the avatar's
+      // own target, as the bell's is on the right.
+      padding: EdgeInsets.only(left: showBackButton ? 8 : 18, right: 2, top: top),
       // Grows with large text, which was cut off at a fixed 64 (P0-FL-61).
       constraints: BoxConstraints(minHeight: top + 64),
       decoration: BoxDecoration(
@@ -114,11 +116,24 @@ class _AppHeader extends StatelessWidget {
               },
             )
           else
-            GestureDetector(
+            // A named button with a 44px target; the 40px avatar is drawn
+            // where it was, 2 into the target on each side (P0-FL-61 r3).
+            Semantics(
+              container: true,
+              button: true,
+              label: 'Profile',
+              excludeSemantics: true,
               onTap: () => context.go('/profile'),
-              child: _UserAvatar(avatarUrl: avatarUrl),
+              child: GestureDetector(
+                onTap: () => context.go('/profile'),
+                behavior: HitTestBehavior.opaque,
+                child: SizedBox.square(
+                  dimension: 44,
+                  child: Center(child: _UserAvatar(avatarUrl: avatarUrl)),
+                ),
+              ),
             ),
-          const SizedBox(width: 12),
+          SizedBox(width: showBackButton ? 12 : 10),
           Expanded(
             // Off the header's edges once the text is what makes it grow.
             child: Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: title != null
