@@ -326,7 +326,11 @@ void main() {
           default:
             t
                 .widget<BarcodeScanView>(find.byType(BarcodeScanView))
-                .onFound({'name': "A's curry", 'calories': 1.0});
+                // A whole product: one with a value missing is not logged.
+                .onFound({
+              'name': "A's curry", 'calories': 1.0, 'protein': 0.0,
+              'carbs': 0.0, 'fat': 0.0,
+            });
         }
         await settle(t, 2);
         return hold;

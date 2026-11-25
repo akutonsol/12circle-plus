@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'models/food_model.dart';
 import '../../../core/observability/app_failure.dart';
@@ -32,6 +33,14 @@ class NutritionService {
     connectTimeout: const Duration(seconds: 8),
     receiveTimeout: const Duration(seconds: 8),
   ));
+
+  /// For tests: the food database, without its network.
+  @visibleForTesting
+  static Dio get openFoodFacts => _off;
+
+  /// A value as given; null when it was not (never 0, which is an answer).
+  static double? _known(Object? v) =>
+      v is num && v.isFinite ? v.toDouble() : null;
 
   void addCustomFood(Food food) => _customFoods.add(food);
 
@@ -249,7 +258,8 @@ class NutritionService {
 
   /// Barcode → nutrition. Checks the local `foods` table first, then falls back
   /// to OpenFoodFacts (and caches the hit). Returns {name, calories, protein,
-  /// carbs, fat} per 100g, or null if not found anywhere.
+  /// carbs, fat} per 100g, or null if not found anywhere. A value the product
+  /// does not give is null: it was 0, and was logged (and cached) as 0.
   Future<Map<String, dynamic>?> lookupBarcode(String code) async {
     final searcher = _supabase.auth.currentUser?.id;
     try {
@@ -261,10 +271,10 @@ class NutritionService {
       if (row != null) {
         return {
           'name': row['name'],
-          'calories': (row['calories_per_100g'] as num?)?.toDouble() ?? 0,
-          'protein': (row['protein_per_100g'] as num?)?.toDouble() ?? 0,
-          'carbs': (row['carbs_per_100g'] as num?)?.toDouble() ?? 0,
-          'fat': (row['fat_per_100g'] as num?)?.toDouble() ?? 0,
+          'calories': _known(row['calories_per_100g']),
+          'protein': _known(row['protein_per_100g']),
+          'carbs': _known(row['carbs_per_100g']),
+          'fat': _known(row['fat_per_100g']),
         };
       }
     } catch (_) {}
@@ -276,13 +286,12 @@ class NutritionService {
       if (data is Map && data['status'] == 1 && data['product'] is Map) {
         final p = data['product'] as Map;
         final n = (p['nutriments'] as Map?) ?? {};
-        double nv(String k) => (n[k] as num?)?.toDouble() ?? 0;
         final name = (p['product_name'] as String?)?.trim();
         if (name == null || name.isEmpty) return null;
-        final cal = nv('energy-kcal_100g');
-        final protein = nv('proteins_100g');
-        final carbs = nv('carbohydrates_100g');
-        final fat = nv('fat_100g');
+        final cal = _known(n['energy-kcal_100g']);
+        final protein = _known(n['proteins_100g']);
+        final carbs = _known(n['carbohydrates_100g']);
+        final fat = _known(n['fat_100g']);
         // Cache for instant/offline future lookups.
         _cacheFoods(searcher, [{
           'barcode': code, 'name': name,
@@ -336,6 +345,7 @@ class NutritionService {
       final data = res.data is String ? jsonDecode(res.data as String) : res.data;
       final products = (data is Map ? data['products'] as List? : null) ?? const [];
       final out = <Food>[];
+      final cache = <Map<String, dynamic>>[];
       for (final p in products) {
         if (p is! Map) continue;
         final name = (p['product_name'] as String?)?.trim();
@@ -354,13 +364,19 @@ class NutritionService {
           servingSize: 100, servingUnit: 'g',
           barcode: p['code'] as String?,
         ));
+        // As given: a barcode scanned later reads these, and a value not given
+        // is not 0.
+        final f = out.last;
+        cache.add({
+          'barcode': f.barcode, 'name': f.name, 'brand': f.brand,
+          'calories_per_100g': f.calories,
+          'protein_per_100g': _known(n['proteins_100g']),
+          'carbs_per_100g': _known(n['carbohydrates_100g']),
+          'fat_per_100g': _known(n['fat_100g']),
+        });
       }
       // Cache the barcoded results for instant future lookups.
-      _cacheFoods(searcher, out.map((f) => {
-        'barcode': f.barcode, 'name': f.name, 'brand': f.brand,
-        'calories_per_100g': f.calories, 'protein_per_100g': f.protein,
-        'carbs_per_100g': f.carbs, 'fat_per_100g': f.fat,
-      }).toList());
+      _cacheFoods(searcher, cache);
       return out;
     } catch (_) {
       return [];

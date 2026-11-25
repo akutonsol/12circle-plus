@@ -744,6 +744,10 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
   Food?  _selected;
   String _mealType  = 'breakfast';
   bool   _saving    = false;
+
+  /// The product last scanned, when it does not give all its values: not
+  /// logged (a value not given is not 0), said, and offered for manual entry.
+  ({Food known, String missing})? _incomplete;
   List<Food> _filtered = [];
   bool   _searchingOnline = false;
   Timer? _debounce;
@@ -767,7 +771,7 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
   void _followAccount() {
     if (!mounted || _signedIn == _owner) return;
     _debounce?.cancel();
-    setState(() => _selected = null);
+    setState(() => _selected = _incomplete = null);
     final route = ModalRoute.of(context);
     final navigator = route?.navigator;
     if (route == null || navigator == null || !route.isActive) return;
@@ -922,12 +926,36 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
     // One tap, one meal (QAX-COR-05): _saving is set synchronously below, so a
     // second tap while the first save is in flight is ignored.
     if (_saving || !_stillOwner('meal')) return;
-    setState(() => _saving = true);
     final name    = food['name'] as String? ?? 'Scanned Food';
-    final cal     = (food['calories'] as num?)?.toDouble() ?? 0;
-    final protein = (food['protein'] as num?)?.toDouble() ?? 0;
-    final carbs   = (food['carbs'] as num?)?.toDouble()  ?? 0;
-    final fat     = (food['fat'] as num?)?.toDouble()    ?? 0;
+    double? given(String key) => (food[key] as num?)?.toDouble();
+    final cal     = given('calories');
+    final protein = given('protein');
+    final carbs   = given('carbs');
+    final fat     = given('fat');
+    // A value the product does not give was logged as 0: a 0 kcal meal.
+    if (cal == null || protein == null || carbs == null || fat == null) {
+      final missing = [
+        if (cal == null) 'calories',
+        if (protein == null) 'protein',
+        if (carbs == null) 'carbs',
+        if (fat == null) 'fat',
+      ];
+      reportError('nutrition.barcode.incomplete',
+          StateError('the product gives no ${missing.join(', ')}'));
+      setState(() => _incomplete = (
+            known: Food(
+                id: 'barcode', name: name, brand: 'Custom',
+                calories: cal ?? double.nan, protein: protein ?? double.nan,
+                carbs: carbs ?? double.nan, fat: fat ?? double.nan,
+                fiber: 0, sugar: 0, servingSize: 100, servingUnit: 'g'),
+            missing: missing.length == 1
+                ? missing.single
+                : '${missing.sublist(0, missing.length - 1).join(', ')} and '
+                    '${missing.last}',
+          ));
+      return;
+    }
+    setState(() => _saving = true);
     try {
       await _svc.logMeal(
         mealType:    _mealType,
@@ -960,18 +988,26 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
     }
   }
 
-  void _showAddCustomSheet() {
+  /// [scanned]: a product to complete (its values not given are NaN). It is
+  /// picked once they are, ready to be logged.
+  void _showAddCustomSheet({Food? scanned}) {
+    if (!_stillOwner('custom food')) return;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _CustomFoodSheet(
         mealType: _mealType,
+        scanned: scanned,
         onSaved: (f) {
           if (!mounted || !_stillOwner('custom food')) return;
           setState(() {
             _svc.addCustomFood(f);
             _filtered = _svc.getSampleFoods();
+            if (scanned == null) return;
+            _incomplete = null;
+            _inputMode = 'manual';
+            _selected = f;
           });
         }));
   }
@@ -1142,7 +1178,15 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
             // ── Body ────────────────────────────────────────────────
             Expanded(
               child: _inputMode == 'barcode'
-                ? BarcodeScanView(onFound: _logFromBarcode)
+                ? _incomplete != null
+                  ? _IncompleteProduct(
+                      name: _incomplete!.known.name,
+                      missing: _incomplete!.missing,
+                      onManual: () =>
+                          _showAddCustomSheet(scanned: _incomplete?.known),
+                      // A new scanner: the one before waits for its meal.
+                      onScanAgain: () => setState(() => _incomplete = null))
+                  : BarcodeScanView(onFound: _logFromBarcode)
                 : _inputMode == 'ai_scan'
                 ? AiScanView(
                     onAccept: _logFromScan,
@@ -1176,6 +1220,39 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
                     })),
           ])),
       ])));
+}
+
+// ── A scanned product that does not give all its values ────────────────────
+class _IncompleteProduct extends StatelessWidget {
+  final String name, missing;
+  final VoidCallback onManual, onScanAgain;
+  const _IncompleteProduct({required this.name, required this.missing,
+    required this.onManual, required this.onScanAgain});
+
+  @override
+  Widget build(BuildContext context) => SingleChildScrollView(
+    padding: const EdgeInsets.all(24),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Semantics(
+        liveRegion: true,
+        container: true,
+        child: Text(
+          "Couldn't read the $missing for $name — add it manually, or scan it "
+          'again. Nothing was logged.',
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: _white, fontSize: 15, height: 1.4))),
+      const SizedBox(height: 20),
+      ElevatedButton(
+        onPressed: onManual,
+        style: ElevatedButton.styleFrom(minimumSize: const Size(44, 48)),
+        child: const Text('Add manually', textAlign: TextAlign.center)),
+      const SizedBox(height: 8),
+      TextButton(
+        onPressed: onScanAgain,
+        style: TextButton.styleFrom(
+          minimumSize: const Size(44, 48), foregroundColor: _brand),
+        child: const Text('Scan again', textAlign: TextAlign.center)),
+    ]));
 }
 
 // ── Food list row ──────────────────────────────────────────────────────────
@@ -1436,19 +1513,32 @@ class _MacroCell extends StatelessWidget {
 // ── Custom food entry sheet ────────────────────────────────────────────────
 class _CustomFoodSheet extends StatefulWidget {
   final String mealType;
+
+  /// A scanned product to complete: the values it does not give (NaN) are
+  /// asked for. Left empty they would be saved as 0.
+  final Food? scanned;
   final void Function(Food) onSaved;
-  const _CustomFoodSheet({required this.mealType, required this.onSaved});
+  const _CustomFoodSheet(
+    {required this.mealType, required this.onSaved, this.scanned});
   @override
   State<_CustomFoodSheet> createState() => _CustomFoodSheetState();
 }
 
 class _CustomFoodSheetState extends State<_CustomFoodSheet> {
-  final _name     = TextEditingController();
-  final _cal      = TextEditingController();
-  final _protein  = TextEditingController();
-  final _carbs    = TextEditingController();
-  final _fat      = TextEditingController();
+  late final _name     = TextEditingController(text: widget.scanned?.name);
+  late final _cal      = _value(widget.scanned?.calories);
+  late final _protein  = _value(widget.scanned?.protein);
+  late final _carbs    = _value(widget.scanned?.carbs);
+  late final _fat      = _value(widget.scanned?.fat);
   final _serving  = TextEditingController(text: '100');
+
+  /// What is still to be entered for a scanned product.
+  String? _asked;
+
+  static TextEditingController _value(double? v) => TextEditingController(
+      text: v == null || v.isNaN
+          ? ''
+          : v == v.roundToDouble() ? '${v.toInt()}' : '$v');
 
   @override
   void dispose() {
@@ -1461,6 +1551,17 @@ class _CustomFoodSheetState extends State<_CustomFoodSheet> {
   void _save() {
     final n = _name.text.trim();
     if (n.isEmpty) return;
+    if (widget.scanned != null) {
+      final asked = [
+        for (final (field, label) in [
+          (_cal, 'calories'), (_protein, 'protein'),
+          (_carbs, 'carbs'), (_fat, 'fat'),
+        ])
+          if (double.tryParse(field.text.trim()) == null) label,
+      ];
+      setState(() => _asked = asked.isEmpty ? null : asked.join(', '));
+      if (asked.isNotEmpty) return;
+    }
     final food = Food(
       id:          'custom_${DateTime.now().millisecondsSinceEpoch}',
       name:        n,
@@ -1509,6 +1610,15 @@ class _CustomFoodSheetState extends State<_CustomFoodSheet> {
           Expanded(child: _CustomField(_fat,     'Fat (g)',     TextInputType.number)),
         ]),
         const SizedBox(height: 20),
+        if (_asked != null) ...[
+          Semantics(
+            liveRegion: true,
+            container: true,
+            child: Text('Enter the $_asked — 0 if there is none.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Color(0xFFFFB4AB), fontSize: 13))),
+          const SizedBox(height: 12),
+        ],
         GestureDetector(
           onTap: _save,
           child: Container(
