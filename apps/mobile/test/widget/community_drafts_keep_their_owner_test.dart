@@ -10,7 +10,9 @@
 // AccountScope. The request log says whose token wrote which row.
 //
 // HOW TO SEE IT FAIL: put back 5f8b7f3's community_screen, create_post_sheet,
-// post_card and live_community_service. The POSITIVE CONTROLs pass there.
+// post_card and live_community_service. The POSITIVE CONTROLs pass there, and
+// so do "a second tap" and "A's reaction is stored after B signed in" (they
+// guard what is already right).
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -40,6 +42,7 @@ void main() {
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
     await initTwoMemberSupabase(server);
+    watchAuthChanges();
   });
 
   setUp(() async {
@@ -143,7 +146,22 @@ void main() {
       });
     }
 
-    testWidgets("submitted the instant the account changes, B's own feed "
+    testWidgets('submitted the instant the account changes: nothing is sent, '
+        'recorded, nothing is said', (t) async {
+      await open(t);
+      await writePost(t);
+      final press = t.widget<ElevatedButton>(submit()).onPressed!;
+      await t.runAsync(() => switchAnd(memberB, press));
+      await settle(t);
+      expect(server.writes(), isEmpty);
+      expect(origins(), contains('CreatePostSheet.identity'));
+      expect(origins(), isNot(contains('CreatePostSheet.post')),
+          reason: 'it went on to the feed');
+      expect(find.textContaining("Couldn't"), findsNothing);
+      await close(t);
+    });
+
+    testWidgets("the screen's own check, B's feed "
         'already read: nothing is sent, recorded', (t) async {
       await open(t);
       await writePost(t);
@@ -364,6 +382,22 @@ void main() {
       expect(find.text(_comment), findsNothing);
       expect(haptics, isNot(contains(commentDone)));
       expect(find.textContaining("Couldn't"), findsNothing);
+      await close(t);
+    });
+
+    testWidgets('sent the instant the account changes: nothing is sent, '
+        'recorded, cleared', (t) async {
+      await open(t);
+      await write(t);
+      final send = t
+          .widget<IconButton>(find.widgetWithIcon(IconButton, Icons.send))
+          .onPressed!;
+      await t.runAsync(() => switchAnd(memberB, send));
+      await settle(t);
+      expect(server.writes(), isEmpty);
+      expect(origins(), contains('PostCard.identity'));
+      expect(origins(), isNot(contains('PostCard.comment')));
+      expect(find.text(_comment), findsNothing);
       await close(t);
     });
 

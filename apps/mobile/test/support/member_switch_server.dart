@@ -28,6 +28,26 @@ Future<void> refreshSession() async {
   }
 }
 
+/// Signs [uid] in (null: out) and runs [act] the instant the auth client says
+/// so: BEFORE any screen's own listener has heard it, so [act] meets only the
+/// guard inside what it calls. [watchAuthChanges] must come first.
+Future<void> switchAnd(String? uid, void Function() act) async {
+  _atChange = act;
+  await (uid == null ? signOut() : signInAs(uid));
+  await Future<void>.delayed(const Duration(milliseconds: 20));
+  if (_atChange != null) throw StateError('no auth change was heard');
+}
+
+void Function()? _atChange;
+
+/// Once, in setUpAll: events reach listeners in the order they were made.
+void watchAuthChanges() =>
+    Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+      final act = _atChange;
+      _atChange = null;
+      act?.call();
+    });
+
 /// One request the fake server saw, with the member whose token it carried.
 class SeenRequest {
   SeenRequest(this.method, this.target, this.who, this.query, this.body);

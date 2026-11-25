@@ -210,18 +210,18 @@ void main() {
 
     testWidgets("A's challenges are not B's: B has none, and saves none",
         (t) async {
-      members();
-      server.rows['user_profiles']![memberA]!.single['biggest_challenges'] = [
-        'consistency', 'motivation',
-      ];
+      members(b: _finalPage);
+      server.rows['user_profiles']![memberA]!.single['biggest_challenges'] =
+          'consistency,motivation';
       await open(t);
+      expect(find.text('Alice'), findsOneWidget, reason: 'premise: A is read');
       await switchTo(t, memberB);
       await settle(t);
-      await t.tap(find.text('Continue'));
+      await t.tap(find.text('Enter 12 Circle'));
       await settle(t);
-      final w = server.writes('user_profiles').last;
-      expect((w.who, w.query['id']), (memberB, 'eq.$memberB'));
-      expect('${w.body}', isNot(contains('consistency')));
+      final w = server.writes('user_profiles').single;
+      expect((w.who, w.row['id']), (memberB, memberB));
+      expect(w.row['biggest_challenges'], '');
       await close(t);
     });
 

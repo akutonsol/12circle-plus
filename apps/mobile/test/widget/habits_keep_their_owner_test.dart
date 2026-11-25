@@ -9,7 +9,10 @@
 // AccountScope. The request log says whose token wrote which row.
 //
 // HOW TO SEE IT FAIL: put back 5f8b7f3's habit_provider, habit_card and
-// habit_screen; every test but the POSITIVE CONTROLs fails.
+// habit_screen; every test fails but the POSITIVE CONTROLs and these, which
+// hold there and fail on a82f993: "A's value answers after B signed in", "A's
+// tick fails after B signed in". ("nobody is signed in" with the add sheet
+// holds on both: addCustomHabit sends nothing signed out.)
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -39,6 +42,7 @@ void main() {
             const MethodChannel('dexterous.com/flutter/local_notifications'),
             (call) async => call.method == 'initialize' ? true : null);
     await initTwoMemberSupabase(server);
+    watchAuthChanges();
   });
 
   setUp(() async {
@@ -216,10 +220,12 @@ void main() {
       await t.runAsync(bLoaded);
       server.seen.clear();
       final slider = t.widget<Slider>(find.byType(Slider));
+      reported.clear();
       slider.onChanged!(4);
       slider.onChangeEnd!(8);
       await settle(t);
       expect(server.writes(), isEmpty);
+      expect(origins(), ['HabitCard.identity'], reason: 'refused at the card');
       expect(find.byType(SnackBar), findsNothing);
       await close(t);
     });
@@ -345,6 +351,34 @@ void main() {
         await close(t);
       });
     }
+
+    testWidgets('saved the instant the account changes: nothing is sent, '
+        'recorded', (t) async {
+      await openSheet(t);
+      final save = t
+          .widget<ElevatedButton>(
+              find.widgetWithText(ElevatedButton, 'Create Habit'))
+          .onPressed!;
+      await t.runAsync(() => switchAnd(memberB, save));
+      await settle(t);
+      expect(server.writes('client_habits'), isEmpty);
+      expect(origins(), contains('AddHabitSheet.identity'));
+      await close(t);
+    });
+
+    testWidgets('opened, and switched before its first frame: never drawn for '
+        'B, and it goes', (t) async {
+      await openSheet(t);
+      t.state<NavigatorState>(find.byType(Navigator).first).pop();
+      await settle(t);
+      await t.tap(find.byIcon(Icons.add).first);
+      await t.runAsync(() => signInAs(memberB));
+      await t.pump();
+      expect(find.text('Create Habit'), findsNothing);
+      await settle(t);
+      expect(find.byType(ModalBarrier), findsOneWidget, reason: 'only the page');
+      await close(t);
+    });
 
     testWidgets('it closes on a switch', (t) async {
       await openSheet(t);
