@@ -10,9 +10,10 @@
 //
 // HOW TO SEE IT FAIL: put back 3a90049's settings_screen and
 // coaching_mode_provider; every test but the POSITIVE CONTROL and "invalidated
-// before" fails. (Round 4's "its container disposed" fails on e0736a6: an
-// uncaught StateError. The same member's message is not shown through a
-// messenger that is gone.)
+// before" fails. (Round 4's "its container disposed" pins what riverpod 2.6.1
+// does: invalidate is a no-op there. Its paid coach fails on e0736a6: the
+// message was shown through a messenger that is gone, and the throw recorded as
+// a coaching that could not be ended.)
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -264,25 +265,35 @@ void main() {
     });
   }
 
-  for (final fails in [false, true]) {
+  for (final (fails, paid) in [(false, false), (true, false), (false, true)]) {
     testWidgets(
         'the same member signed out and in again while the coaching is ended'
-        '${fails ? ' (and it fails)' : ''}, its container disposed: nothing is '
-        'thrown', (t) async {
+        '${fails ? ' (and it fails)' : paid ? ' (paid: later)' : ''}, its '
+        'container disposed: nothing is thrown, or recorded that is not so',
+        (t) async {
+      if (paid) {
+        server.rows['subscriptions'] = {
+          memberA: [{'id': 'sub-a', 'current_period_end': '2026-12-20T00:00:00Z'}],
+        };
+        server.functions['cancel-subscription'] = {
+          'ok': true, 'endsAt': '2026-12-20T00:00:00Z',
+        };
+      }
       await open(t);
       await t.tap(find.text('Coach Guided'));
       await settle(t);
       await t.tap(find.text('Self Guided'));
       await settle(t);
-      const key = 'PATCH coach_client_relationships:$memberA';
+      final target =
+          paid ? 'cancel-subscription' : 'coach_client_relationships';
+      final key = '${paid ? 'POST' : 'PATCH'} $target:$memberA';
       final hold = server.holds[key] = Completer();
       if (fails) server.fails.add(key);
       await t.tap(find.text('Apply'));
       await settle(t);
       await t.tap(find.text('End & switch'));
       await settle(t, 4);
-      expect(server.writes('coach_client_relationships'), hasLength(1),
-          reason: 'premise');
+      expect(server.writes(target), hasLength(1), reason: 'premise');
       await t.runAsync(signOut);
       await switchTo(t, memberA);
       await t.pumpWidget(const SizedBox()); // as AccountScope replaces it

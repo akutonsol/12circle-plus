@@ -2,14 +2,16 @@
 //
 // Action Center drew whatever the provider held: riverpod 2.6.1 does not notify
 // a refresh in flight that becomes the next member's read, so A's tasks stayed
-// on B's screen until something else redrew it. Its tile also re-read through a
-// container that may be gone by then.
+// on B's screen until something else redrew it. Its tile also spoke through a
+// messenger that may be gone by then.
 //
 // The real screen, no PaywallGate, no AccountScope; real auth transitions.
 //
 // HOW TO SEE IT FAIL: put back e0736a6's action_item_provider and
-// action_center_screen: every test but those marked "(old too)" fails. (On
-// a82f993 the same, and the tile's own identity tests besides.)
+// action_center_screen: "frames pumped", "a token refresh", "one that fails
+// keeps it too" and "(and it fails), the tile's container disposed" fail. The
+// others pin what held there by riverpod's notifications alone (and, for the
+// container, that invalidate is a no-op on a disposed one).
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';

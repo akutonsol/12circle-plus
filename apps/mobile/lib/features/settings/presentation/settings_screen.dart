@@ -798,17 +798,6 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
     return false;
   }
 
-  static void _rereadCoaches(ProviderContainer container) {
-    try {
-      container.invalidate(myCoachesProvider);
-      container.invalidate(assignedCoachProvider);
-      container.invalidate(clientRelationshipProvider);
-    } on StateError {
-      // Disposed (the same member signed out and in again meanwhile): nothing
-      // of it is drawn any more, and its successor reads for itself.
-    }
-  }
-
   Future<void> _apply() async {
     if (!_stillOwner('coaching mode')) return;
     final messenger = ScaffoldMessenger.of(context);
@@ -858,7 +847,9 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
           reportError('CoachingModeSheet.apply.cancelCoach', e, st);
           if (!_stillOwner('end coaching')) return;
           // One of several may have ended: re-read even if the sheet is gone.
-          _rereadCoaches(container);
+          container.invalidate(myCoachesProvider);
+          container.invalidate(assignedCoachProvider);
+          container.invalidate(clientRelationshipProvider);
           if (!mounted) return;
           setState(() => _saving = false);
           messenger.showSnackBar(const SnackBar(
@@ -868,7 +859,9 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
         // Ended: the coach lists are re-read even if the sheet was swiped away
         // meanwhile (they are the page's, not the sheet's).
         if (!_stillOwner('coaching mode')) return;
-        _rereadCoaches(container);
+        container.invalidate(myCoachesProvider);
+        container.invalidate(assignedCoachProvider);
+        container.invalidate(clientRelationshipProvider);
         if (!mounted) return;
       }
     }
@@ -890,7 +883,9 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
     if (!mounted || !_stillOwner('coaching mode')) return;
     // Refresh coach-dependent views so a mode change is reflected immediately
     // (e.g. the profile's My Coach section), even if the prompt path didn't run.
-    _rereadCoaches(container);
+    container.invalidate(assignedCoachProvider);
+    container.invalidate(clientRelationshipProvider);
+    container.invalidate(myCoachesProvider);
     Navigator.pop(context);
     if (_selected == CoachingMode.coachGuided) {
       context.push('/coach-marketplace');

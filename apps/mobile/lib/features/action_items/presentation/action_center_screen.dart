@@ -264,12 +264,9 @@ class _ActionTile extends ConsumerWidget {
     }
     // Another member's by now: theirs to read, and nothing to say to them.
     if (auth.currentUser?.id != owner) return;
-    try {
-      container.invalidate(myActionItemsProvider);
-    } on StateError {
-      // Disposed (the same member signed out and in again meanwhile): nothing
-      // of it is drawn any more, and its successor reads for itself.
-    }
+    // (A no-op on a container disposed meanwhile: the same member signed out
+    // and in again. Its messenger is gone too.)
+    container.invalidate(myActionItemsProvider);
     if (failed != null && messenger.mounted) {
       messenger.showSnackBar(SnackBar(content: Text(failed)));
     }

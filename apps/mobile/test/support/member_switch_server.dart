@@ -86,6 +86,9 @@ class MemberSwitchServer extends TwoMemberPostgrest {
   /// Keyed `METHOD target:who`: these never reach the server.
   final offline = <String>{};
 
+  /// What an Edge Function answers, by its name.
+  final functions = <String, Object>{};
+
   /// Storage objects that exist (`uid/front.jpg`).
   final objects = <String>{};
 
@@ -104,6 +107,7 @@ class MemberSwitchServer extends TwoMemberPostgrest {
     rows.clear();
     zeroRows.clear();
     offline.clear();
+    functions.clear();
     objects.clear();
     unsignable.clear();
     holdUploadsOf = null;
@@ -177,6 +181,8 @@ class MemberSwitchServer extends TwoMemberPostgrest {
   }
 
   (Object?, int) _rest(SeenRequest r, http.BaseRequest request) {
+    final function = functions[r.target];
+    if (function != null) return (function, 200);
     final single =
         request.headers['Accept']?.contains('vnd.pgrst.object') ?? false;
     if (r.method == 'GET') {

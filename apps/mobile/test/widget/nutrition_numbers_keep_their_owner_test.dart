@@ -10,10 +10,10 @@
 // The real screens, with and without the real PaywallGate; real auth
 // transitions; no AccountScope.
 //
-// HOW TO SEE IT FAIL: put back e0736a6's nutrition_provider, nutrition_screen
-// and meals_dashboard_screen (a82f993's too, with its food_added_dialog and
-// nutrition_service). What passes there: the POSITIVE / NEGATIVE CONTROLs
-// marked "(old too)" and "A signed out" behind the gate.
+// HOW TO SEE IT FAIL: put back e0736a6's nutrition_provider, nutrition_screen,
+// meals_dashboard_screen and action_item_provider + action_center_screen (they
+// share `readForMember`). Only the controls marked "(old too)" and "A signed
+// out" pass there.
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -270,7 +270,7 @@ void main() {
         await close(t);
       });
 
-      testWidgets('$name, $where: A signed out: nothing of A\'s', (t) async {
+      testWidgets("$name, $where: A signed out: nothing of A's", (t) async {
         await open(t, screen, gate: gate);
         await t.runAsync(signOut);
         await settle(t);
