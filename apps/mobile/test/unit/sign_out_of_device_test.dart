@@ -22,6 +22,9 @@ GoTrueClient get _auth => Supabase.instance.client.auth;
 
 Future<Object?> _signOut() => signOutOfDevice('test', _auth.signOut);
 
+/// What supabase_flutter stores follows the event, a turn later.
+Future<void> _landed() => Future<void>.delayed(Duration.zero);
+
 void main() {
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
@@ -37,16 +40,19 @@ void main() {
     setFailureSink(_failures.add);
     addTearDown(resetFailureSink);
     await signInAs(acctA);
+    await _landed();
     expect(_stored.who, (acctA, acctA));
   });
 
   tearDown(() async {
+    _server.reset();
     _store.refuseRemoval = false;
     await signOut();
   });
 
   test('control: signed out, nothing recorded', () async {
     expect(await _signOut(), isNull);
+    await _landed();
     expect(_stored.stored, isNull);
     expect(_failures, isEmpty);
   });
@@ -54,6 +60,7 @@ void main() {
   test('the server refuses: signed out all the same, recorded', () async {
     _server.fails['POST logout'] = 500;
     expect(await _signOut(), isNull);
+    await _landed();
     expect((_auth.currentSession, _stored.stored), (null, null));
     expect(_failures, hasLength(1));
   });
@@ -67,6 +74,7 @@ void main() {
     await signInAs(acctB);
     hold.complete();
     expect(await out, isNull);
+    await _landed();
     expect(_auth.currentUser?.id, acctB);
     expect(_stored.who, (acctB, acctB));
   });
@@ -85,6 +93,7 @@ void main() {
     _store.refuseRemoval = true;
     _store.onRefused = () => _store.refuseRemoval = false;
     expect(await _signOut(), isNull);
+    await _landed();
     expect(_stored.stored, isNull);
   });
 
