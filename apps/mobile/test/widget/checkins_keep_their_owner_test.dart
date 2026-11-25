@@ -621,7 +621,7 @@ void main() {
       await settle(t);
       expect(find.textContaining('Amara Osei'), findsOneWidget);
       expect(text(t, 0), 'feedback by A');
-      expect(find.textContaining("couldn't load your review queue"),
+      expect(find.textContaining("ouldn't load your review queue"),
           findsOneWidget);
       await switchTo(t, memberB);
       server.fails.add('GET weekly_checkins:$memberB');

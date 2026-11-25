@@ -144,9 +144,11 @@ void main() {
       server.fails.add('GET weekly_checkins:$memberA');
       container.invalidate(coachSubmittedCheckinsProvider);
       await settleReal(t);
-      const header = "Week 47 · 1 of 2 · couldn't load your review queue";
+      // Said once, by the card (UX round 2, LOW 1): not again in the header.
+      const header = 'Week 47 · 1 of 2';
       formOfA(t, header: header);
-      expect(find.text("Couldn't load your review queue"), findsOneWidget);
+      expect(find.textContaining("ouldn't load your review queue"),
+          findsOneWidget);
       expect(liveRegion("Couldn't load your review queue"), findsOneWidget);
       final retry = find.widgetWithText(TextButton, 'Try again');
       expect(t.getSize(retry).height, greaterThanOrEqualTo(44));

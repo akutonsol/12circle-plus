@@ -296,7 +296,8 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining("couldn't load your review queue"), findsOneWidget);
+    // P0-FL-59c: said once — by the failure card, not again in the header.
+    expect(find.textContaining("ouldn't load your review queue"), findsOneWidget);
     // The week is still known, so it is still shown.
     expect(find.textContaining('Week 14'), findsOneWidget);
     // And nothing promises a next it cannot reach.

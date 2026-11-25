@@ -157,10 +157,11 @@ void main() {
       });
     }
 
+    late GoRouter router;
     Future<void> openInbox(WidgetTester t) async {
       tallView(t);
       newContainer();
-      final router = GoRouter(initialLocation: '/messages', routes: [
+      router = GoRouter(initialLocation: '/messages', routes: [
         GoRoute(path: '/messages', builder: (_, __) => const MessagingScreen()),
         GoRoute(path: '/chat', builder: (_, __) => const ChatScreen()),
       ]);
@@ -173,8 +174,10 @@ void main() {
       expect(find.text('Nadia Rahman'), findsOneWidget, reason: 'premise');
     }
 
-    testWidgets("an inbox row of A tapped with no frame since A->B: the chat "
-        "reads, names, opens and sends nothing of A's", (t) async {
+    // P0-FL-59c round 3: the row is now refused where it is tapped, so the
+    // chat's own refusal is reached by handing it A's row directly below.
+    testWidgets('an inbox row of A tapped with no frame since A->B: nothing is '
+        'stored or opened, recorded, nothing said', (t) async {
       await openInbox(t);
       final tap = t
           .widget<GestureDetector>(find
@@ -186,6 +189,32 @@ void main() {
       await switchNoFrame(t, memberB);
       server.log.clear();
       tap();
+      expect(container.read(selectedConversationProvider), isNull,
+          reason: "THE defect: A's thread stored as B's selection");
+      await settleReal(t);
+      expect(find.byType(ChatScreen), findsNothing);
+      expect(server.sent('GET', 'messages'), isEmpty);
+      expect(server.writesAs(memberB), isEmpty);
+      expect(origins(), contains('MessagingScreen'));
+      expect(find.byType(SnackBar), findsNothing);
+      await closeApp(t);
+    });
+
+    testWidgets("the chat handed A's row as B (a way in other than the inbox): "
+        "it reads, names, opens and sends nothing of A's", (t) async {
+      await openInbox(t);
+      await switchNoFrame(t, memberB);
+      server.log.clear();
+      container.read(selectedConversationProvider.notifier).state = {
+        ...convOfA,
+        'participant': {
+          'id': 'coach-1',
+          'first_name': 'Nadia',
+          'last_name': 'Rahman',
+          'role': 'coach',
+        },
+      };
+      router.go('/chat');
       await settleReal(t);
       expect(find.byType(ChatScreen), findsOneWidget, reason: 'premise');
       expect(find.textContaining('Nadia'), findsNothing);
