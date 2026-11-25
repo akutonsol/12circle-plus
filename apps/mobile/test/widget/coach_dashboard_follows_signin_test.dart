@@ -413,9 +413,7 @@ void main() {
       for (final r in reads) {
         c.invalidate(r);
       }
-      await pumpUntil(tester,
-          () => reported.any((f) => f.origin.startsWith('CoachDashboardScreen.')),
-          what: 'the failure');
+      await pumpUntil(tester, () => seen(notice()), what: 'the failure said');
       await frames(tester);
     }
 
