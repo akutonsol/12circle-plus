@@ -19,6 +19,7 @@ import '../support/account_app.dart';
 
 final _server = AccountServer();
 final _realtime = FakeRealtime();
+final _store = MemoryStore();
 
 Map<String, Object?> _note(String id, String to) => {
       'id': id,
@@ -33,7 +34,7 @@ Map<String, Object?> _note(String id, String to) => {
 void main() {
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
-    await initAccountSupabase(_server, _realtime, MemoryStore());
+    await initAccountSupabase(_server, _realtime, _store);
   });
   setUp(_server.reset);
 
@@ -129,6 +130,44 @@ void main() {
     _realtime.notify(_note('n3', acctB));
     await settleApp(t, 4);
     expect(reads(), before + 1);
+  });
+
+  watcherTest("a mixed session (A's user on B's token) moves it nowhere, and B's "
+      'notifications still arrive', (t) async {
+    final reads = await mount(t, acctA);
+    final hold = _server.holds['PUT user:$acctA'] = Completer<void>();
+    unawaited(Supabase.instance.client.auth
+        .updateUser(UserAttributes(data: {'x': 1}))
+        .then((_) {}));
+    await settleApp(t, 1);
+    await change(t, () => signInAs(acctB));
+    final channel = _realtime.joinedFor(acctB).single;
+    hold.complete(); // gotrue puts A's user on B's session
+    await change(t, () async {});
+    expect(Supabase.instance.client.auth.currentUser?.id, acctA,
+        reason: 'premise: mixed');
+    expect(_realtime.joinedFor(acctA), isEmpty);
+    expect(_realtime.joinedFor(acctB), [channel]);
+    final before = reads();
+    _realtime.notify(_note('n5', acctB));
+    await settleApp(t, 4);
+    expect(reads(), before + 1);
+  });
+
+  watcherTest("a sign-out the device refused to finish (no event): what still "
+      "arrives for A is not acted on", (t) async {
+    final reads = await mount(t, acctA);
+    _store.refuseRemoval = true;
+    addTearDown(() => _store.refuseRemoval = false);
+    await change(t, () => signOut().catchError((Object _) {}));
+    expect(Supabase.instance.client.auth.currentSession, isNull);
+    expect(_realtime.joinedFor(acctA), hasLength(1),
+        reason: 'premise: nobody told it');
+    final before = reads();
+    _realtime.notify(_note('n6', acctA));
+    await settleApp(t, 4);
+    expect(reads(), before);
+    _store.refuseRemoval = false;
   });
 
   watcherTest('signed out at first, then A: subscribed', (t) async {

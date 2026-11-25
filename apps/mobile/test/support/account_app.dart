@@ -83,6 +83,12 @@ class AccountServer extends http.BaseClient {
   /// Members all of whose REST reads (bar `user_profiles`, which routes them)
   /// are held, or fail.
   final holdAll = <String, Completer<void>>{};
+
+  /// REST writes match no row.
+  bool emptyWrites = false;
+
+  /// Keys whose connection drops.
+  final drops = <String>{};
   final failAll = <String>{};
 
   /// What exchanging an auth code answers: a session, or null to refuse it.
@@ -95,6 +101,8 @@ class AccountServer extends http.BaseClient {
     holds.clear();
     fails.clear();
     holdAll.clear();
+    drops.clear();
+    emptyWrites = false;
     failAll.clear();
     codeSession = null;
     sent.clear();
@@ -125,6 +133,9 @@ class AccountServer extends http.BaseClient {
     sent.add(s);
     final hold = holds[s.key] ?? holds['${s.method} ${s.name}'];
     if (hold != null) await hold.future;
+    if (drops.contains(s.key) || drops.contains('${s.method} ${s.name}')) {
+      throw http.ClientException('Connection closed', request.url);
+    }
     final fail = fails[s.key] ?? fails['${s.method} ${s.name}'];
     if (fail != null) {
       return _json({'message': 'refused', 'code': 'XX000'}, fail, request);
@@ -149,6 +160,9 @@ class AccountServer extends http.BaseClient {
     final single =
         request.headers['Accept']?.contains('vnd.pgrst.object') ?? false;
     if (s.method != 'GET' && !s.url.path.contains('/rpc/')) {
+      if (emptyWrites && !single && s.url.queryParameters.containsKey('select')) {
+        return _json([], 200, request);
+      }
       return s.url.queryParameters.containsKey('select')
           ? _json(
               single
@@ -186,6 +200,9 @@ class AccountServer extends http.BaseClient {
         final uid = body['email'] as String? ??
             ('${body['refresh_token']}'.contains(acctA) ? acctA : acctB);
         return _json(sessionOf(uid), 200, r);
+      case 'signup': // no email confirmation: signed in at once
+        return _json(sessionOf((jsonDecode(s.body) as Map)['email'] as String),
+            200, r);
       case 'user':
         return _json(userOf(s.who, n: ++_n), 200, r);
       default:
@@ -317,29 +334,69 @@ class _FakeSink implements WebSocketSink {
 /// gotrue's store for the PKCE code verifier.
 class MemoryStore extends GotrueAsyncStorage {
   final m = <String, String>{};
+
+  /// The device refuses removals (as a failing secure store or a full disk).
+  bool refuseRemoval = false;
+
+  /// After each refusal.
+  void Function()? onRefused;
   @override
   Future<String?> getItem({required String key}) async => m[key];
   @override
   Future<void> setItem({required String key, required String value}) async =>
       m[key] = value;
   @override
-  Future<void> removeItem({required String key}) async => m.remove(key);
+  Future<void> removeItem({required String key}) async {
+    if (refuseRemoval) {
+      onRefused?.call();
+      throw StateError('storage: cannot remove $key');
+    }
+    m.remove(key);
+  }
 
   /// As if this device had asked for a reset email.
   void askedForReset() =>
       m['supabase.auth.token-code-verifier'] = 'verifier/passwordRecovery';
 }
 
+/// The session supabase_flutter keeps for the next start.
+class MemorySession extends LocalStorage {
+  String? stored;
+  @override
+  Future<void> initialize() async {}
+  @override
+  Future<bool> hasAccessToken() async => stored != null;
+  @override
+  Future<String?> accessToken() async => stored;
+  @override
+  Future<void> persistSession(String persistSessionString) async =>
+      stored = persistSessionString;
+  @override
+  Future<void> removePersistedSession() async => stored = null;
+
+  /// Whose user, on whose token.
+  (String user, String token)? get who {
+    final s = stored;
+    if (s == null) return null;
+    final m = jsonDecode(s) as Map;
+    return (
+      (m['user'] as Map)['id'] as String,
+      AccountServer.sub(m['access_token'] as String)
+    );
+  }
+}
+
 /// Unroutable URL: nothing can reach a real service.
 Future<void> initAccountSupabase(
-        AccountServer server, FakeRealtime realtime, MemoryStore store) =>
+        AccountServer server, FakeRealtime realtime, MemoryStore store,
+        {LocalStorage session = const EmptyLocalStorage()}) =>
     Supabase.initialize(
       url: 'http://127.0.0.1:1',
       publishableKey: 'test-publishable-key',
       httpClient: server,
       realtimeClientOptions: RealtimeClientOptions(transport: realtime.connect),
       authOptions: FlutterAuthClientOptions(
-        localStorage: const EmptyLocalStorage(),
+        localStorage: session,
         pkceAsyncStorage: store,
         detectSessionInUri: false,
         autoRefreshToken: true,
@@ -354,6 +411,37 @@ Future<void> signInAs(String uid) =>
     _auth.recoverSession(jsonEncode(sessionOf(uid)));
 
 Future<void> signOut() => _auth.signOut();
+
+/// The same member's session renewed in this tab: an event really fires
+/// (`recoverSession` of the same uid fires none).
+Future<void> renewToken() =>
+    _expectEvent(_auth.refreshSession, AuthChangeEvent.tokenRefreshed);
+
+/// The same member, with a newer session, from another tab (a broadcast).
+Future<void> sameMemberInAnotherTab(String uid) => _expectEvent(() async {
+      final session = await _auth.recoverSession(jsonEncode(sessionOf(uid)));
+      // What gotrue's broadcast channel does with a message.
+      // ignore: invalid_use_of_internal_member
+      _auth.notifyAllSubscribers(AuthChangeEvent.signedIn,
+          session: session.session, broadcast: false);
+      return null;
+    }, AuthChangeEvent.signedIn);
+
+/// Runs [f] and checks that [event], for whoever was signed in, arrived.
+Future<void> _expectEvent(
+    Future<Object?> Function() f, AuthChangeEvent event) async {
+  final uid = _auth.currentUser!.id;
+  final heard = <AuthState>[];
+  final sub = _auth.onAuthStateChange
+      .listen(heard.add, onError: (Object _, StackTrace __) {});
+  await Future<void>.delayed(Duration.zero);
+  heard.clear(); // the replayed one
+  await f();
+  await Future<void>.delayed(Duration.zero);
+  await sub.cancel();
+  expect(heard.map((s) => (s.event, s.session?.user.id)), [(event, uid)],
+      reason: 'premise: the same account\'s event arrives');
+}
 
 /// The session ends remotely: the refresh token is refused.
 Future<void> expire(AccountServer server) async {

@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/errors/auth_error_text.dart';
+import '../../../core/identity/account_scope.dart'
+    show accountNoticeNotifier, isMixedSession, putBackOwnUser, signedInUid;
 import '../../../core/observability/app_failure.dart';
 import '../../../core/router/app_router.dart'
     show endPasswordRecovery, passwordRecoveryNotifier;
@@ -30,13 +32,14 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   String? _owner;
   late final StreamSubscription<AuthState> _auth;
 
-  String? get _signedIn => Supabase.instance.client.auth.currentUser?.id;
+  String? get _signedIn => signedInUid();
 
   @override
   void initState() {
     super.initState();
     _owner = passwordRecoveryNotifier.value ?? _signedIn;
     _auth = Supabase.instance.client.auth.onAuthStateChange.listen((state) {
+      if (isMixedSession(state.session)) return;
       if (state.session?.user.id != _owner && _signedIn != _owner) {
         _accountChanged();
       }
@@ -66,6 +69,19 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   void _reportChanged() => reportError('ResetPasswordScreen._submit',
       StateError('set new password: the signed-in account changed'));
 
+  /// A press that sent nothing is said, or the password typed just disappears.
+  /// Where the member lands: on the form when it stays (now their own), else on
+  /// the page this goes to, or the first of the next account's generation
+  /// (which this one's messenger does not outlive).
+  void _sayNothingWasSet() {
+    if (!mounted) return;
+    accountNoticeNotifier.value = (uid: _signedIn, text: _notSet);
+    _snack(_notSet);
+  }
+
+  static const _notSet = "Couldn't set the new password — the account signed in "
+      'here changed. Ask for a new reset link.';
+
   @override
   void dispose() {
     _auth.cancel();
@@ -78,6 +94,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     final owner = _owner;
     if (_signedIn != owner) {
       _reportChanged();
+      _sayNothingWasSet();
       _accountChanged();
       return;
     }
@@ -93,21 +110,31 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     }
     setState(() => _loading = true);
     final auth = Supabase.instance.client.auth;
-    // Another account arriving while the update is out. `_signedIn` cannot say
-    // so afterwards: gotrue's updateUser copies the ANSWERED user (owner) onto
-    // whatever session is current by then.
+    // Another account arriving while the update is out. The user signed in
+    // cannot say so afterwards: gotrue's updateUser copies the ANSWERED one
+    // (owner) onto whatever session is current by then. Put right as soon as
+    // that is heard of, before anything else runs.
     var changed = false;
+    Session? arrived;
+    Future<void>? puttingBack;
     final watch = auth.onAuthStateChange.listen((state) {
-      if (state.session?.user.id != owner) changed = true;
+      final session = state.session;
+      if (isMixedSession(session)) {
+        changed = true;
+        puttingBack = putBackOwnUser(arrived);
+      } else if (session?.user.id != owner) {
+        changed = true;
+        arrived = session;
+      }
     }, onError: (Object _, StackTrace __) {});
     try {
       await auth.updateUser(UserAttributes(password: pw));
       await Future<void>.delayed(Duration.zero); // let the last event land
       if (changed) {
         _reportChanged();
-        // Put the signed-in account's own user back on its session.
-        if (auth.currentSession != null) await auth.refreshSession();
-        _accountChanged();
+        await (puttingBack ?? putBackOwnUser(arrived));
+        // Already the next account's own form: theirs, with what they typed.
+        if (_owner == owner) _accountChanged();
         return;
       }
       endPasswordRecovery();

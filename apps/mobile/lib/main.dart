@@ -1,6 +1,7 @@
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'core/identity/account_scope.dart';
 import 'core/theme/twelve_circle_theme.dart';
@@ -75,6 +76,7 @@ class CircleFitnessRoot extends StatelessWidget {
   Widget build(BuildContext context) => AccountScope(
         overrides: overrides,
         // The device's habit reminders are the account's that set them.
+        onLaunch: HabitReminderService().sweepAtLaunch,
         onOwnerLeft: (_) => HabitReminderService().cancelAll(),
         child: CircleFitnessApp(theme: theme),
       );
@@ -117,16 +119,58 @@ class _AppScrollBehavior extends MaterialScrollBehavior {
   };
 }
 
-class CircleFitnessApp extends ConsumerWidget {
+class CircleFitnessApp extends ConsumerStatefulWidget {
   const CircleFitnessApp({super.key, this.theme});
 
   /// Null: the app's own.
   final ThemeData? theme;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final router = ref.watch(routerProvider);
-    final theme = this.theme ?? TwelveCircleTheme.theme;
+  ConsumerState<CircleFitnessApp> createState() => _CircleFitnessAppState();
+}
+
+class _CircleFitnessAppState extends ConsumerState<CircleFitnessApp> {
+  final _messenger = GlobalKey<ScaffoldMessengerState>();
+  late final GoRouter _router;
+
+  /// A generation after the launch's begins with no route: where its account
+  /// goes waits for its role to be read (the launch's begins on the splash).
+  late final bool _later;
+
+  @override
+  void initState() {
+    super.initState();
+    _router = ref.read(routerProvider);
+    _later = !ref.read(accountGenerationProvider).isFirst;
+    if (_later) _router.routerDelegate.addListener(_sayNotice);
+  }
+
+  @override
+  void dispose() {
+    _router.routerDelegate.removeListener(_sayNotice);
+    super.dispose();
+  }
+
+  bool get _hasRoute => _router.routerDelegate.currentConfiguration.isNotEmpty;
+
+  /// Once this generation's first route is up, says the one line left for the
+  /// account it began with, and drops one left for any other.
+  void _sayNotice() {
+    if (!_hasRoute) return;
+    _router.routerDelegate.removeListener(_sayNotice);
+    final notice = accountNoticeNotifier.value;
+    accountNoticeNotifier.value = null;
+    if (notice == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || notice.uid != signedInUid()) return;
+      _messenger.currentState
+          ?.showSnackBar(SnackBar(content: Text(notice.text)));
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = widget.theme ?? TwelveCircleTheme.theme;
     return MaterialApp.router(
       title: '12 Circle Fitness',
       debugShowCheckedModeBanner: false,
@@ -135,7 +179,37 @@ class CircleFitnessApp extends ConsumerWidget {
       darkTheme: theme,
       themeMode: ThemeMode.dark,
       scrollBehavior: _AppScrollBehavior(),
-      routerConfig: router,
+      scaffoldMessengerKey: _messenger,
+      builder: _later ? _orPending : null,
+      routerConfig: _router,
     );
   }
+
+  /// The app, and over it — while somebody is signed in and no route is up —
+  /// that their account is loading. It was an empty window, for as long as a
+  /// dropped connection takes to give up.
+  Widget _orPending(BuildContext context, Widget? app) => ListenableBuilder(
+        listenable: _router.routerDelegate,
+        child: app,
+        builder: (context, app) => Stack(fit: StackFit.expand, children: [
+          app!,
+          if (!_hasRoute && signedInUid() != null) const AccountPending(),
+        ]),
+      );
+}
+
+/// The signed-in account is being loaded and there is nothing to show yet.
+class AccountPending extends StatelessWidget {
+  const AccountPending({super.key});
+
+  @override
+  Widget build(BuildContext context) => ColoredBox(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        child: Semantics(
+          label: 'Loading your account',
+          liveRegion: true,
+          container: true,
+          child: const Center(child: CircularProgressIndicator()),
+        ),
+      );
 }

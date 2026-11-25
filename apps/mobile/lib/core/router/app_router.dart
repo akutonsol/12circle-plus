@@ -145,6 +145,23 @@ Future<void> _rememberRecovery(String? uid) async {
   }
 }
 
+/// Removes the device's note of a recovery of any account but [uid] (null:
+/// nobody is signed in), whatever this process remembers of it: left behind, a
+/// later `?recovery=1` page of that account's would force it onto the form with
+/// no working link.
+Future<void> _forgetRecoveryUnless(String? uid) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final noted = prefs.getString(passwordRecoveryStorageKey);
+    if (noted == null || noted == uid) return;
+    // A recovery that began since: its own note.
+    if (noted == passwordRecoveryNotifier.value) return;
+    await prefs.remove(passwordRecoveryStorageKey);
+  } catch (e, st) {
+    reportError('appRouter.forgetRecovery', e, st);
+  }
+}
+
 /// Decides at launch whether [launchUri] started a recovery, and for whom.
 /// Call once, straight after `Supabase.initialize()`.
 ///
@@ -152,7 +169,8 @@ Future<void> _rememberRecovery(String? uid) async {
 /// the link was FOR. `Supabase.initialize()` has already tried the link's code:
 ///
 /// * it worked: the last auth event is the session the link established
-///   (`passwordRecovery`, or `signedIn`), and the recovery is that account's;
+///   (`passwordRecovery`, or `signedIn`), and the recovery is that account's
+///   (not one another tab told this one of: that is no answer to the link);
 /// * it failed (expired, used, no code): gotrue leaves whoever was signed in
 ///   signed in and reports only an error. No recovery started. The one
 ///   exception is a reload of the form: the account still signed in is the one
@@ -168,18 +186,21 @@ Future<void> bindPasswordRecoveryAtLaunch(Uri launchUri) async {
   } catch (e, st) {
     reportError('appRouter.recoveryLink', e, st);
   }
-  final established = last?.event == AuthChangeEvent.passwordRecovery ||
-          last?.event == AuthChangeEvent.signedIn
-      ? last?.session?.user.id
+  final established = last != null &&
+          !last.fromBroadcast &&
+          !isMixedSession(last.session) &&
+          (last.event == AuthChangeEvent.passwordRecovery ||
+              last.event == AuthChangeEvent.signedIn)
+      ? last.session?.user.id
       : null;
   if (established != null) return startPasswordRecovery(established);
 
-  final uid = auth.currentUser?.id;
+  final uid = signedInUid();
   if (uid == null) return;
   try {
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getString(passwordRecoveryStorageKey) == uid &&
-        auth.currentUser?.id == uid) {
+        signedInUid() == uid) {
       startPasswordRecovery(uid);
     }
   } catch (e, st) {
@@ -228,11 +249,14 @@ class _RouterNotifier extends ChangeNotifier {
       final before = prev?.valueOrNull;
       final hadSession = before == null ? beganSignedIn : before.session != null;
       final session = next.value.session;
+      // Says nothing about who is signed in, so it ends nobody's recovery.
+      if (isMixedSession(session)) return;
       // A recovery belongs to one account: signed out, or anyone else, ends it.
       final recovering = passwordRecoveryNotifier.value;
       if (recovering != null && recovering != session?.user.id) {
         endPasswordRecovery();
       }
+      _forgetRecoveryUnless(session?.user.id);
       // Password-reset link tapped → drive the user to the reset screen.
       if (next.value.event == AuthChangeEvent.passwordRecovery &&
           session != null) {
@@ -322,8 +346,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       if (path == '/signup') {
         final token = state.uri.queryParameters['invite'];
         if (token != null && token.isNotEmpty) {
+          final uid = signedInUid();
           await PendingInvite.capture(token);
-          if (isAuthenticated && notifier.live) {
+          // Only as the account that opened it.
+          if (uid != null && uid == signedInUid() && notifier.live) {
             _redeemInvite(ref, () => notifier.live);
           }
         }
@@ -337,7 +363,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       // reset link was for.
       final recovering = passwordRecoveryNotifier.value;
       if (recovering != null &&
-          recovering == Supabase.instance.client.auth.currentUser?.id) {
+          recovering == signedInUid()) {
         return path == '/reset-password' ? null : '/reset-password';
       }
 
@@ -357,10 +383,9 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       if (isAuthenticated && isAuthRoute) {
         if (path == '/intake') return null;
-        final auth = Supabase.instance.client.auth;
         // P0-FL-59a (A-29): the account can change while its role is read.
         // That role is someone else's — read again for whoever is here now.
-        for (var userId = auth.currentUser?.id; userId != null;) {
+        for (var userId = signedInUid(); userId != null;) {
           Map<String, dynamic>? profile;
           Object? failure;
           try {
@@ -380,7 +405,7 @@ final routerProvider = Provider<GoRouter>((ref) {
             reportError('appRouter.redirect.roleRead', e, st);
             failure = e;
           }
-          final nowId = auth.currentUser?.id;
+          final nowId = signedInUid();
           if (nowId != userId) {
             if (nowId == null) return null; // signed out: an auth route stays
             userId = nowId;

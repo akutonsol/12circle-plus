@@ -279,7 +279,7 @@ void main() {
         (t) => quietly(() async {
               try {
                 await mountAs(t, c);
-                await change(t, () => signInAs(acctA));
+                await change(t, renewToken);
                 for (final f in c.secrets) {
                   expect(f, findsWidgets);
                 }

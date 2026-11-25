@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../domain/auth_provider.dart';
 import '../../../core/errors/auth_error_text.dart';
+import '../../../core/identity/account_scope.dart'
+    show signOutFailedText, signOutOfDevice;
 import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
 import '../../../core/router/app_router.dart'
@@ -168,18 +170,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     // notifier would set state on a disposed one. A new sign-in form (empty)
     // takes this one's place then; without AccountScope the fields are cleared
     // below.
-    Object? error;
-    try {
-      await ref.read(authServiceProvider).signOut();
-    } catch (e, st) {
-      error = e;
-      reportError('LoginScreen._signOutAfterFailure', e, st);
-    }
+    final error = await signOutOfDevice('LoginScreen._signOutAfterFailure',
+        ref.read(authServiceProvider).signOut);
     if (!mounted) return;
-    final stillSignedIn = Supabase.instance.client.auth.currentSession != null;
     setState(() {
       _signingOut = false;
-      if (!stillSignedIn) {
+      if (error == null) {
         _accountReadError = null;
         _awaitingFirstRead = false;
         // The next person at the sign-in form should not find this
@@ -188,11 +184,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         _passwordCtrl.clear();
       }
     });
-    if (stillSignedIn) {
-      _showError(isNetworkFailure(error)
-          ? "Couldn't sign you out — check your connection and try again."
-          : "Couldn't sign you out — try again in a moment. If it keeps happening, contact support.");
-    }
+    if (error != null) _showError(signOutFailedText(error));
   }
 
   // OAuth uses Supabase's redirect flow: the page navigates to the provider and

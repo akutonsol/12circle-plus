@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:circle_fitness/core/identity/account_scope.dart';
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/core/router/app_router.dart';
 import 'package:circle_fitness/features/auth/presentation/reset_password_screen.dart';
@@ -47,6 +49,9 @@ Future<void> _openLink({Uri? uri}) async {
   }
 }
 
+const _notSet = "Couldn't set the new password — the account signed in here "
+    'changed. Ask for a new reset link.';
+
 Iterable<Sent> get _passwordWrites => _server.of('user', method: 'PUT');
 
 void main() {
@@ -64,6 +69,7 @@ void main() {
     _store.m.clear();
     _failures.clear();
     passwordRecoveryNotifier.value = null;
+    accountNoticeNotifier.value = null;
     accountReadFailureNotifier.value = null;
     setFailureSink(_failures.add);
     addTearDown(resetFailureSink);
@@ -127,12 +133,37 @@ void main() {
         expect(_passwordWrites, isEmpty,
             reason: 'THE defect: the password of whoever is signed in was set');
         expect(find.text('SIGN-IN'), findsOneWidget, reason: 'the form is left');
+        expect(find.text(_notSet), findsOneWidget,
+            reason: 'and why is said where it lands');
+        expect(
+            t.widget<Text>(find.text(_notSet)).data, isNot(contains(acctB)));
         expect(passwordRecoveryNotifier.value, isNull);
         expect(_failures.where((f) => '${f.error}'.contains('account changed')),
             isNotEmpty);
         await end(t);
       });
     }
+
+    testWidgets("B's own recovery took the form over, with no frame between: the "
+        "press sends nothing, the form stays, and says so on it", (t) async {
+      await mountForm(t);
+      await type(t, 'alba-new-pw');
+      final update = t.widget<AuthButton>(find.byType(AuthButton)).onTap!;
+      startPasswordRecovery(acctB);
+      await t.runAsync(() async {
+        // The session is B's at once; no one has been told yet.
+        unawaited(signInAs(acctB));
+        update();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      });
+      await settleApp(t);
+      expect(_passwordWrites, isEmpty);
+      expect(find.text('Set a new password'), findsOneWidget);
+      expect(typed(t, 0), isEmpty);
+      expect(find.text(_notSet), findsOneWidget);
+      expect(passwordRecoveryNotifier.value, acctB);
+      await end(t);
+    });
 
     testWidgets('A -> B clears what A typed without waiting for a press',
         (t) async {
@@ -302,6 +333,119 @@ void main() {
       appRouter(t).go('/home'); // the splash hands off
       await settleApp(t);
       await expectFormWorksFor(t, acctA);
+    });
+
+    for (final (what, change, dest) in [
+      ('A -> B', () => signInAs(acctB), '/home'),
+      ('A signed out', signOut, '/login'),
+    ]) {
+      rootTest('$what, then Update before any frame: one neutral line where the '
+          'member lands, once', (t) async {
+        _store.askedForReset();
+        _server.codeSession = sessionOf(acctA);
+        await t.runAsync(_openLink);
+        await t.runAsync(() => bindPasswordRecoveryAtLaunch(_link));
+        await pumpRoot(t);
+        appRouter(t).go('/home');
+        await settleApp(t);
+        await type(t, 'alba-new-pw');
+        final update = t.widget<AuthButton>(find.byType(AuthButton)).onTap!;
+        await t.runAsync(() async {
+          await change();
+          update();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        });
+        final handle = t.ensureSemantics();
+        await settleApp(t);
+        expect(_passwordWrites, isEmpty);
+        expect(appPath(t), dest);
+        expect(find.text(_notSet), findsOneWidget);
+        expect(
+            find.ancestor(
+                of: find.text(_notSet),
+                matching: find.byWidgetPredicate(
+                    (w) => w is Semantics && w.properties.liveRegion == true)),
+            findsWidgets);
+        handle.dispose();
+        await t.pump(const Duration(seconds: 6));
+        await settleApp(t);
+        expect(find.text(_notSet), findsNothing, reason: 'not left standing');
+        // Nor said again to whoever comes next.
+        await t.runAsync(dest == '/home' ? signOut : () => signInAs(acctB));
+        await settleApp(t);
+        expect(find.text(_notSet), findsNothing);
+      });
+    }
+
+    rootTest('a notice left for another account is not said to this one',
+        (t) async {
+      await t.runAsync(() => signInAs(acctA));
+      await pumpRoot(t);
+      accountNoticeNotifier.value = (uid: null, text: _notSet);
+      await t.runAsync(() => signInAs(acctB));
+      await settleApp(t);
+      expect(appPath(t), '/home');
+      expect(find.text(_notSet), findsNothing);
+      expect(accountNoticeNotifier.value, isNull);
+    });
+
+    rootTest("another tab's sign-in is not the launch link's: nobody is bound",
+        (t) async {
+      await t.runAsync(() => signInAs(acctB));
+      // The link has no code; the last thing heard is B's, from another tab.
+      await t.runAsync(() => sameMemberInAnotherTab(acctB));
+      await t.runAsync(() => bindPasswordRecoveryAtLaunch(_link));
+      expect(passwordRecoveryNotifier.value, isNull);
+    });
+
+    rootTest("nor is a mixed session", (t) async {
+      await t.runAsync(() => signInAs(acctB));
+      await t.runAsync(() async {
+        final mixed = Session.fromJson(jsonDecode(
+            jsonEncode(sessionOf(acctB)..['user'] = userOf(acctA))))!;
+        // ignore: invalid_use_of_internal_member
+        _auth.notifyAllSubscribers(AuthChangeEvent.signedIn, session: mixed);
+        await bindPasswordRecoveryAtLaunch(_link);
+      });
+      expect(passwordRecoveryNotifier.value, isNull);
+    });
+
+    for (final (what, change) in [
+      ('a sign-out', signOut),
+      ('another account', () => signInAs(acctB)),
+    ]) {
+      rootTest('a note kept from an earlier run (nothing in memory) goes with '
+          '$what', (t) async {
+        SharedPreferences.setMockInitialValues(
+            {passwordRecoveryStorageKey: acctA});
+        await t.runAsync(() => signInAs(acctA));
+        await pumpRoot(t);
+        Future<String?> note() async => (await SharedPreferences.getInstance())
+            .getString(passwordRecoveryStorageKey);
+        await t.runAsync(renewToken);
+        await settleApp(t, 2);
+        expect(await note(), acctA, reason: 'control: the same account keeps it');
+        await t.runAsync(change);
+        await settleApp(t, 2);
+        expect(passwordRecoveryNotifier.value, isNull);
+        expect(await note(), isNull);
+      });
+    }
+
+    rootTest("control: A's link after a sign-out keeps its own note", (t) async {
+      SharedPreferences.setMockInitialValues(
+          {passwordRecoveryStorageKey: acctB});
+      await t.runAsync(() => signInAs(acctB));
+      await pumpRoot(t);
+      _store.askedForReset();
+      _server.codeSession = sessionOf(acctA);
+      await t.runAsync(_openLink);
+      await settleApp(t);
+      expect(passwordRecoveryNotifier.value, acctA);
+      expect(
+          (await SharedPreferences.getInstance())
+              .getString(passwordRecoveryStorageKey),
+          acctA);
     });
 
     rootTest('the launch link fails while B is signed in: B is left alone',

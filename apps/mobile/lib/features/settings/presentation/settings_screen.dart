@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/identity/account_scope.dart'
+    show signOutFailedText, signOutOfDevice, signedInUid;
 import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
 import '../../../core/utils/web_logout.dart';
@@ -638,6 +640,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Future<void> _showLogoutDialog(BuildContext context) async {
+    final owner = signedInUid();
     final confirmed = await showDialog<bool>(
       context: context,
       useRootNavigator: true,
@@ -663,15 +666,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ),
     );
     if (confirmed == true && context.mounted) {
+      if (signedInUid() != owner) {
+        // Not the account that asked.
+        reportError('SettingsScreen.signOut',
+            StateError('sign out: the signed-in account changed'));
+        return;
+      }
       // The service, not authNotifierProvider: signing out ends this account's
       // provider container (AccountScope) before the server answers, and the
       // notifier would set state on a disposed one.
-      try {
-        await ref.read(authServiceProvider).signOut();
-      } catch (e, st) {
-        reportError('SettingsScreen.signOut', e, st);
-      }
-      if (kIsWeb) {
+      final error = await signOutOfDevice(
+          'SettingsScreen.signOut', ref.read(authServiceProvider).signOut);
+      if (error != null) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(signOutFailedText(error))));
+        }
+      } else if (kIsWeb) {
         reloadForLogout();
       } else if (context.mounted) {
         context.go('/login');

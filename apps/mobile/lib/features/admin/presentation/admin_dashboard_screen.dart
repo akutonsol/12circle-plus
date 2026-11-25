@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/identity/account_scope.dart'
+    show signOutFailedText, signOutOfDevice;
 import '../domain/admin_provider.dart';
 import '../data/platform_settings_service.dart';
 
@@ -229,8 +231,15 @@ class AdminDashboardScreen extends ConsumerWidget {
           ),
           IconButton(
             onPressed: () async {
-              await Supabase.instance.client.auth.signOut();
-              if (context.mounted) context.go('/login');
+              final error = await signOutOfDevice('AdminDashboardScreen.signOut',
+                  Supabase.instance.client.auth.signOut);
+              if (!context.mounted) return;
+              if (error == null) {
+                context.go('/login');
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(signOutFailedText(error))));
+              }
             },
             icon: const Icon(Icons.logout_rounded, color: _muted),
           ),

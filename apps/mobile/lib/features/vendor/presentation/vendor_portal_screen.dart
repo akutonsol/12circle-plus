@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/identity/account_scope.dart'
+    show signOutFailedText, signOutOfDevice;
 import '../domain/vendor_provider.dart';
 import 'event_agenda_screen.dart';
 
@@ -45,8 +47,15 @@ class VendorPortalScreen extends ConsumerWidget {
           IconButton(
             icon: const Icon(Icons.logout_rounded, color: _muted),
             onPressed: () async {
-              await Supabase.instance.client.auth.signOut();
-              if (context.mounted) context.go('/login');
+              final error = await signOutOfDevice('VendorPortalScreen.signOut',
+                  Supabase.instance.client.auth.signOut);
+              if (!context.mounted) return;
+              if (error == null) {
+                context.go('/login');
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(signOutFailedText(error))));
+              }
             },
           ),
         ],

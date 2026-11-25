@@ -299,13 +299,16 @@ void main() {
   // ── Positive controls: the same account keeps everything ──────────────────
 
   for (final (what, f) in [
-    ('token refresh', () async => Supabase.instance.client.auth.refreshSession()),
+    ('token refresh', renewToken),
     (
       'profile metadata edit',
       () async => Supabase.instance.client.auth
           .updateUser(UserAttributes(data: {'first_name': 'Alba'}))
     ),
-    ('the same member\'s session from another tab', () async => signInAs(acctA)),
+    (
+      'the same member\'s session from another tab',
+      () => sameMemberInAnotherTab(acctA)
+    ),
     (
       'a failed refresh that ends no session',
       () async {
@@ -441,10 +444,141 @@ void main() {
     });
   }
 
-  for (final (role, at) in [
-    ('admin', '/admin-dashboard'),
-    ('vendor', '/vendor-portal')
+  const refusedByDevice = "Couldn't sign you out — try again in a moment. "
+      'If it keeps happening, contact support.';
+
+  /// The device refuses to remove what gotrue stores (round 2, item 7): nobody
+  /// is told, and the stored session signs the account in at the next start.
+  Future<void> expectRefusedByDevice(
+      WidgetTester t, String origin, String at) async {
+    expect(find.text(refusedByDevice), findsOneWidget);
+    expect(find.textContaining('storage:'), findsNothing);
+    expect(appPath(t), at);
+    expect(_failures.map((f) => f.origin), contains(origin));
+    await t.pump(const Duration(seconds: 5));
+    await settle(t);
+  }
+
+  for (final (who, at, opener, confirm, origin) in [
+    ('Profile', '/profile', 'Sign Out', 'Sign Out', 'ProfileScreen.signOut'),
+    ('Settings', '/settings', 'Sign out', 'Sign out', 'SettingsScreen.signOut'),
   ]) {
+    Future<void> press(WidgetTester t) async {
+      await t.ensureVisible(find.text(opener).last);
+      await t.tap(find.text(opener).last);
+      await settle(t);
+      await t.tap(find.descendant(
+          of: find.byType(AlertDialog), matching: find.text(confirm)).last);
+      await settle(t);
+    }
+
+    appTest('$who sign-out, the device refuses: says so, and can be tried again',
+        (t) async {
+      await mount(t, as: acctA, at: at);
+      _store.refuseRemoval = true;
+      addTearDown(() => _store.refuseRemoval = false);
+      await press(t);
+      await expectRefusedByDevice(t, origin, at);
+      _store.refuseRemoval = false;
+      await press(t);
+      expect(appPath(t), '/login');
+      expect(find.text(refusedByDevice), findsNothing);
+      expect(container(t).read(accountGenerationProvider).number, 1);
+    });
+
+    appTest('$who sign-out, the device refuses once: signed out, nothing said',
+        (t) async {
+      await mount(t, as: acctA, at: at);
+      _store.refuseRemoval = true;
+      addTearDown(() => _store.refuseRemoval = false);
+      _store.onRefused = () => _store.refuseRemoval = false;
+      addTearDown(() => _store.onRefused = null);
+      await press(t);
+      expect(appPath(t), '/login');
+      expect(find.text(refusedByDevice), findsNothing);
+    });
+
+    appTest("$who: A's sign-out dialog, confirmed after A -> B with no frame "
+        'between, does not sign B out', (t) async {
+      await mount(t, as: acctA, at: at);
+      await t.ensureVisible(find.text(opener).last);
+      await t.tap(find.text(opener).last);
+      await settle(t);
+      final button = t.widget<TextButton>(find.ancestor(
+          of: find.descendant(
+              of: find.byType(AlertDialog), matching: find.text(confirm)).last,
+          matching: find.byType(TextButton)));
+      await t.runAsync(() async {
+        await signInAs(acctB);
+        button.onPressed!();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      });
+      await settle(t);
+      expect(_server.of('logout'), isEmpty);
+      expect(Supabase.instance.client.auth.currentUser?.id, acctB);
+      expect(path(t), '/home');
+      expect(_failures.where((f) => f.origin == origin), hasLength(1));
+    });
+  }
+
+  appTest('Sign-in\'s "Sign out", the device refuses: says so, keeps the notice',
+      (t) async {
+    _server.fails['GET user_profiles:$acctA'] = 403;
+    await mount(t, as: null);
+    router(t).go('/login');
+    await settle(t);
+    await t.enterText(find.byType(TextField).first, acctA);
+    await t.enterText(find.byType(TextField).last, 'secret-1');
+    await t.tap(find.text('Sign in'));
+    await settle(t, 30);
+    expect(find.byKey(const Key('login-account-read-failure')), findsOneWidget,
+        reason: 'premise');
+    _store.refuseRemoval = true;
+    addTearDown(() => _store.refuseRemoval = false);
+    await t.tap(find.text('Sign out'));
+    await settle(t);
+    expect(find.byKey(const Key('login-account-read-failure')), findsOneWidget);
+    await expectRefusedByDevice(t, 'LoginScreen._signOutAfterFailure', '/login');
+    _store.refuseRemoval = false;
+  });
+
+  for (final (role, at, origin) in [
+    ('admin', '/admin-dashboard', 'AdminDashboardScreen.signOut'),
+    ('vendor', '/vendor-portal', 'VendorPortalScreen.signOut')
+  ]) {
+    Future<void> open(WidgetTester t) async {
+      // The admin tiles overflow by 2px in the test font; not what this is on.
+      final onError = FlutterError.onError;
+      FlutterError.onError = (d) =>
+          '${d.exception}'.contains('overflowed') ? null : onError!(d);
+      addTearDown(() => FlutterError.onError = onError);
+      _server.rows['user_profiles:$acctA']!.first['role'] = role;
+      await mount(t, as: acctA, at: at);
+    }
+
+    appTest('$role sign-out, the server refuses: sign-in, recorded, not thrown',
+        (t) async {
+      await open(t);
+      _server.fails['POST logout'] = 500;
+      await t.tap(find.byIcon(Icons.logout_rounded));
+      await settle(t, 20);
+      expect(path(t), '/login');
+      expect(Supabase.instance.client.auth.currentSession, isNull);
+      expect(
+          _failures.map((f) => f.origin).where((o) => o == origin), hasLength(1));
+      expect(find.text(refusedByDevice), findsNothing);
+    });
+
+    appTest('$role sign-out, the device refuses: says so', (t) async {
+      await open(t);
+      _store.refuseRemoval = true;
+      addTearDown(() => _store.refuseRemoval = false);
+      await t.tap(find.byIcon(Icons.logout_rounded));
+      await settle(t);
+      await expectRefusedByDevice(t, origin, at);
+      _store.refuseRemoval = false;
+    });
+
     appTest('$role sign-out lands on sign-in, throws nothing', (t) async {
       // The admin tiles overflow by 2px in the test font; not what this is on.
       final onError = FlutterError.onError;

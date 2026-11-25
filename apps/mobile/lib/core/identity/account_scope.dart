@@ -1,10 +1,119 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../observability/app_failure.dart';
+import '../observability/network_failure.dart';
+
+// ── Who is signed in ────────────────────────────────────────────────────────
+
+/// The account [session]'s access token was issued to: the one the server acts
+/// for, whatever user the session carries. Null when the token cannot be read.
+String? sessionSubject(Session session) {
+  final parts = session.accessToken.split('.');
+  if (parts.length != 3) return null;
+  try {
+    final claims = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))));
+    final sub = claims is Map ? claims['sub'] : null;
+    return sub is String && sub.isNotEmpty ? sub : null;
+  } on FormatException {
+    return null;
+  }
+}
+
+/// [session] carries one account's user on another's token. gotrue makes one
+/// when `updateUser` answers after the account has changed: it copies the user
+/// it was answered onto whatever session is current by then, and tells every
+/// listener (and every other web tab). It says nothing about who is signed in.
+bool isMixedSession(Session? session) {
+  if (session == null) return false;
+  final subject = sessionSubject(session);
+  return subject != null && subject != session.user.id;
+}
+
+/// The uid signed in now, or null: the one requests are made as, also while the
+/// session is a mixed one ([isMixedSession]).
+String? signedInUid() {
+  final session = Supabase.instance.client.auth.currentSession;
+  return session == null ? null : sessionSubject(session) ?? session.user.id;
+}
+
+/// Ends a mixed session ([isMixedSession]): puts the user its token was issued
+/// to back on it, as in [own] (the last session heard of with that user), here
+/// and (recoverSession tells them, for another uid) in every other tab, with no
+/// network. Synchronously when [own]'s token is good, so nothing else runs under
+/// the wrong name. Without [own] the server is asked. Records failures.
+Future<void> putBackOwnUser(Session? own) async {
+  final auth = Supabase.instance.client.auth;
+  final mixed = auth.currentSession;
+  if (mixed == null || !isMixedSession(mixed)) return;
+  try {
+    if (own != null && sessionSubject(mixed) == own.user.id) {
+      final json = jsonEncode(mixed.copyWith(user: own.user).toJson());
+      if (!mixed.isExpired) {
+        await auth.recoverSession(json);
+        return;
+      }
+      // recoverSession would first ask the server for a new token.
+      await auth.setInitialSession(json);
+    }
+    await auth.refreshSession();
+  } catch (e, st) {
+    reportError('putBackOwnUser', e, st);
+  }
+}
+
+/// Runs [signOut] and says whether this device is signed out: null when it is,
+/// else the error that left the account's session on it. Records every failure,
+/// never throws.
+///
+/// gotrue forgets the session in memory, then removes its stored PKCE code, and
+/// only then tells anyone (which removes the stored session) and the server. A
+/// refusal by the SERVER is therefore after the fact: the device is signed out.
+/// But when that removal throws, nobody is told, and the stored session signs
+/// the account back in at the next start. That is tried once more.
+Future<Object?> signOutOfDevice(
+    String origin, Future<void> Function() signOut) async {
+  final auth = Supabase.instance.client.auth;
+  final uid = signedInUid();
+  var told = false;
+  final events = auth.onAuthStateChange.listen((state) {
+    if (state.session == null) told = true;
+  }, onError: (Object _, StackTrace __) {});
+  try {
+    await signOut();
+    return null;
+  } catch (e, st) {
+    reportError(origin, e, st);
+    if (told) return null;
+    if (auth.currentSession != null) return signedInUid() == uid ? e : null;
+    try {
+      await auth.signOut(); // no token left: nothing is sent
+      return null;
+    } catch (e, st) {
+      reportError(origin, e, st);
+      return e;
+    }
+  } finally {
+    unawaited(events.cancel());
+  }
+}
+
+/// What to say when [signOutOfDevice] answers [error].
+String signOutFailedText(Object error) => isNetworkFailure(error)
+    ? "Couldn't sign you out — check your connection and try again."
+    : "Couldn't sign you out — try again in a moment. If it keeps happening, contact support.";
+
+/// One line for the account an account change lands on, shown once by the
+/// generation that begins with [uid] (null: signed out). It names nobody.
+final accountNoticeNotifier =
+    ValueNotifier<({String? uid, String text})?>(null);
+
+// ── The scope ───────────────────────────────────────────────────────────────
 
 /// Which account generation a provider container belongs to.
 @immutable
@@ -36,6 +145,7 @@ final accountGenerationProvider =
 ///
 /// * A generation with no owner takes the first account that signs in, without
 ///   remounting: sign-in, sign-up, intake, invites and OAuth keep their state.
+/// * A mixed session ([isMixedSession]) is nobody's arrival: it is put right.
 /// * The same uid (token refresh, profile edit, MFA, its own recovery) never
 ///   remounts. Neither does a failed token refresh that ends no session: gotrue
 ///   reports that as an error, not a sign-out.
@@ -46,11 +156,16 @@ class AccountScope extends StatefulWidget {
   const AccountScope({
     super.key,
     required this.child,
+    this.onLaunch,
     this.onOwnerLeft,
     this.overrides = const [],
   });
 
   final Widget child;
+
+  /// Called once, when the app starts, for what an earlier run left on the
+  /// device.
+  final FutureOr<void> Function()? onLaunch;
 
   /// Called with the uid that left, as soon as it has (before any frame): for
   /// what the account put on the DEVICE, which no widget owns.
@@ -68,6 +183,9 @@ class _AccountScopeState extends State<AccountScope> {
   late final StreamSubscription<AuthState> _auth;
   final _retired = <ProviderContainer>[];
   String? _owner;
+
+  /// The last one heard of (never a mixed one).
+  Session? _session;
   int _number = 0;
 
   @override
@@ -80,10 +198,18 @@ class _AccountScopeState extends State<AccountScope> {
     // By the EVENT's uid, not currentUser: for a rapid A -> B -> A both events
     // can be delivered after the second, when currentUser is A again.
     _auth = auth.onAuthStateChange.listen(
-      (state) => _follow(state.session?.user.id),
+      (state) {
+        if (isMixedSession(state.session)) {
+          putBackOwnUser(_session);
+          return;
+        }
+        _session = state.session;
+        _follow(state.session?.user.id);
+      },
       // A failed refresh ends no session; gotrue has logged it.
       onError: (Object _, StackTrace __) {},
     );
+    _run('AccountScope.onLaunch', () => widget.onLaunch?.call());
   }
 
   ProviderContainer _newContainer(AccountGeneration generation) =>
@@ -105,14 +231,14 @@ class _AccountScopeState extends State<AccountScope> {
     // After the frame that unmounts the old tree, never before: its widgets
     // still read from it until then.
     WidgetsBinding.instance.addPostFrameCallback((_) => _disposeRetired());
-    _ownerLeft(left);
+    _run('AccountScope.onOwnerLeft', () => widget.onOwnerLeft?.call(left));
   }
 
-  Future<void> _ownerLeft(String uid) async {
+  Future<void> _run(String origin, FutureOr<void> Function() hook) async {
     try {
-      await widget.onOwnerLeft?.call(uid);
+      await hook();
     } catch (e, st) {
-      reportError('AccountScope.onOwnerLeft', e, st);
+      reportError(origin, e, st);
     }
   }
 

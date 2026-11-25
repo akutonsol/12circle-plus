@@ -24,6 +24,7 @@ import '../../features/habits/domain/habit_provider.dart'
 import '../../features/nutrition/domain/nutrition_provider.dart'
     show nutritionGoalsProvider;
 import '../../features/workout/domain/workout_provider.dart' show assignedWorkoutsProvider;
+import '../identity/account_scope.dart' show isMixedSession, signedInUid;
 import 'browser_push.dart';
 
 /// Re-reads what a new notification says has changed.
@@ -103,12 +104,12 @@ class _NotificationWatcherState extends ConsumerState<NotificationWatcher> {
     // P0-FL-59a (A-31): follows the account itself. It was looked at only in
     // build: a sign-out kept the old account's subscription, and the next
     // account got nothing until something rebuilt this.
-    _auth = Supabase.instance.client.auth.onAuthStateChange.listen(
-        (state) => _follow(state.session?.user.id),
-        onError: (Object _, StackTrace __) {});
+    _auth = Supabase.instance.client.auth.onAuthStateChange.listen((state) {
+      if (!isMixedSession(state.session)) _follow(state.session?.user.id);
+    }, onError: (Object _, StackTrace __) {});
   }
 
-  String? get _signedIn => Supabase.instance.client.auth.currentUser?.id;
+  String? get _signedIn => signedInUid();
 
   /// Drops the previous account's subscription; with nobody signed in there is
   /// none.
