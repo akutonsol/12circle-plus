@@ -363,6 +363,7 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
       navigator.pop();
       FoodAddedDialog.show(
         navigator.context,
+        owner: (uid: _owner),
         foodName: food.name,
         protein: (food.protein * servings).toInt(),
         carbs: (food.carbs * servings).toInt(),

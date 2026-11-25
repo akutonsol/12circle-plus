@@ -760,8 +760,13 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
       ? null
       : Supabase.instance.client.auth.currentUser?.id;
 
+  /// Whose meal the "Food Added!" dialog is (nobody's to follow, injected).
+  ({String? uid})? get _dialogOwner =>
+      widget.service != null ? null : (uid: _owner);
+
   void _followAccount() {
     if (!mounted || _signedIn == _owner) return;
+    _debounce?.cancel();
     setState(() => _selected = null);
     final route = ModalRoute.of(context);
     final navigator = route?.navigator;
@@ -809,12 +814,15 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
     // OpenFoodFacts network results — each merged in without duplicates.
     setState(() => _searchingOnline = true);
     _debounce = Timer(const Duration(milliseconds: 350), () async {
+      // What one member typed is never searched for as another.
+      if (!_stillOwner('food search')) return;
       void merge(List<Food> more) {
-        if (!mounted || _searchCtrl.text != q) return;
+        if (!mounted || _signedIn != _owner || _searchCtrl.text != q) return;
         final seen = _filtered.map((f) => f.name.toLowerCase()).toSet();
         setState(() => _filtered = [..._filtered, ...more.where((f) => seen.add(f.name.toLowerCase()))]);
       }
       merge(await _svc.searchFoodsCached(q));
+      if (!mounted || !_stillOwner('food search')) return;
       final online = await _svc.searchFoodsOnline(q);
       merge(online);
       if (mounted && _searchCtrl.text == q) setState(() => _searchingOnline = false);
@@ -860,7 +868,7 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
       if (!mounted || !_stillOwner('meal logged')) return;
       widget.onLogged();
       setState(() { _saving = false; _selected = null; _logged.add(f.name); });
-      await FoodAddedDialog.show(context,
+      await FoodAddedDialog.show(context, owner: _dialogOwner,
         foodName: f.name,
         protein:  (f.protein * servings).toInt(),
         carbs:    (f.carbs   * servings).toInt(),
@@ -897,7 +905,7 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
       // inherited widget through the context it is handed.
       final navigator = Navigator.of(context);
       navigator.pop();
-      FoodAddedDialog.show(navigator.context,
+      FoodAddedDialog.show(navigator.context, owner: _dialogOwner,
         foodName: r.name,
         protein:  r.protein.toInt(),
         carbs:    r.carbs.toInt(),
@@ -939,7 +947,7 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
       // inherited widget through the context it is handed.
       final navigator = Navigator.of(context);
       navigator.pop();
-      FoodAddedDialog.show(navigator.context,
+      FoodAddedDialog.show(navigator.context, owner: _dialogOwner,
         foodName: name,
         protein:  protein.toInt(),
         carbs:    carbs.toInt(),
@@ -1466,7 +1474,10 @@ class _CustomFoodSheetState extends State<_CustomFoodSheet> {
       servingSize: double.tryParse(_serving.text) ?? 100,
       servingUnit: 'g');
     widget.onSaved(food);
-    if (mounted) Navigator.pop(context);
+    // Only itself: gone with its member, the route under it is not it.
+    if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
+      Navigator.pop(context);
+    }
   }
 
   @override

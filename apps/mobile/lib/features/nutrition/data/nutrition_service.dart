@@ -8,12 +8,16 @@ import '../../scoring/data/score_engine.dart';
 
 class NutritionService {
   /// P0-FL-59e · [forUid]: the member whose meals these are. Given, a meal is
-  /// logged for that member or not at all.
-  NutritionService({this.forUid});
+  /// logged for that member or not at all. Null is a member captured while
+  /// nobody was signed in: nobody's meal, so not the next member's either.
+  NutritionService({this.forUid = signedInAtCall});
 
   final String? forUid;
 
-  bool _stillSignedIn(String owner, String what) {
+  /// "[forUid] was not given", which null is not.
+  static const signedInAtCall = '<signed in at the call>';
+
+  bool _stillSignedIn(String? owner, String what) {
     if (_supabase.auth.currentUser?.id == owner) return true;
     reportError('NutritionService.identity',
         StateError('$what: the signed-in account changed'));
@@ -63,11 +67,12 @@ class NutritionService {
     required String servingUnit,
   }) async {
     // One member for the meal and every award that follows it.
-    final userId = forUid ?? _supabase.auth.currentUser?.id;
-    if (userId == null) throw Exception('Not logged in');
+    final userId =
+        forUid == signedInAtCall ? _supabase.auth.currentUser?.id : forUid;
     if (!_stillSignedIn(userId, 'meal')) {
       throw StateError('meal: the signed-in account changed'); // nothing sent
     }
+    if (userId == null) throw Exception('Not logged in');
     await _supabase.from('nutrition_logs').insert({
       'user_id': userId,
       'meal_type': mealType,
@@ -231,7 +236,10 @@ class NutritionService {
 
   /// Caches an OpenFoodFacts hit into the local `foods` table (dedup by the
   /// UNIQUE barcode) so repeat lookups are instant/offline. Fire-and-forget.
-  Future<void> _cacheFoods(List<Map<String, dynamic>> rows) async {
+  Future<void> _cacheFoods(
+      String? searcher, List<Map<String, dynamic>> rows) async {
+    // P0-FL-59e · what one member looked up is not sent by another.
+    if (_supabase.auth.currentUser?.id != searcher) return;
     final withCode = rows.where((r) => (r['barcode'] as String?)?.isNotEmpty == true).toList();
     if (withCode.isEmpty) return;
     try {
@@ -243,6 +251,7 @@ class NutritionService {
   /// to OpenFoodFacts (and caches the hit). Returns {name, calories, protein,
   /// carbs, fat} per 100g, or null if not found anywhere.
   Future<Map<String, dynamic>?> lookupBarcode(String code) async {
+    final searcher = _supabase.auth.currentUser?.id;
     try {
       final row = await _supabase
           .from('foods')
@@ -275,7 +284,7 @@ class NutritionService {
         final carbs = nv('carbohydrates_100g');
         final fat = nv('fat_100g');
         // Cache for instant/offline future lookups.
-        _cacheFoods([{
+        _cacheFoods(searcher, [{
           'barcode': code, 'name': name,
           'brand': (p['brands'] as String?)?.split(',').first.trim(),
           'calories_per_100g': cal, 'protein_per_100g': protein,
@@ -315,6 +324,7 @@ class NutritionService {
   /// Searches the OpenFoodFacts database (per-100g values) for `query`.
   Future<List<Food>> searchFoodsOnline(String query) async {
     if (query.trim().length < 2) return [];
+    final searcher = _supabase.auth.currentUser?.id;
     try {
       final res = await _off.get(
         'https://world.openfoodfacts.org/cgi/search.pl',
@@ -346,7 +356,7 @@ class NutritionService {
         ));
       }
       // Cache the barcoded results for instant future lookups.
-      _cacheFoods(out.map((f) => {
+      _cacheFoods(searcher, out.map((f) => {
         'barcode': f.barcode, 'name': f.name, 'brand': f.brand,
         'calories_per_100g': f.calories, 'protein_per_100g': f.protein,
         'carbs_per_100g': f.carbs, 'fat_per_100g': f.fat,

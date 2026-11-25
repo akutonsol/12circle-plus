@@ -9,15 +9,19 @@ import '../../../core/observability/app_failure.dart';
 class ScoreEngine {
   /// P0-FL-59e · [forUid]: the member whose action this is. `award_points`
   /// awards whoever is signed in, so, given, nothing is sent once that is
-  /// someone else (recorded). Not given, as before.
-  ScoreEngine({this.forUid});
+  /// someone else (recorded). Not given, as before. Null is a member captured
+  /// while nobody was signed in: it is not whoever is by now.
+  ScoreEngine({this.forUid = signedInAtCall});
 
   final String? forUid;
 
+  /// "[forUid] was not given", which null is not.
+  static const signedInAtCall = '<signed in at the call>';
+
   /// Asked right before the request: there is no await in between.
   bool _isForSignedIn(String action) {
-    final owner = forUid;
-    if (owner == null || _uid == owner) return true;
+    if (forUid == signedInAtCall) return true;
+    if (_uid == forUid) return forUid != null; // signed out: nobody's points
     reportError('ScoreEngine.identity',
         StateError('$action: the signed-in account changed'));
     return false;

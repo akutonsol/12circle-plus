@@ -2,33 +2,64 @@
 // by one member is never saved for another.
 //
 // HOW TO SEE IT FAIL: put back a82f993's nutrition_screen, meals_dashboard
-// _screen, nutrition_service and settings_screen; every test but the POSITIVE
-// CONTROLs fails.
+// _screen, nutrition_service, food_added_dialog and settings_screen; every test
+// fails but the POSITIVE CONTROLs, "signed out with the sheet open" (signed
+// out, the notifier itself sends nothing) and, in the dialog group, the
+// "answers after" ones. The "Food Added!" group, the dialog "switched before it
+// is drawn", the swiped-away sheet and the food search fail on 5f8b7f3 too.
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
+import 'package:circle_fitness/features/coach/domain/coach_provider.dart';
 import 'package:circle_fitness/features/nutrition/presentation/meals_dashboard_screen.dart';
 import 'package:circle_fitness/features/nutrition/presentation/nutrition_screen.dart';
 import 'package:circle_fitness/features/nutrition/presentation/widgets/ai_scan_view.dart';
+import 'package:circle_fitness/features/nutrition/presentation/widgets/barcode_scan_view.dart';
 import 'package:circle_fitness/features/payments/domain/entitlements.dart';
 import 'package:circle_fitness/features/settings/presentation/settings_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/member_switch_server.dart';
 
+/// Whether a dialog has been pushed, before any frame draws it.
+class _Dialogs extends NavigatorObserver {
+  int pushed = 0;
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    if (route is DialogRoute) pushed++;
+  }
+}
+
 void main() {
+  final dialogs = _Dialogs();
   final server = MemberSwitchServer();
   final reported = <AppFailure>[];
 
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
+    // No camera here: the scanner view says so and stays up.
+    const scanner = 'dev.steenbakker.mobile_scanner/scanner';
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(const MethodChannel('$scanner/method'),
+        (call) async => switch (call.method) {
+              'state' => 2, // denied
+              'request' => false,
+              _ => null,
+            });
+    for (final name in ['event', 'deviceOrientation']) {
+      messenger.setMockMethodCallHandler(
+          MethodChannel('$scanner/$name'), (call) async => null);
+    }
     await initTwoMemberSupabase(server);
   });
 
   setUp(() async {
     server.reset();
+    dialogs.pushed = 0;
     await signInAs(memberA);
     reported.clear();
     setFailureSink(reported.add);
@@ -67,6 +98,7 @@ void main() {
       await size(t);
       await t.pumpWidget(ProviderScope(
         child: MaterialApp(
+          navigatorObservers: [dialogs],
           home: Scaffold(
             body: Builder(
               builder: (ctx) => TextButton(
@@ -140,6 +172,96 @@ void main() {
       await close(t);
     });
 
+    testWidgets("A's barcode food, found once B is signed in: no meal for B; "
+        'refused at the sheet, recorded', (t) async {
+      await open(t, mode: 'barcode');
+      final found =
+          t.widget<BarcodeScanView>(find.byType(BarcodeScanView)).onFound;
+      await switchTo(t, memberB);
+      found({'name': "A's bar", 'calories': 100.0});
+      await settle(t);
+      expect(asB(), isEmpty);
+      expect(server.writes(), isEmpty);
+      expect(origins(), ['AddMealSheet.identity'],
+          reason: 'it went on to the service');
+      expect(find.byType(BarcodeScanView), findsNothing);
+      await close(t);
+    });
+
+    testWidgets("A's custom food, saved in its undrawn sheet once B is signed "
+        'in: kept by nobody, and the page is still up', (t) async {
+      await open(t);
+      await t.enterText(find.byType(TextField), 'z'); // matches no food
+      await settle(t);
+      await t.tap(find.textContaining('manually'));
+      await settle(t);
+      await t.enterText(find.byType(TextField).at(1), "A's stew");
+      await t.pump();
+      final save = t
+          .widget<GestureDetector>(find.ancestor(
+              of: find.text('Add to List'),
+              matching: find.byType(GestureDetector)).first)
+          .onTap!;
+      await switchTo(t, memberB);
+      save(); // (the navigator absorbs taps until the routes are redrawn)
+      await settle(t);
+      expect(find.textContaining("A's stew"), findsNothing);
+      expect(find.text('open'), findsOneWidget);
+      expect(origins(), contains('AddMealSheet.identity'));
+      expect(server.writes(), isEmpty);
+      await close(t);
+    });
+
+    testWidgets('POSITIVE CONTROL: a custom food is on its member\'s list and '
+        'is logged for them', (t) async {
+      await open(t);
+      await t.enterText(find.byType(TextField), 'z');
+      await settle(t);
+      await t.tap(find.textContaining('manually'));
+      await settle(t);
+      await t.enterText(find.byType(TextField).at(1), 'Stew');
+      await t.tap(find.text('Add to List'));
+      await settle(t);
+      expect(find.text('Log Meal'), findsOneWidget);
+      await t.enterText(find.byType(TextField), 'Stew');
+      await settle(t);
+      await t.tap(find.text('Stew').last);
+      await settle(t);
+      await t.tap(find.text('Log Stew'));
+      await settle(t);
+      expect(server.writes('nutrition_logs').single.row['food_name'], 'Stew');
+      await close(t);
+    });
+
+    testWidgets("what A typed in the food search is not searched for as B",
+        (t) async {
+      await open(t);
+      await t.enterText(find.byType(TextField), 'low FODMAP');
+      await t.pump(const Duration(milliseconds: 100));
+      await switchTo(t, memberB);
+      // The debounce comes due before the next frame, as in a hidden tab.
+      await t.pump(const Duration(milliseconds: 400));
+      await settle(t);
+      expect(server.seen.where((r) => '${r.query}'.contains('FODMAP')), isEmpty,
+          reason: '${server.seen.toList()}');
+      await close(t);
+    });
+
+    testWidgets('POSITIVE CONTROL: after a token refresh the search is sent as '
+        'its member', (t) async {
+      await open(t);
+      await t.enterText(find.byType(TextField), 'low FODMAP');
+      await t.pump(const Duration(milliseconds: 100));
+      await t.runAsync(refreshSession);
+      await t.pump(const Duration(milliseconds: 400));
+      await settle(t);
+      expect(
+          server.reads('foods').where((r) => '${r.query}'.contains('FODMAP'))
+              .map((r) => r.who),
+          [memberA]);
+      await close(t);
+    });
+
     testWidgets("A's meal answers after B signed in: no points for B, B is not "
         "shown A's meal", (t) async {
       await open(t);
@@ -168,8 +290,8 @@ void main() {
       await switchTo(t, memberB);
       hold.complete();
       await settle(t);
-      expect(origins(), contains('AddMealSheet._logFood'));
       expect(find.byType(SnackBar), findsNothing);
+      expect(origins(), contains('AddMealSheet._logFood'));
       await close(t);
     });
 
@@ -189,6 +311,82 @@ void main() {
       await close(t);
     });
 
+    group('"Food Added!"', () {
+      /// Logs a meal by [path] up to (not through) its save's answer.
+      Future<Completer<void>> log(WidgetTester t, String path) async {
+        await open(t, mode: path);
+        final hold =
+            server.holds['POST nutrition_logs:$memberA'] = Completer<void>();
+        switch (path) {
+          case 'manual':
+            await pickFood(t);
+            await t.tap(find.text('Log Brown Rice'));
+          case 'ai_scan':
+            t.widget<AiScanView>(find.byType(AiScanView)).onAccept(scan);
+          default:
+            t
+                .widget<BarcodeScanView>(find.byType(BarcodeScanView))
+                .onFound({'name': "A's curry", 'calories': 1.0});
+        }
+        await settle(t, 2);
+        return hold;
+      }
+
+      for (final path in ['manual', 'ai_scan', 'barcode']) {
+        for (final signedOut in [false, true]) {
+          final who = signedOut ? 'signed out' : 'B signed in';
+          testWidgets('$path: up, then $who: it goes', (t) async {
+            final hold = await log(t, path);
+            hold.complete();
+            await settle(t);
+            expect(find.text('Food Added!'), findsOneWidget, reason: 'premise');
+            await t.runAsync(() => signedOut ? signOut() : signInAs(memberB));
+            await settle(t);
+            expect(find.text('Food Added!'), findsNothing);
+            expect(find.textContaining('diet schedule'), findsNothing);
+            expect(find.text('open'), findsOneWidget);
+            await close(t);
+          });
+
+          testWidgets('$path: pushed, then $who before its first frame: never '
+              'drawn, and nothing is left over the page', (t) async {
+            final hold = await log(t, path);
+            await t.runAsync(() async {
+              hold.complete();
+              final clock = Stopwatch()..start();
+              while (dialogs.pushed == 0 &&
+                  clock.elapsed < const Duration(seconds: 5)) {
+                await Future<void>.delayed(const Duration(milliseconds: 5));
+              }
+              expect(dialogs.pushed, 1, reason: 'premise');
+              await (signedOut ? signOut() : signInAs(memberB));
+            });
+            await t.pump();
+            expect(find.text('Food Added!'), findsNothing);
+            await settle(t);
+            expect(find.text('Food Added!'), findsNothing);
+            expect(find.byType(ModalBarrier), findsOneWidget,
+                reason: 'only the page');
+            await close(t);
+          });
+        }
+      }
+
+      testWidgets('POSITIVE CONTROL: a token refresh keeps it; "Great, thanks!" '
+          'closes it', (t) async {
+        final hold = await log(t, 'ai_scan');
+        hold.complete();
+        await settle(t);
+        await t.runAsync(refreshSession);
+        await settle(t);
+        expect(find.text('Food Added!'), findsOneWidget);
+        await t.tap(find.text('Great, thanks!'));
+        await settle(t);
+        expect(find.text('Food Added!'), findsNothing);
+        await close(t);
+      });
+    });
+
     testWidgets('POSITIVE CONTROL: a scan is logged for its member', (t) async {
       await open(t, mode: 'ai_scan');
       t.widget<AiScanView>(find.byType(AiScanView)).onAccept(scan);
@@ -202,7 +400,8 @@ void main() {
     Future<void> open(WidgetTester t) async {
       await size(t);
       await t.pumpWidget(
-          const ProviderScope(child: MaterialApp(home: NutritionScreen())));
+          ProviderScope(child: MaterialApp(
+              navigatorObservers: [dialogs], home: const NutritionScreen())));
       await settle(t);
       await t.tap(find.text('Log Meal'));
       await settle(t);
@@ -232,11 +431,50 @@ void main() {
       await switchTo(t, memberB);
       hold.complete();
       await settle(t);
-      expect(origins(), contains('NutritionScreen.addMeal._log'));
       expect(find.byType(SnackBar), findsNothing);
       expect(asB(), isEmpty);
+      expect(origins(), contains('NutritionScreen.addMeal._log'));
       await close(t);
     });
+
+    for (final signedOut in [false, true]) {
+      final who = signedOut ? 'signed out' : 'B signed in';
+      testWidgets('"Food Added!" up, then $who: it goes', (t) async {
+        await open(t);
+        await t.tap(find.text('Log Brown Rice'));
+        await settle(t);
+        expect(find.text('Food Added!'), findsOneWidget, reason: 'premise');
+        await t.runAsync(() => signedOut ? signOut() : signInAs(memberB));
+        await settle(t);
+        expect(find.text('Food Added!'), findsNothing);
+        expect(find.textContaining('diet schedule'), findsNothing);
+        await close(t);
+      });
+
+      testWidgets('"Food Added!" pushed, then $who before its first frame: '
+          'never drawn', (t) async {
+        await open(t);
+        final hold =
+            server.holds['POST nutrition_logs:$memberA'] = Completer<void>();
+        await t.tap(find.text('Log Brown Rice'));
+        await settle(t, 2);
+        await t.runAsync(() async {
+          hold.complete();
+          final clock = Stopwatch()..start();
+          while (dialogs.pushed == 0 &&
+              clock.elapsed < const Duration(seconds: 5)) {
+            await Future<void>.delayed(const Duration(milliseconds: 5));
+          }
+          expect(dialogs.pushed, 1, reason: 'premise');
+          await (signedOut ? signOut() : signInAs(memberB));
+        });
+        await t.pump();
+        expect(find.text('Food Added!'), findsNothing);
+        await settle(t);
+        expect(find.byType(ModalBarrier), findsOneWidget);
+        await close(t);
+      });
+    }
 
     testWidgets('POSITIVE CONTROL: logged for its member', (t) async {
       await open(t);
@@ -248,7 +486,8 @@ void main() {
   });
 
   group('Coaching mode sheet', () {
-    Future<void> open(WidgetTester t, {bool coach = false}) async {
+    Future<void> open(WidgetTester t,
+        {bool coach = false, List<String> coaches = const ['coach-a']}) async {
       Map<String, Object?> me(String id, String name) => {
             'id': id, 'role': 'client', 'first_name': name, 'last_name': 'Lee',
             'coaching_mode': 'coach_guided',
@@ -261,7 +500,10 @@ void main() {
         if (coach)
           'coach_client_relationships': {
             for (final m in [memberA, memberB])
-              m: [{'id': 'rel-$m', 'coach_id': 'coach-a', 'status': 'active'}],
+              m: [
+                for (final c in coaches)
+                  {'id': 'rel-$c', 'coach_id': c, 'status': 'active'},
+              ],
           },
         'public_profiles': {
           for (final m in [memberA, memberB])
@@ -274,7 +516,14 @@ void main() {
         overrides: [
           clientPlanProvider.overrideWith((ref) async => ClientPlan.coachGuided),
         ],
-        child: const MaterialApp(home: SettingsScreen()),
+        child: MaterialApp(
+          home: const SettingsScreen(),
+          // Profile, further down the real stack, lists the coaches.
+          builder: (_, child) => Consumer(builder: (_, ref, __) {
+            ref.watch(myCoachesProvider);
+            return child!;
+          }),
+        ),
       ));
       await settle(t);
       await t.tap(find.text('Coach Guided'));
@@ -345,6 +594,98 @@ void main() {
       await settle(t);
       expect(modeWrites(), isEmpty);
       expect(find.text('Could not save coaching mode.'), findsNothing);
+      await close(t);
+    });
+
+    for (final fails in [false, true]) {
+      testWidgets(
+          'same member, the sheet swiped away while the coaching is ended'
+          '${fails ? ' (and it fails)' : ''}: the coaches are read again once',
+          (t) async {
+        await open(t, coach: true);
+        final key = 'PATCH coach_client_relationships:$memberA';
+        final hold = server.holds[key] = Completer();
+        if (fails) server.fails.add(key);
+        await t.tap(find.text('Apply'));
+        await settle(t);
+        await t.tap(find.text('End & switch'));
+        await settle(t, 4);
+        expect(server.writes('coach_client_relationships'), hasLength(1),
+            reason: 'premise');
+        t.state<NavigatorState>(find.byType(Navigator).first).pop();
+        await settle(t);
+        expect(find.text('Apply'), findsNothing, reason: 'premise');
+        server.seen.clear();
+        hold.complete();
+        await settle(t);
+        expect(
+            server.reads('coach_client_relationships', memberA).where(
+                (r) => '${r.query['select']}'.contains('monthly_price')),
+            hasLength(1),
+            reason: 'the ended coach is still listed');
+        expect(asB(), isEmpty);
+        await close(t);
+      });
+    }
+
+    testWidgets("A's coaching could not be ended, B signed in meanwhile: "
+        'recorded, B is not told', (t) async {
+      await open(t, coach: true);
+      final key = 'PATCH coach_client_relationships:$memberA';
+      final hold = server.holds[key] = Completer();
+      server.fails.add(key);
+      await t.tap(find.text('Apply'));
+      await settle(t);
+      await t.tap(find.text('End & switch'));
+      await settle(t, 4);
+      await switchTo(t, memberB);
+      hold.complete();
+      await settle(t);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(asB(), isEmpty);
+      expect(origins(), contains('CoachingModeSheet.apply.cancelCoach'));
+      await close(t);
+    });
+
+    testWidgets("the dialog naming A's coach, switched before it is drawn: "
+        'never drawn for B, and it goes', (t) async {
+      await open(t, coach: true);
+      await t.tap(find.text('Apply'));
+      await t.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        await signInAs(memberB);
+      });
+      await t.pump();
+      expect(find.textContaining('End coaching with'), findsNothing);
+      await settle(t);
+      expect(find.text('Apply'), findsNothing);
+      expect(find.byType(ModalBarrier), findsOneWidget);
+      expect(asB(), isEmpty);
+      await close(t);
+    });
+
+    testWidgets('two coaches, B signs in after the first is ended: the second '
+        'is not ended as B', (t) async {
+      await open(t, coach: true, coaches: ['coach-a', 'coach-c']);
+      final hold =
+          server.holds['PATCH coach_client_relationships:$memberA'] = Completer();
+      await t.tap(find.text('Apply'));
+      await settle(t);
+      await t.tap(find.text('End & switch'));
+      await settle(t, 4);
+      await switchTo(t, memberB);
+      hold.complete();
+      await settle(t);
+      expect(server.writes('coach_client_relationships'), hasLength(1));
+      expect(
+          server.seen.where((r) =>
+              r.who == memberB &&
+              r.target == 'subscriptions' &&
+              '${r.query}'.contains('coach-c')),
+          isEmpty, reason: "the second coach was looked up to be ended as B");
+      expect(modeWrites(), isEmpty);
+      // (The first coach's "ended coaching" notification is sent inside
+      // cancelCoach: coach_relationship_service, P0-FL-59d.)
       await close(t);
     });
 

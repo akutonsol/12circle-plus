@@ -3,6 +3,8 @@
 //
 // New API: on a82f993 this file does not compile (there was no way to say whose
 // award it is). The behaviour failures are in awards_stay_with_their_member.
+// The "captured while nobody was signed in" test fails on 5f8b7f3, where null
+// meant "not given".
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/coach/data/score_service.dart';
 import 'package:circle_fitness/features/nutrition/data/nutrition_service.dart';
@@ -73,6 +75,30 @@ void main() {
     await meal(NutritionService(forUid: memberB));
     expect(server.writes('nutrition_logs').single.row['user_id'], memberB);
     expect(reported, isEmpty);
+  });
+
+  test('captured while nobody was signed in (null) is nobody\'s, not "no owner '
+      'given": nothing is sent for whoever is signed in by now, recorded',
+      () async {
+    await everyScore(ScoreService(forUid: null));
+    expect(origins(), List.filled(5, 'ScoreService.identity'));
+    reported.clear();
+    await ScoreEngine(forUid: null).mealLogged('m');
+    await ScoreEngine(forUid: null).idleTimePenalty();
+    expect(origins(), List.filled(2, 'ScoreEngine.identity'));
+    reported.clear();
+    await expectLater(meal(NutritionService(forUid: null)), throwsStateError);
+    expect(origins(), ['NutritionService.identity']);
+    expect(server.seen, isEmpty, reason: 'sent as B: ${server.seen}');
+    // Still nobody: nothing, and nothing to record.
+    reported.clear();
+    await signOut();
+    await everyScore(ScoreService(forUid: null));
+    await ScoreEngine(forUid: null).mealLogged('m');
+    expect(server.seen, isEmpty);
+    expect(reported, isEmpty);
+    await expectLater(meal(NutritionService(forUid: null)), throwsException);
+    expect(server.seen, isEmpty);
   });
 
   test('BACKWARD COMPATIBLE: without forUid, the member signed in; signed out, '

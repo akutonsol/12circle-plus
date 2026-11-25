@@ -5,21 +5,26 @@ class ScoreService {
   /// P0-FL-59e · [forUid]: the member these points are for. Given, every award
   /// is written for that member or not at all: nothing is read or written once
   /// someone else is signed in. Not given, the member signed in when the award
-  /// started is the one it stays with.
-  ScoreService({this.forUid});
+  /// started is the one it stays with. Null is a member captured while nobody
+  /// was signed in: nobody's, so nothing is awarded to whoever is by now.
+  ScoreService({this.forUid = signedInAtCall});
 
   final String? forUid;
+
+  /// "[forUid] was not given", which null is not.
+  static const signedInAtCall = '<signed in at the call>';
 
   final _db = Supabase.instance.client;
 
   /// The one member an award is for, fixed at its start; null = award nothing
   /// (signed out, or [forUid] is no longer the member signed in: recorded).
   String? _awardOwner() {
-    final owner = forUid ?? _db.auth.currentUser?.id;
-    return owner != null && _stillSignedIn(owner) ? owner : null;
+    final owner =
+        forUid == signedInAtCall ? _db.auth.currentUser?.id : forUid;
+    return _stillSignedIn(owner) ? owner : null;
   }
 
-  bool _stillSignedIn(String owner) {
+  bool _stillSignedIn(String? owner) {
     if (_db.auth.currentUser?.id == owner) return true;
     reportError('ScoreService.identity',
         StateError('daily score: the signed-in account changed'));

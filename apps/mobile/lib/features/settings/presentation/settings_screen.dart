@@ -770,8 +770,7 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
   /// The sheet (and its dialog) goes with the member who opened it: at once,
   /// and silently, as the one signed in now did not open it.
   void _closeForOwner() {
-    if (!mounted) return;
-    for (final ctx in [_confirmCtx, context]) {
+    for (final ctx in [_confirmCtx, if (mounted) context]) {
       if (ctx == null || !ctx.mounted) continue;
       final route = ModalRoute.of(ctx);
       if (route != null && route.isActive) route.navigator?.removeRoute(route);
@@ -823,28 +822,34 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
             if (coachId != null) {
               // A paid coach is cancelled at the end of the paid period and
               // coaching lasts until then (owner decision 2): say so.
+              // (Asked as the owner just above: no await in between.)
               final end = await svc.cancelCoach(coachId, 'switched_to_self_serve', null);
               if (end.scheduled && _signedIn == _owner) {
                 messenger.showSnackBar(SnackBar(content: Text(end.describe())));
               }
             }
           }
-        } catch (e) {
+        } catch (e, st) {
           // Coaching did not end, so the mode does not change either.
-          reportError('CoachingModeSheet.apply.cancelCoach', e);
-          if (!mounted || !_stillOwner('end coaching')) return;
+          reportError('CoachingModeSheet.apply.cancelCoach', e, st);
+          if (!_stillOwner('end coaching')) return;
+          // One of several may have ended: re-read even if the sheet is gone.
           widget.ref.invalidate(myCoachesProvider);
           widget.ref.invalidate(assignedCoachProvider);
           widget.ref.invalidate(clientRelationshipProvider);
+          if (!mounted) return;
           setState(() => _saving = false);
           messenger.showSnackBar(const SnackBar(
             content: Text('Could not save coaching mode.')));
           return;
         }
-        if (!mounted || !_stillOwner('coaching mode')) return;
+        // Ended: the coach lists are re-read even if the sheet was swiped away
+        // meanwhile (they are the page's, not the sheet's).
+        if (!_stillOwner('coaching mode')) return;
         widget.ref.invalidate(myCoachesProvider);
         widget.ref.invalidate(assignedCoachProvider);
         widget.ref.invalidate(clientRelationshipProvider);
+        if (!mounted) return;
       }
     }
 
@@ -885,6 +890,12 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
       context: context,
       builder: (dctx) {
         _confirmCtx = dctx;
+        // Opened after an await: never drawn once its member has left.
+        if (_signedIn != _owner) {
+          WidgetsBinding.instance
+              .addPostFrameCallback((_) => _closeForOwner());
+          return const SizedBox.shrink();
+        }
         return AlertDialog(
         backgroundColor: const Color(0xFF1C1B1C),
         title: Text('End coaching with $who?',
