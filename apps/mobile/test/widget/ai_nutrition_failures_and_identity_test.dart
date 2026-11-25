@@ -426,15 +426,17 @@ void main() {
                 .onSubmitted!(draft(t));
           }
           await noFrame(t);
-          expect(draft(t), isEmpty);
-          expect(asA.mounted, isTrue, reason: 'premise: no frame');
-          expect(asA.state.map((m) => m.content),
-              isNot(contains('I am diabetic')),
-              reason: "A's turns are dropped before any frame");
+          final heldBeforeAFrame =
+              asA.mounted ? asA.state.map((m) => m.content).toList() : null;
           await settle(t);
           expect(ai.sent, hasLength(n),
               reason: "THE defect: A's words went out under B's login");
-          expect(origins(), ['aiNutrition.identity']);
+          expect(origins(), ['aiNutrition.identity'],
+              reason: 'THE defect: the tap was answered by another chat');
+          expect(heldBeforeAFrame, isNotNull, reason: 'premise: no frame');
+          expect(heldBeforeAFrame, isNot(contains('I am diabetic')),
+              reason: "A's turns are dropped before any frame");
+          expect(draft(t), isEmpty);
           expect(find.textContaining('92 kg'), findsNothing);
           expect(find.text('I am diabetic'), findsNothing);
           expect(find.text('Thinking...'), findsNothing);
@@ -472,12 +474,29 @@ void main() {
       await hearNoFrame(t, to: memberB);
       await t.tap(find.text('Send it again'));
       await noFrame(t);
-      expect(asA.state, hasLength(1));
+      final turns = asA.mounted ? asA.state.length : null;
       await settle(t);
       expect(ai.sent, hasLength(n));
       expect(origins(), ['aiNutrition.identity'],
           reason: "the retry was asked of B's chat instead of A's");
+      expect(turns, 1, reason: 'dropped before any frame');
       expect(find.text('Thinking...'), findsNothing);
+      await close(t);
+    });
+
+    testWidgets("a retry on A's chat once it is gone: refused and recorded, "
+        'not thrown', (t) async {
+      ai.status = 503;
+      final c = await show(t, const AiNutritionScreen());
+      await ask(t, 'I am diabetic');
+      final asA = c.read(aiNutritionNotifierProvider.notifier);
+      await switchTo(t, memberB);
+      expect(asA.mounted, isFalse, reason: 'premise');
+      reported.clear();
+      final n = ai.sent.length;
+      await t.runAsync(asA.retryLastTurn);
+      expect(ai.sent, hasLength(n));
+      expect(origins(), ['aiNutrition.identity']);
       await close(t);
     });
 
@@ -819,11 +838,14 @@ void main() {
       expect(find.text('2600 kcal'), findsOneWidget, reason: 'premise: no frame');
       await t.tap(find.text('Generate Meal Plan'));
       await noFrame(t);
-      expect(asA.state.content, isNull);
+      final alive = asA.mounted;
+      final kept = alive ? asA.state.content : null;
       await settle(t);
       expect(ai.sent, hasLength(n),
           reason: "THE defect: a build nobody chose, under B's login");
       expect(origins(), ['aiNutrition.identity']);
+      expect(alive, isTrue, reason: 'premise: no frame');
+      expect(kept, isNull);
       expect(find.text('Generating your meal plan...'), findsNothing);
       expect(find.text('Mon: oats'), findsNothing);
       expect(find.text('1500 kcal'), findsOneWidget);
@@ -1027,11 +1049,14 @@ void main() {
       await hearNoFrame(t, to: memberB);
       await t.tap(find.text(groceryRebuildLabel));
       await noFrame(t);
-      expect(asA.state.content, isNull);
+      final alive = asA.mounted;
+      final kept = alive ? asA.state.content : null;
       await settle(t);
       expect(ai.sent, hasLength(n));
       expect(origins(), ['aiNutrition.identity'],
           reason: 'it was dropped without a word');
+      expect(alive, isTrue, reason: 'premise: no frame');
+      expect(kept, isNull);
       expect(find.text('No meal plan yet'), findsOneWidget);
       await close(t);
     });

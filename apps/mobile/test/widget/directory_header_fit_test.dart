@@ -52,7 +52,8 @@ void main() {
 
   final header = find.byType(BackdropFilter);
 
-  for (final w in fitPhones.keys) {
+  // 700: wide enough for a line each at 3x, but the bar is not tall enough.
+  for (final w in [...fitPhones.keys, 700]) {
     for (final s in fitScales) {
       for (final name in ['Sam', _long]) {
         testWidgets('${w}dp at ${s}x, "$name": the greeting is whole, not '
