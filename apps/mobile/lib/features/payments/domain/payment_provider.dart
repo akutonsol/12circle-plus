@@ -115,27 +115,27 @@ final paymentServiceProvider = Provider<PaymentService>((ref) => PaymentService(
 
 final mySubscriptionsProvider =
     FutureProvider<List<Map<String, dynamic>>>((ref) async {
-  ref.watch(paymentAccountProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   return ref.watch(paymentServiceProvider).getMySubscriptions();
 });
 
 /// Coach: Stripe Connect status (connected / charges_enabled / payouts_enabled).
 final coachConnectStatusProvider =
     FutureProvider<Map<String, dynamic>>((ref) async {
-  ref.watch(paymentAccountProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   return ref.watch(paymentServiceProvider).connectStripeStatus();
 });
 
 /// Coach revenue metrics (monthly/lifetime/mrr/subscribers/marketplace/direct $).
 final coachRevenueServiceProvider = Provider((ref) => CoachRevenueService());
 final coachRevenueProvider = FutureProvider<Map<String, double>>((ref) async {
-  ref.watch(paymentAccountProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   return ref.watch(coachRevenueServiceProvider).getMetrics();
 });
 
 /// Coach: connected-account balance {pending, available} (cents).
 final coachBalanceProvider = FutureProvider<Map<String, dynamic>>((ref) async {
-  ref.watch(paymentAccountProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   return ref.watch(paymentServiceProvider).connectBalance();
 });
 
@@ -143,7 +143,7 @@ final coachBalanceProvider = FutureProvider<Map<String, dynamic>>((ref) async {
 /// Gate platform features on this — for whoever is signed in now, which is
 /// why it watches the user: the server answers for `auth.uid()`.
 final membershipTierProvider = FutureProvider<String?>((ref) async {
-  ref.watch(paymentAccountProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   return ref.watch(paymentServiceProvider).activeMembership();
 });
 
@@ -156,13 +156,13 @@ final hasMembershipProvider = Provider<bool?>((ref) {
 
 /// The coach's active platform plan tier ('starter'|'growth'|'elite' | null).
 final coachPlanTierProvider = FutureProvider<String?>((ref) async {
-  ref.watch(paymentAccountProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   return ref.watch(paymentServiceProvider).coachPlanTier();
 });
 
 /// Active subscription to a given coach (null if not subscribed).
 final coachSubscriptionProvider =
     FutureProvider.family<Map<String, dynamic>?, String>((ref, coachId) async {
-  ref.watch(paymentAccountProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   return ref.watch(paymentServiceProvider).activeCoachSubscription(coachId);
 });
