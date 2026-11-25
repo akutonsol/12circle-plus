@@ -246,10 +246,10 @@ void main() {
       final submit = field(t).onSubmitted!;
       await switchTo(t, memberB);
       submit('');
-      expect(reported.single.origin, 'ChatScreen._send',
-          reason: "THE defect: A's draft was sent as B");
       await settle(t);
-      expect(server.writesAs(memberB), isEmpty);
+      expect(server.writesAs(memberB), isEmpty,
+          reason: "THE defect: A's draft was inserted into A's thread as B");
+      expect(reported.single.origin, 'ChatScreen._send');
       expect('${reported.single.error}', contains('the signed-in account changed'));
       expect(find.byType(SnackBar), findsNothing);
       nothingOfAs(t);
@@ -296,6 +296,9 @@ void main() {
       await open(t);
       await switchTo(t, memberB);
       svc.stream.add([_msg('m9', 'A private row')]);
+      await t.idle();
+      expect(svc.stream.hasListener, isFalse,
+          reason: 'dropped by the row itself, before any frame');
       await settle(t);
       expect(find.text('A private row'), findsNothing);
       expect(svc.stream.hasListener, isFalse);
@@ -375,6 +378,8 @@ void main() {
       await settle(t);
       expect(server.log.where((a) => a.who == memberB), isEmpty,
           reason: "THE defect: B asked for A's thread and marked it read");
+      expect(origins(), ['MessagingService.getOrCreateConversationWith'],
+          reason: 'a switch is not "no conversation for participant"');
       expect(find.textContaining('Nadia'), findsNothing);
       await close(t);
     });

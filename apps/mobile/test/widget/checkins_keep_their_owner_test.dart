@@ -318,11 +318,11 @@ void main() {
         await open(t);
         await switchTo(t, memberB);
         await settle(t);
-        expect(server.sent('GET', 'weekly_checkins', memberB), isNotEmpty);
         hold.complete();
         await settle(t);
         expect(find.text(done), findsNothing,
             reason: "THE defect: B was told they had checked in (A's week)");
+        expect(server.sent('GET', 'weekly_checkins', memberB), isNotEmpty);
         expect(notesField(), findsOneWidget);
         await close(t);
       });
@@ -340,6 +340,9 @@ void main() {
         expect(find.text(done), findsNothing);
         server.holds['GET weekly_checkins:$memberB']!.complete();
         await settle(t);
+        expect(find.text(done), findsNothing,
+            reason: "THE defect (S5): A's week beside B's streak");
+        expect(notesField(), findsOneWidget);
         await close(t);
       });
 
@@ -740,6 +743,24 @@ void main() {
         await close(t);
       });
     }
+
+    testWidgets("A's failure landing after B's own sessions is not B's",
+        (t) async {
+      server.rows['coaching_calls:$memberB'] = [call(memberB, 'Blake')];
+      final hold =
+          server.holds['GET coaching_calls:$memberA'] = Completer<void>();
+      server.fails.add('GET coaching_calls:$memberA');
+      await open(t);
+      await switchTo(t, memberB);
+      await settle(t);
+      hold.complete();
+      await t.idle();
+      await t.pump();
+      expect(find.text(checkinSessionsFailure), findsNothing);
+      await settle(t);
+      expect(find.text('with Coach Blake Park'), findsOneWidget);
+      await close(t);
+    });
 
     testWidgets('CONTROLS: a token refresh reads nothing again; signed out '
         "shows nothing of A's; no calls is still none", (t) async {
