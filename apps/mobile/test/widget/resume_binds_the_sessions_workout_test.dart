@@ -40,6 +40,8 @@ Future<Workout?> _select(WidgetTester tester, WorkoutSessionRecord? open) async 
   Workout? selected;
   await tester.pumpWidget(ProviderScope(
     overrides: [
+      // Whose session it is: the signed-in member's (P0-FL-59b).
+      restoringUserIdProvider.overrideWithValue('u1'),
       activeSessionProvider.overrideWith((ref) async => open),
       workoutSessionManagerProvider.overrideWithValue(_Manager()),
       assignedWorkoutsProvider.overrideWith((ref) async => [_program]),

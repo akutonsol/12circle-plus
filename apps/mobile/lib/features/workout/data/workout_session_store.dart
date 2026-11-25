@@ -145,14 +145,48 @@ abstract class WorkoutSessionStore {
       String sessionId, String exerciseId, String setId);
 }
 
+/// Throws unless [owner] is the member signed in NOW.
+///
+/// P0-FL-59b: a workout outlives the moment it was opened — debounced saves, a
+/// rest timer, a finish over four round-trips — and the server only asks that
+/// the row carry the caller's own uid. So every workout write asks, right
+/// before it is sent, whether the member who owns the workout is still here.
+void requireWorkoutOwner(SupabaseClient db, String owner, String what) {
+  if (db.auth.currentUser?.id != owner) {
+    throw StateError('$what: the signed-in account changed');
+  }
+}
+
 /// Production store, backed by the existing Supabase `workout_sessions` table.
 class SupabaseWorkoutSessionStore implements WorkoutSessionStore {
   final SupabaseClient _db;
   SupabaseWorkoutSessionStore([SupabaseClient? db])
       : _db = db ?? Supabase.instance.client;
 
+  /// The member each session was read or created for, by session id. Every
+  /// session the app holds came through this store, so a write against one
+  /// made after the account changed is refused here whoever asks for it
+  /// (P0-FL-59b) — the row would match nothing, and report success.
+  final Map<String, String> _owners = {};
+
+  void _requireOwner(Iterable<String> sessionIds, String what) {
+    for (final id in sessionIds) {
+      final owner = _owners[id];
+      if (owner != null) requireWorkoutOwner(_db, owner, what);
+    }
+  }
+
+  WorkoutSessionRecord _remember(Map row, String userId) {
+    final record = WorkoutSessionRecord.fromMap(Map<String, dynamic>.from(row));
+    _owners[record.id] = userId;
+    return record;
+  }
+
   @override
   Future<List<WorkoutSessionRecord>> inProgressSessions(String userId) async {
+    // Asked as anybody else, this answers "none" — and "none" is what opens a
+    // new session.
+    requireWorkoutOwner(_db, userId, 'reading the active workout');
     final rows = await _db
         .from('workout_sessions')
         .select()
@@ -160,8 +194,7 @@ class SupabaseWorkoutSessionStore implements WorkoutSessionStore {
         .eq('status', WorkoutSessionStatus.inProgress)
         .order('started_at', ascending: false);
     return [
-      for (final row in (rows as List))
-        WorkoutSessionRecord.fromMap(Map<String, dynamic>.from(row as Map)),
+      for (final row in (rows as List)) _remember(row as Map, userId),
     ];
   }
 
@@ -172,6 +205,7 @@ class SupabaseWorkoutSessionStore implements WorkoutSessionStore {
     required String workoutTitle,
     required Map<String, dynamic> workoutSnapshot,
   }) async {
+    requireWorkoutOwner(_db, userId, 'starting a workout');
     final row = await _db
         .from('workout_sessions')
         .insert({
@@ -191,17 +225,25 @@ class SupabaseWorkoutSessionStore implements WorkoutSessionStore {
         })
         .select()
         .single();
-    return WorkoutSessionRecord.fromMap(Map<String, dynamic>.from(row));
+    return _remember(row, userId);
   }
 
   @override
   Future<void> abandonSessions(Iterable<String> sessionIds) async {
     final ids = sessionIds.toList();
     if (ids.isEmpty) return;
-    await _db
+    _requireOwner(ids, 'ending a workout');
+    final rows = await _db
         .from('workout_sessions')
         .update({'status': WorkoutSessionStatus.abandoned})
-        .inFilter('id', ids);
+        .inFilter('id', ids)
+        .select('id');
+    // RLS filters silently: fewer rows than asked for means a session is still
+    // in progress, and must not be reported as ended.
+    if (rows.length < ids.length) {
+      throw StateError('ending a workout: ${rows.length} of ${ids.length} '
+          'sessions were updated');
+    }
   }
 
   @override
@@ -211,17 +253,24 @@ class SupabaseWorkoutSessionStore implements WorkoutSessionStore {
     required int idleSeconds,
     required int caloriesBurned,
   }) async {
-    await _db.from('workout_sessions').update({
+    _requireOwner([sessionId], 'completing a workout');
+    final rows = await _db.from('workout_sessions').update({
       'status': WorkoutSessionStatus.completed,
       'completed_at': DateTime.now().toUtc().toIso8601String(),
       'duration_seconds': durationSeconds,
       'idle_seconds': idleSeconds,
       'calories_burned': caloriesBurned,
-    }).eq('id', sessionId);
+    }).eq('id', sessionId).select('id');
+    // A completion that matched no row completed nothing: the coach never sees
+    // the session and it stays in progress. It used to count as done.
+    if (rows.isEmpty) {
+      throw StateError('completing a workout: no session was updated');
+    }
   }
 
   @override
   Future<void> saveElapsed(String sessionId, int elapsedSeconds) async {
+    _requireOwner([sessionId], 'saving the workout clock');
     await _db
         .from('workout_sessions')
         .update({'elapsed_seconds': elapsedSeconds})
@@ -230,6 +279,7 @@ class SupabaseWorkoutSessionStore implements WorkoutSessionStore {
 
   @override
   Future<void> acknowledgeWarmup(String sessionId) async {
+    _requireOwner([sessionId], 'recording the warm-up');
     // Filtered on "not already set" so a repeat call is a no-op rather than a
     // fresh timestamp.
     await _db
@@ -243,6 +293,7 @@ class SupabaseWorkoutSessionStore implements WorkoutSessionStore {
 
   @override
   Future<void> saveSnapshot(String sessionId, Map<String, dynamic> snapshot) async {
+    _requireOwner([sessionId], 'saving a swapped workout');
     await _db
         .from('workout_sessions')
         .update({'workout_snapshot': snapshot})
@@ -252,6 +303,7 @@ class SupabaseWorkoutSessionStore implements WorkoutSessionStore {
   @override
   Future<void> saveCursor(
       String sessionId, String exerciseId, String setId) async {
+    _requireOwner([sessionId], 'saving the workout position');
     await _db.from('workout_sessions').update({
       'current_exercise_id': exerciseId,
       'current_set_id': setId,

@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../coach/data/coach_program_service.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/realtime/realtime.dart';
 import '../data/program_schedule.dart';
 import '../data/workout_service.dart';
@@ -16,6 +17,8 @@ import '../../auth/domain/auth_provider.dart';
 /// Today's coaching adjustment from the AI coach's daily insight — drives an
 /// intensity/focus banner on the workout screen. null when there's no brief yet.
 final coachAdjustmentProvider = FutureProvider.autoDispose<CoachAdjustment?>((ref) async {
+  // The signed-in member's own brief: re-read when the account changes.
+  ref.watch(restoringUserIdProvider);
   final insight = await AICoachService().getTodayInsight();
   if (insight == null) return null;
   final data = (insight['data'] as Map?) ?? const {};
@@ -118,18 +121,28 @@ final exercisesProvider = Provider<List<Exercise>>((ref) {
   return ref.watch(workoutServiceProvider).getSampleExercises();
 });
 
-final selectedWorkoutProvider = StateProvider<Workout?>((ref) => null);
+/// The workout the member opened. Theirs alone: dropped when the account
+/// changes, and only then — keyed by the uid, so a token refresh or a profile
+/// edit cannot wipe a live workout (P0-FL-59b).
+final selectedWorkoutProvider = StateProvider<Workout?>((ref) {
+  ref.watch(restoringUserIdProvider);
+  return null;
+});
 
 /// Active rest countdown as a wall-clock end time + its original duration (for
 /// the progress ring). App-scoped so it survives navigating away and resumes at
-/// the correct remaining time. Null = no rest running.
+/// the correct remaining time. Null = no rest running. Dropped when the account
+/// changes: one member's rest must not sound over, or cost points to, another.
 class RestTimerState {
   final DateTime end;
   final int total;
   const RestTimerState(this.end, this.total);
 }
 
-final restTimerProvider = StateProvider<RestTimerState?>((ref) => null);
+final restTimerProvider = StateProvider<RestTimerState?>((ref) {
+  ref.watch(restoringUserIdProvider);
+  return null;
+});
 
 /// The result of FIT-017's "Add 30 seconds": the rest that should now be
 /// running, and the overtime seconds the caller must bank as idle time.
@@ -429,9 +442,12 @@ class ActiveWorkoutNotifier
 }
 
 final activeWorkoutProvider = StateNotifierProvider<ActiveWorkoutNotifier,
-    Map<String, Map<String, dynamic>>>(
-  (ref) => ActiveWorkoutNotifier(),
-);
+    Map<String, Map<String, dynamic>>>((ref) {
+  // One member's sets are never another's: two clients on the same coach
+  // program share set ids.
+  ref.watch(restoringUserIdProvider);
+  return ActiveWorkoutNotifier();
+});
 
 // ── Stat providers ────────────────────────────────────────────────────────────
 final weeklyWorkoutCountProvider = FutureProvider<int>((ref) async {
@@ -497,8 +513,11 @@ final workoutSessionRestorerProvider = Provider<WorkoutSessionRestorer>((ref) {
 /// Derived from the auth stream, so signing out drops the restore cache rather
 /// than leaving one client's session to be restored under the next. A token
 /// refresh yields the same id and so changes nothing.
+///
+/// Also the key of the live workout itself ([selectedWorkoutProvider],
+/// [activeWorkoutProvider], [restTimerProvider]).
 final restoringUserIdProvider = Provider<String?>(
-  (ref) => ref.watch(currentUserProvider)?.id,
+  (ref) => ref.watch(currentUserProvider.select((u) => u?.id)),
 );
 
 /// Hydration of the active workout session — the startup / browser-refresh path.
@@ -524,11 +543,21 @@ final activeWorkoutRestorationProvider =
   final restored = await ref.read(workoutSessionRestorerProvider).restore(uid);
   if (restored == null) return null;
 
+  // Through the container: this provider may already be outdated. A restore
+  // that finishes after the account changed hydrates nothing — the state it
+  // would write into is the next member's.
+  final app = ref.container;
+  if (app.read(restoringUserIdProvider) != uid) {
+    reportError('activeWorkoutRestorationProvider',
+        StateError('restoring a workout: the signed-in account changed'));
+    return null;
+  }
+
   // Hydrate the in-memory state the Workout Zone reads. Doing it here rather
   // than in a screen means every entry point — refresh, route change, a resume
   // tap — lands on the same rebuilt session.
-  ref.read(selectedWorkoutProvider.notifier).state = restored.workout;
-  final active = ref.read(activeWorkoutProvider.notifier);
+  app.read(selectedWorkoutProvider.notifier).state = restored.workout;
+  final active = app.read(activeWorkoutProvider.notifier);
   active.beginSession(restored.sessionId);
   active.restoreSeated(restored.setState);
 
@@ -538,12 +567,27 @@ final activeWorkoutRestorationProvider =
 /// Rebuilds the workout an active session belongs to and makes it the selected
 /// workout, so every "Resume" entry point lands in the Workout Zone bound to
 /// the session's own workout instead of whatever was last left in memory.
+///
+/// Null when there is nothing to bind — including a [session] that is not the
+/// signed-in member's, or an account that changed while the program was read.
 Future<Workout?> bindSessionToSelectedWorkout(
   WidgetRef ref,
   WorkoutSessionRecord session,
 ) async {
+  final uid = ref.read(restoringUserIdProvider);
+  if (session.userId != uid) {
+    reportError('bindSessionToSelectedWorkout',
+        StateError('resuming a workout: the signed-in account changed'));
+    return null;
+  }
   final manager = ref.read(workoutSessionManagerProvider);
   final assigned = await ref.read(assignedWorkoutsProvider.future);
+  if (!ref.context.mounted) return null;
+  if (ref.read(restoringUserIdProvider) != uid) {
+    reportError('bindSessionToSelectedWorkout',
+        StateError('resuming a workout: the signed-in account changed'));
+    return null;
+  }
   final workout = manager.workoutForSession(
     session,
     candidates: [...assigned, ...ref.read(workoutsProvider)],
@@ -570,6 +614,7 @@ final completionRateProvider = FutureProvider<double>((ref) async {
 });
 
 final programAdherenceProvider = FutureProvider<double>((ref) async {
+  ref.watch(restoringUserIdProvider);
   return ref.watch(workoutServiceProvider).getProgramAdherence();
 });
 
@@ -586,14 +631,23 @@ final loggedExerciseNamesProvider = FutureProvider<List<String>>((ref) async {
 });
 
 // ── Coach: client workout stats ───────────────────────────────────────────────
+// The stats are keyed by the coach themselves. The two per-client reads are not
+// — a client id does not say whose coach is asking — so they are re-read when
+// the account changes.
 final clientWorkoutStatsProvider = FutureProvider.autoDispose.family<List<Map<String, dynamic>>, String>(
   (ref, coachId) async => WorkoutService().getClientWorkoutStats(coachId),
 );
 
 final clientPersonalRecordsProvider = FutureProvider.autoDispose.family<List<Map<String, dynamic>>, String>(
-  (ref, clientId) async => WorkoutService().getClientPersonalRecords(clientId),
+  (ref, clientId) async {
+    ref.watch(restoringUserIdProvider);
+    return WorkoutService().getClientPersonalRecords(clientId);
+  },
 );
 
 final clientRecentSessionsProvider = FutureProvider.autoDispose.family<List<Map<String, dynamic>>, String>(
-  (ref, clientId) async => WorkoutService().getClientRecentSessions(clientId),
+  (ref, clientId) async {
+    ref.watch(restoringUserIdProvider);
+    return WorkoutService().getClientRecentSessions(clientId);
+  },
 );

@@ -17,6 +17,7 @@ import 'widgets/rest_timer_widget.dart';
 import 'widgets/zone_action.dart';
 import 'widgets/exercise_guide_sheet.dart';
 import 'widgets/swap_substitutes_list.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../exercise_database/data/custom_exercise_service.dart';
 import '../../exercise_database/data/exercise_database_service.dart';
 import '../../../core/utils/rest_alarm.dart';
@@ -104,10 +105,15 @@ class ActiveWorkoutScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // One view per member: when the account changes, the previous member's view
+    // — its session id, clock, idle total and typed fields — goes with them.
+    final view = _ActiveWorkoutView(
+        key: ValueKey(ref.watch(restoringUserIdProvider)));
+
     // A workout already in memory (started, or resumed from a Resume card) is
     // authoritative — the database has nothing to add.
     final workout = ref.watch(selectedWorkoutProvider);
-    if (workout != null) return const _ActiveWorkoutView();
+    if (workout != null) return view;
 
     final restoration = ref.watch(activeWorkoutRestorationProvider);
     return restoration.when(
@@ -118,14 +124,14 @@ class ActiveWorkoutScreen extends ConsumerWidget {
       // lands in the Zone on the very next build.
       data: (restored) => restored == null
           ? const _NoActiveWorkoutView()
-          : const _ActiveWorkoutView(),
+          : view,
     );
   }
 }
 
 /// The Workout Zone proper, entered only once a workout is resolved.
 class _ActiveWorkoutView extends ConsumerStatefulWidget {
-  const _ActiveWorkoutView();
+  const _ActiveWorkoutView({super.key});
   @override
   ConsumerState<_ActiveWorkoutView> createState() => _ActiveWorkoutViewState();
 }
@@ -150,7 +156,12 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// The log is already in `workout_logs`, so a retry of a failed completion
   /// must not insert it again: one workout, one row.
   bool _logFiled = false;
-  final _workoutService = WorkoutService();
+  /// The member this workout belongs to: the one the in-memory workout is keyed
+  /// by when this view is created (P0-FL-59b). Every write below is theirs or
+  /// is not sent.
+  late final String? _owner;
+  late final _workoutService = WorkoutService(owner: _owner);
+  StreamSubscription<AuthState>? _authEvents;
   final _scrollController = ScrollController();
   /// Resolved on USE, not in the field initializer.
   ///
@@ -183,6 +194,19 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   // Per-exercise (by name) RPE-tracking flag from the library metadata.
   final Map<String, bool> _showRpe = {};
 
+  /// Whether the member who owns this workout is still the one signed in.
+  ///
+  /// Asked right before every write, award and penalty, and after every await
+  /// that could outlive them — from the auth client itself, not the widget
+  /// tree: a hidden web tab runs timers but no frames, so nothing has rebuilt.
+  /// When they are not, the caller does nothing; that is recorded here.
+  bool _isOwner(String what) {
+    if (_db.auth.currentUser?.id == _owner) return true;
+    reportError('ActiveWorkoutScreen',
+        StateError('$what: the signed-in account changed'));
+    return false;
+  }
+
   bool _showRpeFor(String name) => _showRpe[name] ?? true;
 
   AppLifecycleListener? _lifecycle;
@@ -190,7 +214,13 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   @override
   void initState() {
     super.initState();
+    _owner = ref.read(restoringUserIdProvider);
     _sessions = ref.read(workoutSessionManagerProvider);
+    // Not a frame: a siren already sounding in a hidden tab stops when its
+    // member leaves. Stream errors are the auth provider's to report.
+    _authEvents = _db.auth.onAuthStateChange.listen((_) {
+      if (_db.auth.currentUser?.id != _owner) stopRestSiren();
+    }, onError: (Object _, StackTrace __) {});
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_paused) return;
       setState(() => _elapsedSeconds++);
@@ -240,13 +270,15 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     _warmupSettled = true;
     if (session != null && session.warmupAcknowledged) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _showWarmupDialog(session?.id);
+      if (mounted && _isOwner('asking about the warm-up')) {
+        _showWarmupDialog(session?.id);
+      }
     });
   }
 
   /// Records the client's answer against the session, so it survives a reload.
   Future<void> _acknowledgeWarmup(String? sessionId) async {
-    if (sessionId == null) return;
+    if (sessionId == null || !_isOwner('recording the warm-up')) return;
     try {
       await _sessions.acknowledgeWarmup(sessionId);
     } catch (_) {}
@@ -259,7 +291,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (dctx) => Dialog(
+      builder: (dctx) => _OwnersOnly(owner: _owner, child: Dialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
         child: Padding(
@@ -301,7 +333,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
                 ]))),
           ]),
         ),
-      ),
+      )),
     );
   }
 
@@ -315,18 +347,20 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   Future<void> _startSession() async {
     final workout = ref.read(selectedWorkoutProvider);
     if (workout == null) return;
-    final uid = _db.auth.currentUser?.id;
-    if (uid == null) return;
+    final uid = _owner;
+    if (uid == null || !_isOwner('starting a workout')) return;
     try {
       final before = await _sessions.activeSession(uid);
+      if (!_isOwner('starting a workout')) return;
       final session = await _activate(uid, workout);
-      if (session == null) return;
+      if (session == null || !_isOwner('starting a workout')) return;
 
       final isResume = before != null && before.id == session.id;
 
       if (isResume) {
         if (mounted) setState(() => _elapsedSeconds = session.elapsedSeconds);
         await _restoreLoggedSets(session.id, workout);
+        if (!_isOwner('resuming a workout')) return;
         // Land on the set they stopped at, not on exercise 1 / set 1.
         _resumeAtPosition(workout, session);
       } else {
@@ -338,7 +372,10 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       // Every Resume surface reads activeSessionProvider — refresh it now that
       // the active session has changed.
       if (mounted) ref.invalidate(activeSessionProvider);
-    } catch (e) {
+    } catch (e, st) {
+      reportError('ActiveWorkoutScreen._startSession', e, st);
+      // Not this member's workout any more: nothing to tell them.
+      if (_db.auth.currentUser?.id != _owner) return;
       // Activation failed, so the *previous* session is still the authoritative
       // one — the client is looking at this workout but the app is not running
       // it. Say so rather than failing silently: a silent failure here is what
@@ -364,6 +401,8 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     return _activation ??= _sessions
         .startWorkout(userId: uid, workout: workout)
         .then((session) {
+      // The sets this would bind are the next member's by now.
+      requireWorkoutOwner(_db, uid, 'starting a workout');
       _sessionId = session.id;
       // Bind the in-memory set state to this session — switching workouts
       // clears it so the previous workout's sets can't leak into this one.
@@ -379,12 +418,13 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   Future<void> _restoreLoggedSets(String sessionId, Workout workout) async {
     try {
       final logs = await _workoutService.getSessionCompletedSets(sessionId);
-      if (mounted && logs.isNotEmpty) {
+      if (mounted && logs.isNotEmpty && _isOwner('restoring logged sets')) {
         // Seated against this workout, so each row goes back on the set whose
         // id it recorded rather than onto whatever slot is next.
         ref.read(activeWorkoutProvider.notifier).restoreFromLogs(workout, logs);
       }
-    } catch (e) {
+    } catch (e, st) {
+      reportError('ActiveWorkoutScreen._restoreLoggedSets', e, st);
       _toastSave('Could not restore your logged sets.');
     }
   }
@@ -472,6 +512,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   Future<void> _saveCursor(String exerciseId, String setId) async {
     final sid = _sessionId;
     if (sid == null || setId.isEmpty) return;
+    if (!_isOwner('saving the workout position')) return;
     try {
       await _sessions.saveCursor(
           sessionId: sid, exerciseId: exerciseId, setId: setId);
@@ -497,10 +538,12 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
 
   /// Returns the active session id, creating the session row on demand so set
   /// logs can't be silently dropped when the session insert was delayed/failed.
+  ///
+  /// For the member who owns this workout, whoever is signed in now.
   Future<String?> _ensureSession() async {
     if (_sessionId != null) return _sessionId;
     final workout = ref.read(selectedWorkoutProvider);
-    final uid = _db.auth.currentUser?.id;
+    final uid = _owner;
     if (workout == null || uid == null) return null;
     // Joins the activation already started in initState rather than opening a
     // competing one.
@@ -518,8 +561,10 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       String? libraryExerciseId, String setId, int setNumber,
       String? tempo, int reps, double weightKg, double? rpe, String? notes,
       bool completed) async {
+    if (!_isOwner('saving a set')) return;
     try {
       final sid = await _ensureSession();
+      if (!_isOwner('saving a set')) return;
       if (sid == null) {
         _toastSave('No active workout session.');
         return;
@@ -538,13 +583,16 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
         tempo: tempo,
         completed: completed,
       );
-    } catch (e) {
+    } catch (e, st) {
+      reportError('ActiveWorkoutScreen._persistSet', e, st);
       _toastSave('Could not save set.');
     }
   }
 
   void _toastSave(String msg) {
     if (!mounted) return;
+    // A failure of this member's is not said to the next one.
+    if (_db.auth.currentUser?.id != _owner) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(msg), backgroundColor: _error));
   }
@@ -656,7 +704,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
 
   Future<void> _saveElapsed() async {
     final sid = _sessionId;
-    if (sid == null) return;
+    if (sid == null || !_isOwner('saving the workout clock')) return;
     try {
       await _sessions.saveElapsed(sid, _elapsedSeconds);
     } catch (_) {}
@@ -665,6 +713,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   @override
   void dispose() {
     _timer?.cancel();
+    unawaited(_authEvents?.cancel());
     _lifecycle?.dispose();
     _scrollController.dispose();
     _saveElapsed(); // persist elapsed time so resume can restore it
@@ -678,6 +727,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   }
 
   Future<void> _completeWorkout() async {
+    if (!_isOwner('finishing a workout')) return;
     final workout = ref.read(selectedWorkoutProvider);
     if (workout == null) return;
     // Everything after the awaits below goes through the app's container, not
@@ -709,7 +759,20 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       if (!_logFiled) await _workoutService.logWorkout(log);
       logWritten = true;
       _logFiled = true;
-    } catch (_) {}
+    } catch (e, st) {
+      reportError('ActiveWorkoutScreen.logWorkout', e, st);
+    }
+
+    // From here to the end, each step first asks whether the member who pressed
+    // Finish is still here: what is left belongs to them — the session, the
+    // points — and the in-memory workout is the next member's.
+    bool ownerLeft() {
+      if (_isOwner('finishing a workout')) return false;
+      if (mounted) setState(() => _saving = false);
+      return true;
+    }
+
+    if (ownerLeft()) return;
 
     bool? sessionCompleted;
     if (_sessionId != null) {
@@ -722,8 +785,11 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
               caloriesBurned: log.caloriesBurned ?? 0,
             );
         sessionCompleted = true;
-      } catch (_) {}
+      } catch (e, st) {
+        reportError('ActiveWorkoutScreen.completeSession', e, st);
+      }
     }
+    if (ownerLeft()) return;
 
     // Derived, and recomputable: worth recording, not worth making someone
     // retry a finished workout for.
@@ -733,10 +799,14 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     if (logWritten && sessionCompleted != false) {
       try {
         await ScoreService().addWorkoutPoints();
+        if (ownerLeft()) return;
         await ScoreEngine().workoutCompleted(workout.id);
         scored = true;
-      } catch (_) {}
+      } catch (e, st) {
+        reportError('ActiveWorkoutScreen.workoutPoints', e, st);
+      }
     }
+    if (ownerLeft()) return;
 
     final outcome = workoutSaveOutcome(
       logWritten: logWritten,
@@ -800,7 +870,8 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (dialogContext) => WorkoutCompleteDialog(
+        builder: (dialogContext) => _OwnersOnly(owner: _owner, child: WorkoutCompleteDialog(
+          ownerId: _owner,
           title: workout.title,
           duration: _elapsedTime,
           calories: log.caloriesBurned ?? 0,
@@ -826,7 +897,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
             _leaveFinishedWorkout(app);
             context.go('/home');
           },
-        ),
+        )),
       );
     } else {
       // Finish Early → Skip can pop this screen before the dialog is raised.
@@ -850,6 +921,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   ///
   /// Through [app], not `ref`: this also runs after the screen is gone.
   void _leaveFinishedWorkout(ProviderContainer app) {
+    if (!_isOwner('closing a finished workout')) return;
     app.read(selectedWorkoutProvider.notifier).state = null;
   }
 
@@ -959,6 +1031,9 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
               endTime: rest.end,
               totalSeconds: rest.total,
               onOvertime: () {
+                // The widget has just started the siren; it is not this
+                // member's rest.
+                if (!_isOwner('charging a rest overrun')) return stopRestSiren();
                 _overtimePenalties = 1;
                 ScoreEngine().idleTimePenalty(); // -5 the moment rest runs over
                 if (mounted) {
@@ -973,6 +1048,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
               // the whole score.
               onOvertimePenaltyTick: () {
                 if (_overtimePenalties >= 8) return;
+                if (!_isOwner('charging a rest overrun')) return stopRestSiren();
                 _overtimePenalties++;
                 ScoreEngine().idleTimePenalty();
               },
@@ -1359,7 +1435,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     showModalBottomSheet(
       context: context, backgroundColor: _card, isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => SafeArea(child: ConstrainedBox(
+      builder: (ctx) => _OwnersOnly(owner: _owner, child: SafeArea(child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.7),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -1376,7 +1452,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
                   .getSubstitutes(we.exercise.name, we.exercise.muscleGroup),
               onPick: (s) { Navigator.pop(ctx); _swapExercise(index, we, s); },
               text: _white, muted: _muted, accent: _primary)),
-          ])))));
+          ]))))));
   }
 
   /// Replaces one exercise instance with a substitute movement.
@@ -1398,6 +1474,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// tempo — which is what "keeps your sets" means to a client.
   Future<void> _swapExercise(
       int index, WorkoutExercise we, Map<String, dynamic> sub) async {
+    if (!_isOwner('swapping an exercise')) return;
     final workout = ref.read(selectedWorkoutProvider);
     if (workout == null || index < 0 || index >= workout.exercises.length) return;
     final newEx = Exercise(
@@ -1431,7 +1508,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     // and surfaced: a lost re-snapshot silently resurrects the replaced
     // exercise on the next reload, along with its set ids.
     final saved = await _resnapshotSession(updated);
-    if (!mounted) return;
+    if (!mounted || !_isOwner('swapping an exercise')) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(saved
           ? 'Swapped to ${newEx.name}'
@@ -1505,12 +1582,16 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
         // A completed set only gets here for its note; the notifier drops the
         // rest, and a refused edit isn't written to the database either.
         onChanged: (reps, weight, rpe, notes) {
+          // Also reached from the row's dispose, which flushes a pending
+          // debounce: by then the in-memory sets may be another member's.
+          if (!_isOwner('saving a set')) return;
           _markCurrentSet(we, set);
           if (_cacheSet(we, set, reps, weight, rpe, notes)) {
             _persistFromState(we, set);
           }
         },
         onCompleted: (reps, weight, rpe, notes) {
+          if (!_isOwner('completing a set')) return;
           // Completion is one-way: the notifier records the final values and
           // refuses an already-completed set, so this can't reopen or rewrite
           // one. Corrections go through onEditCompleted instead.
@@ -1559,7 +1640,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
 
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dctx) => AlertDialog(
+      builder: (dctx) => _OwnersOnly(owner: _owner, child: AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1600,7 +1681,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
             onPressed: () => Navigator.pop(dctx, true),
             child: const Text('Save Correction',
               style: TextStyle(color: _primary, fontWeight: FontWeight.w700))),
-        ]));
+        ])));
 
     final newWeight = double.tryParse(weightCtl.text.trim());
     final newReps = int.tryParse(repsCtl.text.trim());
@@ -1608,7 +1689,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     weightCtl.dispose();
     repsCtl.dispose();
     rpeCtl.dispose();
-    if (confirmed != true) return;
+    if (confirmed != true || !_isOwner('correcting a set')) return;
 
     final applied = notifier.applyCorrection(
       set,
@@ -1682,7 +1763,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     showDialog(
       context: context,
       // The dialog is on the root navigator; [context] reaches the shell's.
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => _OwnersOnly(owner: _owner, child: AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('Leave this workout?',
@@ -1710,13 +1791,14 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
               _endWorkout();
             },
             child: const Text('End Workout', style: TextStyle(color: _error))),
-        ]));
+        ])));
   }
 
   /// Steps away without closing the session: it stays `in_progress`, so the
   /// Resume banner offers it and the stored cursor puts the client back on the
   /// set they left.
   void _leaveForNow() {
+    if (!_isOwner('leaving a workout')) return;
     // Leaving is not training, as pausing is not (FIT-002): stop the rest
     // countdown. `restTimerProvider` is app-wide, so a rest left running sounded
     // the overtime alarm on return, took 5 points and then 5 every 20 seconds,
@@ -1741,6 +1823,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// the defect this replaces, so the client is told when it did not close and
   /// is left on the screen to try again.
   Future<void> _endWorkout() async {
+    if (!_isOwner('ending a workout')) return;
     final sid = _sessionId;
     // Through the app's container after the await, as in _completeWorkout:
     // `ref` throws once the screen is gone, and the ended workout stayed
@@ -1749,14 +1832,17 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     if (sid != null) {
       try {
         await _sessions.abandonSession(sid);
-      } catch (e) {
-        if (!mounted) return;
+      } catch (e, st) {
+        reportError('ActiveWorkoutScreen._endWorkout', e, st);
+        if (!mounted || _db.auth.currentUser?.id != _owner) return;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('Could not end the workout.'),
           backgroundColor: _error));
         return;
       }
     }
+    // The in-memory workout below is the next member's by now.
+    if (!_isOwner('ending a workout')) return;
     _timer?.cancel();
     _dismissRest(app);
     _sessionId = null;
@@ -1768,6 +1854,27 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     app.invalidate(activeSessionProvider);
     app.invalidate(activeWorkoutRestorationProvider);
     if (mounted) context.go('/home');
+  }
+}
+
+/// A dialog or sheet that belongs to [owner]: it closes when the account
+/// changes. These are on the root navigator, so they outlive the Zone — and
+/// they name the member's workout, loads and notes (P0-FL-59b).
+class _OwnersOnly extends ConsumerWidget {
+  final String? owner;
+  final Widget child;
+  const _OwnersOnly({required this.owner, required this.child});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (ref.watch(restoringUserIdProvider) == owner) return child;
+    final route = ModalRoute.of(context);
+    final navigator = Navigator.of(context);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (route == null || !route.isActive) return;
+      route.isCurrent ? navigator.pop() : navigator.removeRoute(route);
+    });
+    return const SizedBox.shrink();
   }
 }
 
@@ -1941,6 +2048,10 @@ class WorkoutCompleteDialog extends StatefulWidget {
   final String? sessionId;
   final VoidCallback onDone;
 
+  /// The member who finished the workout. The feedback is theirs: it is sent
+  /// as them or not at all. Null is whoever is signed in when it is submitted.
+  final String? ownerId;
+
   /// FIT-018's three figures. Passed in rather than read here so the dialog
   /// stays testable — it already carries an injection seam for the same
   /// reason (F-23).
@@ -1961,7 +2072,7 @@ class WorkoutCompleteDialog extends StatefulWidget {
     required this.title, required this.duration,
     required this.calories, this.idleSeconds = 0, this.sessionId,
     this.elapsedSeconds = 0, this.setsLogged = 0, this.volumeKg = 0,
-    required this.onDone, this.submit});
+    required this.onDone, this.ownerId, this.submit});
   @override
   State<WorkoutCompleteDialog> createState() => _WorkoutCompleteDialogState();
 }
@@ -1999,6 +2110,8 @@ class _WorkoutCompleteDialogState extends State<WorkoutCompleteDialog> {
   ///     line drops the delivery claim instead of retracting the save.
   Future<void> _saveFeedback() async {
     if (_rating == 0) return;
+    final owner = widget.ownerId;
+    if (owner != null && !_stillIs(owner)) return _discardDraft();
     setState(() { _saving = true; _saveFailed = false; });
     final outcome = await (widget.submit ?? _submitToSupabase)(
       rating: _rating,
@@ -2007,12 +2120,30 @@ class _WorkoutCompleteDialogState extends State<WorkoutCompleteDialog> {
       notes: _notes.text,
     );
     if (!mounted) return;
+    if (owner != null && !_stillIs(owner)) return _discardDraft();
     setState(() {
       _saving = false;
       _saveFailed = outcome == FeedbackDelivery.failed;
       _submitted = outcome != FeedbackDelivery.failed;
       _reachedCoach = outcome == FeedbackDelivery.delivered;
     });
+  }
+
+  /// The account changed: the draft is not the next member's to read or send.
+  void _discardDraft() {
+    _notes.clear();
+    setState(() {
+      _rating = _energy = _difficulty = 0;
+      _saving = _saveFailed = false;
+    });
+  }
+
+  /// Records that the account changed when it did.
+  bool _stillIs(String owner) {
+    if (Supabase.instance.client.auth.currentUser?.id == owner) return true;
+    reportError('WorkoutCompleteDialog',
+        StateError('sending workout feedback: the signed-in account changed'));
+    return false;
   }
 
   Future<FeedbackDelivery> _submitToSupabase({
@@ -2023,15 +2154,17 @@ class _WorkoutCompleteDialogState extends State<WorkoutCompleteDialog> {
   }) async {
     final db = Supabase.instance.client;
     String? coachId;
+    final uid = widget.ownerId ?? db.auth.currentUser?.id;
     try {
-      final uid = db.auth.currentUser?.id;
+      requireWorkoutOwner(db, uid!, 'sending workout feedback');
       final rel = await db
           .from('coach_client_relationships')
           .select('coach_id')
-          .eq('client_id', uid!)
+          .eq('client_id', uid)
           .eq('status', 'active')
           .maybeSingle();
       coachId = rel?['coach_id'] as String?;
+      requireWorkoutOwner(db, uid, 'sending workout feedback');
       await db.from('workout_feedback').insert({
         'session_id': widget.sessionId,
         'user_id': uid,
@@ -2041,7 +2174,8 @@ class _WorkoutCompleteDialogState extends State<WorkoutCompleteDialog> {
         'difficulty': difficulty > 0 ? difficulty : null,
         'notes': notes.isEmpty ? null : notes,
       });
-    } catch (_) {
+    } catch (e, st) {
+      reportError('WorkoutCompleteDialog.submit', e, st);
       // Nothing was written.
       return deliveryFor(saved: false, coachId: coachId, notified: false);
     }
@@ -2049,7 +2183,7 @@ class _WorkoutCompleteDialogState extends State<WorkoutCompleteDialog> {
     // Saved from here on. A failure below costs the coach their ping, not the
     // client their notes.
     var notified = false;
-    if (coachId != null) {
+    if (coachId != null && _stillIs(uid)) {
       try {
         await db.from('notifications').insert({
           'recipient_id': coachId,
@@ -2059,7 +2193,10 @@ class _WorkoutCompleteDialogState extends State<WorkoutCompleteDialog> {
           'read': false,
         });
         notified = true;
-      } catch (_) {/* saved, just not announced */}
+      } catch (e, st) {
+        // Saved, just not announced.
+        reportError('WorkoutCompleteDialog.notifyCoach', e, st);
+      }
     }
     return deliveryFor(saved: true, coachId: coachId, notified: notified);
   }

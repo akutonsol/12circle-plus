@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/observability/app_failure.dart';
 import '../data/models/workout_model.dart';
 import '../data/workout_session_store.dart';
 import '../domain/workout_provider.dart';
@@ -14,7 +15,19 @@ import '../domain/workout_provider.dart';
 /// nowhere to go: they vanished from the screen and from the finish totals.
 /// The Train hub and the resume banner already bind the session's workout
 /// (`bindSessionToSelectedWorkout`); every entry point now does.
+///
+/// Selects nothing when the account changed while the session was looked up:
+/// the tapped workout was the previous member's.
 Future<void> selectWorkoutForZone(WidgetRef ref, Workout workout) async {
+  final uid = ref.read(restoringUserIdProvider);
+  bool sameMember() {
+    if (!ref.context.mounted) return false;
+    if (ref.read(restoringUserIdProvider) == uid) return true;
+    reportError('selectWorkoutForZone',
+        StateError('opening a workout: the signed-in account changed'));
+    return false;
+  }
+
   WorkoutSessionRecord? session;
   try {
     session = await ref.read(activeSessionProvider.future);
@@ -25,9 +38,10 @@ Future<void> selectWorkoutForZone(WidgetRef ref, Workout workout) async {
     // (EC-G1), and the read it guards still propagates to every screen.
     session = null;
   }
+  if (!sameMember()) return;
   if (session != null && session.workoutId == workout.id) {
     final bound = await bindSessionToSelectedWorkout(ref, session);
-    if (bound != null) return;
+    if (bound != null || !sameMember()) return;
   }
   ref.read(selectedWorkoutProvider.notifier).state = workout;
 }

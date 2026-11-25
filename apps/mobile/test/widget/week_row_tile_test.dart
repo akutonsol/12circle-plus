@@ -88,7 +88,9 @@ Workout _w({
 /// A router with a real destination, so "it navigated" is observable rather
 /// than inferred from a callback.
 Future<ProviderContainer> _pump(WidgetTester tester, List<Workout> rows) async {
-  final container = ProviderContainer();
+  // The selection is keyed by the member (P0-FL-59b).
+  final container = ProviderContainer(
+      overrides: [restoringUserIdProvider.overrideWithValue('u1')]);
   addTearDown(container.dispose);
 
   final router = GoRouter(
