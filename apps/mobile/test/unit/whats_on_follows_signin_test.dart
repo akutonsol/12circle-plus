@@ -7,6 +7,7 @@ import 'package:circle_fitness/features/challenges/domain/challenge_provider.dar
 import 'package:circle_fitness/features/classes/domain/class_provider.dart';
 import 'package:circle_fitness/features/classes/domain/whats_on.dart';
 import 'package:circle_fitness/features/classes/domain/whats_on_provider.dart';
+import 'package:circle_fitness/features/dashboard/domain/still_reading.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -173,6 +174,34 @@ void main() {
       });
     });
   }
+
+  test("settled class rows marked for A are not B's, however they came; rows "
+      "nobody marked are nobody's; their own are theirs", () async {
+    final rows = c.read(liveClassesFromDbProvider).requireValue;
+    await becomes(memberB);
+    for (final (held, shown) in [
+      (ownedBy(memberA, rows), false),
+      (rows.toList(), false),
+      (ownedBy(memberB, rows), true),
+    ]) {
+      final other = ProviderContainer(overrides: [
+        liveClassesFromDbProvider.overrideWith((ref) async => held),
+        tableTickerProvider.overrideWith((ref, t) => Stream.value(0)),
+      ]);
+      other.listen(whatsOnProvider, (_, __) {});
+      await until(
+          () =>
+              other.read(liveClassesFromDbProvider) is AsyncData &&
+              !other.read(liveChallengesProvider).isLoading &&
+              !other.read(whatsOnEventsProvider).isLoading,
+          'read');
+      final v = other.read(whatsOnProvider);
+      expect(
+          v.hasValue && v.requireValue.items.any((i) => i.action == 'Booked'),
+          shown);
+      other.dispose();
+    }
+  });
 
   test('control: a refreshed token holds the list, and re-reads no classes',
       () async {
