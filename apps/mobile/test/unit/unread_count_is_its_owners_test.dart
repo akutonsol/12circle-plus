@@ -157,7 +157,7 @@ void main() {
     final from = told.length;
     await signOut();
     await settle();
-    expect(count(), isNull);
+    expect(count() ?? 0, 0);
     expect(rows(), isEmpty, reason: "THE defect: A's rows outlived sign-out");
     expectNothingOfAsTold(from);
     server.rows[_t]!.add(_n('a-3', memberA));

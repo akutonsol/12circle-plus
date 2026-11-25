@@ -270,27 +270,8 @@ void main() {
       await done(tester);
     });
 
-    testWidgets("A's controls with B already signed in send nothing",
-        (tester) async {
-      await show(tester);
-      final ofA = c.read(notificationsProvider.notifier);
-      await tester.runAsync(() => signInAs(memberB)); // no frame
-      await tester.runAsync(() async {
-        expect(await ofA.markRead('a-1'), isFalse);
-        expect(await ofA.markAllRead(), isFalse);
-        expect(await ofA.delete('a-1'), isFalse);
-      });
-      expect(server.writes(_t), isEmpty,
-          reason: "THE defect: 'mark all' marked B's as read");
-      expect(readOf('b-1'), isFalse);
-      expect(
-          reported
-              .where((f) => '${f.error}'.contains('signed-in account changed'))
-              .length,
-          3);
-      await create(tester);
-      await done(tester);
-    });
+    // A's RENDERED controls with B already signed in and no frame since:
+    // notification_controls_are_their_owners_test.
 
     testWidgets('sign-out, then A again', (tester) async {
       await show(tester);
