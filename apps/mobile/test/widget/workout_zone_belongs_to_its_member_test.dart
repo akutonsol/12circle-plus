@@ -874,10 +874,10 @@ void main() {
     });
 
     testWidgets('re-read before the switch is seen: A\'s answer is not B\'s', (t) async {
-      // Invalidated with the account change unflushed, riverpod takes the
-      // re-read for a REFRESH: data, loading, and the value is A's. The Zone
-      // opened B's view on it, with no workout, and B's own session — landing
-      // later — was never resumed in it.
+      // A provider that watches `currentUserProvider.select` and is invalidated
+      // with the change unflushed is REFRESHED by riverpod, keeping A's value.
+      // This one reads the uid through a provider of its own and is reloaded;
+      // pinned here.
       seedA();
       server.seedSession(memberB, workoutId: _bWorkout.id, title: _bWorkout.title,
           snapshot: _snap(_bWorkout))['elapsed_seconds'] = 600;

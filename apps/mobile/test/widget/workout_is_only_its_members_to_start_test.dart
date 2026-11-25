@@ -295,7 +295,7 @@ void main() {
       await close(t);
     });
 
-    testWidgets('A signs out and B taps nothing of A\'s in between', (t) async {
+    testWidgets("B's card, tapped as A with no frame since: nothing is started", (t) async {
       await mount(t, homeCard());
       await switchSeen(t);
       await switchUnseen(t, memberA);
@@ -370,8 +370,11 @@ void main() {
 
     testWidgets('re-read before the switch is seen: A\'s plan and session are not B\'s',
         (t) async {
-      // A read invalidated while the account change is unflushed is a REFRESH
-      // to riverpod: data, loading, and the value is A's.
+      // A provider that watches `currentUserProvider.select` and is invalidated
+      // while the change is unflushed is REFRESHED by riverpod (data, loading,
+      // A's value). These read the uid through a provider of its own, or the
+      // whole user, and are reloaded; pinned here. The cards do not lean on it:
+      // see 'a value read for A'.
       server.seedSession(memberA, workoutId: 'pw-$memberA', title: _a);
       await mount(t, const TrainHubScreen());
       expect(find.text(_a), findsWidgets);
@@ -477,10 +480,12 @@ void main() {
     testWidgets('a browse card A\'s list was built with opens nothing for B', (t) async {
       await mount(t, const WorkoutListScreen());
       await switchUnseen(t);
-      await t.tap(find.byType(Image).last, warnIfMissed: false);
+      await t.tap(find.textContaining('Full Body').last, warnIfMissed: false);
       await settle(t);
+      expect(find.byType(WorkoutDetailScreen), findsNothing,
+          reason: "THE defect: a tap on A's list opened for B");
+      expect(c.read(selectedWorkoutProvider), isNull);
       expectNothingStarted();
-      expect(find.byType(WorkoutDetailScreen), findsNothing);
       await close(t);
     });
 
@@ -544,6 +549,125 @@ void main() {
       expect(c.read(selectedWorkoutProvider)?.id, '1');
       await t.tap(beginSession);
       await expectATrains(t, title: 'Full Body Strength');
+      await close(t);
+    });
+  });
+
+  group('a value read for A, handed to B\'s screen as data', () {
+    // Whatever way a read comes to hold it. The value says whose it is; the
+    // read's state (data, loading, error) does not.
+    /// [c], rebuilt for B with [overrides].
+    Future<void> asB(WidgetTester t, List<Override> Function() overrides) async {
+      c.dispose();
+      c = ProviderContainer(overrides: [
+        tableTickerProvider.overrideWith((ref, t) => Stream.value(0)),
+        memberPrefersMetricProvider.overrideWithValue(true),
+        notificationsStreamProvider.overrideWith((ref) => Stream.value(const [])),
+        assignedCoachProvider.overrideWith((ref) async => null),
+        ...overrides(),
+      ]);
+      c.listen(restoringUserIdProvider, (_, __) {});
+    }
+
+    Future<T> readAsA<T>(WidgetTester t, FutureProvider<T> p) async {
+      late T value;
+      await t.runAsync(() async {
+        final own = ProviderContainer(overrides: [
+          tableTickerProvider.overrideWith((ref, t) => const Stream.empty()),
+        ]);
+        own.listen<Object?>(p, (_, __) {});
+        value = await own.read(p.future);
+        own.dispose();
+      });
+      return value;
+    }
+
+    for (final (name, screen) in [
+      ('the Train hub', () => const TrainHubScreen()),
+      ('the Workouts list', () => const WorkoutListScreen()),
+    ]) {
+      testWidgets('$name does not list A\'s program', (t) async {
+        final ofA = await readAsA(t, assignedWorkoutsProvider);
+        expect(ofA.single.title, _a);
+        await switchUnseen(t);
+        await asB(t, () => [assignedWorkoutsProvider.overrideWith((ref) async => ofA)]);
+        await mount(t, screen());
+        expect(find.text(_a), findsNothing, reason: "THE defect: A's program shown to B");
+        expect(find.text('START'), findsNothing);
+        expect(beginSession, findsNothing);
+        await close(t);
+      });
+    }
+
+    testWidgets('the Train hub does not offer A\'s session', (t) async {
+      server.seedSession(memberA, workoutId: 'pw-$memberA', title: _a);
+      final ofA = await readAsA(t, activeSessionProvider);
+      expect(ofA?.workoutTitle, _a);
+      await switchUnseen(t);
+      await asB(t, () => [activeSessionProvider.overrideWith((ref) async => ofA)]);
+      await mount(t, const TrainHubScreen());
+      expect(find.text('RESUME WORKOUT'), findsNothing, reason: "THE defect: A's session");
+      expect(find.text(_a), findsNothing);
+      await close(t);
+    });
+
+    for (final (name, screen) in [
+      ('the Workouts list', () => const WorkoutListScreen()),
+      ('the Zone', () => const ActiveWorkoutScreen()),
+    ]) {
+      testWidgets('$name does not apply A\'s coach brief', (t) async {
+        server.rows['ai_insights:$memberA'] = [
+          {'title': 'Easy day, A', 'body': 'x', 'data': {'intensity_delta': -20}}
+        ];
+        late CoachAdjustment? ofA;
+        await t.runAsync(() async {
+          final own = ProviderContainer();
+          own.listen<Object?>(coachAdjustmentProvider, (_, __) {});
+          ofA = await own.read(coachAdjustmentProvider.future);
+          own.dispose();
+        });
+        expect(ofA?.title, 'Easy day, A');
+        await switchUnseen(t);
+        await asB(t, () => [coachAdjustmentProvider.overrideWith((ref) async => ofA)]);
+        c.read(selectedWorkoutProvider.notifier).state =
+            WorkoutService().getSampleWorkouts().first;
+        await mount(t, screen());
+        expect(find.textContaining('EASY DAY, A'), findsNothing);
+        expect(find.text('COACH ADJUSTMENT'), findsNothing);
+        await close(t);
+      });
+    }
+
+    testWidgets('the Zone does not open on A\'s restored workout; B\'s is then resumed',
+        (t) async {
+      server.seedSession(memberA, workoutId: 'pw-$memberA', title: _a);
+      final ofA = await readAsA(t, activeWorkoutRestorationProvider);
+      expect(ofA?.workout.title, _a);
+      await switchUnseen(t);
+      sessionOfB['elapsed_seconds'] = 600;
+      var reads = 0;
+      final hold = Completer<void>();
+      await asB(t, () => [
+            activeWorkoutRestorationProvider.overrideWith((ref) async {
+              if (reads++ == 0) return ofA;
+              await hold.future;
+              final w = Workout(
+                  id: 'own-of-b', title: 'Own of B', description: '', estimatedDuration: 1,
+                  difficulty: 'x', category: 'y',
+                  exercises: WorkoutService().getSampleWorkouts().first.exercises);
+              ref.read(selectedWorkoutProvider.notifier).state = w;
+              return null;
+            }),
+          ]);
+      await mount(t, const ActiveWorkoutScreen());
+      expect(find.text('Restoring your workout…'), findsOneWidget);
+      c.invalidate(activeWorkoutRestorationProvider);
+      await settle(t, 3);
+      hold.complete();
+      await settle(t);
+      expect(find.text('Own of B'), findsOneWidget);
+      expect(find.textContaining('10:0'), findsOneWidget,
+          reason: "THE defect: B's view was opened on A's answer, and never resumed B's session");
       await close(t);
     });
   });
