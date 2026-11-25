@@ -1,3 +1,4 @@
+import 'dart:async' show StreamSubscription, unawaited;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -59,15 +60,75 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
   /// Why the last read failed, for the error state's next step.
   Object? _loadError;
 
+  /// P0-FL-59e · whose coaches, slots and calls are shown. A write is refused
+  /// unless this is the member signed in.
+  late String? _owner = _signedIn;
+
+  /// Bumped by every load: an answer that lands after a newer one started (or
+  /// after the account changed) is dropped.
+  int _loadSeq = 0;
+  StreamSubscription<AuthState>? _authSub;
+
+  /// The open "Cancel session?" dialog; it goes with the member it asks.
+  BuildContext? _confirmCtx;
+
+  String? get _signedIn => _db.auth.currentUser?.id;
+
   @override
   void initState() {
     super.initState();
     _load();
+    _authSub = _db.auth.onAuthStateChange.listen((_) => _followAccount(),
+        onError: (Object e, StackTrace s) =>
+            reportError('BookingScreen.onAuthStateChange', e, s));
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  /// Another member signed in, or this one out: nothing of theirs stays, and
+  /// the one signed in now is read for themselves. The same member (a token
+  /// refresh) changes nothing.
+  void _followAccount() {
+    if (!mounted || _signedIn == _owner) return;
+    final dialog = _confirmCtx;
+    _confirmCtx = null;
+    if (dialog != null && dialog.mounted) {
+      final route = ModalRoute.of(dialog);
+      if (route != null && route.isActive) route.navigator?.removeRoute(route);
+    }
+    ScaffoldMessenger.maybeOf(context)?.clearSnackBars();
+    _owner = _signedIn;
+    _coachId = _coachName = _coachAvatar = _coachTitle = null;
+    _coachBio = _coachSpecialties = _pendingAt = null;
+    _coaches = [];
+    _slots = [];
+    _booked = [];
+    _cancelling.clear();
+    _loadError = null;
+    _load();
+  }
+
+  /// False (recorded, the previous member's content cleared) once [owner] is
+  /// no longer the member signed in.
+  bool _stillOwner(String? owner, String what) {
+    if (owner != null && _signedIn == owner) return true;
+    reportError('BookingScreen.identity',
+        StateError('$what: the signed-in account changed'));
+    _followAccount();
+    return false;
   }
 
   Future<void> _load() async {
+    if (!mounted) return;
+    if (_signedIn != _owner) return _followAccount();
+    final seq = ++_loadSeq;
+    final uid = _owner;
+    bool stale() => !mounted || seq != _loadSeq || _signedIn != uid;
     setState(() => _state = _BookingState.loading);
-    final uid = _db.auth.currentUser?.id;
     if (uid == null) { setState(() => _state = _BookingState.noCoach); return; }
 
     try {
@@ -87,6 +148,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
           // Most recently activated first → default matches the "assigned coach"
           // shown on the home screen (assignedCoachProvider uses activated_at).
           .order('activated_at', ascending: false, nullsFirst: false);
+      if (stale()) return;
       final list = List<Map<String, dynamic>>.from(rels as List);
 
       // Second query. `public_profiles` (migration 110) is the sanctioned
@@ -103,6 +165,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
             .select('id, first_name, last_name, avatar_url, '
                 'coach_title, coach_bio, specialties')
             .inFilter('id', coachIds);
+        if (stale()) return;
         for (final row in (profiles as List)) {
           final m = Map<String, dynamic>.from(row as Map);
           final id = m['id'] as String?;
@@ -141,11 +204,9 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
           _coachBio         = c['bio'] as String?;
           _coachSpecialties = c['specialties'] as String?;
           _pendingAt        = c['pending_at'] as String?;
-          if (!mounted) return;
           setState(() => _state = _BookingState.pending);
           return;
         }
-        if (!mounted) return;
         setState(() => _state = _BookingState.noCoach);
         return;
       }
@@ -154,14 +215,14 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       // Keep the current selection if it's still active, else pick the first.
       final selId = _coaches.any((c) => c['id'] == _coachId)
           ? _coachId! : _coaches.first['id'] as String;
-      await _applyCoach(selId);
+      await _applyCoach(selId, seq);
     } catch (e, st) {
       // UIX-1 / invariants I-1 and I-5: the authoritative data could not be
       // obtained, so the screen must not present the confident "no slots"
       // answer. An empty value is an answer; this is not one.
       // P0-FL-53b · and it is recorded: this catch swallowed it unseen.
       reportError('BookingScreen._load', e, st);
-      if (!mounted) return;
+      if (stale()) return;
       setState(() {
         _slots  = [];
         _booked = [];
@@ -187,9 +248,10 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
   }
 
   /// Loads the chosen coach's open slots + the client's booked calls with them.
-  Future<void> _applyCoach(String coachId) async {
-    final uid = _db.auth.currentUser?.id;
-    if (uid == null) return;
+  Future<void> _applyCoach(String coachId, int seq) async {
+    final uid = _owner;
+    bool stale() => !mounted || seq != _loadSeq || _signedIn != uid;
+    if (uid == null || stale()) return;
     final c = _coaches.firstWhere((x) => x['id'] == coachId,
         orElse: () => _coaches.first);
     _coachId          = coachId;
@@ -212,12 +274,13 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         // Soonest first, stated: postgrest-dart orders DESCENDING when
         // `ascending` is omitted, which listed these furthest first.
         .order('slot_time', ascending: true);
+    if (stale()) return;
     final bookedData = await _db
         .from('coaching_calls').select()
         .eq('client_id', uid).eq('coach_id', coachId).eq('status', 'scheduled')
         .gte('scheduled_at', now.toUtc().toIso8601String())
         .order('scheduled_at', ascending: true);
-    if (!mounted) return;
+    if (stale()) return;
     setState(() {
       _slots  = List<Map<String, dynamic>>.from(slotsData as List);
       _booked = List<Map<String, dynamic>>.from(bookedData as List);
@@ -231,12 +294,14 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
   /// spinner up for good and the error unhandled.
   Future<void> _selectCoach(String coachId) async {
     if (coachId == _coachId) return;
+    if (_signedIn != _owner) return _followAccount();
+    final seq = ++_loadSeq;
     setState(() => _state = _BookingState.loading);
     try {
-      await _applyCoach(coachId);
+      await _applyCoach(coachId, seq);
     } catch (e, st) {
       reportError('BookingScreen._selectCoach', e, st);
-      if (!mounted) return;
+      if (!mounted || seq != _loadSeq || _signedIn != _owner) return;
       setState(() {
         _slots  = [];
         _booked = [];
@@ -266,10 +331,15 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
   Future<void> _cancelBooking(Map<String, dynamic> call) async {
     final id = call['id'] as String?;
     if (id == null || _cancelling.contains(id)) return;
+    final owner = _owner;
+    if (!_stillOwner(owner, 'cancel session')) return;
+    final coachId = _coachId;
     final messenger = ScaffoldMessenger.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dctx) => AlertDialog(
+      builder: (dctx) {
+        _confirmCtx = dctx;
+        return AlertDialog(
         backgroundColor: _card,
         title: const Text('Cancel session?', style: TextStyle(color: _wht, fontWeight: FontWeight.w800)),
         content: const Text('Your coach will be notified and the time slot reopened.',
@@ -280,9 +350,11 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
           TextButton(onPressed: () => Navigator.pop(dctx, true),
               child: const Text('Cancel session', style: TextStyle(color: Color(0xFFFFB4AB)))),
         ],
-      ),
+        );
+      },
     );
     if (confirmed != true || !mounted || _cancelling.contains(id)) return;
+    if (!_stillOwner(owner, 'cancel session')) return;
     setState(() => _cancelling.add(id));
     // P0-FL-42 · cancelled only when the server says the row changed. A 0-row
     // update (already cancelled, not this client's call, RLS) answers 204 like
@@ -304,7 +376,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       if ((rows as List).isEmpty) {
         reportError('BookingScreen._cancelBooking',
             StateError('coaching_calls update matched no row'));
-        if (!mounted) return;
+        if (!mounted || !_stillOwner(owner, 'cancel session')) return;
         setState(() => _cancelling.remove(id));
         messenger.showSnackBar(_failureSnack(
             "Couldn't cancel this session — it may already be cancelled. "
@@ -314,7 +386,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       }
     } catch (e, st) {
       reportError('BookingScreen._cancelBooking', e, st);
-      if (!mounted) return;
+      if (!mounted || !_stillOwner(owner, 'cancel session')) return;
       setState(() => _cancelling.remove(id));
       messenger.showSnackBar(
           _failureSnack("Couldn't cancel this session — ${_nextStep(e)}"));
@@ -322,10 +394,11 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
     }
     // Best-effort, and reported: the cancel above is saved, and a failed
     // notification thrown from here read as a failed cancel (N3).
-    if (_coachId != null) {
+    if (!_stillOwner(owner, 'cancel notification')) return;
+    if (coachId != null) {
       try {
         await _db.from('notifications').insert({
-          'recipient_id': _coachId,
+          'recipient_id': coachId,
           'type': 'session_cancelled',
           'title': 'Session cancelled',
           'body': 'A client cancelled their scheduled session.',
@@ -335,6 +408,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         reportError('BookingScreen._cancelBooking.notify', e);
       }
     }
+    if (_signedIn != owner) return; // nothing of theirs is said to anyone else
     if (mounted) setState(() => _cancelling.remove(id));
     // Already announced: the SnackBar itself is a live region (proved by
     // the FL-42 test). No extra wrapper, which could announce it twice.
@@ -343,8 +417,11 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
   }
 
   Future<void> _book(Map<String, dynamic> slot) async {
-    final uid = _db.auth.currentUser?.id;
-    if (uid == null || _coachId == null) return;
+    final uid = _owner;
+    final coachId = _coachId;
+    if (uid == null || coachId == null) return;
+    // The slot is one of THIS member's coach's.
+    if (!_stillOwner(uid, 'booking')) return;
     try {
       // One write. The slot is marked booked by the database, which also refuses
       // a slot someone else has just taken (migration 187, 23505). The client's
@@ -352,7 +429,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       // coach_availability -- so the slot stayed on offer and was booked twice.
       await _db.from('coaching_calls').insert({
         'client_id'          : uid,
-        'coach_id'           : _coachId,
+        'coach_id'           : coachId,
         'availability_slot_id': slot['id'],
         'scheduled_at'       : slot['slot_time'],
         'duration_minutes'   : slot['duration_minutes'] ?? 30,
@@ -361,7 +438,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       });
     } catch (e, st) {
       if (slotWasTaken(e)) {
-        if (!mounted) return;
+        if (!mounted || !_stillOwner(uid, 'booking')) return;
         _showSnack('That time was just taken — pick another.', Colors.redAccent);
         _load();                       // the list still offers it; show what is free
         return;
@@ -369,7 +446,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       // P0-FL-46 · recorded, and said in the house voice: a refusal is
       // neither "try again" nor the connection.
       reportError('BookingScreen._book', e, st);
-      if (!mounted) return;
+      if (!mounted || !_stillOwner(uid, 'booking')) return;
       final next = bookingWasRefused(e)
           ? "this booking isn't available for your account. If you think "
               'this is wrong, contact support.'
@@ -391,12 +468,14 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
     // notification thrown from here read as a failed booking — with the slot
     // still offered, so a retry booked it twice (N3).
     var notified = false;
+    if (!_stillOwner(uid, 'booking notification')) return;
     try {
       final me = await _db.from('user_profiles')
           .select('first_name, last_name').eq('id', uid).maybeSingle();
       final clientName = '${me?['first_name'] ?? ''} ${me?['last_name'] ?? ''}'.trim();
+      if (!_stillOwner(uid, 'booking notification')) return;
       await _db.from('notifications').insert({
-        'recipient_id': _coachId,
+        'recipient_id': coachId,
         'type'        : 'session_booked',
         'title'       : 'New session booked',
         'body'        : '${clientName.isEmpty ? 'A client' : clientName} booked a '
@@ -409,7 +488,8 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       reportError('BookingScreen._book.notify', e);
     }
 
-    ScoreEngine().bookSession('${slot['id']}'); // +15
+    if (!_stillOwner(uid, 'booking points')) return;
+    unawaited(ScoreEngine(forUid: uid).bookSession('${slot['id']}')); // +15
     if (!mounted) return;
     _showSnack(notified ? 'Call booked! Your coach has been notified.' : 'Call booked!', _tert);
     _load();
@@ -444,6 +524,11 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
   }
 
   Widget _buildBody() {
+    // Never drawn for anyone else, however late the change is heard of.
+    if (_signedIn != _owner) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _followAccount());
+      return const Center(child: CircularProgressIndicator(color: _brand));
+    }
     final content = switch (_state) {
       _BookingState.loading  => const Center(child: CircularProgressIndicator(color: _brand)),
       _BookingState.noCoach  => _NoCoachState(),

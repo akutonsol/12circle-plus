@@ -1,4 +1,4 @@
-import 'dart:async' show unawaited;
+import 'dart:async' show StreamSubscription, unawaited;
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show Uint8List, kIsWeb;
 import 'package:flutter/services.dart' show PlatformException;
@@ -57,12 +57,93 @@ class _ProgressScreenState extends State<ProgressScreen>
   /// statements about their history, none of which the screen could support.
   bool _loadFailed = false;
 
+  /// A load of this member's landed: from then on a failed refresh keeps it.
+  bool _loadedOnce = false;
+
+  /// The photos that are stored but could not be opened (a baseline side, or a
+  /// gallery photo's path), and one of the failures. Not "no photo" (routed
+  /// from P0-FL-60): an empty slot invites adding one over it.
+  Set<String> _unopened = {};
+  Object? _photoError;
+  bool _reopeningPhotos = false;
+
+  /// P0-FL-59e · whose weights, measurements and body photos these are. Drawn,
+  /// read and written only while this is the member signed in.
+  String? _owner = _signedIn;
+
+  /// Bumped by every load and every account change; a late answer is dropped.
+  int _loadSeq = 0;
+
+  /// Photos of [_owner] on their way to storage.
+  int _storing = 0;
+  StreamSubscription<AuthState>? _authSub;
+
+  static String? get _signedIn =>
+      Supabase.instance.client.auth.currentUser?.id;
+
   @override
   void initState() {
     super.initState();
     _tabCtrl = TabController(length: 3, vsync: this);
     _tabCtrl.addListener(() => setState(() {}));
     _loadData();
+    // Heard in a hidden tab too, where nothing is rebuilt. A token refresh is
+    // the same member and changes nothing.
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
+        (_) => _followAccount(),
+        onError: (Object e, StackTrace st) =>
+            reportError('ProgressScreen.onAuthStateChange', e, st));
+  }
+
+  /// Another member signed in, or this one out: nothing of theirs stays, and
+  /// the one signed in now is read for themselves.
+  void _followAccount() {
+    if (!mounted || _signedIn == _owner) return;
+    // A member's photo still on its way stays theirs (P0-FL-56a: nothing is
+    // reloaded on the back of it as the next member); they load with Try again.
+    final storing = _storing > 0;
+    _loadSeq++;
+    ScaffoldMessenger.maybeOf(context)?.clearSnackBars();
+    // The photo source sheet, a filter menu: they go with the member.
+    Navigator.of(context).popUntil((r) => r is! PopupRoute);
+    setState(() {
+      _owner = _signedIn;
+      _profile = null;
+      _weightLogs = [];
+      _latestMeasurements = null;
+      _measurementHistory = [];
+      _photoLogs = [];
+      _galleryUrls = {};
+      _frontUrl = _sideUrl = _backUrl = null;
+      _unopened = {};
+      _photoError = null;
+      _reopeningPhotos = false;
+      _loadedOnce = false;
+      _storing = 0;
+      _loading = false;
+      _loadFailed = storing && _owner != null;
+    });
+    if (_owner != null && !storing) _loadData();
+  }
+
+  /// Opens one photo, or says why not: null and no failure is a photo that is
+  /// not there (storage answers a missing object `404`/`not_found`).
+  Future<(String?, Object?)> _openPhoto(String path) async {
+    try {
+      return (
+        await Supabase.instance.client.storage
+            .from('progress-photos')
+            .createSignedUrl(path, 3600),
+        null,
+      );
+    } catch (e, st) {
+      if (e is StorageException &&
+          (e.statusCode == '404' || e.error == 'not_found')) {
+        return (null, null);
+      }
+      reportError('ProgressScreen.openPhoto', e, st);
+      return (null, e);
+    }
   }
 
   /// [afterPhotoOf]: a reload after that member's photo was stored. If it
@@ -70,14 +151,24 @@ class _ProgressScreenState extends State<ProgressScreen>
   /// Refresh (P0-FL-56a) — the photo IS saved, and "Could not load your
   /// progress" in its place hid both facts.
   Future<void> _loadData({String? afterPhotoOf}) async {
-    if (mounted) setState(() => _loadFailed = false);
-    final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (uid == null) { setState(() => _loading = false); return; }
+    if (!mounted) return;
+    if (_signedIn != _owner) return _followAccount();
+    final uid = _owner;
+    final seq = ++_loadSeq;
+    bool stale() => !mounted || seq != _loadSeq || _signedIn != uid;
+    // With nothing loaded there is nothing to keep up meanwhile: a retry that
+    // drew the (empty) tabs said "Log your first weight" until it answered.
+    setState(() {
+      _loadFailed = false;
+      _loading = !_loadedOnce && uid != null;
+    });
+    if (uid == null) return;
     try {
       final profile = await Supabase.instance.client
           .from('user_profiles')
           .select('weight_kg, weight_goal_kg, height_cm')
           .eq('id', uid).maybeSingle();
+      if (stale()) return;
 
       final logs = await Supabase.instance.client
           .from('weight_logs')
@@ -85,6 +176,7 @@ class _ProgressScreenState extends State<ProgressScreen>
           .eq('user_id', uid)
           .order('logged_at', ascending: false)
           .limit(30);
+      if (stale()) return;
 
       // The LATEST 24, oldest first (the chart's order). Ascending with
       // `limit(24)` kept the first 24 ever, and `.last` of those was taken as
@@ -97,6 +189,7 @@ class _ProgressScreenState extends State<ProgressScreen>
           .eq('user_id', uid)
           .order('logged_at', ascending: false)
           .limit(24);
+      if (stale()) return;
       final measurementHistory =
           List<Map<String, dynamic>>.from(measurementRows as List).reversed.toList();
       final measurements =
@@ -108,25 +201,34 @@ class _ProgressScreenState extends State<ProgressScreen>
           .eq('user_id', uid)
           .order('logged_at', ascending: false)
           .limit(10);
+      if (stale()) return;
 
-      // Signed URLs for onboarding photos (1 hr expiry; silent fail = no photo yet).
+      // Signed URLs for onboarding photos (1 hr expiry). Not there = no photo
+      // yet; any other failure is recorded and said.
       // Probe EVERY extension the onboarding upload may have written (iOS=heic,
       // web=png/webp), not just one — otherwise a non-jpg photo never shows.
       String? frontUrl, sideUrl, backUrl;
+      final unopened = <String>{};
+      Object? photoError;
       const exts = ['jpg', 'jpeg', 'png', 'heic', 'webp'];
       for (final entry in [
         ('front', (String u) => frontUrl = u),
         ('side',  (String u) => sideUrl  = u),
         ('back',  (String u) => backUrl  = u),
       ]) {
+        Object? failure;
         for (final ext in exts) {
-          try {
-            final url = await Supabase.instance.client.storage
-                .from('progress-photos')
-                .createSignedUrl('$uid/${entry.$1}.$ext', 3600);
-            entry.$2(url);
-            break; // found this side — stop trying extensions
-          } catch (_) {}
+          final (url, error) = await _openPhoto('$uid/${entry.$1}.$ext');
+          if (stale()) return;
+          failure ??= error;
+          if (url == null) continue;
+          entry.$2(url);
+          failure = null;
+          break; // found this side — stop trying extensions
+        }
+        if (failure != null) {
+          unopened.add(entry.$1);
+          photoError ??= failure;
         }
       }
 
@@ -135,17 +237,24 @@ class _ProgressScreenState extends State<ProgressScreen>
       for (final log in (photoLogs as List)) {
         final path = log['storage_path'] as String?;
         if (path != null && path.isNotEmpty && path.contains('gallery_')) {
-          try {
-            final url = await Supabase.instance.client.storage
-                .from('progress-photos')
-                .createSignedUrl(path, 3600);
-            galleryUrls[path] = url;
-          } catch (_) {}
+          final (url, error) = await _openPhoto(path);
+          if (stale()) return;
+          if (url != null) galleryUrls[path] = url;
+          if (url == null) unopened.add(path);
+          if (url == null && error == null) {
+            // Not "no photo yet": its log says it was stored.
+            reportError('ProgressScreen.openPhoto',
+                StateError('a logged photo is not in storage'));
+          }
+          photoError ??= error;
         }
       }
 
-      if (mounted) {
+      {
         setState(() {
+          _unopened = unopened;
+          _photoError = photoError;
+          _loadedOnce = true;
           _profile = profile;
           _weightLogs = List<Map<String, dynamic>>.from(logs);
           _latestMeasurements = measurements;
@@ -160,15 +269,28 @@ class _ProgressScreenState extends State<ProgressScreen>
       }
     } catch (e, st) {
       reportError('ProgressScreen._loadData', e, st);
-      if (afterPhotoOf != null && _isSignedIn(afterPhotoOf)) {
-        _say('Your photo is saved. ${couldntMessage('refresh your progress', e)}',
+      if (stale()) return; // not the signed-in member's failure to be told
+      if (_loadedOnce) {
+        // What is shown stays; the refresh that failed is said.
+        final failed = couldntMessage('refresh your progress', e);
+        _say(afterPhotoOf == null ? failed : 'Your photo is saved. $failed',
             action: SnackBarAction(
                 label: 'Refresh',
-                onPressed: () => _refreshAfterPhoto(afterPhotoOf)));
+                onPressed: () =>
+                    _refresh(uid, afterPhotoOf: afterPhotoOf)));
         return;
       }
-      if (mounted) setState(() { _loading = false; _loadFailed = true; });
+      setState(() { _loading = false; _loadFailed = true; });
     }
+  }
+
+  /// Asks again for the photos that could not be opened. Busy-aware.
+  Future<void> _reopenPhotos() async {
+    if (_reopeningPhotos) return;
+    final owner = _owner;
+    setState(() => _reopeningPhotos = true);
+    await _loadData();
+    if (mounted && _owner == owner) setState(() => _reopeningPhotos = false);
   }
 
   bool _isSignedIn(String uid) =>
@@ -177,17 +299,18 @@ class _ProgressScreenState extends State<ProgressScreen>
   /// True while a Refresh is loading: another one does nothing until then.
   bool _refreshingAfterPhoto = false;
 
-  /// The failed-refresh notice's Refresh, for the member whose photo it was.
-  Future<void> _refreshAfterPhoto(String uid) async {
+  /// The failed-refresh notice's Refresh, for the member it was said to.
+  Future<void> _refresh(String uid, {String? afterPhotoOf}) async {
     if (!mounted || _refreshingAfterPhoto) return;
     if (!_isSignedIn(uid)) {
       reportError('progress.photo.refresh.identity',
           StateError('the member changed before a refresh'));
+      _followAccount();
       return;
     }
     _refreshingAfterPhoto = true;
     try {
-      await _loadData(afterPhotoOf: uid);
+      await _loadData(afterPhotoOf: afterPhotoOf);
     } finally {
       _refreshingAfterPhoto = false;
     }
@@ -205,15 +328,30 @@ class _ProgressScreenState extends State<ProgressScreen>
 
   @override
   void dispose() {
+    _authSub?.cancel();
     _tabCtrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final changed = _signedIn != _owner;
+    // Never drawn for anyone else, however late the change is heard of.
+    if (changed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _followAccount());
+    }
     return AppScaffold(
       title: 'PERFORMANCE',
-      body: _loading
+      body: !changed && _owner == null
+          // Signed out: nothing is known, and "No entries yet" is a claim.
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Text("You're signed out — sign in again to see your "
+                    'progress.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: _C.onSurfaceVar, fontSize: 15))))
+          : _loading || changed
           ? const Center(child: CircularProgressIndicator(color: _C.primary))
           : _loadFailed
           // NOT three empty states. The screen knows nothing about this
@@ -322,7 +460,9 @@ class _ProgressScreenState extends State<ProgressScreen>
                         frontPhotoUrl: _frontUrl,
                         // Filled from the photo logs newest first, so the
                         // latest is the first of them, not the last.
-                        latestGalleryUrl: _galleryUrls.values.firstOrNull,
+                        latestGalleryUrl: _latestGalleryUrl,
+                        frontUnopened: _unopened.contains('front'),
+                        latestUnopened: _latestUnopened,
                         onLog: () => _showLogMeasurementSheet(context),
                       ),
                       _PhotosTab(
@@ -331,6 +471,10 @@ class _ProgressScreenState extends State<ProgressScreen>
                         backUrl: _backUrl,
                         photoLogs: _photoLogs,
                         galleryUrls: _galleryUrls,
+                        unopened: _unopened,
+                        photoError: _photoError,
+                        reopening: _reopeningPhotos,
+                        onReopen: _reopenPhotos,
                         onRefresh: _loadData,
                         onAddPhoto: () => _pickAndUploadPhoto(context),
                         onSetBaseline: (side) => _setBaselinePhoto(context, side),
@@ -343,12 +487,34 @@ class _ProgressScreenState extends State<ProgressScreen>
     );
   }
 
+  /// The newest photo log's path, when it is a gallery photo.
+  String? get _latestGalleryPath {
+    for (final log in _photoLogs) {
+      final path = log['storage_path'] as String?;
+      if (path != null && path.contains('gallery_')) return path;
+    }
+    return null;
+  }
+
+  /// "Today" is the newest photo or nothing: an older one in its place, when
+  /// the newest could not be opened, was shown as today's.
+  String? get _latestGalleryUrl => _galleryUrls[_latestGalleryPath];
+
+  bool get _latestUnopened {
+    final path = _latestGalleryPath;
+    return path == null
+        ? _unopened.contains('front')
+        : _unopened.contains(path);
+  }
+
   void _showLogWeightSheet(BuildContext context) {
+    if (_signedIn != _owner) return _followAccount();
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => LogWeightSheet(
+        owner: _owner,
         initialKg: _currentWeightKg,
         onSaved: _loadData,
       ),
@@ -356,11 +522,13 @@ class _ProgressScreenState extends State<ProgressScreen>
   }
 
   void _showLogMeasurementSheet(BuildContext context) {
+    if (_signedIn != _owner) return _followAccount();
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => LogMeasurementSheet(
+        owner: _owner,
         initial: _latestMeasurements,
         onSaved: _loadData,
       ),
@@ -392,7 +560,14 @@ class _ProgressScreenState extends State<ProgressScreen>
     _pickingPhoto = true;
     try {
       final auth = Supabase.instance.client.auth;
-      final uid = auth.currentUser?.id;
+      // The member whose screen this is, not whoever is signed in by now.
+      final uid = _owner;
+      if (auth.currentUser?.id != uid) {
+        reportError('$origin.identity',
+            StateError('the member changed before a pick'));
+        _followAccount();
+        return null;
+      }
       var source = await _showPhotoSourceSheet();
       if (source == null) return null;
       if (uid == null) {
@@ -409,6 +584,7 @@ class _ProgressScreenState extends State<ProgressScreen>
         file = await ImagePicker().pickImage(source: source, imageQuality: 85);
       } catch (e, st) {
         reportError('$origin.pick.${source.name}', e, st);
+        if (auth.currentUser?.id != uid) return null; // theirs, not said
         final camera = source == ImageSource.camera;
         final what = camera ? 'camera' : 'photos';
         // image_picker's permission codes end `_access_denied`.
@@ -424,6 +600,7 @@ class _ProgressScreenState extends State<ProgressScreen>
         bytes = await file.readAsBytes();
       } catch (e, st) {
         reportError('$origin.read', e, st);
+        if (auth.currentUser?.id != uid) return null; // theirs, not said
         _say(couldntMessage('use that photo', e));
         return null;
       }
@@ -441,9 +618,9 @@ class _ProgressScreenState extends State<ProgressScreen>
   }
 
   /// Best effort: a failed award never turns the saved photo into a failure.
-  Future<void> _awardCheckinPoints() async {
+  Future<void> _awardCheckinPoints(String uid) async {
     try {
-      await ScoreService().addCheckinPoints();
+      await ScoreService(forUid: uid).addCheckinPoints();
     } catch (e, st) {
       reportError('progress.photo.points', e, st);
     }
@@ -454,6 +631,7 @@ class _ProgressScreenState extends State<ProgressScreen>
     if (photo == null) return;
     final uid = photo.uid;
     var step = 'upload';
+    _storing++;
     try {
       final ext = photo.file.path.split('.').last.toLowerCase();
       final ts = DateTime.now().millisecondsSinceEpoch;
@@ -463,6 +641,11 @@ class _ProgressScreenState extends State<ProgressScreen>
           .uploadBinary(storagePath, photo.bytes,
             fileOptions: FileOptions(contentType: 'image/$ext', upsert: false));
       step = 'save';
+      if (!_isSignedIn(uid)) {
+        reportError('progress.photo.identity',
+            StateError('the member changed while a photo was stored'));
+        return;
+      }
       // Every progress log's `logged_at` is timestamptz and goes out as a UTC
       // instant. Local time with no zone is read by Postgres as UTC, so the
       // dates and times this screen converts back (`toLocal`) were shifted by
@@ -476,8 +659,11 @@ class _ProgressScreenState extends State<ProgressScreen>
       });
     } catch (e, st) {
       reportError('progress.photo.$step', e, st);
-      _say(couldntMessage('save your photo', e));
+      // Another member is never told about this one's photo.
+      if (_isSignedIn(uid)) _say(couldntMessage('save your photo', e));
       return;
+    } finally {
+      _stored(uid);
     }
     // Both read the session: the points would be B's for A's photo.
     if (!_isSignedIn(uid)) {
@@ -485,9 +671,13 @@ class _ProgressScreenState extends State<ProgressScreen>
           StateError('the member changed while a photo was stored'));
       return;
     }
-    unawaited(_awardCheckinPoints());
-    ScoreEngine().progressPhotos();
+    unawaited(_awardCheckinPoints(uid));
+    unawaited(ScoreEngine(forUid: uid).progressPhotos());
     _loadData(afterPhotoOf: uid);
+  }
+
+  void _stored(String uid) {
+    if (_owner == uid && _storing > 0) _storing--;
   }
 
   // Sets one of the baseline (start) photos — front / side / back — writing to
@@ -498,6 +688,7 @@ class _ProgressScreenState extends State<ProgressScreen>
     if (photo == null) return;
     final uid = photo.uid;
     Object? cleanupError;
+    _storing++;
     try {
       final ext = _baselineExt(photo.file);
       final mime = ext == 'png' ? 'image/png'
@@ -542,8 +733,10 @@ class _ProgressScreenState extends State<ProgressScreen>
       );
     } catch (e, st) {
       reportError('progress.baseline.upload', e, st);
-      _say(couldntMessage('update your $side photo', e));
+      if (_isSignedIn(uid)) _say(couldntMessage('update your $side photo', e));
       return;
+    } finally {
+      _stored(uid);
     }
     if (!_isSignedIn(uid)) {
       reportError('progress.baseline.identity',
@@ -835,12 +1028,15 @@ class _MeasurementsTab extends StatelessWidget {
   final List<Map<String, dynamic>> history;
   final String? frontPhotoUrl;
   final String? latestGalleryUrl;
+  final bool frontUnopened, latestUnopened;
   final VoidCallback onLog;
   const _MeasurementsTab({
     this.measurements,
     required this.history,
     this.frontPhotoUrl,
     this.latestGalleryUrl,
+    this.frontUnopened = false,
+    this.latestUnopened = false,
     required this.onLog,
   });
 
@@ -1140,7 +1336,11 @@ class _MeasurementsTab extends StatelessWidget {
           const SizedBox(height: 12),
           _VisualComparison(
             firstUrl: frontPhotoUrl,
-            latestUrl: latestGalleryUrl ?? frontPhotoUrl,
+            latestUrl: latestUnopened
+                ? null
+                : latestGalleryUrl ?? frontPhotoUrl,
+            firstUnopened: frontUnopened,
+            latestUnopened: latestUnopened,
             history: history,
           ),
           const SizedBox(height: 16),
@@ -1183,12 +1383,18 @@ class _PhotosTab extends StatelessWidget {
   final String? frontUrl, sideUrl, backUrl;
   final List<Map<String, dynamic>> photoLogs;
   final Map<String, String> galleryUrls;
+  final Set<String> unopened;
+  final Object? photoError;
+  final bool reopening;
+  final VoidCallback onReopen;
   final VoidCallback onRefresh;
   final VoidCallback onAddPhoto;
   final void Function(String side) onSetBaseline;
   const _PhotosTab({
     this.frontUrl, this.sideUrl, this.backUrl,
     required this.photoLogs, required this.galleryUrls,
+    required this.unopened, required this.photoError,
+    required this.reopening, required this.onReopen,
     required this.onRefresh, required this.onAddPhoto,
     required this.onSetBaseline,
   });
@@ -1213,7 +1419,7 @@ class _PhotosTab extends StatelessWidget {
           child: url != null
               ? Stack(fit: StackFit.expand, children: [
                   Image.network(url, fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => _slotEmpty()),
+                    errorBuilder: (_, __, ___) => _slotUnopened()),
                   Positioned(bottom: 6, right: 6, child: Container(
                     padding: const EdgeInsets.all(4),
                     decoration: BoxDecoration(
@@ -1221,7 +1427,7 @@ class _PhotosTab extends StatelessWidget {
                       borderRadius: BorderRadius.circular(6)),
                     child: const Icon(Icons.edit, color: Colors.white, size: 13))),
                 ])
-              : _slotEmpty(),
+              : unopened.contains(side) ? _slotUnopened() : _slotEmpty(),
         ),
       ),
       const SizedBox(height: 6),
@@ -1230,6 +1436,17 @@ class _PhotosTab extends StatelessWidget {
         fontSize: 12, fontWeight: FontWeight.w600)),
     ]),
   );
+
+  /// There is a photo; it could not be opened.
+  Widget _slotUnopened() => const Center(child: Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(Icons.broken_image_outlined, color: _C.outline, size: 24),
+      SizedBox(height: 4),
+      Text("Couldn't open", textAlign: TextAlign.center,
+          style: TextStyle(color: _C.onSurfaceVar, fontSize: 11)),
+    ],
+  ));
 
   Widget _slotEmpty() => const Center(child: Column(
     mainAxisSize: MainAxisSize.min,
@@ -1256,6 +1473,15 @@ class _PhotosTab extends StatelessWidget {
           const Text('Tap a slot to add or replace each angle. These are your Day 1 baseline.',
             style: TextStyle(color: _C.outline, fontSize: 12)),
           const SizedBox(height: 12),
+          if (unopened.isNotEmpty || reopening) ...[
+            SectionLoadFailure(
+              what: 'some of your photos',
+              error: photoError,
+              busy: reopening,
+              onRetry: onReopen,
+              accent: _C.primary),
+            const SizedBox(height: 12),
+          ],
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1342,6 +1568,7 @@ class _PhotosTab extends StatelessWidget {
           _ProgressGallery(
             photoLogs: photoLogs,
             galleryUrls: galleryUrls,
+            unopened: unopened,
             frontUrl: frontUrl,
             sideUrl: sideUrl,
             backUrl: backUrl,
@@ -1352,19 +1579,81 @@ class _PhotosTab extends StatelessWidget {
   }
 }
 
+/// P0-FL-59e · a progress sheet belongs to the member who opened it ([owner]):
+/// what it is prefilled with, and what it saves, are theirs. It closes, unsaved
+/// and silently, when someone else is signed in. Null (no session at all, as
+/// in a test of the sheet alone) follows nobody.
+mixin _OwnedSheet<T extends StatefulWidget> on State<T> {
+  String? get owner;
+  StreamSubscription<AuthState>? _authSub;
+
+  bool get isOwner =>
+      owner == null || Supabase.instance.client.auth.currentUser?.id == owner;
+
+  /// Withdraws what was typed or prefilled.
+  void forget();
+
+  void followOwner() {
+    if (owner == null) return;
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+      if (!isOwner) closeForOwner();
+    }, onError: (Object e, StackTrace st) =>
+        reportError('ProgressSheet.onAuthStateChange', e, st));
+  }
+
+  void closeForOwner() {
+    if (!mounted) return;
+    forget();
+    setState(() {});
+    final route = ModalRoute.of(context);
+    if (route == null || !route.isActive || route.isFirst) return;
+    route.navigator?.removeRoute(route);
+  }
+
+  /// False (recorded, sheet closed) once someone else is signed in.
+  bool stillOwner(String what) {
+    if (isOwner) return true;
+    reportError('ProgressSheet.identity',
+        StateError('$what: the signed-in account changed'));
+    closeForOwner();
+    return false;
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+}
+
 // ── Log Measurement Bottom Sheet ─────────────────────────────────────────────
 class LogMeasurementSheet extends StatefulWidget {
   final Map<String, dynamic>? initial;
   final VoidCallback? onSaved;
+  /// The member whose sheet this is.
+  final String? owner;
   @visibleForTesting
   final ProgressRowWriter? writeRow;
-  const LogMeasurementSheet({super.key, this.initial, this.onSaved, this.writeRow});
+  const LogMeasurementSheet({super.key, this.initial, this.onSaved, this.owner,
+    this.writeRow});
 
   @override
   State<LogMeasurementSheet> createState() => LogMeasurementSheetState();
 }
 
-class LogMeasurementSheetState extends State<LogMeasurementSheet> {
+class LogMeasurementSheetState extends State<LogMeasurementSheet>
+    with _OwnedSheet {
+  @override
+  String? get owner => widget.owner;
+
+  @override
+  void forget() {
+    for (final c in _ctrls.values) {
+      c.clear();
+    }
+    _error = null;
+  }
+
   late final Map<String, TextEditingController> _ctrls;
   bool _saving = false;
   String? _error;
@@ -1387,6 +1676,7 @@ class LogMeasurementSheetState extends State<LogMeasurementSheet> {
               ? (widget.initial![f.$2] as num).toStringAsFixed(1)
               : ''),
     };
+    followOwner();
   }
 
   @override
@@ -1396,6 +1686,7 @@ class LogMeasurementSheetState extends State<LogMeasurementSheet> {
   }
 
   Future<void> _save() async {
+    if (_saving || !stillOwner('measurement')) return;
     setState(() { _saving = true; _error = null; });
     try {
       final data = <String, dynamic>{
@@ -1405,20 +1696,21 @@ class LogMeasurementSheetState extends State<LogMeasurementSheet> {
         final v = double.tryParse(_ctrls[f.$2]!.text.trim());
         if (v != null) data[f.$2] = v;
       }
-      await (widget.writeRow ?? _supabaseProgressInsert)('body_measurements', data);
+      await (widget.writeRow ?? _insertFor(owner))('body_measurements', data);
     } catch (e, s) {
       reportError('LogMeasurementSheet._save', e, s);
-      if (mounted) setState(() { _saving = false; _error = progressSaveFailedMessage; });
+      if (mounted && stillOwner('measurement')) setState(() { _saving = false; _error = progressSaveFailedMessage; });
       return;
     }
+    if (!stillOwner('measurement points')) return;
     // The row is stored. Points are a follow-up: their failure must not make a
     // saved entry look failed (a retry would insert a duplicate measurement).
     try {
-      await ScoreService().addCheckinPoints();
+      await ScoreService(forUid: owner).addCheckinPoints();
     } catch (e, s) {
       reportError('LogMeasurementSheet._save.points', e, s);
     }
-    if (mounted) {
+    if (mounted && stillOwner('measurement refresh')) {
       Navigator.pop(context);
       widget.onSaved?.call();
     }
@@ -1426,6 +1718,7 @@ class LogMeasurementSheetState extends State<LogMeasurementSheet> {
 
   @override
   Widget build(BuildContext context) {
+    if (!isOwner) return const SizedBox.shrink();
     final bottom = MediaQuery.of(context).padding.bottom;
     return Container(
       padding: EdgeInsets.fromLTRB(20, 0, 20, bottom + 20),
@@ -1545,11 +1838,19 @@ class _ProgressSaveError extends StatelessWidget {
 /// Persists one progress row. Injected in tests; the default writes to Supabase.
 typedef ProgressRowWriter = Future<void> Function(String table, Map<String, dynamic> row);
 
-Future<void> _supabaseProgressInsert(String table, Map<String, dynamic> row) async {
+/// Writes rows of [owner] only: refused, with nothing sent, once someone else
+/// is signed in.
+ProgressRowWriter _insertFor(String? owner) =>
+    (table, row) => _supabaseProgressInsert(table, row, owner);
+
+Future<void> _supabaseProgressInsert(
+    String table, Map<String, dynamic> row, String? owner) async {
   final db = Supabase.instance.client;
-  final uid = db.auth.currentUser?.id;
+  final uid = owner;
   // Refuse rather than no-op: a silently discarded save looked like a hang.
-  if (uid == null) throw StateError('Not signed in — the entry was not saved.');
+  if (uid == null || db.auth.currentUser?.id != uid) {
+    throw StateError('Not signed in as the owner — the entry was not saved.');
+  }
   await db.from(table).insert({...row, 'user_id': uid});
 }
 
@@ -1557,15 +1858,28 @@ Future<void> _supabaseProgressInsert(String table, Map<String, dynamic> row) asy
 class LogWeightSheet extends StatefulWidget {
   final double initialKg;
   final VoidCallback? onSaved;
+  /// The member whose sheet this is.
+  final String? owner;
   @visibleForTesting
   final ProgressRowWriter? writeRow;
-  const LogWeightSheet({super.key, this.initialKg = 80.0, this.onSaved, this.writeRow});
+  const LogWeightSheet({super.key, this.initialKg = 80.0, this.onSaved,
+    this.owner, this.writeRow});
 
   @override
   State<LogWeightSheet> createState() => LogWeightSheetState();
 }
 
-class LogWeightSheetState extends State<LogWeightSheet> {
+class LogWeightSheetState extends State<LogWeightSheet> with _OwnedSheet {
+  @override
+  String? get owner => widget.owner;
+
+  @override
+  void forget() {
+    _noteCtrl.clear();
+    _weight = 0;
+    _error = null;
+  }
+
   bool _isLbs = false;
   late double _weight;
   bool _saving = false;
@@ -1577,6 +1891,7 @@ class LogWeightSheetState extends State<LogWeightSheet> {
   void initState() {
     super.initState();
     _weight = widget.initialKg;
+    followOwner();
   }
 
   @override
@@ -1586,20 +1901,21 @@ class LogWeightSheetState extends State<LogWeightSheet> {
   }
 
   Future<void> _save() async {
+    if (_saving || !stillOwner('weight')) return;
     setState(() { _saving = true; _error = null; });
     try {
       final kg = _isLbs ? _weight / 2.20462 : _weight;
-      await (widget.writeRow ?? _supabaseProgressInsert)('weight_logs', {
+      await (widget.writeRow ?? _insertFor(owner))('weight_logs', {
         'weight_kg': kg,
         'note': _noteCtrl.text.trim().isEmpty ? null : _noteCtrl.text.trim(),
         'logged_at': DateTime.now().toUtc().toIso8601String(),
       });
     } catch (e, s) {
       reportError('LogWeightSheet._save', e, s);
-      if (mounted) setState(() { _saving = false; _error = progressSaveFailedMessage; });
+      if (mounted && stillOwner('weight')) setState(() { _saving = false; _error = progressSaveFailedMessage; });
       return;
     }
-    if (mounted) {
+    if (mounted && stillOwner('weight refresh')) {
       Navigator.pop(context);
       widget.onSaved?.call();
     }
@@ -1607,6 +1923,7 @@ class LogWeightSheetState extends State<LogWeightSheet> {
 
   @override
   Widget build(BuildContext context) {
+    if (!isOwner) return const SizedBox.shrink();
     final bottom = MediaQuery.of(context).padding.bottom;
     return Container(
       padding: EdgeInsets.fromLTRB(20, 0, 20, bottom + 20),
@@ -1917,9 +2234,11 @@ class _InsightRow extends StatelessWidget {
 class _ProgressGallery extends StatefulWidget {
   final List<Map<String, dynamic>> photoLogs;
   final Map<String, String> galleryUrls;
+  final Set<String> unopened;
   final String? frontUrl, sideUrl, backUrl;
   const _ProgressGallery({
     required this.photoLogs, required this.galleryUrls,
+    required this.unopened,
     this.frontUrl, this.sideUrl, this.backUrl,
   });
   @override
@@ -1940,9 +2259,16 @@ class _ProgressGalleryState extends State<_ProgressGallery> {
     if (path == null) {
       return side == 'front' ? widget.frontUrl : side == 'side' ? widget.sideUrl : widget.backUrl;
     }
+    // A gallery photo is itself or nothing: the back baseline in its place is
+    // another photo under this one's date.
+    if (path.contains('gallery_')) return widget.galleryUrls[path];
     return widget.galleryUrls[path] ??
         (side == 'front' ? widget.frontUrl : side == 'side' ? widget.sideUrl : widget.backUrl);
   }
+
+  bool _unopened(Map<String, dynamic> log) =>
+      widget.unopened.contains(log['storage_path'] ?? log['side']) ||
+      (_urlFor(log) == null && widget.unopened.contains(log['side']));
 
   String _dateOf(Map<String, dynamic> log) {
     final raw = (log['logged_at'] ?? log['created_at']) as String?;
@@ -2020,7 +2346,8 @@ class _ProgressGalleryState extends State<_ProgressGallery> {
               crossAxisCount: 2, crossAxisSpacing: 12, mainAxisSpacing: 12, childAspectRatio: 0.8),
             itemCount: logs.length,
             itemBuilder: (_, i) => _GalleryCard(
-                date: _dateOf(logs[i]), label: _labelOf(logs[i]), url: _urlFor(logs[i])),
+                date: _dateOf(logs[i]), label: _labelOf(logs[i]), url: _urlFor(logs[i]),
+                unopened: _unopened(logs[i])),
           )
         else
           ListView.separated(
@@ -2044,7 +2371,11 @@ class _ProgressGalleryState extends State<_ProgressGallery> {
                             errorBuilder: (_, __, ___) => Container(color: _C.surfaceContainer,
                                 child: const Icon(Icons.image_outlined, color: _C.outline)))
                         : Container(color: _C.surfaceContainer,
-                            child: const Icon(Icons.image_outlined, color: _C.outline)),
+                            child: Icon(
+                                _unopened(logs[i])
+                                    ? Icons.broken_image_outlined
+                                    : Icons.image_outlined,
+                                color: _C.outline)),
                   ),
                   const SizedBox(width: 14),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -2069,7 +2400,9 @@ class _GalleryCard extends StatelessWidget {
   final String date;
   final String label;
   final String? url;
-  const _GalleryCard({required this.date, required this.label, this.url});
+  final bool unopened;
+  const _GalleryCard({required this.date, required this.label, this.url,
+    this.unopened = false});
 
   @override
   Widget build(BuildContext context) {
@@ -2087,7 +2420,9 @@ class _GalleryCard extends StatelessWidget {
                 errorBuilder: (_, __, ___) => Container(color: _C.surfaceContainer,
                   child: const Icon(Icons.broken_image_outlined, color: _C.outline, size: 32)))
             : Container(color: _C.surfaceContainer,
-                child: const Icon(Icons.photo_outlined, color: _C.outline, size: 32)),
+                child: Icon(
+                    unopened ? Icons.broken_image_outlined : Icons.photo_outlined,
+                    color: _C.outline, size: 32)),
           const DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -2121,8 +2456,11 @@ class _GalleryCard extends StatelessWidget {
 class _VisualComparison extends StatelessWidget {
   final String? firstUrl;
   final String? latestUrl;
+  final bool firstUnopened, latestUnopened;
   final List<Map<String, dynamic>> history;
-  const _VisualComparison({this.firstUrl, this.latestUrl, required this.history});
+  const _VisualComparison({this.firstUrl, this.latestUrl,
+    this.firstUnopened = false, this.latestUnopened = false,
+    required this.history});
 
   String _firstDate() {
     if (history.isEmpty) return 'Start';
@@ -2133,14 +2471,14 @@ class _VisualComparison extends StatelessWidget {
     return '${_monthShort(d.month)} ${d.year}';
   }
 
-  Widget _photoCard(String? url, String label, bool isLatest) {
+  Widget _photoCard(String? url, String label, bool isLatest, bool unopened) {
     final borderColor = isLatest ? _C.primary : Colors.white.withValues(alpha: 0.1);
     Widget image;
     if (url != null) {
       image = Image.network(url, fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => _placeholder());
+        errorBuilder: (_, __, ___) => _placeholder(unopened: true));
     } else {
-      image = _placeholder();
+      image = _placeholder(unopened: unopened);
     }
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -2170,12 +2508,16 @@ class _VisualComparison extends StatelessWidget {
     );
   }
 
-  Widget _placeholder() => Container(
+  Widget _placeholder({bool unopened = false}) => Container(
     color: _C.surfaceContainer,
-    child: const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-      Icon(Icons.add_a_photo_outlined, color: _C.outline, size: 28),
-      SizedBox(height: 4),
-      Text('No photo', style: TextStyle(color: _C.outlineVar, fontSize: 10)),
+    child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+      Icon(unopened ? Icons.broken_image_outlined : Icons.add_a_photo_outlined,
+          color: _C.outline, size: 28),
+      const SizedBox(height: 4),
+      Text(unopened ? "Couldn't open" : 'No photo',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+              color: unopened ? _C.onSurfaceVar : _C.outlineVar, fontSize: 10)),
     ])),
   );
 
@@ -2197,9 +2539,9 @@ class _VisualComparison extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.all(16),
           child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            Expanded(child: _photoCard(firstUrl, _firstDate(), false)),
+            Expanded(child: _photoCard(firstUrl, _firstDate(), false, firstUnopened)),
             const SizedBox(width: 12),
-            Expanded(child: _photoCard(latestUrl, 'Today', true)),
+            Expanded(child: _photoCard(latestUrl, 'Today', true, latestUnopened)),
           ]),
         ),
       ]),

@@ -2,10 +2,24 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'models/food_model.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../coach/data/score_service.dart';
 import '../../scoring/data/score_engine.dart';
 
 class NutritionService {
+  /// P0-FL-59e · [forUid]: the member whose meals these are. Given, a meal is
+  /// logged for that member or not at all.
+  NutritionService({this.forUid});
+
+  final String? forUid;
+
+  bool _stillSignedIn(String owner, String what) {
+    if (_supabase.auth.currentUser?.id == owner) return true;
+    reportError('NutritionService.identity',
+        StateError('$what: the signed-in account changed'));
+    return false;
+  }
+
   final _supabase = Supabase.instance.client;
   final _customFoods = <Food>[];
   // OpenFoodFacts is a free, key-less food database (barcodes + search).
@@ -48,8 +62,12 @@ class NutritionService {
     required double servingSize,
     required String servingUnit,
   }) async {
-    final userId = _supabase.auth.currentUser?.id;
+    // One member for the meal and every award that follows it.
+    final userId = forUid ?? _supabase.auth.currentUser?.id;
     if (userId == null) throw Exception('Not logged in');
+    if (!_stillSignedIn(userId, 'meal')) {
+      throw StateError('meal: the signed-in account changed'); // nothing sent
+    }
     await _supabase.from('nutrition_logs').insert({
       'user_id': userId,
       'meal_type': mealType,
@@ -67,20 +85,21 @@ class NutritionService {
       'logged_at': DateTime.now().toUtc().toIso8601String(),
     });
     // 12 Circle Score: +5 for the meal log, then re-check goal/day bonuses.
-    await ScoreEngine().mealLogged(DateTime.now().microsecondsSinceEpoch.toString());
+    await ScoreEngine(forUid: userId)
+        .mealLogged(DateTime.now().microsecondsSinceEpoch.toString());
     // Award 12 Circle Score nutrition points based on adherence to coach goals.
     // Idempotent (ScoreService sets, not increments) so re-logging never double-counts.
-    await _awardNutritionScore();
+    await _awardNutritionScore(userId);
   }
 
   /// Recomputes today's macro adherence vs the active plan and updates the
   /// nutrition portion of the daily score. Never throws — scoring failures
   /// must not break meal logging.
-  Future<void> _awardNutritionScore() async {
+  Future<void> _awardNutritionScore(String userId) async {
+    if (!_stillSignedIn(userId, 'nutrition points')) return;
     try {
-      final userId = _supabase.auth.currentUser?.id;
-      if (userId == null) return;
-      final totals = await getTodayTotals();
+      final totals = await _todayTotalsOf(userId);
+      if (!_stillSignedIn(userId, 'nutrition points')) return;
       // Pull active coach-assigned goals; fall back to sensible defaults.
       double calTarget = 2000, proTarget = 120;
       final plan = await _supabase
@@ -96,13 +115,14 @@ class NutritionService {
       final calPct = calTarget > 0 ? (totals['calories']! / calTarget).clamp(0.0, 1.0) : 0.0;
       final proPct = proTarget > 0 ? (totals['protein']! / proTarget).clamp(0.0, 1.0) : 0.0;
       final completionPct = (calPct + proPct) / 2;
-      await ScoreService().addNutritionPoints(completionPct);
+      await ScoreService(forUid: userId).addNutritionPoints(completionPct);
       // 12 Circle Score goal bonuses (each once-per-day via server dedup).
-      final engine = ScoreEngine();
+      final engine = ScoreEngine(forUid: userId);
       if (proPct >= 1.0) await engine.proteinGoalHit();
       if (calPct >= 0.9) await engine.nutritionDayComplete();
-    } catch (_) {
-      // ignore scoring errors
+    } catch (e, st) {
+      // Scoring never breaks meal logging; it is recorded.
+      reportError('NutritionService._awardNutritionScore', e, st);
     }
   }
 
@@ -116,6 +136,10 @@ class NutritionService {
   Future<Map<String, double>> getTodayTotals() async {
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) return {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0};
+    return _todayTotalsOf(userId);
+  }
+
+  Future<Map<String, double>> _todayTotalsOf(String userId) async {
     {
       final today = DateTime.now();
       final start = DateTime(today.year, today.month, today.day);

@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/notifications/notification_watcher.dart' show refreshForNotification;
 import '../../auth/domain/auth_provider.dart';
 import '../../payments/domain/entitlements.dart';
@@ -48,6 +49,12 @@ class CoachingModeNotifier extends StateNotifier<AsyncValue<CoachingMode>> {
   final Ref _ref;
   final String _userId;
 
+  /// The member this state is of is still the one signed in. The plan RPCs
+  /// rebuild or deactivate the plan of whoever is signed in, so this is asked
+  /// right before each step (P0-FL-59e).
+  bool get _isOwnerSignedIn =>
+      Supabase.instance.client.auth.currentUser?.id == _userId;
+
   Future<void> _load() async {
     if (_userId.isEmpty) {
       state = const AsyncValue.data(CoachingMode.selfGuided);
@@ -59,10 +66,11 @@ class CoachingModeNotifier extends StateNotifier<AsyncValue<CoachingMode>> {
           .select('coaching_mode')
           .eq('id', _userId)
           .maybeSingle();
+      if (!mounted) return; // replaced meanwhile (another account signed in)
       state = AsyncValue.data(
           CoachingMode.fromDb(data?['coaching_mode'] as String?));
     } catch (e, st) {
-      state = AsyncValue.error(e, st);
+      if (mounted) state = AsyncValue.error(e, st);
     }
   }
 
@@ -71,6 +79,11 @@ class CoachingModeNotifier extends StateNotifier<AsyncValue<CoachingMode>> {
   /// surface it instead of the change quietly reverting on next load.
   Future<void> setMode(CoachingMode mode) async {
     if (_userId.isEmpty) return;
+    if (!mounted || !_isOwnerSignedIn) {
+      final error = StateError('coaching mode: the signed-in account changed');
+      reportError('CoachingModeNotifier.setMode.identity', error);
+      throw error; // nothing was sent
+    }
     final prev = state;
     state = AsyncValue.data(mode); // optimistic update
     try {
@@ -83,8 +96,15 @@ class CoachingModeNotifier extends StateNotifier<AsyncValue<CoachingMode>> {
         throw StateError('coaching_mode update matched no row');
       }
     } catch (e) {
-      state = prev; // rollback so UI reflects reality
+      if (mounted) state = prev; // rollback so UI reflects reality
       rethrow;
+    }
+    // Another member signed in while the mode was being saved: the RPC below
+    // would rebuild or deactivate THEIR plan.
+    if (!_isOwnerSignedIn) {
+      reportError('CoachingModeNotifier.setMode.identity',
+          StateError('plan sync: the signed-in account changed'));
+      return;
     }
     // Mode write succeeded — keep the generated plan in sync. This is secondary,
     // so a failure here must NOT roll back the (already saved) mode change.
@@ -94,7 +114,12 @@ class CoachingModeNotifier extends StateNotifier<AsyncValue<CoachingMode>> {
       } else {
         await Supabase.instance.client.rpc('generate_client_plan');
       }
-    } catch (_) {/* plan sync is best-effort */}
+    } catch (e, st) {
+      // Plan sync is best-effort: recorded, and the saved mode stands.
+      reportError('CoachingModeNotifier.setMode.planSync', e, st);
+    }
+    // Replaced meanwhile: its successor reads its own member's everything.
+    if (!mounted) return;
 
     // ── Single point of propagation ──────────────────────────────────────────
     // Every mode-derived view must reconverge to DB truth, not just Home (which
@@ -123,8 +148,9 @@ class CoachingModeNotifier extends StateNotifier<AsyncValue<CoachingMode>> {
 
 final coachingModeNotifierProvider = StateNotifierProvider<
     CoachingModeNotifier, AsyncValue<CoachingMode>>((ref) {
-  final user = ref.watch(currentUserProvider);
-  return CoachingModeNotifier(ref, user?.id ?? '');
+  // By the id alone: a token refresh is the same member, not a new notifier.
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+  return CoachingModeNotifier(ref, uid ?? '');
 });
 
 // Convenience read-only provider — defaults to selfGuided while loading

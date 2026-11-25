@@ -1,5 +1,8 @@
+import 'dart:async' show StreamSubscription;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthState, Supabase;
+import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../data/nutrition_service.dart';
 import '../data/models/food_model.dart';
@@ -262,7 +265,7 @@ class _AddMealSheet extends ConsumerStatefulWidget {
 }
 
 class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
-  final _svc = NutritionService();
+  late final _svc = NutritionService(forUid: _owner);
   final _searchCtrl = TextEditingController();
   Food? _selected;
   String _mealType = "breakfast";
@@ -271,16 +274,54 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
   List<Food> _filtered = [];
   final _meals = ["breakfast", "lunch", "dinner", "snack", "protein_shake"];
 
+  /// P0-FL-59e · the member who opened this sheet: the food picked or scanned
+  /// in it is theirs, and so is the meal. It closes with them.
+  final String? _owner = _signedIn;
+  StreamSubscription<AuthState>? _authSub;
+
+  static String? get _signedIn =>
+      Supabase.instance.client.auth.currentUser?.id;
+
+  void _followAccount() {
+    if (!mounted || _signedIn == _owner) return;
+    setState(() => _selected = null);
+    final route = ModalRoute.of(context);
+    final navigator = route?.navigator;
+    if (route == null || navigator == null || !route.isActive) return;
+    // With whatever this member opened over it.
+    final root = Navigator.of(context, rootNavigator: true);
+    if (!identical(root, navigator)) root.popUntil((r) => r is! PopupRoute);
+    navigator.popUntil((r) => identical(r, route));
+    if (!route.isFirst) navigator.removeRoute(route);
+  }
+
+  /// False (recorded, sheet closed) once someone else is signed in.
+  bool _stillOwner(String what) {
+    if (_signedIn == _owner) return true;
+    reportError('NutritionScreen.addMeal.identity',
+        StateError('$what: the signed-in account changed'));
+    _followAccount();
+    return false;
+  }
+
   @override
   void initState() {
     super.initState();
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
+        (_) => _followAccount(),
+        onError: (Object e, StackTrace s) =>
+            reportError('NutritionScreen.addMeal.onAuthStateChange', e, s));
     _filtered = _svc.getSampleFoods();
     _searchCtrl.addListener(() =>
       setState(() => _filtered = _svc.searchFoods(_searchCtrl.text)));
   }
 
   @override
-  void dispose() { _searchCtrl.dispose(); super.dispose(); }
+  void dispose() {
+    _authSub?.cancel();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   String _mealTypeLabel(String m) {
     switch (m) {
@@ -290,7 +331,7 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
   }
 
   Future<void> _log() async {
-    if (_selected == null) return;
+    if (_selected == null || !_stillOwner('meal')) return;
     setState(() => _saving = true);
     final food = _selected!;
     final servings = _servings;
@@ -304,7 +345,7 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
         fat: food.fat * servings,
         servingSize: food.servingSize * servings,
         servingUnit: food.servingUnit);
-      if (!mounted) return;
+      if (!mounted || !_stillOwner('meal logged')) return;
       setState(() => _saving = false);
       widget.onLogged();
       // The context is captured as the NAVIGATOR's, not this sheet's. Popping
@@ -327,8 +368,9 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
         carbs: (food.carbs * servings).toInt(),
         fat: (food.fat * servings).toInt(),
       );
-    } catch (e) {
-      if (!mounted) return;
+    } catch (e, st) {
+      reportError('NutritionScreen.addMeal._log', e, st);
+      if (!mounted || !_stillOwner('meal')) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Could not log meal.'),
@@ -340,6 +382,8 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
 
   @override
   Widget build(BuildContext context) {
+    // Nothing picked by one member is drawn for another.
+    if (_signedIn != _owner) return const SizedBox.shrink();
     return DraggableScrollableSheet(
       initialChildSize: 0.85,
       maxChildSize: 0.95,

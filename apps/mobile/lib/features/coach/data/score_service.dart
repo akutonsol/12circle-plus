@@ -1,7 +1,30 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 
 class ScoreService {
+  /// P0-FL-59e · [forUid]: the member these points are for. Given, every award
+  /// is written for that member or not at all: nothing is read or written once
+  /// someone else is signed in. Not given, the member signed in when the award
+  /// started is the one it stays with.
+  ScoreService({this.forUid});
+
+  final String? forUid;
+
   final _db = Supabase.instance.client;
+
+  /// The one member an award is for, fixed at its start; null = award nothing
+  /// (signed out, or [forUid] is no longer the member signed in: recorded).
+  String? _awardOwner() {
+    final owner = forUid ?? _db.auth.currentUser?.id;
+    return owner != null && _stillSignedIn(owner) ? owner : null;
+  }
+
+  bool _stillSignedIn(String owner) {
+    if (_db.auth.currentUser?.id == owner) return true;
+    reportError('ScoreService.identity',
+        StateError('daily score: the signed-in account changed'));
+    return false;
+  }
 
   static const int maxWorkout = 30;
   static const int maxNutrition = 30;
@@ -12,6 +35,10 @@ class ScoreService {
   Future<Map<String, dynamic>> getTodayScore() async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return _emptyScore();
+    return _todayScoreOf(userId);
+  }
+
+  Future<Map<String, dynamic>> _todayScoreOf(String userId) async {
     final today = DateTime.now().toIso8601String().split('T')[0];
     final row = await _db
         .from('daily_scores')
@@ -58,16 +85,26 @@ class ScoreService {
   }
 
   Future<void> addCommunityPoints() async {
-    final today = await getTodayScore();
+    final userId = _awardOwner();
+    if (userId == null) return;
+    final today = await _todayScoreOf(userId);
     if ((today['community_points'] as int? ?? 0) >= maxCommunity) return;
-    await _updatePoints({'community_points': maxCommunity});
+    if (!_stillSignedIn(userId)) return;
+    await _updatePointsOf(userId, {'community_points': maxCommunity});
   }
 
   Future<void> _updatePoints(Map<String, dynamic> updates) async {
-    final userId = _db.auth.currentUser?.id;
+    final userId = _awardOwner();
     if (userId == null) return;
+    await _updatePointsOf(userId, updates);
+  }
+
+  /// The day that is read and the day that is written are both [userId]'s.
+  Future<void> _updatePointsOf(
+      String userId, Map<String, dynamic> updates) async {
     final today = DateTime.now().toIso8601String().split('T')[0];
-    final current = await getTodayScore();
+    final current = await _todayScoreOf(userId);
+    if (!_stillSignedIn(userId)) return;
     final merged = {
       'user_id': userId,
       'score_date': today,

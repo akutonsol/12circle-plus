@@ -6,6 +6,8 @@ import 'widgets/nutrition_load_failed.dart';
 import 'widgets/pill_tab.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthState, Supabase;
+import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../data/nutrition_service.dart';
 import '../data/models/food_model.dart';
@@ -735,7 +737,8 @@ class AddMealSheet extends ConsumerStatefulWidget {
 }
 
 class AddMealSheetState extends ConsumerState<AddMealSheet> {
-  late final NutritionService _svc = widget.service ?? NutritionService();
+  late final NutritionService _svc =
+      widget.service ?? NutritionService(forUid: _owner);
   final _searchCtrl = TextEditingController();
   late String _inputMode = widget.initialMode;
   Food?  _selected;
@@ -747,9 +750,48 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
   final _meals = ['breakfast', 'lunch', 'dinner', 'snack', 'protein_shake'];
   final _logged = <String>{};   // names of items logged this session
 
+  /// P0-FL-59e · the member who opened this sheet: the food picked or scanned
+  /// in it is theirs, and so is the meal. It closes with them.
+  late final String? _owner;
+  StreamSubscription<AuthState>? _authSub;
+
+  // An injected service (tests of the sheet alone) comes with no session.
+  String? get _signedIn => widget.service != null
+      ? null
+      : Supabase.instance.client.auth.currentUser?.id;
+
+  void _followAccount() {
+    if (!mounted || _signedIn == _owner) return;
+    setState(() => _selected = null);
+    final route = ModalRoute.of(context);
+    final navigator = route?.navigator;
+    if (route == null || navigator == null || !route.isActive) return;
+    // With whatever this member opened over it.
+    final root = Navigator.of(context, rootNavigator: true);
+    if (!identical(root, navigator)) root.popUntil((r) => r is! PopupRoute);
+    navigator.popUntil((r) => identical(r, route));
+    if (!route.isFirst) navigator.removeRoute(route);
+  }
+
+  /// False (recorded, sheet closed) once someone else is signed in.
+  bool _stillOwner(String what) {
+    if (_signedIn == _owner) return true;
+    reportError('AddMealSheet.identity',
+        StateError('$what: the signed-in account changed'));
+    _followAccount();
+    return false;
+  }
+
   @override
   void initState() {
     super.initState();
+    if (widget.service == null) {
+      _authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
+          (_) => _followAccount(),
+          onError: (Object e, StackTrace s) =>
+              reportError('AddMealSheet.onAuthStateChange', e, s));
+    }
+    _owner = _signedIn;
     _filtered = _svc.getSampleFoods();
     _searchCtrl.addListener(_onSearchChanged);
   }
@@ -780,7 +822,12 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
   }
 
   @override
-  void dispose() { _debounce?.cancel(); _searchCtrl.dispose(); super.dispose(); }
+  void dispose() {
+    _authSub?.cancel();
+    _debounce?.cancel();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   String _label(String m) =>
     m == 'protein_shake' ? 'Protein Shake'
@@ -798,7 +845,7 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
   Future<void> _logFood(Food f, double servings) async {
     // One tap, one meal (QAX-COR-05): _saving is set synchronously below, so a
     // second tap while the first save is in flight is ignored.
-    if (_saving) return;
+    if (_saving || !_stillOwner('meal')) return;
     setState(() => _saving = true);
     try {
       await _svc.logMeal(
@@ -810,7 +857,7 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
         fat:         f.fat      * servings,
         servingSize: f.servingSize * servings,
         servingUnit: f.servingUnit);
-      if (!mounted) return;
+      if (!mounted || !_stillOwner('meal logged')) return;
       widget.onLogged();
       setState(() { _saving = false; _selected = null; _logged.add(f.name); });
       await FoodAddedDialog.show(context,
@@ -818,8 +865,9 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
         protein:  (f.protein * servings).toInt(),
         carbs:    (f.carbs   * servings).toInt(),
         fat:      (f.fat     * servings).toInt());
-    } catch (e) {
-      if (!mounted) return;
+    } catch (e, st) {
+      reportError('AddMealSheet._logFood', e, st);
+      if (!mounted || !_stillOwner('meal')) return;
       setState(() { _saving = false; _selected = null; });
       _showMealError('Could not log meal.');
     }
@@ -828,7 +876,7 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
   Future<void> _logFromScan(ScanResult r) async {
     // One tap, one meal (QAX-COR-05): _saving is set synchronously below, so a
     // second tap while the first save is in flight is ignored.
-    if (_saving) return;
+    if (_saving || !_stillOwner('meal')) return;
     setState(() => _saving = true);
     try {
       await _svc.logMeal(
@@ -840,7 +888,7 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
         fat:         r.fat,
         servingSize: 1,
         servingUnit: 'serving');
-      if (!mounted) return;
+      if (!mounted || !_stillOwner('meal logged')) return;
       widget.onLogged();
       setState(() => _saving = false);
       // Navigator's context, not this route's — see nutrition_screen.dart for
@@ -854,8 +902,9 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
         protein:  r.protein.toInt(),
         carbs:    r.carbs.toInt(),
         fat:      r.fat.toInt());
-    } catch (e) {
-      if (!mounted) return;
+    } catch (e, st) {
+      reportError('AddMealSheet._logScanned', e, st);
+      if (!mounted || !_stillOwner('meal')) return;
       setState(() => _saving = false);
       _showMealError('Could not log meal.');
     }
@@ -864,7 +913,7 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
   Future<void> _logFromBarcode(Map<String, dynamic> food) async {
     // One tap, one meal (QAX-COR-05): _saving is set synchronously below, so a
     // second tap while the first save is in flight is ignored.
-    if (_saving) return;
+    if (_saving || !_stillOwner('meal')) return;
     setState(() => _saving = true);
     final name    = food['name'] as String? ?? 'Scanned Food';
     final cal     = (food['calories'] as num?)?.toDouble() ?? 0;
@@ -881,7 +930,7 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
         fat:         fat,
         servingSize: 1,
         servingUnit: 'serving');
-      if (!mounted) return;
+      if (!mounted || !_stillOwner('meal logged')) return;
       widget.onLogged();
       setState(() => _saving = false);
       // Navigator's context, not this route's — see nutrition_screen.dart for
@@ -895,8 +944,9 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
         protein:  protein.toInt(),
         carbs:    carbs.toInt(),
         fat:      fat.toInt());
-    } catch (e) {
-      if (!mounted) return;
+    } catch (e, st) {
+      reportError('AddMealSheet._logScanned', e, st);
+      if (!mounted || !_stillOwner('meal')) return;
       setState(() => _saving = false);
       _showMealError('Could not log meal.');
     }
@@ -910,6 +960,7 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
       builder: (_) => _CustomFoodSheet(
         mealType: _mealType,
         onSaved: (f) {
+          if (!mounted || !_stillOwner('custom food')) return;
           setState(() {
             _svc.addCustomFood(f);
             _filtered = _svc.getSampleFoods();
@@ -918,7 +969,11 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
   }
 
   @override
-  Widget build(BuildContext context) => DraggableScrollableSheet(
+  Widget build(BuildContext context) =>
+      // Nothing picked or scanned by one member is drawn for another.
+      _signedIn == _owner ? _buildSheet(context) : const SizedBox.shrink();
+
+  Widget _buildSheet(BuildContext context) => DraggableScrollableSheet(
     initialChildSize: 0.88,
     maxChildSize: 0.96,
     minChildSize: 0.5,

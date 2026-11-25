@@ -1,4 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
+import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../data/habit_service.dart';
 import '../data/models/habit_model.dart';
@@ -11,7 +13,7 @@ final habitServiceProvider = Provider<HabitService>((ref) => HabitService());
 
 // ── Live habits from Supabase (coach-assigned or default) ─────────────────────
 final liveHabitsProvider = FutureProvider<List<Habit>>((ref) async {
-  ref.watch(currentUserProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   final svc = CoachProgramService();
   final results = await Future.wait([
     svc.getMyHabits(),
@@ -71,8 +73,29 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
     _load();
   }
 
+  /// P0-FL-59e · whose habits these are: the member signed in when this was
+  /// made (a new one is made for each member).
+  final String? _owner = _signedIn;
+
+  static String? get _signedIn =>
+      Supabase.instance.client.auth.currentUser?.id;
+
+  /// False (recorded) once someone else is signed in: the habits here are not
+  /// theirs, so neither is a log, nor points counted from them. Nothing of
+  /// them stays up either.
+  bool _isOwner(String what) {
+    if (_signedIn == _owner) return true;
+    reportError('LiveHabitNotifier.identity',
+        StateError('$what: the signed-in account changed'));
+    if (mounted) state = const AsyncValue.loading();
+    return false;
+  }
+
   Future<void> _load() async {
     state = const AsyncValue.loading();
+    // These reads ask as whoever is signed in. Not this list's member any
+    // more, the answer is not for it (its replacement loads its own).
+    if (_signedIn != _owner) return;
     try {
       final results = await Future.wait([
         _svc.getMyHabits(),
@@ -113,7 +136,7 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
       }
       // Replaced mid-load (`habits_assigned`, or another account signing in):
       // the replaced one must not write its stale answer, or schedule reminders.
-      if (!mounted) return;
+      if (!mounted || _signedIn != _owner) return;
       state = AsyncValue.data(habits);
       // Schedule device notifications for all habits that have a reminder time
       HabitReminderService().scheduleHabitReminders(habits);
@@ -142,43 +165,56 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
   /// failed write puts the habit back and returns false for the screen to say
   /// so, and points are awarded only for a tick that was saved.
   Future<bool> toggleComplete(String habitId) async {
+    if (!_isOwner('habit log')) return false; // nothing was sent
     final habits = state.valueOrNull ?? [];
     final habit = habits.firstWhere((h) => h.id == habitId, orElse: () => habits.first);
     final newCompleted = !habit.isCompletedToday;
 
     // Optimistic update
-    state = AsyncValue.data(habits.map((h) {
+    final ticked = habits.map((h) {
       if (h.id != habitId) return h;
       return h.copyWith(
         isCompletedToday: newCompleted,
         currentValue: newCompleted ? h.targetValue : 0);
-    }).toList());
+    }).toList();
+    state = AsyncValue.data(ticked);
 
     try {
       await _svc.logHabit(habitId, completed: newCompleted, value: newCompleted ? habit.targetValue.toDouble() : 0);
-    } catch (_) {
+    } catch (e, st) {
+      reportError('LiveHabitNotifier.toggleComplete', e, st);
+      // Not the signed-in member's tick: nothing to say to them about it.
+      if (!_isOwner('habit log')) return true;
       _restore(habit);
       return false;
     }
     // Saved. Scoring is best-effort and never undoes a saved tick.
+    // P0-FL-59e · counted from THIS member's habits, so for this member only:
+    // `addHabitPoints` SETS the day's habits_points, and after a switch it set
+    // the next member's from these counts.
+    if (!_isOwner('habit points')) return true;
     try {
-      final updated = state.valueOrNull ?? [];
+      // Replaced meanwhile (`habits_assigned`): the list that was ticked.
+      final updated = mounted ? state.valueOrNull ?? [] : ticked;
       final completed = updated.where((h) => h.isCompletedToday).length;
       await _score.addHabitPoints(completed, updated.length);
       // 12 Circle Score (each once-per-day via server dedup).
       if (newCompleted) {
-        final engine = ScoreEngine();
+        final engine = ScoreEngine(forUid: _owner);
         await engine.habitCompleted(habitId);
         if (habit.name.toLowerCase().contains('water')) await engine.waterGoalHit();
         if (updated.isNotEmpty && completed >= updated.length) await engine.allHabitsToday();
       }
-    } catch (_) {}
+    } catch (e, st) {
+      reportError('LiveHabitNotifier.toggleComplete.points', e, st);
+    }
     return true;
   }
 
   /// Sets a counted habit's value and says whether it was saved; a failed
   /// write puts the habit back (EC-12).
   Future<bool> updateValue(String habitId, int value) async {
+    if (!_isOwner('habit log')) return false; // nothing was sent
     final habits = state.valueOrNull ?? [];
     final habit = habits.firstWhere((h) => h.id == habitId);
     final isCompleted = value >= habit.targetValue;
@@ -189,7 +225,9 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
     try {
       await _svc.logHabit(habitId, value: value.toDouble(), completed: isCompleted);
       return true;
-    } catch (_) {
+    } catch (e, st) {
+      reportError('LiveHabitNotifier.updateValue', e, st);
+      if (!_isOwner('habit log')) return true;
       _restore(habit);
       return false;
     }
@@ -208,8 +246,9 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
 
 final liveHabitNotifierProvider = StateNotifierProvider<LiveHabitNotifier, AsyncValue<List<Habit>>>((ref) {
   // The habits of whoever is signed in now, not of whoever opened Habits first.
-  ref.watch(currentUserProvider);
-  return LiveHabitNotifier(CoachProgramService(), ScoreService());
+  // By the id alone: a token refresh does not throw away what is on screen.
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+  return LiveHabitNotifier(CoachProgramService(), ScoreService(forUid: uid));
 });
 
 // Backwards-compat shim for screens that watch habitNotifierProvider

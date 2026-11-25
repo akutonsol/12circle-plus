@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/observability/app_failure.dart';
 import 'models/action_item.dart';
@@ -90,27 +91,40 @@ class ActionItemService {
     final uid = _uid;
     if (uid == null) return false;
     try {
-      await _db.from('action_items').update({
+      // P0-FL-59e · a 0-row update (not this member's item, or already gone)
+      // answers like a saved one unless the row is asked back.
+      final rows = await _db.from('action_items').update({
         'status': 'completed',
         'completed_at': DateTime.now().toUtc().toIso8601String(),
         if (proofUrl != null) 'proof_url': proofUrl,
         if (notes != null) 'client_notes': notes,
-      }).eq('id', id).eq('client_id', uid);
-      ScoreEngine().actionItemComplete(id); // +10 (automatic, once per item)
-      return true;
-    } catch (_) {
+      }).eq('id', id).eq('client_id', uid).select('id');
+      if (rows.isEmpty) {
+        reportError('ActionItemService.completeActionItem',
+            StateError('action_items update changed 0 rows'));
+        return false;
+      }
+    } catch (e, st) {
+      reportError('ActionItemService.completeActionItem', e, st);
       return false;
     }
+    // +10 (automatic, once per item), for the member who completed it.
+    unawaited(ScoreEngine(forUid: uid).actionItemComplete(id));
+    return true;
   }
 
-  /// Client: reopen a completed item.
-  Future<void> reopen(String id) async {
+  /// Client: reopen a completed item. True only when a row was changed.
+  Future<bool> reopen(String id) async {
     final uid = _uid;
-    if (uid == null) return;
-    await _db.from('action_items').update({
+    if (uid == null) return false;
+    final rows = await _db.from('action_items').update({
       'status': 'pending',
       'completed_at': null,
-    }).eq('id', id).eq('client_id', uid);
+    }).eq('id', id).eq('client_id', uid).select('id');
+    if (rows.isNotEmpty) return true;
+    reportError('ActionItemService.reopen',
+        StateError('action_items update changed 0 rows'));
+    return false;
   }
 
   /// Coach: completion stats for the dashboard view (assigned / completed / %).

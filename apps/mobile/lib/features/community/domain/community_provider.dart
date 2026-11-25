@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/observability/app_failure.dart';
@@ -17,7 +18,7 @@ final selectedPostProvider = StateProvider<CommunityPost?>((ref) => null);
 
 // ── Live posts from Supabase ──────────────────────────────────────────────────
 final livePostsProvider = FutureProvider<List<CommunityPost>>((ref) async {
-  ref.watch(currentUserProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   final svc = ref.watch(liveCommunityServiceProvider);
   final live = await svc.getPosts();
   // Real posts only — no sample fallback (avoids demo names in production).
@@ -32,13 +33,34 @@ class PostNotifier extends StateNotifier<AsyncValue<List<CommunityPost>>> {
     _load();
   }
 
+  /// P0-FL-59e · whose feed this is: the member signed in when it was made (a
+  /// new one is made for each member).
+  final String? _owner = _signedIn;
+
+  static String? get _signedIn =>
+      Supabase.instance.client.auth.currentUser?.id;
+
+  bool get _live => mounted && _signedIn == _owner;
+
+  /// Before a write: the post, comment or reaction was made in THIS member's
+  /// feed, so nothing is sent as anyone else. Throws, so it is never taken for
+  /// saved; the feed shown goes away.
+  void _requireOwner(String what) {
+    if (_signedIn == _owner) return;
+    final error = StateError('$what: the signed-in account changed');
+    reportError('PostNotifier.identity', error);
+    if (mounted) state = const AsyncValue.loading();
+    throw error;
+  }
+
   Future<void> _load() async {
+    if (!_live) return; // replaced, or not this member's to read any more
     state = const AsyncValue.loading();
     try {
       final live = await _svc.getPosts();
-      state = AsyncValue.data(live);
+      if (_live) state = AsyncValue.data(live);
     } catch (e, st) {
-      state = AsyncValue.error(e, st);
+      if (_live) state = AsyncValue.error(e, st);
     }
   }
 
@@ -55,7 +77,9 @@ class PostNotifier extends StateNotifier<AsyncValue<List<CommunityPost>>> {
     // taking back a reaction left before the feed loaded counted it again.
     final me = Supabase.instance.client.auth.currentUser?.id;
     if (me == null) return; // the service writes nothing signed out
+    _requireOwner('reaction');
     await _svc.toggleReaction(postId, reactionWire(type));
+    if (!_live) return;
     final posts = state.valueOrNull ?? [];
     state = AsyncValue.data(posts.map((p) {
       if (p.id != postId) return p;
@@ -79,14 +103,25 @@ class PostNotifier extends StateNotifier<AsyncValue<List<CommunityPost>>> {
   }
 
   Future<void> addComment(String postId, String content) async {
+    _requireOwner('comment');
     await _svc.addComment(postId, content);
     await _load();
   }
 
   Future<void> addPost(String content, {String postType = 'general'}) async {
+    _requireOwner('post');
     final post = await _svc.createPost(content, postType: postType);
-    ScoreEngine().communityPost(); // +5, once/day
-    if (state.hasError && !state.hasValue) {
+    // The post is this member's, and so are its points; a feed replaced by
+    // another member's is left alone.
+    if (_signedIn != _owner) {
+      reportError('PostNotifier.identity',
+          StateError('post points: the signed-in account changed'));
+      return;
+    }
+    unawaited(ScoreEngine(forUid: _owner).communityPost()); // +5, once/day
+    if (!mounted) {
+      // Replaced meanwhile: the new feed reads the post itself.
+    } else if (state.hasError && !state.hasValue) {
       // P0-FL-8 · the feed never arrived: `valueOrNull ?? []` made that failure
       // a feed holding only the new post. Read it again instead — the post is
       // in it, or the failure is still shown as one.
@@ -94,8 +129,13 @@ class PostNotifier extends StateNotifier<AsyncValue<List<CommunityPost>>> {
     } else {
       state = AsyncValue.data([post, ...(state.valueOrNull ?? [])]);
     }
-    // Award community points for posting
-    await _score.addCommunityPoints();
+    // Award community points for posting. Best-effort: the post is saved, and
+    // a failed award must not read as a post that was not.
+    try {
+      await _score.addCommunityPoints();
+    } catch (e, st) {
+      reportError('PostNotifier.addPost.points', e, st);
+    }
   }
 }
 
@@ -104,11 +144,12 @@ final postNotifierProvider = StateNotifierProvider<PostNotifier, AsyncValue<List
   // (`isLiked`), its own new posts — so a new one for each account. The
   // QAX-SES-01 guard sees user reads in a provider's own body, not in the
   // notifier it constructs, which is how this one was missed.
-  ref.watch(currentUserProvider);
+  // By the id alone: a token refresh does not throw the feed away.
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
   return PostNotifier(
     ref.watch(liveCommunityServiceProvider),
     ref.watch(communityServiceProvider),
-    ScoreService(),
+    ScoreService(forUid: uid),
   );
 });
 
@@ -134,7 +175,7 @@ final liveMembersProvider = FutureProvider<List<Map<String, dynamic>>>((ref) asy
 
 // ── Live groups from Supabase ─────────────────────────────────────────────────
 final liveGroupsProvider = FutureProvider<List<CommunityGroup>>((ref) async {
-  ref.watch(currentUserProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   final svc = ref.watch(liveCommunityServiceProvider);
   // No groups is no groups — never the sample ones (see getGroups).
   return svc.getGroups();
