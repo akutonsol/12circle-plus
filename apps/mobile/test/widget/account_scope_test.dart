@@ -260,9 +260,10 @@ void main() {
     await mount(t, as: acctA, at: '/settings');
     await openPrivateUi(t);
     final old = container(t);
-    // Both events are delivered before any frame.
+    // Both events are delivered before any frame, and after currentUser is A
+    // again.
     await t.runAsync(() async {
-      await signInAs(acctB);
+      unawaited(signInAs(acctB));
       await signInAs(acctA);
     });
     await settle(t);
@@ -392,7 +393,20 @@ void main() {
 
   // ── Every sign-out path finishes on a disposed tree ───────────────────────
 
+  /// The server's answer to the sign-out comes after the old tree and its
+  /// container are gone, as over any real network.
+  late Completer<void> logout;
+  void holdLogout() => logout = _server.holds['POST logout'] = Completer<void>();
+  Future<void> answerLogout(WidgetTester t) async {
+    expect(path(t), '/login', reason: 'before the server has answered');
+    expect(_server.of('logout'), hasLength(1));
+    logout.complete();
+    await settle(t);
+    expect(path(t), '/login');
+  }
+
   Future<void> confirmSignOut(WidgetTester t, Finder opener, String confirm) async {
+    holdLogout();
     await t.ensureVisible(opener);
     await t.tap(opener);
     await settle(t);
@@ -408,7 +422,7 @@ void main() {
       await mount(t, as: acctA, at: '/profile');
       if (offline) _server.fails['POST logout'] = 500;
       await confirmSignOut(t, find.text('Sign Out').last, 'Sign Out');
-      expect(path(t), '/login');
+      await answerLogout(t);
       expect(Supabase.instance.client.auth.currentSession, isNull);
       expect(_server.of('logout'), hasLength(1));
       expect(_failures.map((f) => f.origin).where((o) => o.contains('signOut')),
@@ -420,7 +434,7 @@ void main() {
       await mount(t, as: acctA, at: '/settings');
       if (offline) _server.fails['POST logout'] = 500;
       await confirmSignOut(t, find.text('Sign out').last, 'Sign out');
-      expect(path(t), '/login');
+      await answerLogout(t);
       expect(_server.of('logout'), hasLength(1));
       expect(_failures.map((f) => f.origin).where((o) => o.contains('signOut')),
           offline ? ['SettingsScreen.signOut'] : isEmpty);
@@ -439,9 +453,10 @@ void main() {
       addTearDown(() => FlutterError.onError = onError);
       _server.rows['user_profiles:$acctA']!.first['role'] = role;
       await mount(t, as: acctA, at: at);
+      holdLogout();
       await t.tap(find.byIcon(Icons.logout_rounded));
       await settle(t, 20);
-      expect(path(t), '/login');
+      await answerLogout(t);
       expect(_server.of('logout'), hasLength(1));
       expect(find.byIcon(Icons.logout_rounded), findsNothing);
     });
@@ -459,8 +474,10 @@ void main() {
     await settle(t, 30);
     expect(find.byKey(const Key('login-account-read-failure')), findsOneWidget,
         reason: 'premise');
+    holdLogout();
     await t.tap(find.text('Sign out'));
     await settle(t, 20);
+    await answerLogout(t);
     expect(Supabase.instance.client.auth.currentSession, isNull);
     expect(find.byKey(const Key('login-account-read-failure')), findsNothing);
     final fields = t.widgetList<TextField>(find.byType(TextField));

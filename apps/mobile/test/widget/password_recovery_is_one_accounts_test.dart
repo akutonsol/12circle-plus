@@ -363,6 +363,27 @@ void main() {
       });
     }
 
+    for (final (what, change) in [
+      ('another account', () => signInAs(acctB)),
+      ('a sign-out', signOut),
+    ]) {
+      rootTest('$what ends the recovery even before the form was opened',
+          (t) async {
+        _store.askedForReset();
+        _server.codeSession = sessionOf(acctA);
+        await t.runAsync(_openLink);
+        await t.runAsync(() => bindPasswordRecoveryAtLaunch(_link));
+        await pumpRoot(t);
+        expect(appPath(t), '/splash', reason: 'premise: no form yet');
+        expect(passwordRecoveryNotifier.value, acctA);
+        await t.runAsync(change);
+        await settleApp(t);
+        expect(passwordRecoveryNotifier.value, isNull);
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.getString(passwordRecoveryStorageKey), isNull);
+      });
+    }
+
     for (final (what, change, dest) in [
       ('another account', () => signInAs(acctB), '/home'),
       ('a sign-out', signOut, '/login'),
