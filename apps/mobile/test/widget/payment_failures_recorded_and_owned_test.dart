@@ -13,7 +13,6 @@ import 'package:circle_fitness/features/payments/domain/entitlements.dart';
 import 'package:circle_fitness/features/payments/domain/payment_provider.dart';
 import 'package:circle_fitness/features/payments/presentation/coach_payments_screen.dart';
 import 'package:circle_fitness/features/payments/presentation/coach_plan_screen.dart';
-import 'package:circle_fitness/features/payments/presentation/checkout_launcher.dart';
 import 'package:circle_fitness/features/payments/presentation/manage_subscription_screen.dart';
 import 'package:circle_fitness/features/payments/presentation/payment_result_screen.dart';
 import 'package:circle_fitness/features/payments/presentation/paywall_gate.dart';
@@ -40,8 +39,9 @@ import '../support/two_member_postgrest.dart';
 // mounted across the switch. The request log says who asked for what.
 //
 // HOW TO SEE IT FAIL: `git checkout a82f993 -- lib/features/payments`. The
-// groups marked R3 (rounds 2 and 3): `git checkout 5cafdd4 -- lib/features/payments`
-// (they need the round-3 helpers only where they say so).
+// groups marked R3 (rounds 2 and 3) fail on 5cafdd4 or 46ec3f0 too (with
+// lib/features/profile/presentation/subscription_screen.dart). What needs the
+// new helpers by name is in test/unit/payment_ownership_helpers_test.dart.
 
 class _Server extends TwoMemberPostgrest {
   /// Answers keyed `name:<who asked>` (else `name`): an rpc, a function or a
@@ -1451,51 +1451,6 @@ void main() {
       });
     });
 
-    test('a settled value keeps the account its read started for, whoever is '
-        'signed in when it is looked at', () async {
-      await signInAs(_a);
-      var reads = 0;
-      // A source that is NOT re-read on an account change: it stays settled.
-      final source = FutureProvider<String>((ref) async => 'read ${++reads}');
-      final owned = ownedReadProvider(source);
-      final c = ProviderContainer();
-      addTearDown(c.dispose);
-      c.listen(owned, (_, __) {});
-      await pumpEventQueue();
-      expect(c.read(owned).value, 'read 1');
-      await signInAs(_b);
-      await pumpEventQueue();
-      expect(c.read(source).value, 'read 1', reason: 'premise: still settled');
-      expect(c.read(owned).hasValue, isFalse, reason: "A's value became B's");
-      c.invalidate(source);
-      await pumpEventQueue();
-      expect(c.read(owned).value, 'read 2', reason: "B's own read is B's");
-      await signInAs(_a);
-      await pumpEventQueue();
-      expect(c.read(owned).hasValue, isFalse, reason: "B's value became A's");
-    });
-
-    test("a read that starts after the auth client changed and before the app "
-        'knows counts for nobody', () async {
-      await signInAs(_a);
-      var reads = 0;
-      final source = FutureProvider<String>((ref) async => 'read ${++reads}');
-      final owned = ownedReadProvider(source);
-      // The app still believes in A while the client is B's.
-      final c = ProviderContainer(
-          overrides: [paymentAccountProvider.overrideWithValue(_a)]);
-      addTearDown(c.dispose);
-      c.listen(owned, (_, __) {});
-      await pumpEventQueue();
-      expect(c.read(owned).value, 'read 1');
-      await signInAs(_b);
-      c.invalidate(source);
-      await pumpEventQueue();
-      expect(c.read(source).value, 'read 2', reason: 'premise');
-      expect(c.read(owned).hasValue, isFalse,
-          reason: "B's answer was taken for A's");
-    });
-
     testWidgets('Coach plan: no frame, then an invalidate; B pending, then B '
         'answers', (t) async {
       server.answers['coach_plan_tier:$_a'] = (200, 'growth');
@@ -1638,6 +1593,10 @@ void main() {
     });
   });
 
+  // By name, so this file also compiles against the code before the fix.
+  final ownedDialog = find.byWidgetPredicate(
+      (w) => w.runtimeType.toString() == 'OwnedDialog');
+
   group('R3 an action belongs to the account it was built for (items 2, 3)', () {
     const rel = {'coach_id': 'c-1', 'status': 'active'};
 
@@ -1690,7 +1649,7 @@ void main() {
       await settle(t);
       nothingSent();
       expect(recordedAccountChange(), isTrue);
-      expect(find.byType(OwnedDialog), findsNothing);
+      expect(ownedDialog, findsNothing);
     });
 
     testWidgets('no-frame: Plans, Switch to Free confirmed after B signed in '
@@ -1705,7 +1664,7 @@ void main() {
       await settle(t);
       nothingSent();
       expect(recordedAccountChange(), isTrue);
-      expect(find.byType(OwnedDialog), findsNothing);
+      expect(ownedDialog, findsNothing);
     });
 
     testWidgets("no-frame: Plans, A's subscriptions read lands after B signed "
@@ -1718,7 +1677,7 @@ void main() {
       gate.complete();
       await noFrames(t);
       await t.pump();
-      expect(find.byType(OwnedDialog), findsNothing,
+      expect(ownedDialog, findsNothing,
           reason: "A's question was put to B");
       expect(recordedAccountChange(), isTrue);
       await settle(t);
@@ -1850,27 +1809,6 @@ void main() {
       await t.runAsync(() => signInAs(_a));
       await settle(t);
       expect(find.text('Opening…'), findsNothing);
-    });
-
-    testWidgets('no-frame: launchCheckout for another account sends nothing',
-        (t) async {
-      await t.runAsync(() => signInAs(_b));
-      late BuildContext ctx;
-      late WidgetRef ref;
-      await t.pumpWidget(ProviderScope(
-          child: MaterialApp(
-              home: Scaffold(body: Consumer(builder: (c, r, __) {
-        ctx = c;
-        ref = r;
-        return const SizedBox();
-      })))));
-      bool? started;
-      await t.runAsync(() async => started = await launchCheckout(ctx, ref,
-          kind: 'coach_plan', tier: 'growth', owner: _a));
-      await t.pump();
-      expect(started, isFalse);
-      nothingSent();
-      expect(recordedAccountChange(), isTrue);
     });
 
     // N-7
@@ -2485,22 +2423,6 @@ void main() {
         expect(origins(), contains('ManageSubscriptionScreen.stopCoach'));
       });
     }
-
-    testWidgets('an unconfirmed cancellation is forgotten when the retry is '
-        'refused', (t) async {
-      final svc = PaymentService();
-      await t.runAsync(() async {
-        await signInAs(_a);
-        server.answers['cancel-subscription:$_a'] = _down;
-        expect(await svc.cancelSubscriptionOutcome('s'),
-            CancelOutcome.unconfirmed);
-        server.answers['cancel-subscription:$_a'] = (403, {'error': 'x'});
-        expect(await svc.cancelSubscriptionOutcome('s'), CancelOutcome.refused);
-        server.answers['cancel-subscription:$_a'] = (200, {'ok': true});
-        expect(
-            await svc.cancelSubscriptionOutcome('s'), CancelOutcome.cancelled);
-      });
-    });
 
     testWidgets('Plans says a failed refresh of the plan it still shows; '
         'choices stay enabled; Try again clears it', (t) async {
