@@ -154,8 +154,6 @@ Future<void> _forgetRecoveryUnless(String? uid) async {
     final prefs = await SharedPreferences.getInstance();
     final noted = prefs.getString(passwordRecoveryStorageKey);
     if (noted == null || noted == uid) return;
-    // A recovery that began since: its own note.
-    if (noted == passwordRecoveryNotifier.value) return;
     await prefs.remove(passwordRecoveryStorageKey);
   } catch (e, st) {
     reportError('appRouter.forgetRecovery', e, st);

@@ -39,7 +39,6 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     super.initState();
     _owner = passwordRecoveryNotifier.value ?? _signedIn;
     _auth = Supabase.instance.client.auth.onAuthStateChange.listen((state) {
-      if (isMixedSession(state.session)) return;
       if (state.session?.user.id != _owner && _signedIn != _owner) {
         _accountChanged();
       }

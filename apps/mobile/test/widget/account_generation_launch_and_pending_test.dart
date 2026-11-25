@@ -388,6 +388,20 @@ void main() {
       }
     }
 
+    testWidgets('control: not on the first frames of a signed-in launch either',
+        (t) async {
+      try {
+        await t.runAsync(signOut);
+        await t.runAsync(() => signInAs(acctA));
+        _server.holds['GET user_profiles:$acctA'] = Completer<void>();
+        await t.pumpWidget(CircleFitnessRoot(theme: ThemeData.dark()));
+        await neverPending(t, () async {});
+        _server.holds.remove('GET user_profiles:$acctA')!.complete();
+      } finally {
+        await unmountApp(t, _server);
+      }
+    });
+
     appTest('control: never at a launch, a sign-in or a renewal of one account',
         (t) async {
       await neverPending(t, () => mount(t, as: null));

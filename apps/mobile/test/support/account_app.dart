@@ -87,6 +87,9 @@ class AccountServer extends http.BaseClient {
   /// REST writes match no row.
   bool emptyWrites = false;
 
+  /// Keys whose request throws this.
+  final throws = <String, Object>{};
+
   /// Keys whose connection drops.
   final drops = <String>{};
   final failAll = <String>{};
@@ -102,6 +105,7 @@ class AccountServer extends http.BaseClient {
     fails.clear();
     holdAll.clear();
     drops.clear();
+    throws.clear();
     emptyWrites = false;
     failAll.clear();
     codeSession = null;
@@ -136,6 +140,8 @@ class AccountServer extends http.BaseClient {
     if (drops.contains(s.key) || drops.contains('${s.method} ${s.name}')) {
       throw http.ClientException('Connection closed', request.url);
     }
+    final thrown = throws[s.key];
+    if (thrown != null) throw thrown;
     final fail = fails[s.key] ?? fails['${s.method} ${s.name}'];
     if (fail != null) {
       return _json({'message': 'refused', 'code': 'XX000'}, fail, request);

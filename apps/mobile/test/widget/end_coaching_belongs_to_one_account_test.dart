@@ -134,6 +134,19 @@ void main() {
     }
   }
 
+  testWidgets('cancelCoach itself says the account changed (59d): never shown, '
+      'recorded', (t) async {
+    await open(t);
+    _server.throws['PATCH coach_client_relationships:$acctA'] =
+        StateError('Ending coaching: the signed-in account changed');
+    await confirm(t);
+    expect(writes(), hasLength(1), reason: 'premise');
+    expect(find.byType(SnackBar), findsNothing);
+    expect(find.textContaining('account changed'), findsNothing);
+    expect(_failures.map((f) => f.origin), ['MyCoachSection.cancelCoach']);
+    await end(t);
+  });
+
   testWidgets('"the signed-in account changed" is never shown (A -> B -> A too)',
       (t) async {
     await open(t);
