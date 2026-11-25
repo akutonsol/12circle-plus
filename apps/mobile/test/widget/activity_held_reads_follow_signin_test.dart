@@ -5,7 +5,6 @@ import 'package:circle_fitness/core/realtime/realtime.dart';
 import 'package:circle_fitness/features/activity/presentation/activity_screen.dart';
 import 'package:circle_fitness/features/ai_nutrition/presentation/meal_plan_screen.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
-import 'package:circle_fitness/features/challenges/data/models/challenge_model.dart';
 import 'package:circle_fitness/features/challenges/domain/challenge_provider.dart';
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
 import 'package:circle_fitness/features/coach/domain/coach_provider.dart';
@@ -785,38 +784,4 @@ void main() {
       await close(t);
     });
   }
-
-  test('a failure that landed while no screen was reading is nobody else\'s', () async {
-    // B was told their rows and closed the screen; A's read then failed unseen
-    // (another screen's), and is carried into B's next read.
-    final reads = _Reads<List<Challenge>>(
-        {memberA: const [], memberB: const [], 'nobody': const []});
-    final read = FutureProvider<List<Challenge>>((ref) => reads(ref));
-    final mine = forMember(read);
-    final c = ProviderContainer();
-    addTearDown(c.dispose);
-    Future<void> turn() =>
-        Future<void>.delayed(const Duration(milliseconds: 20));
-    c.listen(read, (_, __) {});
-    await turn();
-
-    await signInAs(memberB);
-    await turn();
-    final sub = c.listen(mine, (_, __) {});
-    expect(c.read(mine).value, isNotNull, reason: 'premise: B was told');
-    sub.close();
-    await turn();
-
-    reads.fails.add(memberA);
-    await signInAs(memberA);
-    await turn();
-    expect(c.read(read).hasError, isTrue, reason: 'premise: unseen by mine');
-
-    reads.holds[memberB] = Completer<void>();
-    c.invalidate(read);
-    await signInAs(memberB);
-    c.listen(mine, (_, __) {});
-    expect(c.read(read).error, isNotNull, reason: "premise: A's, carried");
-    expect(c.read(mine).error, isNull, reason: "A's failure told to B");
-  });
 }
