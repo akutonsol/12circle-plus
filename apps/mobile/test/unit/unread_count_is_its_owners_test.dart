@@ -92,10 +92,10 @@ void main() {
     await eventually(count, 2);
     await eventually(rows, containsAll(['a-1', 'a-2']));
     await signInAs(memberB);
+    await settle();
     await eventually(count, 1);
     await eventually(rows, ['b-1']);
     await eventually(() => told.last.$2, 1);
-    await settle();
     expect(reported, isEmpty);
   });
 
@@ -220,8 +220,8 @@ void main() {
     hold.complete();
     unawaited(signInAs(memberB)); // the client has B; nobody was told
     expect(signedIn(), memberB, reason: 'premise');
+    await settle(); // first: reading the count flushes it
     await eventually(count, 1);
-    await settle();
     expectNothingOfAsTold(from);
     expect(count(), 1);
     expect(
