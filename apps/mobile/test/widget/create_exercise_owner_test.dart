@@ -173,6 +173,34 @@ void main() {
       await unmountAll(t);
     });
 
+    testWidgets('switch during the first of two videos: the second is not uploaded as B',
+        (t) async {
+      await open(t);
+      await type(t);
+      await t.tap(find.text('MEDIA'));
+      await settleReal(t);
+      for (var i = 1; i <= 2; i++) {
+        await t.tap(find.byIcon(Icons.add_circle_outline));
+        await settleReal(t);
+        await t.tap(find.text('Upload from device').first);
+        await pumpUntil(t, () => find.text('Video selected').evaluate().length == i,
+            what: 'video $i');
+      }
+      bool uploads(Sent s) => s.path.startsWith('/storage/v1/');
+      final hold = server.hold(uploads);
+      saveTap(t)();
+      await pumpUntil(t, () => server.writes.any(uploads), what: 'the first upload');
+      await switchNoFrame(t, memberB);
+      hold.complete();
+      await settleNoFrame(t);
+      await settleReal(t);
+      expect(server.writes.where(uploads).map((s) => s.who), [memberA],
+          reason: "A's second video was uploaded by B");
+      expect(server.writesBy(memberB), isEmpty);
+      expect(changed(), ['CreateExerciseScreen._save']);
+      await unmountAll(t);
+    });
+
     testWidgets('switch during the last step: B is not told "Exercise Saved!"',
         (t) async {
       await open(t);
@@ -231,6 +259,23 @@ void main() {
       await switchTo(t, memberB);
       expect(find.text('Paste exercise JSON'), findsNothing);
       blank(t);
+      await unmountAll(t);
+    });
+
+    testWidgets("a Submit fired after A's Exercise Saved! closed publishes nothing as B",
+        (t) async {
+      await open(t);
+      await type(t);
+      saveTap(t)();
+      await settleReal(t);
+      final submit = tapOf(t, 'Submit to Global Library');
+      final before = server.writes.length;
+      await switchTo(t, memberB);
+      submit();
+      await settleReal(t);
+      expect(server.writes.length, before, reason: "A's exercise was published by B");
+      expect(changed(), ['CreateExerciseScreen._save']);
+      expect(find.byType(SnackBar), findsNothing);
       await unmountAll(t);
     });
 
@@ -319,6 +364,58 @@ void main() {
       expect(changed(), ['CreateExerciseScreen._save']);
       await unmountAll(t);
     });
+
+    testWidgets("switch while the videos are attached: A's muscles and equipment "
+        'are not written as B', (t) async {
+      await open(t, editing: 'ex-a');
+      final hold = server.hold((s) => s.method == 'PATCH' &&
+          s.json.containsKey('video_variants') && !s.json.containsKey('name'));
+      saveTap(t)();
+      await settleReal(t);
+      expect(server.writes, hasLength(2), reason: 'premise: details, then videos');
+      await switchNoFrame(t, memberB);
+      hold.complete();
+      await settleNoFrame(t);
+      await settleReal(t);
+      expect(sync(), isEmpty);
+      expect(server.writesBy(memberB), isEmpty);
+      expect(changed(), ['CreateExerciseScreen._save']);
+      blank(t);
+      await unmountAll(t);
+    });
+
+    for (final switches in [true, false]) {
+      testWidgets(
+          switches
+              ? "switch during an editor's update: not submitted for review as B"
+              : 'control: an editor\'s update is submitted for review', (t) async {
+        server.tables['user_profiles'] = [
+          {'id': memberA, 'role': 'admin'}, {'id': memberB, 'role': 'admin'},
+        ];
+        server.tables['custom_exercises'] = [
+          {...server.tables['custom_exercises']!.single, 'visibility': 'global',
+            'content_status': 'draft', 'instructions': ['Press up']},
+        ];
+        await open(t, editing: 'ex-a');
+        final hold = server.hold((s) => s.method == 'PATCH' && s.json.containsKey('name'));
+        saveTap(t)();
+        await settleReal(t);
+        expect(server.writes, hasLength(1), reason: 'premise: the details');
+        if (switches) await switchNoFrame(t, memberB);
+        hold.complete();
+        await settleNoFrame(t);
+        await settleReal(t);
+        final review = server.to('review_exercise_content');
+        if (switches) {
+          expect(review, isEmpty, reason: "A's draft was submitted by B");
+          expect(server.writesBy(memberB), isEmpty);
+          expect(changed(), ['CreateExerciseScreen._save']);
+        } else {
+          expect(review.single.who, memberA);
+        }
+        await unmountAll(t);
+      });
+    }
 
     testWidgets("positive control: A saves A's edit", (t) async {
       await open(t, editing: 'ex-a');

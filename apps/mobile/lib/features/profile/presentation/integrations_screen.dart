@@ -17,6 +17,64 @@ const _out  = Color(0xFF968E99);
 const _outV = Color(0xFF4B444F);
 const _err  = Color(0xFFFFB4AB);
 
+/// P0-FL-59d · a route's content, for the account [owner] only. For anyone else
+/// nothing of it is drawn — not even the first frame of a route pushed just
+/// before a switch — and the route closes. It listens for itself: whatever
+/// opened the route may be gone by then.
+class _OwnedRoute extends StatefulWidget {
+  final String? owner;
+  final Widget child;
+  const _OwnedRoute({required this.owner, required this.child});
+  @override
+  State<_OwnedRoute> createState() => _OwnedRouteState();
+}
+
+class _OwnedRouteState extends State<_OwnedRoute> {
+  StreamSubscription<AuthState>? _authSub;
+
+  bool get _mine =>
+      Supabase.instance.client.auth.currentUser?.id == widget.owner;
+
+  @override
+  void initState() {
+    super.initState();
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+      if (!mounted || _mine) return;
+      setState(() {}); // (one already closing stops showing it, too)
+      _close();
+    }, onError: (Object e, StackTrace s) =>
+        reportError('IntegrationsScreen._OwnedRoute', e, s));
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  void _close() {
+    final route = ModalRoute.of(context);
+    if (route != null && route.isActive) route.navigator?.removeRoute(route);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_mine) return widget.child;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_mine) _close();
+    });
+    return const SizedBox.shrink();
+  }
+}
+
+/// Closes [context]'s own route with [result], if it is still open: once it
+/// has been closed under a tap, popping would close the page beneath.
+void _popRoute(BuildContext context, [Object? result]) {
+  final route = context.mounted ? ModalRoute.of(context) : null;
+  if (route == null || !route.isActive) return;
+  route.isCurrent ? Navigator.pop(context, result) : route.navigator?.removeRoute(route);
+}
+
 class IntegrationsScreen extends StatefulWidget {
   const IntegrationsScreen({super.key});
   @override
@@ -44,9 +102,6 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
   /// Providers whose connect / disconnect is in flight (no double fire).
   final Set<String> _busy = {};
 
-  /// The open info sheet.
-  Route<dynamic>? _sheet;
-
   String? get _uid => Supabase.instance.client.auth.currentUser?.id;
 
   @override
@@ -66,11 +121,10 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
     super.dispose();
   }
 
-  /// Nothing of the previous member's stays: connections, sheet, messages.
+  /// Nothing of the previous member's stays: connections, messages. (The info
+  /// sheet closes itself.)
   void _followAccount() {
     if (!mounted || _uid == _owner) return;
-    final sheet = _sheet;
-    if (sheet != null && sheet.isActive) sheet.navigator?.removeRoute(sheet);
     ScaffoldMessenger.of(context)..clearSnackBars()..removeCurrentSnackBar();
     setState(() {
       _connected = {};
@@ -387,27 +441,27 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
     'polar'        : 'https://flow.polar.com/oauth2/authorization?response_type=code&client_id=YOUR_CLIENT_ID',
   };
 
-  Future<void> _handleConnect(String id) async {
+  /// [owner] is the member the tapped row was drawn for.
+  Future<void> _handleConnect(String id, String? owner) async {
+    if (_accountChanged('_handleConnect', 'Connecting an app', owner)) return;
     if (_devicePermissionApps.contains(id)) {
-      _showPermissionSheet(id);
+      _showPermissionSheet(id, owner);
       return;
     }
     if (_oauthApps.contains(id)) {
-      await _showOAuthSheet(id);
+      await _showOAuthSheet(id, owner);
       return;
     }
-    await _toggleConnect(id, true, _owner);
+    await _toggleConnect(id, true, owner);
   }
 
-  void _showPermissionSheet(String id) {
+  void _showPermissionSheet(String id, String? owner) {
     final name = id == 'apple_health' ? 'Apple Health' : 'Google Fit';
     final platform = id == 'apple_health' ? 'iOS' : 'Android';
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (sheetContext) {
-        _sheet = ModalRoute.of(sheetContext);
-        return _IntegrationInfoSheet(
+      builder: (_) => _OwnedRoute(owner: owner, child: _IntegrationInfoSheet(
         name: name,
         type: 'Device Permission',
         typeColor: const Color(0xFF06B6D4),
@@ -422,14 +476,12 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
           'Return to the app — data will sync automatically',
         ],
         onContinue: null, // No OAuth URL — handled natively
-      );
-      });
+      )));
   }
 
-  Future<void> _showOAuthSheet(String id) async {
+  /// The connection is for [owner], the member this sheet was opened by.
+  Future<void> _showOAuthSheet(String id, String? owner) async {
     const names = _names;
-    // The connection is for the member this sheet was opened by.
-    final owner = _owner;
     final descriptions = {
       'spotify': 'Connect Spotify to control your workout playlists directly from the 12 Circle app. You\'ll be able to play, pause, and switch tracks without leaving your session.',
       'strava' : 'Connect Strava to automatically import your runs, rides, and outdoor activities. Your activity data will count toward your weekly progress.',
@@ -442,9 +494,7 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
     await showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (sheetContext) {
-        _sheet = ModalRoute.of(sheetContext);
-        return _IntegrationInfoSheet(
+      builder: (_) => _OwnedRoute(owner: owner, child: _IntegrationInfoSheet(
         name: names[id] ?? id,
         type: 'OAuth 2.0',
         typeColor: _priC,
@@ -483,8 +533,7 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
               await _toggleConnect(id, true, owner);
             }
           : null,
-      );
-      });
+      )));
   }
 
   Widget _integrationRow({
@@ -501,63 +550,72 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
     final isDevicePerm = _devicePermissionApps.contains(id);
     final webOnly = isDevicePerm && kIsWeb;
 
+    final Widget pill;
+    if (!_loaded) {
+      // P0-FL-59d · unknown is not "not connected".
+      pill = _statePill('Not loaded', label: '$name: connection not loaded',
+        onTap: null, text: _out, fill: _outV, edge: _outV);
+    } else if (_busy.contains(id)) {
+      pill = Semantics(
+        container: true, label: 'Updating $name', liveRegion: true,
+        child: const SizedBox(width: 44, height: 44, child: Center(child: SizedBox(
+          width: 18, height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2, color: _pri)))));
+    } else if (isConnected) {
+      pill = _statePill('Connected', label: 'Connected: disconnect $name',
+        onTap: () => _toggleConnect(id, false, owner), text: _tert, fill: _tert, edge: _tert);
+    } else if (webOnly) {
+      pill = _statePill('Mobile only', label: '$name: mobile only',
+        onTap: null, text: _out, fill: _outV, edge: _outV);
+    } else {
+      pill = _statePill('Connect', label: 'Connect $name',
+        onTap: () => _handleConnect(id, owner), text: _pri, fill: _priC, edge: _priC);
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      child: Row(children: [
-        Container(
-          width: 44, height: 44,
-          decoration: BoxDecoration(color: iconBg, borderRadius: BorderRadius.circular(12)),
-          child: Icon(icon, color: iconColor, size: 22)),
-        const SizedBox(width: 14),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Text(name, style: const TextStyle(
-              color: _onS, fontSize: 15, fontWeight: FontWeight.w500)),
-            if (platform != null) ...[
-              const SizedBox(width: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: _outV.withValues(alpha: 0.3),
-                  borderRadius: BorderRadius.circular(4)),
-                child: Text(platform, style: const TextStyle(
-                  color: _out, fontSize: 9, fontWeight: FontWeight.w600))),
-            ],
-            if (isDevicePerm && !kIsWeb) ...[
-              const SizedBox(width: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF06B6D4).withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(4)),
-                child: const Text('Permission', style: TextStyle(
-                  color: Color(0xFF06B6D4), fontSize: 9, fontWeight: FontWeight.w600))),
-            ],
-          ]),
-          const SizedBox(height: 2),
-          Text(subtitle, style: const TextStyle(color: _out, fontSize: 12, height: 1.3)),
-        ])),
-        const SizedBox(width: 12),
-        if (!_loaded)
-          // P0-FL-59d · unknown is not "not connected".
-          _statePill('Not loaded', label: '$name: connection not loaded',
-            onTap: null, text: _out, fill: _outV, edge: _outV)
-        else if (_busy.contains(id))
-          Semantics(
-            container: true, label: 'Updating $name', liveRegion: true,
-            child: const SizedBox(width: 44, height: 44, child: Center(child: SizedBox(
-              width: 18, height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2, color: _pri)))))
-        else if (isConnected)
-          _statePill('Connected', label: 'Connected: disconnect $name',
-            onTap: () => _toggleConnect(id, false, owner), text: _tert, fill: _tert, edge: _tert)
-        else if (webOnly)
-          _statePill('Mobile only', label: '$name: mobile only',
-            onTap: null, text: _out, fill: _outV, edge: _outV)
-        else
-          _statePill('Connect', label: 'Connect $name',
-            onTap: () => _handleConnect(id), text: _pri, fill: _priC, edge: _priC),
-      ]));
+      child: LayoutBuilder(builder: (context, box) {
+        // P0-FL-59d · the state goes under the app past 1.3× — and wherever
+        // beside it the app's name would be broken mid-word.
+        final scale = MediaQuery.textScalerOf(context).scale(12) / 12;
+        final stacked = scale > 1.3 || box.maxWidth < 260 * scale;
+        final app = Row(children: [
+          Container(
+            width: 44, height: 44,
+            decoration: BoxDecoration(color: iconBg, borderRadius: BorderRadius.circular(12)),
+            child: Icon(icon, color: iconColor, size: 22)),
+          const SizedBox(width: 14),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            // The badges go under a name they do not fit beside.
+            Wrap(spacing: 6, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+              Text(name, style: const TextStyle(
+                color: _onS, fontSize: 15, fontWeight: FontWeight.w500)),
+              if (platform != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: _outV.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(4)),
+                  child: Text(platform, style: const TextStyle(
+                    color: _out, fontSize: 9, fontWeight: FontWeight.w600))),
+              if (isDevicePerm && !kIsWeb)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF06B6D4).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(4)),
+                  child: const Text('Permission', style: TextStyle(
+                    color: Color(0xFF06B6D4), fontSize: 9, fontWeight: FontWeight.w600))),
+            ]),
+            const SizedBox(height: 2),
+            Text(subtitle, style: const TextStyle(color: _out, fontSize: 12, height: 1.3)),
+          ])),
+          if (!stacked) ...[const SizedBox(width: 12), pill],
+        ]);
+        if (!stacked) return app;
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          app, const SizedBox(height: 8), pill]);
+      }));
   }
 
   /// A row's state, and (when [onTap] is set) the button that changes it: the
@@ -654,7 +712,7 @@ class _IntegrationInfoSheet extends StatelessWidget {
               width: double.infinity,
               child: ElevatedButton(
                 onPressed: () {
-                  Navigator.pop(context);
+                  _popRoute(context);
                   onContinue!();
                 },
                 style: ElevatedButton.styleFrom(

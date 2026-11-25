@@ -58,6 +58,64 @@ class _FocusTarget extends StatelessWidget {
 Widget _named(String name, Widget field) =>
     MergeSemantics(child: Semantics(label: name, child: field));
 
+/// P0-FL-59d · a route's content, for the account [owner] only. For anyone else
+/// nothing of it is drawn — not even the first frame of a route pushed just
+/// before a switch — and the route closes. It listens for itself: whatever
+/// opened the route may be gone by then.
+class _OwnedRoute extends StatefulWidget {
+  final String? owner;
+  final Widget child;
+  const _OwnedRoute({required this.owner, required this.child});
+  @override
+  State<_OwnedRoute> createState() => _OwnedRouteState();
+}
+
+class _OwnedRouteState extends State<_OwnedRoute> {
+  StreamSubscription<AuthState>? _authSub;
+
+  bool get _mine =>
+      Supabase.instance.client.auth.currentUser?.id == widget.owner;
+
+  @override
+  void initState() {
+    super.initState();
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+      if (!mounted || _mine) return;
+      setState(() {}); // (one already closing stops showing it, too)
+      _close();
+    }, onError: (Object e, StackTrace s) =>
+        reportError('CoachFocusSection._OwnedRoute', e, s));
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  void _close() {
+    final route = ModalRoute.of(context);
+    if (route != null && route.isActive) route.navigator?.removeRoute(route);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_mine) return widget.child;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_mine) _close();
+    });
+    return const SizedBox.shrink();
+  }
+}
+
+/// Closes [context]'s own route with [result], if it is still open: once it
+/// has been closed under a tap, popping would close the page beneath.
+void _popRoute(BuildContext context, [Object? result]) {
+  final route = context.mounted ? ModalRoute.of(context) : null;
+  if (route == null || !route.isActive) return;
+  route.isCurrent ? Navigator.pop(context, result) : route.navigator?.removeRoute(route);
+}
+
 class CoachFocusSection extends ConsumerStatefulWidget {
   final String exerciseId;
   /// Lowercased searchable attributes of the exercise (name/muscle/equipment)
@@ -276,6 +334,7 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
         if ((m['voice_url']?.toString() ?? '').isNotEmpty) ...[
           const SizedBox(height: 12),
           CoachVoicePlayer(
+            key: ValueKey('$_loadedKey ${m['voice_url']}'),
             url: m['voice_url'].toString(),
             durationMs: (m['voice_duration_ms'] as num?)?.toInt(),
             coachName: editable ? null : coachName),
@@ -362,21 +421,6 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
     var expiry = 'never';
     var saving = false;
     if (!mounted || !mine()) return;
-    // The sheet and the pack-name dialog over it go with their coach, silently.
-    Route<dynamic>? sheetRoute;
-    Route<dynamic>? packDialog;
-    StreamSubscription<AuthState>? authSub;
-    void closeUnlessMine() {
-      if (mine()) return;
-      authSub?.cancel();
-      for (final r in [packDialog, sheetRoute]) {
-        if (r != null && r.isActive) r.navigator?.removeRoute(r);
-      }
-    }
-    authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
-        (_) => closeUnlessMine(),
-        onError: (Object e, StackTrace s) =>
-            reportError('CoachFocusSection.onAuthStateChange', e, s));
     DateTime? expiryDate() => switch (expiry) {
       'today' => DateTime.now().add(const Duration(hours: 18)),
       'week' => DateTime.now().add(const Duration(days: 7)),
@@ -385,33 +429,30 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
     showModalBottomSheet(
       context: context, isScrollControlled: true, backgroundColor: _panel,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (ctx) => StatefulBuilder(builder: (ctx, setSheet) {
-        sheetRoute = ModalRoute.of(ctx);
+      // The sheet and the pack-name dialog over it go with their coach, silently.
+      builder: (ctx) => _OwnedRoute(owner: owner, child: StatefulBuilder(builder: (ctx, setSheet) {
         Future<void> saveAsPack() async {
           if (savingPack) return;
           final nameCtl = packNameCtl;
-          final name = await showDialog<String>(context: ctx, builder: (dctx) {
-            packDialog = ModalRoute.of(dctx);
-            return AlertDialog(
+          final name = await showDialog<String>(context: ctx,
+              builder: (dctx) => _OwnedRoute(owner: owner, child: AlertDialog(
             backgroundColor: _panel2,
             title: const Text('Save cue pack', style: TextStyle(color: _text, fontSize: 16)),
             content: _named('Pack name', TextField(controller: nameCtl, autofocus: true,
               style: const TextStyle(color: _text),
               decoration: const InputDecoration(hintText: 'e.g. Squat cues', hintStyle: TextStyle(color: _muted)))),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(dctx), child: const Text('Cancel', style: TextStyle(color: _muted))),
-              TextButton(onPressed: () => Navigator.pop(dctx, nameCtl.text.trim()),
+              TextButton(onPressed: () => _popRoute(dctx), child: const Text('Cancel', style: TextStyle(color: _muted))),
+              TextButton(onPressed: () => _popRoute(dctx, nameCtl.text.trim()),
                 child: const Text('Save', style: TextStyle(color: _brand, fontWeight: FontWeight.w800))),
             ],
-          );
-          });
-          packDialog = null;
+          )));
           if (!ctx.mounted) return;
           final cues = focusCtl.text.split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
           if (name != null && name.isNotEmpty && cues.isNotEmpty) {
             setSheet(() { savingPack = true; packSaveError = null; });
             final ok = await _svc.createCoachingPack(name, cues, expectedUid: owner);
-            if (!mine()) return closeUnlessMine();
+            if (!mine()) return;
             if (!ok) {
               savingPack = false;
               packSaveError = couldntMessage('save your cue pack', _svc.lastError);
@@ -551,6 +592,7 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
               Padding(padding: const EdgeInsets.only(bottom: 8),
                 child: Row(children: [
                   Expanded(child: CoachVoicePlayer(
+                    key: ValueKey(sheetOverlay!['voice_url']),
                     url: sheetOverlay!['voice_url'].toString(),
                     durationMs: (sheetOverlay?['voice_duration_ms'] as num?)?.toInt())),
                   IconButton(tooltip: 'Remove your voice note',
@@ -559,7 +601,7 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                       voiceClearError = null;
                       final cleared = await _svc.clearCoachVoice(widget.exerciseId,
                           expectedUid: owner);
-                      if (!mine()) return closeUnlessMine();
+                      if (!mine()) return;
                       if (!cleared) {
                         voiceClearError = couldntMessage('remove your voice note', _svc.lastError);
                       }
@@ -603,7 +645,7 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                 if (!mine()) {
                   reportError('CoachFocusSection._openEditor',
                       StateError('Saving coaching: the signed-in account changed'));
-                  return closeUnlessMine();
+                  return;
                 }
                 setSheet(() { saving = true; saveError = null; });
                 final focus = focusCtl.text.split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
@@ -612,7 +654,7 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                     focus: focus,
                     videoRef: videoCtl.text.trim().isEmpty ? null : videoCtl.text.trim(),
                     expectedUid: owner);
-                if (!mine()) return closeUnlessMine();
+                if (!mine()) return;
                 if (!ok) {
                   // Keep the sheet and what was typed; say it (recorded).
                   saving = false;
@@ -620,14 +662,14 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                   if (ctx.mounted) setSheet(() {});
                   return;
                 }
-                if (ctx.mounted) Navigator.pop(ctx);
+                if (ctx.mounted) _popRoute(ctx);
                 if (mounted) { setState(() => _loading = true); _load(); }
               },
               child: Text(saving ? 'Saving…' : 'Save coaching',
                   style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)))),
           ]),
         ));
-      }),
-    ).whenComplete(() => authSub?.cancel());
+      })),
+    );
   }
 }

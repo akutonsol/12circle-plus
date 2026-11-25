@@ -48,6 +48,8 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
   late final String? _owner = _uid;
   /// Somebody else (or nobody) is signed in: nothing of [_owner]'s is shown.
   bool _hidden = false;
+  /// Nobody is: said, where the page would be. (To another account, nothing.)
+  bool _signedOut = false;
   StreamSubscription<AuthState>? _authSub;
 
   String? get _uid => _db.auth.currentUser?.id;
@@ -55,7 +57,7 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
   @override
   void initState() {
     super.initState();
-    _hidden = _owner == null;
+    _hidden = _signedOut = _owner == null;
     // Same coach (a token refresh, the stream's replay) changes nothing.
     _authSub = _db.auth.onAuthStateChange.listen((_) => _followAccount(),
         onError: (Object e, StackTrace s) =>
@@ -64,9 +66,11 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
 
   void _followAccount() {
     final hidden = _owner == null || _uid != _owner;
-    if (!mounted || hidden == _hidden) return;
+    final signedOut = _uid == null;
+    if (!mounted || (hidden == _hidden && signedOut == _signedOut)) return;
     setState(() {
       _hidden = hidden;
+      _signedOut = signedOut;
       _videoFile = null;
       _noteCtrl.clear();
       _uploading = false;
@@ -263,7 +267,13 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
           if (!_hidden) Text('To ${widget.clientName}', style: const TextStyle(color: _mut, fontSize: 12)),
         ]),
       ),
-      body: _hidden ? const SizedBox.shrink()
+      body: _signedOut
+          ? Center(child: SingleChildScrollView(
+              padding: const EdgeInsets.all(32),
+              child: Semantics(liveRegion: true, child: const Text(
+                "You're signed out — sign in again to send a video response.",
+                textAlign: TextAlign.center, style: TextStyle(color: _wht, fontSize: 15)))))
+          : _hidden ? const SizedBox.shrink()
           : _done ? _DoneView(clientName: widget.clientName, notified: _notified, onDone: () => Navigator.pop(context))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(20),

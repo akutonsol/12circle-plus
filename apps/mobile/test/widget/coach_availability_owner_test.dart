@@ -1,6 +1,7 @@
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/coach/presentation/coach_availability_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/coach_tools_server.dart';
@@ -123,6 +124,36 @@ void main() {
                 s.who == memberB && s.query.contains('coach_id=eq.$memberA')),
             isEmpty,
             reason: "A's second read is not sent as B");
+        await unmountAll(t);
+      });
+    }
+
+    for (final (read, afterB) in [
+      ('coach_availability', false), ('coach_availability', true),
+      ('coaching_calls', false), ('coaching_calls', true),
+    ]) {
+      testWidgets("A's late FAILED read of $read is not B's failure "
+          "(${afterB ? 'after' : 'before'} B's own)", (t) async {
+        final late = server.hold((s) => s.who == memberA && s.table == read);
+        server.failing = (s) => s.who == memberA && s.table == read;
+        await open(t);
+        final bHeld = afterB ? null : server.hold((s) => s.who == memberB);
+        await switchTo(t, memberB);
+        if (afterB) expect(bobsSlot, findsOneWidget, reason: 'premise');
+        late.complete();
+        await settleReal(t);
+        expect(find.textContaining("Couldn't"), findsNothing,
+            reason: "A's failure is said to B");
+        if (!afterB) {
+          expect(find.byType(CircularProgressIndicator), findsOneWidget,
+              reason: "B's own read is still pending");
+        }
+        bHeld?.complete();
+        await settleReal(t);
+        expect(bobsSlot, findsOneWidget);
+        expect(find.textContaining("Couldn't"), findsNothing);
+        expect(reported.map((f) => f.origin), ['CoachAvailabilityScreen._load'],
+            reason: 'recorded all the same');
         await unmountAll(t);
       });
     }
@@ -300,6 +331,24 @@ void main() {
       await unmountAll(t);
     });
 
+    testWidgets('switch during the notification: B is told nothing of it', (t) async {
+      await open(t);
+      await askCancel(t);
+      final hold = server.hold((s) => s.table == 'notifications');
+      await t.tap(find.text('Cancel session'));
+      await settleReal(t);
+      expect(server.to('notifications').single.who, memberA, reason: 'premise');
+      await switchNoFrame(t, memberB);
+      hold.complete();
+      await settleNoFrame(t);
+      await settleReal(t);
+      expect(find.byType(SnackBar), findsNothing,
+          reason: "A's cancelled session is told to B");
+      expect(server.writesBy(memberB), isEmpty);
+      expect(bobs, findsOneWidget);
+      await unmountAll(t);
+    });
+
     testWidgets('"Reopen slot" does not wait for B, and sends nothing as B',
         (t) async {
       await open(t);
@@ -378,6 +427,124 @@ void main() {
       expect(server.writes.single.toString(), contains('id=eq.open-consultation'));
       expect(server.writes.single.who, memberA);
       expect(reported, isEmpty);
+      await unmountAll(t);
+    });
+  });
+
+  group('the same coach: a refresh keeps what is shown (UX-5)', () {
+    Future<void> remove(WidgetTester t) async {
+      await t.tap(find.byIcon(Icons.delete_outline_rounded).first);
+      await settleReal(t);
+    }
+
+    setUp(() => server.tables['coach_availability']!.add(slot(memberA, 'check_in')));
+    final anasSecond = find.text('Weekly Check-In');
+    const held = 'Try again in a moment. If it keeps happening, contact support. '
+        'Changes are paused until it loads.';
+
+    testWidgets('while it is read: the list, not a spinner; the removed slot is gone',
+        (t) async {
+      await open(t);
+      final again = server.hold((s) => !s.isWrite);
+      // (What the re-read will answer.)
+      server.tables['coach_availability']!.removeWhere((s) => s['id'] == 'open-consultation');
+      await remove(t);
+      expect(server.writes.single.query, contains('id=eq.open-consultation'));
+      expect(find.byType(CircularProgressIndicator), findsNothing,
+          reason: 'THE defect: the list became a spinner, and its place was lost');
+      expect(anas, findsOneWidget);
+      expect(anasSecond, findsOneWidget);
+      expect(anasSlot, findsNothing, reason: 'the server said it went');
+      again.complete();
+      await settleReal(t);
+      expect(anasSecond, findsOneWidget);
+      expect(anasSlot, findsNothing);
+      await unmountAll(t);
+    });
+
+    testWidgets('a failed one: the list stays, said above it, changes held; Try again '
+        'is busy-aware and loads', (t) async {
+      final h = t.ensureSemantics();
+      await open(t);
+      server.failing = (s) => !s.isWrite;
+      await remove(t);
+      expect(find.text("Couldn't load your availability"), findsOneWidget);
+      expect(find.text(held), findsOneWidget);
+      expect(anas, findsOneWidget, reason: 'THE defect: the failure replaced the list');
+      expect(anasSecond, findsOneWidget);
+      expect(reported.map((f) => f.origin), ['CoachAvailabilityScreen._load']);
+      // Nothing is changed on a schedule that could not be read again.
+      final writes = server.writes.length;
+      await t.tap(find.byIcon(Icons.delete_outline_rounded));
+      await t.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await t.tap(find.text('Add Slot'));
+      await settleReal(t);
+      expect(server.writes.length, writes);
+      expect(find.text('Cancel session?'), findsNothing);
+      expect(find.text('Publish Slot'), findsNothing);
+      final cancel = t.getSemantics(
+          find.bySemanticsLabel(RegExp('^Cancel session with Ana Client'))).getSemanticsData();
+      expect(cancel.hasAction(SemanticsAction.tap), isFalse);
+
+      server.failing = (_) => false;
+      final hold = server.hold((s) => !s.isWrite);
+      final reads = server.log.length;
+      await t.tap(find.text('Try again'));
+      await t.pump();
+      await t.tap(find.bySemanticsLabel('Retrying'), warnIfMissed: false);
+      await settleReal(t);
+      expect(server.log.length, reads + 1);
+      expect(anas, findsOneWidget);
+      hold.complete();
+      await settleReal(t);
+      expect(find.textContaining("Couldn't"), findsNothing);
+      await t.tap(find.byIcon(Icons.delete_outline_rounded).first);
+      await settleReal(t);
+      expect(server.writes.length, writes + 1, reason: 'live again');
+      h.dispose();
+      await unmountAll(t);
+    });
+
+    testWidgets("kept over A's failed refresh, it is still never B's", (t) async {
+      await open(t);
+      server.failing = (s) => !s.isWrite;
+      await remove(t);
+      expect(anas, findsOneWidget, reason: 'premise');
+      await switchTo(t, memberB);
+      nothingOfAs(t);
+      expect(anasSecond, findsNothing);
+      expect(find.textContaining("Couldn't load your availability — "), findsOneWidget,
+          reason: "B's first read failed: B's own failure, in place of a list");
+      server.failing = (_) => false;
+      await t.tap(find.text('Try again'));
+      await settleReal(t);
+      expect(bobs, findsOneWidget);
+      expect(find.textContaining("Couldn't"), findsNothing);
+      await unmountAll(t);
+    });
+
+    testWidgets('a cancelled session leaves the list at once, also when the '
+        'refresh fails', (t) async {
+      await open(t);
+      server.failing = (s) => !s.isWrite;
+      await t.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await settleReal(t);
+      await t.tap(find.text('Cancel session'));
+      await settleReal(t);
+      expect(find.text('Session cancelled — client notified.'), findsOneWidget);
+      expect(anas, findsNothing, reason: 'it was cancelled');
+      expect(anasSecond, findsOneWidget);
+      await unmountAll(t);
+    });
+
+    testWidgets('negative control: the last one removed is an empty calendar', (t) async {
+      server.tables['coaching_calls'] = [];
+      server.tables['coach_availability'] = [slot(memberA, 'consultation')];
+      await open(t);
+      server.tables['coach_availability'] = [];
+      await remove(t);
+      expect(find.text('No availability published'), findsOneWidget);
+      expect(find.textContaining("Couldn't"), findsNothing);
       await unmountAll(t);
     });
   });

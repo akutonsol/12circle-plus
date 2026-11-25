@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/profile/presentation/integrations_screen.dart';
 import 'package:flutter/material.dart';
@@ -26,6 +28,7 @@ void main() {
   final launched = <String>[];
   var canLaunch = true;
   var launchWorks = true;
+  Completer<void>? launchGate;
 
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
@@ -40,6 +43,7 @@ void main() {
     reported.clear();
     launched.clear();
     canLaunch = launchWorks = true;
+    launchGate = null;
     setFailureSink(reported.add);
     server.tables['user_integrations'] = [row(memberA, 'strava')];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -47,6 +51,7 @@ void main() {
             const MethodChannel('plugins.flutter.io/url_launcher'), (c) async {
       if (c.method == 'canLaunch') return canLaunch;
       launched.add((c.arguments as Map)['url'] as String);
+      await launchGate?.future;
       return launchWorks;
     });
   });
@@ -120,6 +125,70 @@ void main() {
       expect(connected, findsNothing);
       await unmountAll(t);
     });
+
+    for (final afterB in [false, true]) {
+      testWidgets("A's late FAILED read is not B's failure "
+          "(${afterB ? 'after' : 'before'} B's own)", (t) async {
+        final late = server.hold((s) => s.who == memberA);
+        server.failing = (s) => s.who == memberA;
+        server.tables['user_integrations']!.add(row(memberB, 'whoop'));
+        await open(t);
+        final bHeld = afterB ? null : server.hold((s) => s.who == memberB);
+        await switchTo(t, memberB);
+        late.complete();
+        await settleReal(t);
+        expect(find.text(failedLoad), findsNothing, reason: "A's failure is said to B");
+        expect(find.text('Not loaded'), findsNothing);
+        bHeld?.complete();
+        await settleReal(t);
+        expect(pillOf('WHOOP', 'Connected'), findsOneWidget);
+        expect(origins(), ['IntegrationsScreen._loadConnected'],
+            reason: 'recorded all the same');
+        await unmountAll(t);
+      });
+    }
+
+    for (final drawn in [true, false]) {
+      testWidgets("A's Connect fired after the switch (${drawn ? 'drawn' : 'no frame'}): "
+          'no page opens, nothing is stored for B', (t) async {
+        await open(t);
+        await t.tap(pillOf('WHOOP', 'Connect'));
+        await settleReal(t);
+        final tap = tapOf(t, 'Connect with WHOOP');
+        drawn ? await switchTo(t, memberB) : await switchNoFrame(t, memberB);
+        tap();
+        await settleNoFrame(t);
+        await settleReal(t);
+        expect(launched, isEmpty, reason: "A's authorization page opened for B");
+        expect(server.writes, isEmpty);
+        expect(origins(), ['IntegrationsScreen._showOAuthSheet']);
+        expect(find.byType(SnackBar), findsNothing);
+        await unmountAll(t);
+      });
+    }
+
+    for (final opens in [true, false]) {
+      testWidgets('switch while the page opens (it ${opens ? 'does' : 'does not'}): '
+          'nothing is stored for, or said to, B', (t) async {
+        await open(t);
+        await t.tap(pillOf('WHOOP', 'Connect'));
+        await settleReal(t);
+        launchGate = Completer<void>();
+        launchWorks = opens;
+        await t.tap(find.text('Connect with WHOOP'));
+        await settleReal(t);
+        expect(launched, hasLength(1), reason: 'premise: opening');
+        await switchNoFrame(t, memberB);
+        launchGate!.complete();
+        await settleNoFrame(t);
+        await settleReal(t);
+        expect(server.writes, isEmpty);
+        expect(find.byType(SnackBar), findsNothing);
+        expect(find.textContaining("Couldn't"), findsNothing);
+        expect(origins(), ['IntegrationsScreen._showOAuthSheet']);
+        await unmountAll(t);
+      });
+    }
 
     testWidgets("a change of A's landing after B is not shown as B's", (t) async {
       await open(t);
@@ -345,5 +414,68 @@ void main() {
         await unmountAll(t);
       });
     }
+  });
+
+  group('fit (UX-1): no overflow, no shrunk text, 44px', () {
+    const names = ['Apple Health', 'Google Fit', 'WHOOP', 'Garmin Connect', 'Polar',
+      'Strava', 'MyFitnessPal', 'Spotify'];
+
+    for (final w in fitPhones.keys) {
+      for (final s in fitScales) {
+        testWidgets('${w}dp at ${s}x: loaded, and not loaded', (t) async {
+          for (final fails in [false, true]) {
+            server.failing = (_) => fails;
+            fitWindow(t, w, 16000, s);
+            final seen = recordOverflows();
+            await t.runAsync(() => signInAs(memberA));
+            await t.pumpWidget(MaterialApp(
+                key: UniqueKey(), home: const IntegrationsScreen()));
+            await settleReal(t);
+            expect(seen, isEmpty, reason: seen.join('\n\n'));
+            expectTextNotShrunk(t, find.byType(IntegrationsScreen), s);
+            for (final n in names) {
+              expect(renderedFontSize(t, find.text(n)), closeTo(15 * s, 0.01));
+            }
+            expect(renderedFontSize(t, find.text('iOS only')), closeTo(9 * s, 0.01));
+            expect(renderedFontSize(t, find.text('Permission').first), closeTo(9 * s, 0.01));
+            final pills = fails ? ['Not loaded'] : ['Connect', 'Connected'];
+            for (final state in pills) {
+              final f = find.text(state);
+              expect(f, findsWidgets, reason: 'premise');
+              expect(renderedFontSize(t, f.first), closeTo(12 * s, 0.01));
+              final target = t.getSize(
+                  find.ancestor(of: f.first, matching: find.byType(GestureDetector)).first);
+              expect(target.height, greaterThanOrEqualTo(44));
+              expect(target.width, greaterThanOrEqualTo(44));
+              // Past 1.3× the state is on its own line, under the app.
+              final row = find.ancestor(of: f.first, matching: find.byType(LayoutBuilder)).first;
+              final name = find.descendant(of: row, matching: find.byWidgetPredicate(
+                  (x) => x is Text && names.contains(x.data))).first;
+              if (s > 1.3) {
+                expect(t.getRect(f.first).top,
+                    greaterThanOrEqualTo(t.getRect(name).bottom));
+              }
+            }
+            for (final e in find.byType(RichText).evaluate()) {
+              final r = t.getRect(find.byWidget(e.widget));
+              expect(r.left >= 0 && r.right <= w, isTrue, reason: 'cut off: $r');
+            }
+            await unmountAll(t);
+          }
+        });
+      }
+    }
+
+    testWidgets('control: at 390dp and 1x the state is still beside the app', (t) async {
+      fitWindow(t, 390, 16000, 1);
+      await t.runAsync(() => signInAs(memberA));
+      await t.pumpWidget(const MaterialApp(home: IntegrationsScreen()));
+      await settleReal(t);
+      final state = t.getRect(pillOf('Strava', 'Connected'));
+      final name = t.getRect(find.text('Strava'));
+      expect(state.left, greaterThan(name.right));
+      expect(state.top, lessThan(name.bottom + 30));
+      await unmountAll(t);
+    });
   });
 }

@@ -104,6 +104,64 @@ final exerciseMediaPickerProvider = Provider<ImagePicker>((ref) => ImagePicker()
 /// Where the edit form's prefill of an existing exercise stands.
 enum _Prefill { loading, failed, missing, loaded }
 
+/// P0-FL-59d · a route's content, for the account [owner] only. For anyone else
+/// nothing of it is drawn — not even the first frame of a route pushed just
+/// before a switch — and the route closes. It listens for itself: whatever
+/// opened the route may be gone by then.
+class _OwnedRoute extends StatefulWidget {
+  final String? owner;
+  final Widget child;
+  const _OwnedRoute({required this.owner, required this.child});
+  @override
+  State<_OwnedRoute> createState() => _OwnedRouteState();
+}
+
+class _OwnedRouteState extends State<_OwnedRoute> {
+  StreamSubscription<AuthState>? _authSub;
+
+  bool get _mine =>
+      Supabase.instance.client.auth.currentUser?.id == widget.owner;
+
+  @override
+  void initState() {
+    super.initState();
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+      if (!mounted || _mine) return;
+      setState(() {}); // (one already closing stops showing it, too)
+      _close();
+    }, onError: (Object e, StackTrace s) =>
+        reportError('CreateExerciseScreen._OwnedRoute', e, s));
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  void _close() {
+    final route = ModalRoute.of(context);
+    if (route != null && route.isActive) route.navigator?.removeRoute(route);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_mine) return widget.child;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_mine) _close();
+    });
+    return const SizedBox.shrink();
+  }
+}
+
+/// Closes [context]'s own route with [result], if it is still open: once it
+/// has been closed under a tap, popping would close the page beneath.
+void _popRoute(BuildContext context, [Object? result]) {
+  final route = context.mounted ? ModalRoute.of(context) : null;
+  if (route == null || !route.isActive) return;
+  route.isCurrent ? Navigator.pop(context, result) : route.navigator?.removeRoute(route);
+}
+
 class CreateExerciseScreen extends ConsumerStatefulWidget {
   const CreateExerciseScreen({super.key});
   @override
@@ -181,8 +239,6 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   /// Counts the forms: whatever was started for an earlier one is dropped.
   int _form = 0;
   StreamSubscription<AuthState>? _authSub;
-  /// The open dialog (Import JSON, Exercise Saved!).
-  Route<dynamic>? _dialog;
 
   String? get _uid => Supabase.instance.client.auth.currentUser?.id;
 
@@ -204,8 +260,6 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   void _followAccount() {
     final uid = _uid;
     if (!mounted || uid == _owner) return;
-    final d = _dialog;
-    if (d != null && d.isActive) d.navigator?.removeRoute(d);
     ScaffoldMessenger.of(context)..clearSnackBars()..removeCurrentSnackBar();
     setState(() {
       _owner = uid;
@@ -577,11 +631,10 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   Future<void> _importJson() async {
     final ctrl = TextEditingController();
     final form = _form;
+    final owner = _owner;
     final ok = await showDialog<bool>(
       context: context,
-      builder: (dctx) {
-        _dialog = ModalRoute.of(dctx);
-        return AlertDialog(
+      builder: (dctx) => _OwnedRoute(owner: owner, child: AlertDialog(
         backgroundColor: const Color(0xFF1C1B1C),
         title: const Text('Paste exercise JSON',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
@@ -597,15 +650,13 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dctx, false),
+          TextButton(onPressed: () => _popRoute(dctx, false),
             child: const Text('Cancel', style: TextStyle(color: Color(0xFFCDC3D0)))),
-          TextButton(onPressed: () => Navigator.pop(dctx, true),
+          TextButton(onPressed: () => _popRoute(dctx, true),
             child: const Text('Import', style: TextStyle(color: _C.primary, fontWeight: FontWeight.w700))),
         ],
-      );
-      },
+      )),
     );
-    _dialog = null;
     if (ok != true || !mounted || !_still(form)) return;
     try {
       _applyNormalized(_normalizeImport(jsonDecode(ctrl.text) as Map<String, dynamic>));
@@ -876,7 +927,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
         )) {
       if (_accountChanged(form, 'Submitting for review')) return;
       if (await svc.reviewExercise(id, 'under_review')) {
-        _editingContentStatus = 'under_review';
+        if (_still(form)) _editingContentStatus = 'under_review';
       } else {
         reviewSubmitFailed = true;
         reviewSubmitError = svc.lastError;
@@ -979,11 +1030,13 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
         // re-uploads every picked file; the picks are kept).
         // U4: a failed review submission is folded into this ONE message —
         // Save again retries it too — rather than a second queued SnackBar.
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        final messenger = ScaffoldMessenger.of(context);
+        final owner = _owner;
+        final bar = messenger.showSnackBar(SnackBar(
             duration: const Duration(seconds: 10),
             // U3: retry from the message itself.
             action: SnackBarAction(label: 'Save again',
-                onPressed: () { if (form == _form) _save(); }),
+                onPressed: () { if (mounted && form == _form) _save(); }),
             content: Text(exerciseMediaFailureMessage(
               mediaOnly: mediaOnly,
               mediaWriteFailed: mediaWriteFailed,
@@ -992,6 +1045,14 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
               reviewSubmitFailed: reviewSubmitFailed,
               reviewSubmitError: reviewSubmitError,
             ))));
+        // P0-FL-59d · a message with an action waits on the app's messenger
+        // when this screen is left: it watches the account itself.
+        final sub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+          if (_uid == owner || !messenger.mounted) return;
+          messenger..clearSnackBars()..removeCurrentSnackBar();
+        }, onError: (Object e, StackTrace s) =>
+            reportError('CreateExerciseScreen._save.message', e, s));
+        bar.closed.whenComplete(sub.cancel);
       } else if (reviewSubmitFailed) {
         // Saved, but not queued: say so rather than leave it invisible to reviewers.
         // U2: there is no "submit for review" control for a saved draft, so
@@ -1054,11 +1115,12 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
 
   void _showSuccess() {
     final form = _form;
+    final owner = _owner;
+    final savedId = _savedId;
     showDialog(
       context: context,
-      builder: (dctx) {
-        _dialog = ModalRoute.of(dctx);
-        return AlertDialog(
+      // Pushed after the save's awaits: it is drawn for this coach or not at all.
+      builder: (dctx) => _OwnedRoute(owner: owner, child: AlertDialog(
         backgroundColor: _C.card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('Exercise Saved!', style: TextStyle(color: _C.wht, fontWeight: FontWeight.w700)),
@@ -1071,14 +1133,17 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
         actions: [
           TextButton(
             // Pop the dialog via its own context (root navigator), then leave the screen.
-            onPressed: () { Navigator.of(dctx).pop(); if (mounted) context.pop(); },
+            onPressed: () {
+              _popRoute(dctx);
+              if (mounted && _still(form)) context.pop();
+            },
             child: const Text('Back to Library', style: TextStyle(color: _C.primary))),
-          if (_savedId != null)
+          if (savedId != null)
             TextButton(
               onPressed: () {
-                Navigator.of(dctx).pop();
+                _popRoute(dctx);
                 if (_accountChanged(form, 'Submitting an exercise')) return;
-                ref.read(myExercisesNotifierProvider.notifier).submitForGlobal(_savedId!).then((ok) {
+                ref.read(myExercisesNotifierProvider.notifier).submitForGlobal(savedId).then((ok) {
                   if (!mounted || !_still(form)) return;
                   // The result was ignored: a submission that failed still said
                   // "Published to the Global Library!".
@@ -1095,8 +1160,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
               },
               child: const Text('Submit to Global Library', style: TextStyle(color: _C.amber))),
         ],
-      );
-      },
+      )),
     );
   }
 

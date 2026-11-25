@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/coach/presentation/coach_video_response_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/coach_tools_server.dart';
@@ -184,6 +185,47 @@ void main() {
     blank(t);
     await switchTo(t, memberA);
     expect(find.text('photo.png'), findsNothing, reason: 'it was dropped, not kept');
+    await unmountAll(t);
+  });
+
+  testWidgets('signed out: it says so, announced; to another account, nothing', (t) async {
+    const said = "You're signed out — sign in again to send a video response.";
+    await open(t);
+    expect(find.text(said), findsNothing);
+    await signOutNow(t);
+    expect(find.text(said), findsOneWidget, reason: 'THE defect: a blank page');
+    expect(
+        find.ancestor(of: find.text(said), matching: find.byWidgetPredicate(
+            (w) => w is Semantics && (w.properties.liveRegion ?? false))),
+        findsWidgets);
+    blank(t);
+    await switchTo(t, memberB);
+    expect(find.text(said), findsNothing);
+    blank(t);
+    await signOutNow(t);
+    expect(find.text(said), findsOneWidget);
+    await switchTo(t, memberA);
+    expect(find.text(said), findsNothing);
+    expect(find.text('To Ana Client'), findsOneWidget);
+    expect(reported, isEmpty);
+    await unmountAll(t);
+  });
+
+  testWidgets("a picker that failed for A is not said to B", (t) async {
+    await open(t);
+    final gate = Completer<String?>();
+    picker.answer = (_) async {
+      await gate.future;
+      throw PlatformException(code: 'photo_access_denied', message: 'SECRET');
+    };
+    await t.tap(find.text('From Gallery'));
+    await settleReal(t);
+    await switchNoFrame(t, memberB);
+    gate.complete(null);
+    await settleNoFrame(t);
+    await settleReal(t);
+    expect(find.byType(SnackBar), findsNothing);
+    expect(reported.map((f) => f.origin), ['CoachVideoResponseScreen._pickVideo']);
     await unmountAll(t);
   });
 

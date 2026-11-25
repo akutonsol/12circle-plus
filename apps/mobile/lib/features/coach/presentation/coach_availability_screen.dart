@@ -18,9 +18,62 @@ const _mut   = Color(0xFFCFC2D6);
 bool _largeText(BuildContext context) =>
     MediaQuery.textScalerOf(context).scale(12) > 12 * 1.3;
 
-/// Closes [route] at once, if it is still open.
-void _closeRoute(Route<dynamic>? route) {
-  if (route != null && route.isActive) route.navigator?.removeRoute(route);
+/// P0-FL-59d · a route's content, for the account [owner] only. For anyone else
+/// nothing of it is drawn — not even the first frame of a route pushed just
+/// before a switch — and the route closes. It listens for itself: whatever
+/// opened the route may be gone by then.
+class _OwnedRoute extends StatefulWidget {
+  final String? owner;
+  final Widget child;
+  const _OwnedRoute({required this.owner, required this.child});
+  @override
+  State<_OwnedRoute> createState() => _OwnedRouteState();
+}
+
+class _OwnedRouteState extends State<_OwnedRoute> {
+  StreamSubscription<AuthState>? _authSub;
+
+  bool get _mine =>
+      Supabase.instance.client.auth.currentUser?.id == widget.owner;
+
+  @override
+  void initState() {
+    super.initState();
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+      if (!mounted || _mine) return;
+      setState(() {}); // (one already closing stops showing it, too)
+      _close();
+    }, onError: (Object e, StackTrace s) =>
+        reportError('CoachAvailabilityScreen._OwnedRoute', e, s));
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  void _close() {
+    final route = ModalRoute.of(context);
+    if (route != null && route.isActive) route.navigator?.removeRoute(route);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_mine) return widget.child;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_mine) _close();
+    });
+    return const SizedBox.shrink();
+  }
+}
+
+/// Closes [context]'s own route with [result], if it is still open: once it
+/// has been closed under a tap, popping would close the page beneath.
+void _popRoute(BuildContext context, [Object? result]) {
+  final route = context.mounted ? ModalRoute.of(context) : null;
+  if (route == null || !route.isActive) return;
+  route.isCurrent ? Navigator.pop(context, result) : route.navigator?.removeRoute(route);
 }
 
 class CoachAvailabilityScreen extends StatefulWidget {
@@ -34,6 +87,9 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
   List<Map<String, dynamic>> _slots = [];
   List<Map<String, dynamic>> _sessions = [];
   bool _loading = true;
+  /// [_slots] and [_sessions] are [_owner]'s, as last read: a refresh keeps
+  /// them, and one that fails says so above them.
+  bool _shown = false;
   /// P0-FL-14 · the last load failed. A failed read is not "no slots" and "no
   /// upcoming sessions": the page says so and offers Try again.
   Object? _loadError;
@@ -55,8 +111,6 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
   String? _owner;
   int _loadSeq = 0;
   StreamSubscription<AuthState>? _authSub;
-  /// The open "Cancel session?" dialog.
-  Route<dynamic>? _dialog;
 
   String? get _uid => _db.auth.currentUser?.id;
 
@@ -76,12 +130,12 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
     super.dispose();
   }
 
-  /// Nothing of the previous coach's stays: list, dialog, messages (a Reopen
-  /// slot one waits to be tapped). The sheet closes itself.
+  /// Nothing of the previous coach's stays: list, messages. (The sheet, the
+  /// dialog and the Reopen slot message close themselves.)
   void _followAccount() {
     if (!mounted || _uid == _owner) return;
-    _closeRoute(_dialog);
     ScaffoldMessenger.of(context)..clearSnackBars()..removeCurrentSnackBar();
+    _shown = false;
     _slots = [];
     _sessions = [];
     _deleting.clear();
@@ -103,7 +157,11 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
     final uid = _uid;
     final seq = ++_loadSeq;
     bool current() => seq == _loadSeq && _uid == uid;
-    setState(() { _owner = uid; _loading = uid != null; _loadError = null; });
+    setState(() {
+      _owner = uid;
+      _loading = uid != null;
+      if (!_shown) _loadError = null; // (over a list: until this answers)
+    });
     if (uid == null) return;
     try {
       final data = await _db
@@ -131,6 +189,8 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
       setState(() {
         _slots = List<Map<String, dynamic>>.from(data);
         _sessions = List<Map<String, dynamic>>.from(calls);
+        _shown = true;
+        _loadError = null;
         _loading = false;
       });
     } catch (e, st) {
@@ -157,7 +217,10 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
           .eq('id', id)
           .select('id');
       if (!mounted || !mine()) return;
-      setState(() => _deleting.remove(id));
+      setState(() {
+        _deleting.remove(id);
+        if ((rows as List).isNotEmpty) _slots.removeWhere((s) => s['id'] == id);
+      });
       if ((rows as List).isEmpty) {
         // P0-FL-53b · said, but was never recorded.
         reportError('CoachAvailabilityScreen._delete',
@@ -182,24 +245,20 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dctx) {
-        _dialog = ModalRoute.of(dctx);
-        return AlertDialog(
+      builder: (dctx) => _OwnedRoute(owner: owner, child: AlertDialog(
         backgroundColor: _card,
         scrollable: true, // P0-FL-58 · at 3× on a short phone it was cut off
         title: const Text('Cancel session?', style: TextStyle(color: _wht, fontWeight: FontWeight.w800)),
         content: const Text('The client will be notified and the slot reopened.',
             style: TextStyle(color: _mut)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dctx, false),
+          TextButton(onPressed: () => _popRoute(dctx, false),
               child: const Text('Keep', style: TextStyle(color: _mut))),
-          TextButton(onPressed: () => Navigator.pop(dctx, true),
+          TextButton(onPressed: () => _popRoute(dctx, true),
               child: const Text('Cancel session', style: TextStyle(color: Color(0xFFFFB4AB)))),
         ],
-      );
-      },
+      )),
     );
-    _dialog = null;
     if (confirmed != true) return;
     if (_accountChanged('_cancelSession', 'Cancelling a session', owner)) return;
     final id = call['id'] as String;
@@ -267,7 +326,12 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
       reportError('CoachAvailabilityScreen._cancelSession.notify', e);
     }
     if (_uid != owner) return; // nothing of this is said to the next account
-    if (mounted) setState(() => _cancelling.remove(id));
+    if (mounted) {
+      setState(() {
+        _cancelling.remove(id);
+        _sessions.removeWhere((c) => c['id'] == id); // cancelled: confirmed
+      });
+    }
     final done =
         notified ? 'Session cancelled — client notified.' : 'Session cancelled.';
     if (slotError == null) {
@@ -306,13 +370,16 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
   ///
   /// UX-5 · it stays until acted on (retry or close): the slot is still
   /// booked, and a timed toast let that pass unseen.
+  ///
+  /// P0-FL-59d · it stays on the app's messenger when this page is left, so it
+  /// watches the account itself, until it is closed.
   void _sayReopenFailed(ScaffoldMessengerState messenger, String slotId,
       Object e, String? owner, {String lead = ''}) {
     final next = isNetworkFailure(e)
         ? 'check your connection and tap Reopen slot.'
         : 'tap Reopen slot to try again. If it keeps happening, contact '
             'support.';
-    messenger.showSnackBar(SnackBar(
+    final bar = messenger.showSnackBar(SnackBar(
       persist: true,
       showCloseIcon: true,
       content: Semantics(liveRegion: true,
@@ -332,6 +399,12 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
         },
       ),
     ));
+    final sub = _db.auth.onAuthStateChange.listen((_) {
+      if (_uid == owner || !messenger.mounted) return;
+      messenger..clearSnackBars()..removeCurrentSnackBar();
+    }, onError: (Object e, StackTrace s) =>
+        reportError('CoachAvailabilityScreen._sayReopenFailed', e, s));
+    bar.closed.whenComplete(sub.cancel);
   }
 
   void _showAddSheet() {
@@ -343,7 +416,8 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
       backgroundColor: _card,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (_) => _AddSlotSheet(owner: owner, onSaved: () { if (mounted) _load(); }),
+      builder: (_) => _OwnedRoute(owner: owner, child: _AddSlotSheet(
+          owner: owner, onSaved: () { if (mounted) _load(); })),
     );
   }
 
@@ -355,6 +429,9 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
     // schedule, so adding a slot to it is disabled until it loads. P0-FL-58 r2 ·
     // the floating button too: it stayed live over a failed load.
     final onAdd = _loadError != null || _owner == null ? null : _showAddSheet;
+    // Over a list kept after a failed refresh, too: nothing is removed from a
+    // schedule that could not be read again.
+    final held = _loadError != null;
     final onFab = onAdd == null ? _wht.withValues(alpha: 0.5) : _wht;
     final grouped = <String, List<Map<String, dynamic>>>{};
     for (final s in _slots) {
@@ -380,7 +457,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
             onPressed: onAdd),
         ],
       ),
-      body: _loading
+      body: _loading && !_shown
           ? const Center(child: CircularProgressIndicator(color: _brand))
           : _owner == null
           ? Center(child: Padding(
@@ -388,7 +465,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
               child: Semantics(liveRegion: true, child: const Text(
                 "You're signed out — sign in again to see your availability.",
                 textAlign: TextAlign.center, style: TextStyle(color: _wht, fontSize: 15)))))
-          : _loadError != null
+          : _loadError != null && !_shown
           ? _LoadFailed(message: "Couldn't load your availability — "
                 '${_nextStep(_loadError!)}', onRetry: _load)
           : ListView(
@@ -398,6 +475,16 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
               padding: EdgeInsets.fromLTRB(16, 16, 16,
                   56 + MediaQuery.textScalerOf(context).scale(40)),
               children: [
+                if (_loadError != null) ...[
+                  SectionLoadFailure(
+                    what: 'your availability',
+                    error: _loadError,
+                    detail: 'Changes are paused until it loads.',
+                    busy: _loading,
+                    accent: _brand,
+                    onRetry: _load),
+                  const SizedBox(height: 16),
+                ],
                 // ── Upcoming booked sessions ──
                 if (_sessions.isNotEmpty) ...[
                   const Padding(
@@ -409,7 +496,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
                   ..._sessions.map((c) => _SessionTile(
                         call: c,
                         cancelling: _cancelling.contains(c['id']),
-                        onCancel: () => _cancelSession(c, owner),
+                        onCancel: held ? null : () => _cancelSession(c, owner),
                       )),
                   const SizedBox(height: 20),
                 ],
@@ -423,7 +510,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
                 if (grouped.isEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 32),
-                    child: _EmptyState(onAdd: _showAddSheet),
+                    child: _EmptyState(onAdd: onAdd),
                   ),
                 ...grouped.entries.map((entry) {
                   final dt = DateTime.parse(entry.key);
@@ -437,7 +524,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
                     ...entry.value.map((s) => _SlotTile(slot: s,
                         day: _dateLabel(dt),
                         deleting: _deleting.contains(s['id']),
-                        onDelete: () => _delete(s['id'] as String, owner))),
+                        onDelete: held ? null : () => _delete(s['id'] as String, owner))),
                   ]);
                 }),
               ],
@@ -470,7 +557,8 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
 
 class _SessionTile extends StatelessWidget {
   final Map<String, dynamic> call;
-  final VoidCallback onCancel;
+  /// Null: held, while the schedule could not be read again.
+  final VoidCallback? onCancel;
   /// The cancel is in flight: the button is disabled (no double fire).
   final bool cancelling;
   const _SessionTile({required this.call, required this.onCancel, this.cancelling = false});
@@ -503,6 +591,7 @@ class _SessionTile extends StatelessWidget {
         : Semantics(
             container: true,
             button: true,
+            enabled: onCancel != null,
             label: 'Cancel session with $who${when.isEmpty ? '' : ', $when'}',
             onTap: onCancel,
             excludeSemantics: true,
@@ -511,8 +600,9 @@ class _SessionTile extends StatelessWidget {
               style: TextButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 minimumSize: const Size(44, 44)),
-              child: const Text('Cancel',
-                style: TextStyle(color: Color(0xFFFFB4AB), fontSize: 13, fontWeight: FontWeight.w600)),
+              child: Text('Cancel',
+                style: TextStyle(color: const Color(0xFFFFB4AB).withValues(alpha: onCancel == null ? 0.4 : 1),
+                    fontSize: 13, fontWeight: FontWeight.w600)),
             ));
 
     return Container(
@@ -545,7 +635,8 @@ class _SessionTile extends StatelessWidget {
 
 class _SlotTile extends StatelessWidget {
   final Map<String, dynamic> slot;
-  final VoidCallback onDelete;
+  /// Null: held, while the schedule could not be read again.
+  final VoidCallback? onDelete;
   final bool deleting;
   /// The date heading it is under: part of the delete button's name.
   final String day;
@@ -586,7 +677,7 @@ class _SlotTile extends StatelessWidget {
         : Semantics(
             container: true,
             button: true,
-            enabled: !deleting,
+            enabled: !deleting && onDelete != null,
             liveRegion: deleting,
             label: deleting ? 'Deleting $slotName' : 'Delete $slotName',
             onTap: deleting ? null : onDelete,
@@ -596,7 +687,8 @@ class _SlotTile extends StatelessWidget {
               icon: deleting
                   ? const SizedBox(width: 18, height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2, color: _mut))
-                  : const Icon(Icons.delete_outline_rounded, color: _mut, size: 20),
+                  : Icon(Icons.delete_outline_rounded,
+                      color: _mut.withValues(alpha: onDelete == null ? 0.4 : 1), size: 20),
               onPressed: deleting ? null : onDelete));
 
     return Container(
@@ -625,7 +717,7 @@ class _SlotTile extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  final VoidCallback onAdd;
+  final VoidCallback? onAdd;
   const _EmptyState({required this.onAdd});
   @override
   Widget build(BuildContext context) => Center(
@@ -658,7 +750,7 @@ class _EmptyState extends StatelessWidget {
 // ── Add Slot Bottom Sheet ─────────────────────────────────────────────────────
 class _AddSlotSheet extends StatefulWidget {
   /// P0-FL-59d · the coach it was opened for: the slot is theirs or it is not
-  /// published, and the sheet goes with them.
+  /// published.
   final String owner;
   final VoidCallback onSaved;
   const _AddSlotSheet({required this.owner, required this.onSaved});
@@ -676,30 +768,6 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
   bool _saving = false;
   /// The last publish's failure, said above the button (P0-FL-53b r2).
   String? _error;
-  StreamSubscription<AuthState>? _authSub;
-  /// The open date picker.
-  Route<dynamic>? _picker;
-
-  @override
-  void initState() {
-    super.initState();
-    _authSub = _db.auth.onAuthStateChange.listen((_) => _followAccount(),
-        onError: (Object e, StackTrace s) => reportError(
-            'CoachAvailabilityScreen._AddSlotSheet.onAuthStateChange', e, s));
-  }
-
-  @override
-  void dispose() {
-    _authSub?.cancel();
-    super.dispose();
-  }
-
-  void _followAccount() {
-    if (!mounted || _db.auth.currentUser?.id == widget.owner) return;
-    _closeRoute(_picker);
-    _closeRoute(ModalRoute.of(context));
-  }
-
   static const _types = [
     ('check_in',         'Weekly Check-In'),
     ('consultation',     'Strategy Consultation'),
@@ -714,7 +782,6 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
     if (!mine()) {
       reportError('CoachAvailabilityScreen._AddSlotSheet._save',
           StateError('Publishing a slot: the signed-in account changed'));
-      _followAccount();
       return;
     }
     setState(() { _saving = true; _error = null; });
@@ -728,7 +795,7 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
         'is_booked': false,
       });
       if (mounted && mine()) {
-        Navigator.pop(context);
+        _popRoute(context);
         widget.onSaved();
       }
     } catch (e, st) {
@@ -748,15 +815,11 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
       initialDate: _date,
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 90)),
-      builder: (ctx, child) {
-        _picker = ModalRoute.of(ctx);
-        return Theme(
+      builder: (ctx, child) => _OwnedRoute(owner: widget.owner, child: Theme(
           data: ThemeData.dark().copyWith(
             colorScheme: const ColorScheme.dark(primary: _brand, surface: _card)),
-          child: child!);
-      },
+          child: child!)),
     );
-    _picker = null;
     if (picked != null && mounted) setState(() => _date = picked);
   }
 
@@ -777,7 +840,7 @@ class _AddSlotSheetState extends State<_AddSlotSheet> {
           const Expanded(child: Text('Add Availability Slot',
             style: TextStyle(color: _wht, fontSize: 18, fontWeight: FontWeight.w800))),
           IconButton(tooltip: 'Close Add Availability Slot',
-            icon: const Icon(Icons.close, color: _mut), onPressed: () => Navigator.pop(context)),
+            icon: const Icon(Icons.close, color: _mut), onPressed: () => _popRoute(context)),
         ]),
         const SizedBox(height: 20),
 
