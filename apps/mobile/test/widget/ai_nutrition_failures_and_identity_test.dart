@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:circle_fitness/core/config/app_env.dart';
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -297,6 +296,7 @@ void main() {
         ai.gate = null;
         await settle(t);
         expect(find.text('reply'), findsNothing);
+        expect(reported, isEmpty, reason: 'dropped, not thrown');
         if (to != null) {
           await ask(t, 'Hello');
           expect(find.text('for B'), findsOneWidget);
@@ -505,6 +505,7 @@ void main() {
         ..body = {'text': 'B: rice'};
       await settle(t);
       expect(find.text('Mon: oats'), findsNothing);
+      expect(reported, isEmpty, reason: 'dropped, not thrown');
       await tap(t, 'Generate Meal Plan');
       expect(find.text('B: rice'), findsOneWidget);
       await close(t);
@@ -595,10 +596,14 @@ void main() {
       await close(t);
     });
 
-    testWidgets('POSITIVE CONTROL: built; nothing recorded; kept by a new User '
-        'for the same member', (t) async {
+    testWidgets('POSITIVE CONTROL: built; nothing recorded', (t) async {
       await built(t);
       expect(reported, isEmpty);
+      await close(t);
+    });
+
+    testWidgets('a new User for the same member keeps the list', (t) async {
+      await built(t);
       await t.runAsync(refreshSession);
       await settle(t);
       expect(find.textContaining('Spinach'), findsOneWidget);
@@ -625,6 +630,7 @@ void main() {
       ai.gate!.complete();
       await settle(t);
       expect(find.textContaining('Spinach'), findsNothing);
+      expect(reported, isEmpty, reason: 'dropped, not thrown');
       expect(c.read(groceryListNotifierProvider).content, isNull);
       expect(c.read(mealPlanNotifierProvider).content, isNull);
       await close(t);

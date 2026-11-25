@@ -20,7 +20,6 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../support/activity_server.dart';
 import '../support/fit_matrix.dart';
-import '../support/pump_until.dart';
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-60b (a)+(e) · Activity's streak, and both Upcoming panels (Activity's
@@ -258,7 +257,7 @@ void main() {
         ..fails.add('GET daily_scores:$memberB');
       await show(t, const ActivityScreen());
       await switchTo(t, memberB);
-      expect(streakShown(), isNull, reason: "THE defect: B was shown A's 9");
+      expect(streakShown(), isNull, reason: 'THE defect: "0 day streak"');
       expect(find.text(_streakFailed), findsOneWidget);
       final gate = Completer<void>();
       server.holds['GET daily_scores:$memberB'] = gate;
@@ -547,8 +546,7 @@ void main() {
         expect(size.height, greaterThanOrEqualTo(44));
         final node = t.getSemantics(bell);
         expect(node.flagsCollection.isButton, isTrue);
-        t.binding.pipelineOwner.semanticsOwner!
-            .performAction(node.id, SemanticsAction.tap);
+        node.owner!.performAction(node.id, SemanticsAction.tap);
         await settle(t);
         expect(find.byType(BottomSheet), findsOneWidget);
         h.dispose();
