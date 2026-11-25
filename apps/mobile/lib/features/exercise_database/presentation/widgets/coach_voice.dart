@@ -11,6 +11,7 @@ import 'dart:io' show File;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart' show SemanticsService;
 import 'package:image_picker/image_picker.dart' show XFile;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
@@ -142,12 +143,13 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
 
   /// Stops the capture running now and removes it. Nothing is sent.
   Future<void> _abandon({bool release = false}) async {
+    final capture = _path; // [_path] is the next coach's once they record
     try {
       final path = await _rec.stop();
-      await _discard(path ?? _path);
+      await _discard(path ?? capture);
     } catch (e, st) {
       reportError('CoachVoiceRecorder._abandon', e, st);
-      await _discard(_path);
+      await _discard(capture);
     }
     if (release) await _rec.dispose();
   }
@@ -227,6 +229,7 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
     if (!_recording) return;
     final owner = _owner;
     if (_accountChanged('_stop', owner)) return; // dropped, not sent
+    final capture = _path;
     _timer?.cancel();
     setState(() { _recording = false; _busy = true; });
     String? path;
@@ -260,6 +263,11 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
             expectedUid: owner);
         if (_signedInUid != owner) return;
         if (saved) {
+          // The bar only goes back to rest: said once, to assistive tech.
+          if (mounted) {
+            unawaited(SemanticsService.sendAnnouncement(
+                View.of(context), 'Voice note sent', Directionality.of(context)));
+          }
           widget.onRecorded();
         } else if (!_saidOffline(_svc.lastError)) {
           _say(voiceUploadFailedMessage);
@@ -276,7 +284,7 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
       // accumulated there for the lifetime of the install — including the
       // sub-800ms ones discarded as taps, which were never even uploaded.
       // (A recorder that would not stop may still have left its file.)
-      path ??= _path;
+      path ??= capture;
       await _discard(path);
     }
     if (mounted && _owner == owner) setState(() => _busy = false);
@@ -304,15 +312,17 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
     final left = Text('${_maxSeconds - _elapsed}s',
         style: const TextStyle(color: _muted, fontSize: 11));
     // The label changes with the state and is announced; the seconds are not
-    // in it (one announcement, not thirty).
+    // in it (one announcement, not thirty). It starts with the words on the
+    // bar, so "tap Hold to record" finds it.
     return _withFailure(Semantics(
       container: true,
       button: true,
       enabled: !_busy,
       liveRegion: _recording || _busy,
-      label: _busy ? 'Sending voice note'
-          : _recording ? 'Recording. Stop and send voice note'
-          : 'Record a voice note, up to $_maxSeconds seconds',
+      label: _busy ? 'Sending… voice note'
+          : _recording ? 'Recording… Double-tap to stop and send'
+          : 'Hold to record a voice note, up to $_maxSeconds seconds. '
+              'Double-tap to start or stop',
       onTap: _busy ? null : _toggle,
       excludeSemantics: true,
       child: GestureDetector(
@@ -366,18 +376,40 @@ class _CoachVoicePlayerState extends State<CoachVoicePlayer> {
   double _progress = 0; // 0..1
   Duration _total = Duration.zero;
 
+  /// Paused part-way (not "never played", nor a play that failed).
+  bool _paused = false;
+
   /// The last thing that went wrong, said under the player.
   String? _failure;
+
+  /// This attempt's playing failed: its other streams repeat it.
+  bool _playFailed = false;
 
   /// Starting (or pausing) is in flight: no second one.
   bool _busy = false;
 
-  /// Announce play / pause once it has been used.
+  /// Announce its states once it has been used.
   bool _used = false;
+
+  /// P0-FL-59d · the account this note is shown to. It goes quiet when that
+  /// account leaves — a hidden tab draws nothing, so nothing else would — and
+  /// plays for nobody else.
+  String? _owner;
+  bool _away = false;
+
+  /// Counts what was started for an owner who stayed: earlier ones are dropped.
+  int _run = 0;
+  StreamSubscription<AuthState>? _authSub;
 
   @override
   void initState() {
     super.initState();
+    _owner = _signedInUid;
+    // Same account (a token refresh, the stream's replay) changes nothing.
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
+        (_) => _followAccount(),
+        onError: (Object e, StackTrace s) =>
+            reportError('CoachVoicePlayer.onAuthStateChange', e, s));
     if (widget.durationMs != null) _total = Duration(milliseconds: widget.durationMs!);
     // P0-FL-59d · the player's own failures (a recording that will not load
     // or stops part-way) arrive as errors on EVERY one of its streams, and
@@ -385,35 +417,86 @@ class _CoachVoicePlayerState extends State<CoachVoicePlayer> {
     _player.onDurationChanged.listen((d) { if (mounted && d > Duration.zero) setState(() => _total = d); },
         onError: (Object e, StackTrace st) => _failed(e, st));
     _player.onPositionChanged.listen((p) {
-      if (!mounted || _total == Duration.zero) return;
+      // (A position that lands once it has stopped is not a place to resume.)
+      if (!mounted || !_playing || _total == Duration.zero) return;
       setState(() => _progress = (p.inMilliseconds / _total.inMilliseconds).clamp(0, 1));
     }, onError: (Object _) {/* said by the first listener */});
-    _player.onPlayerComplete.listen((_) { if (mounted) setState(() { _playing = false; _progress = 0; }); },
+    _player.onPlayerComplete.listen((_) { if (mounted) setState(() { _playing = _paused = false; _progress = 0; }); },
         onError: (Object _) {/* said by the first listener */});
   }
 
-  /// What is playing now is not playing, and that is said.
+  void _followAccount() {
+    final away = _signedInUid != _owner;
+    if (!mounted || away == _away) return;
+    _away = away;
+    if (!away) return; // theirs again: at rest
+    _run++;
+    if (_used) unawaited(_silence());
+    setState(() {
+      _playing = _paused = _busy = _used = _playFailed = false;
+      _progress = 0;
+      _failure = null;
+    });
+  }
+
+  /// Stops what plays (or is about to) and lets its source go.
+  Future<void> _silence() async {
+    try {
+      await _player.release();
+    } catch (e, st) {
+      // (Disposed meanwhile: that stopped it.)
+      if (mounted) reportError('CoachVoicePlayer._silence', e, st);
+    }
+  }
+
+  /// What is playing now is not playing, and that is said. Play starts again
+  /// from a fresh link: what failed cannot be resumed.
   void _failed(Object e, StackTrace st) {
     if (!mounted) return;
     // `play` throws what the streams also carry: one failure, recorded once.
-    if (_failure == null) reportError('CoachVoicePlayer._toggle', e, st);
+    if (!_playFailed) reportError('CoachVoicePlayer._toggle', e, st);
+    if (_signedInUid != _owner) return _followAccount(); // not said to them
     setState(() {
-      _playing = false;
+      _playing = _paused = false;
+      _playFailed = true;
+      _progress = 0;
       _failure = couldntMessage('play this voice note', e);
     });
   }
 
   @override
-  void dispose() { _player.dispose(); super.dispose(); }
+  void dispose() { _authSub?.cancel(); _player.dispose(); super.dispose(); }
 
   Future<void> _toggle() async {
     if (_busy) return;
-    setState(() { _busy = true; _used = true; _failure = null; });
-    final owner = _signedInUid;
+    if (_signedInUid != _owner) {
+      reportError('CoachVoicePlayer._toggle',
+          StateError('Playing a voice note: the signed-in account changed'));
+      return _followAccount();
+    }
+    final run = _run;
+    // Still this attempt's account; otherwise it has gone quiet (or does now).
+    bool mine() {
+      if (!mounted || run != _run) return false;
+      if (_signedInUid == _owner) return true;
+      _followAccount();
+      return false;
+    }
+
+    setState(() { _busy = _used = true; _failure = null; _playFailed = false; });
     try {
       if (_playing) {
-        await _player.pause();
-        if (mounted) setState(() => _playing = false);
+        try {
+          await _player.pause();
+        } catch (e, st) {
+          // It plays on, and Pause stays what the control does.
+          reportError('CoachVoicePlayer._toggle', e, st);
+          if (mounted && mine()) {
+            setState(() => _failure = couldntMessage('pause this voice note', e));
+          }
+          return;
+        }
+        if (mounted && mine() && _playing) setState(() { _playing = false; _paused = true; });
         return;
       }
       if (_progress == 0) {
@@ -424,7 +507,7 @@ class _CoachVoicePlayerState extends State<CoachVoicePlayer> {
         // fallback becomes a no-op rather than a silent bypass.
         final signed = await _svc.signedCoachVoiceUrl(widget.url);
         // Gone, or another account's now: nothing is played to them.
-        if (!mounted || _signedInUid != owner) return;
+        if (!mounted || !mine()) return;
         if (signed == null && _svc.lastError != null && !widget.url.contains('://')) {
           // A stored path is not a URL: unsigned, there is nothing to play.
           // (The service has recorded why.)
@@ -436,13 +519,17 @@ class _CoachVoicePlayerState extends State<CoachVoicePlayer> {
       } else {
         await _player.resume();
       }
-      if (!mounted || _failure != null) return;
-      setState(() => _playing = true);
+      if (!mounted || !mine() || _playFailed) return;
+      setState(() { _playing = true; _paused = false; });
     } catch (e, st) {
       // P0-FL-59d · swallowed: a note that would not play did nothing.
-      _failed(e, st);
+      if (run == _run) {
+        _failed(e, st);
+      } else {
+        reportError('CoachVoicePlayer._toggle', e, st); // not this account's
+      }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted && run == _run) setState(() => _busy = false);
     }
   }
 
@@ -450,7 +537,7 @@ class _CoachVoicePlayerState extends State<CoachVoicePlayer> {
 
   @override
   Widget build(BuildContext context) {
-    final name = widget.coachName != null ? 'voice note from ${widget.coachName}' : 'coach voice note';
+    final name = widget.coachName != null ? 'Listen to ${widget.coachName}' : 'Coach voice note';
     final large = _largeText(context);
     final time = Text(_fmt(_total), style: const TextStyle(color: _muted, fontSize: 11));
     return _withFailure(Semantics(
@@ -458,9 +545,9 @@ class _CoachVoicePlayerState extends State<CoachVoicePlayer> {
       button: true,
       enabled: !_busy,
       liveRegion: _used,
-      label: '${_playing ? 'Pause' : 'Play'} $name'
+      label: '$name: ${_playing ? 'pause' : 'play'}'
           '${_total == Duration.zero ? '' : ', ${_total.inSeconds} seconds'}',
-      value: _playing ? 'Playing' : _used ? 'Paused' : null,
+      value: _playing ? 'Playing' : _busy ? 'Loading' : _paused ? 'Paused' : null,
       onTap: _busy ? null : _toggle,
       excludeSemantics: true,
       child: GestureDetector(
@@ -474,7 +561,7 @@ class _CoachVoicePlayerState extends State<CoachVoicePlayer> {
           Icon(_playing ? Icons.pause_rounded : Icons.play_arrow_rounded, color: _brand, size: 22),
           const SizedBox(width: 8),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(widget.coachName != null ? 'Listen to ${widget.coachName}' : 'Coach voice note',
+            Text(name,
                 style: const TextStyle(color: _text, fontSize: 12.5, fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
             SizedBox(height: 20, child: Row(

@@ -25,8 +25,9 @@ import '../support/two_member_postgrest.dart';
 // exercise_database/presentation/widgets/coach_voice.dart`; only the controls
 // pass.
 
-const _idle = 'Record a voice note, up to 30 seconds';
-const _stopLabel = 'Recording. Stop and send voice note';
+// Each starts with the words on the bar (round 2, UX-3).
+const _idle = 'Hold to record a voice note, up to 30 seconds. Double-tap to start or stop';
+const _stopLabel = 'Recording… Double-tap to stop and send';
 
 void main() {
   final server = CoachToolsServer();
@@ -156,6 +157,122 @@ void main() {
       expect(server.writes, isEmpty);
       expect(recorded, 0);
       await pumpUntil(t, () => audio.filesLeft.isEmpty, what: 'capture removed');
+      await unmountAll(t);
+    });
+
+    for (final drawn in [true, false]) {
+      testWidgets('sign-out while recording (${drawn ? 'drawn' : 'no frame'}): it '
+          'stops, is dropped and removed; B and then A again start clean', (t) async {
+        await recorder(t);
+        var g = await hold(t);
+        await hear(t);
+        drawn ? await signOutNow(t) : await switchNoFrame(t, null);
+        await pumpUntil(t, () => audio.filesLeft.isEmpty, what: 'capture removed');
+        expect(audio.calls, contains('stop'), reason: 'the microphone is closed');
+        await g.up();
+        await settleReal(t);
+        expect(isRecording(t), isFalse);
+        expect(server.writes, isEmpty);
+        expect(find.textContaining("Couldn't"), findsNothing);
+
+        // B records and sends B's own; A's never goes out.
+        await switchTo(t, memberB);
+        await t.pump(const Duration(seconds: 31)); // A's 30 s limit
+        await settleReal(t);
+        expect(server.writes, isEmpty);
+        g = await hold(t);
+        await hear(t);
+        await g.up();
+        await pumpUntil(t, () => recorded == 1, what: 'sent');
+        await idle(t);
+        expect(server.writes.map((s) => s.who).toSet(), {memberB});
+        expect(server.writes.first.path, contains('voice/$memberB/'));
+
+        // The same coach back: at rest, and theirs to use.
+        await signOutNow(t);
+        await switchTo(t, memberA);
+        server.log.clear();
+        expect(find.text('Hold to record a voice note'), findsOneWidget);
+        g = await hold(t);
+        await hear(t);
+        await g.up();
+        await pumpUntil(t, () => recorded == 2, what: 'sent');
+        await idle(t);
+        expect(server.writes.map((s) => s.who).toSet(), {memberA});
+        expect(audio.filesLeft, isEmpty);
+        expect(reported, isEmpty);
+        await unmountAll(t);
+      });
+    }
+
+    testWidgets('A, out, and A back while recording: the old capture is not sent',
+        (t) async {
+      await recorder(t);
+      final g = await hold(t);
+      await hear(t);
+      await switchNoFrame(t, null);
+      await switchNoFrame(t, memberA);
+      await g.up();
+      await settleReal(t);
+      expect(server.writes, isEmpty, reason: 'it was dropped when they left');
+      expect(isRecording(t), isFalse);
+      await pumpUntil(t, () => audio.filesLeft.isEmpty, what: 'capture removed');
+      await unmountAll(t);
+    });
+
+    testWidgets("A's stop that fails late does not remove what B is recording",
+        (t) async {
+      await recorder(t);
+      var g = await hold(t);
+      await hear(t);
+      audio.stopGate = Completer<void>();
+      audio.stopFails = 'x';
+      await g.up();
+      await settleReal(t);
+      await switchTo(t, memberB);
+      g = await hold(t, runs: false);
+      audio.stopGate!.complete();
+      audio.stopGate = null;
+      await settleReal(t);
+      audio.stopFails = null;
+      await pumpUntil(t, () => isRecording(t), what: "B's recording");
+      expect(audio.filesLeft, hasLength(1), reason: "B's capture was deleted");
+      await hear(t);
+      await g.up();
+      await pumpUntil(t, () => recorded == 1, what: 'sent');
+      expect(server.writes.map((s) => s.who).toSet(), {memberB});
+      await unmountAll(t);
+    });
+
+    testWidgets('a note that was sent is announced, once; one that was not, never',
+        (t) async {
+      Iterable<String> said() => t.takeAnnouncements().map((a) => a.message);
+      await recorder(t);
+      said();
+      var g = await hold(t);
+      await hear(t);
+      await g.up();
+      await pumpUntil(t, () => recorded == 1, what: 'sent');
+      await idle(t);
+      expect(said(), ['Voice note sent'], reason: 'the bar only went back to rest');
+      server.failing = (s) => s.table == 'coach_exercise_media';
+      g = await hold(t);
+      await hear(t);
+      await g.up();
+      await idle(t);
+      expect(said(), isEmpty, reason: 'it was not sent');
+      server.failing = (_) => false;
+      final set = server.hold((s) => s.table == 'coach_exercise_media' && s.who == memberA);
+      final before = server.to('coach_exercise_media').length;
+      g = await hold(t);
+      await hear(t);
+      await g.up();
+      await pumpUntil(t, () => server.to('coach_exercise_media').length > before, what: 'set');
+      await switchNoFrame(t, memberB);
+      set.complete();
+      await settleReal(t);
+      expect(said(), isEmpty, reason: "A's note is not announced to B");
+      expect(recorded, 1);
       await unmountAll(t);
     });
 
@@ -351,7 +468,7 @@ void main() {
       final upload = server.hold((s) => s.path.startsWith('/storage/v1/'));
       t.semantics.tap(find.semantics.byLabel(_stopLabel));
       await pumpUntil(t, () => server.writes.isNotEmpty, what: 'the upload');
-      d = t.getSemantics(find.bySemanticsLabel('Sending voice note')).getSemanticsData();
+      d = t.getSemantics(find.bySemanticsLabel('Sending… voice note')).getSemanticsData();
       expect(d.hasAction(SemanticsAction.tap), isFalse);
       upload.complete();
       await pumpUntil(t, () => recorded == 1, what: 'sent');
@@ -385,8 +502,8 @@ void main() {
     testWidgets('plays and pauses by name; the state is announced', (t) async {
       final h = t.ensureSemantics();
       await player(t);
-      const play = 'Play voice note from Coach Ana, 12 seconds';
-      const pause = 'Pause voice note from Coach Ana, 12 seconds';
+      const play = 'Listen to Coach Ana: play, 12 seconds';
+      const pause = 'Listen to Coach Ana: pause, 12 seconds';
       expectNamedButton(t, play);
       t.semantics.tap(find.semantics.byLabel(play));
       await pumpUntil(t, () => playing(t), what: 'playing');
@@ -406,7 +523,7 @@ void main() {
     testWidgets("the coach's own note, of unknown length, is named", (t) async {
       final h = t.ensureSemantics();
       await player(t, name: null, ms: null);
-      expectNamedButton(t, 'Play coach voice note');
+      expectNamedButton(t, 'Coach voice note: play');
       h.dispose();
       await unmountAll(t);
     });
@@ -441,15 +558,191 @@ void main() {
       await unmountAll(t);
     });
 
-    testWidgets('will not pause: said and recorded', (t) async {
+    const pauseFailed = "Couldn't pause this voice note — try again in a moment. "
+        'If it keeps happening, contact support.';
+
+    /// What is announced: the button's value ('' = nothing).
+    String state(WidgetTester t) => t
+        .getSemantics(find.bySemanticsLabel(RegExp('^Listen to Coach Ana: ')))
+        .getSemanticsData()
+        .value;
+
+    testWidgets('will not pause: said and recorded; it is still Playing, and the '
+        'next tap pauses', (t) async {
+      final h = t.ensureSemantics();
       await player(t);
+      audio.position = 6000;
       await t.tap(control);
       await pumpUntil(t, () => playing(t), what: 'playing');
       audio.pauseFails = 'x';
       await t.tap(control);
-      await pumpUntil(t, () => find.text(playFailed).evaluate().isNotEmpty, what: 'said');
+      await pumpUntil(t, () => find.textContaining("Couldn't").evaluate().isNotEmpty, what: 'said');
+      expect(find.text(pauseFailed), findsOneWidget, reason: 'it did play');
+      expect(playing(t), isTrue, reason: 'THE defect: shown as paused while it played on');
+      expect(state(t), 'Playing');
       expect(origins(), ['CoachVoicePlayer._toggle']);
+      audio.pauseFails = null;
+      await t.tap(control);
+      await pumpUntil(t, () => !playing(t), what: 'paused');
+      expect(state(t), 'Paused');
+      expect(find.text(pauseFailed), findsNothing);
+      expect(audio.calls.where((c) => c == 'pause'), hasLength(2));
+      expect(origins(), hasLength(1));
+      h.dispose();
       await unmountAll(t);
+    });
+
+    testWidgets('stops part-way: at rest, and Play loads it again from a new link',
+        (t) async {
+      final h = t.ensureSemantics();
+      await player(t);
+      audio.position = 6000;
+      await t.tap(control);
+      await pumpUntil(t, () => playing(t), what: 'playing');
+      for (var i = 0; i < 4; i++) {
+        await t.pump(const Duration(milliseconds: 100)); // half-way through
+        await settleReal(t, rounds: 1);
+      }
+      audio.streamError();
+      await pumpUntil(t, () => find.text(playFailed).evaluate().isNotEmpty, what: 'said');
+      await settleReal(t); // a position that lands late is not a place to resume
+      expect(playing(t), isFalse);
+      expect(state(t), '', reason: 'it is not "Paused"');
+      await t.tap(control);
+      await pumpUntil(t, () => playing(t), what: 'playing');
+      expect(audio.playing, hasLength(2),
+          reason: 'THE defect: "Playing" a source that failed, with no sound');
+      expect(server.log.where((s) => s.path.contains('/object/sign/')), hasLength(2));
+      expect(state(t), 'Playing');
+      expect(find.text(playFailed), findsNothing);
+      // A second, different failure is recorded too.
+      audio.streamError();
+      await pumpUntil(t, () => find.text(playFailed).evaluate().isNotEmpty, what: 'said');
+      expect(origins(), ['CoachVoicePlayer._toggle', 'CoachVoicePlayer._toggle']);
+      h.dispose();
+      await unmountAll(t);
+    });
+
+    testWidgets('control: paused half-way, it resumes the same source', (t) async {
+      final h = t.ensureSemantics();
+      await player(t);
+      audio.position = 6000;
+      await t.tap(control);
+      await pumpUntil(t, () => playing(t), what: 'playing');
+      for (var i = 0; i < 4; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+        await settleReal(t, rounds: 1);
+      }
+      await t.tap(control);
+      await pumpUntil(t, () => !playing(t), what: 'paused');
+      expect(state(t), 'Paused');
+      await t.tap(control);
+      await pumpUntil(t, () => playing(t), what: 'playing');
+      expect(audio.playing, hasLength(1));
+      h.dispose();
+      await unmountAll(t);
+    });
+
+    testWidgets('never "Paused" while it loads or after a first play that failed',
+        (t) async {
+      final h = t.ensureSemantics();
+      await player(t);
+      expect(state(t), '');
+      final sign = server.hold((s) => s.path.contains('/object/sign/'));
+      server.failing = (s) => s.path.contains('/object/sign/');
+      await t.tap(control);
+      await settleReal(t);
+      expect(state(t), 'Loading', reason: 'THE defect: announced "Paused"');
+      sign.complete();
+      await settleReal(t);
+      expect(find.text(playFailed), findsOneWidget, reason: 'premise');
+      expect(state(t), '', reason: 'nothing was ever paused');
+      // Played to its end, it is at rest too.
+      server.failing = (_) => false;
+      await t.tap(control);
+      await pumpUntil(t, () => playing(t), what: 'playing');
+      audio.event({'event': 'audio.onComplete'});
+      await pumpUntil(t, () => !playing(t), what: 'ended');
+      expect(state(t), '');
+      h.dispose();
+      await unmountAll(t);
+    });
+
+    group('goes with its account', () {
+      for (final to in [memberB, null]) {
+        final who = to == null ? 'signed out' : 'A→B';
+        testWidgets("$who, nothing drawn: A's note stops; the next tap plays nothing",
+            (t) async {
+          await player(t);
+          await t.tap(control);
+          await pumpUntil(t, () => playing(t), what: 'playing');
+          audio.calls.clear();
+          final tap = t.widget<GestureDetector>(
+              find.descendant(of: control, matching: find.byType(GestureDetector)).first).onTap!;
+          await switchNoFrame(t, to);
+          expect(audio.calls, contains('release'),
+              reason: 'THE defect: it played on in the next session');
+          final asked = server.log.length;
+          tap();
+          await settleNoFrame(t);
+          expect(server.log.length, asked, reason: "A's note is not signed for them");
+          expect(audio.calls, isNot(contains('resume')));
+          expect(origins(), ['CoachVoicePlayer._toggle']);
+          expect('${reported.single.error}', contains('signed-in account changed'));
+          await t.pump();
+          expect(playing(t), isFalse);
+          expect(find.textContaining("Couldn't"), findsNothing);
+          // A again: at rest, and it plays.
+          await switchTo(t, memberA);
+          expect(playing(t), isFalse);
+          await t.tap(control);
+          await pumpUntil(t, () => playing(t), what: 'playing');
+          await unmountAll(t);
+        });
+
+        testWidgets('$who while it loads: it does not start', (t) async {
+          await player(t);
+          audio.playGate = Completer<void>();
+          await t.tap(control);
+          await pumpUntil(t, () => audio.calls.contains('setSourceUrl'), what: 'loading');
+          await switchNoFrame(t, to);
+          audio.playGate!.complete();
+          await settleNoFrame(t);
+          expect(audio.calls, isNot(contains('resume')));
+          await settleReal(t);
+          expect(playing(t), isFalse);
+          expect(find.textContaining("Couldn't"), findsNothing);
+          await unmountAll(t);
+        });
+      }
+
+      testWidgets("A's failure landing after B is recorded, not said", (t) async {
+        await player(t);
+        await t.tap(control);
+        await pumpUntil(t, () => playing(t), what: 'playing');
+        final b = t.runAsync(() => signInAs(memberB));
+        audio.streamError();
+        await b;
+        await settleReal(t);
+        expect(find.textContaining("Couldn't"), findsNothing);
+        expect(origins(), ['CoachVoicePlayer._toggle']);
+        await unmountAll(t);
+      });
+
+      testWidgets('control: a token refresh plays on', (t) async {
+        await player(t);
+        await t.tap(control);
+        await pumpUntil(t, () => playing(t), what: 'playing');
+        audio.calls.clear();
+        await refreshToken(t);
+        expect(playing(t), isTrue);
+        expect(audio.calls, isNot(contains('release')));
+        expect(audio.calls, isNot(contains('stop')));
+        await t.tap(control);
+        await pumpUntil(t, () => !playing(t), what: 'paused');
+        expect(reported, isEmpty);
+        await unmountAll(t);
+      });
     });
 
     for (final net in [false, true]) {
