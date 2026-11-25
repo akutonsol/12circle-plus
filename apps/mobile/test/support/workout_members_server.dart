@@ -21,6 +21,10 @@ enum Outcome {
 
   /// Made, and then the connection drops: the caller sees a network error.
   lost,
+
+  /// As the table would — but made only once its hold is released, so it
+  /// reaches the table after requests sent later.
+  overtaken,
 }
 
 /// One request's answer, used once: [outcome], after [until] completes.
@@ -137,7 +141,8 @@ class WorkoutMembersServer extends http.BaseClient {
     final at = script.indexWhere((s) => s.where(ask));
     final scripted = at < 0 ? null : script.removeAt(at);
     final failing = fails.contains(key) || scripted?.outcome == Outcome.refused;
-    final answer = failing
+    final late = scripted?.outcome == Outcome.overtaken;
+    var answer = failing || late
         ? null
         : scripted?.outcome == Outcome.matchesNothing
             ? _json(const <Object?>[], 200, request)
@@ -146,6 +151,7 @@ class WorkoutMembersServer extends http.BaseClient {
     if (hold != null) await hold.future;
     if (holdWhere?.call(ask) ?? false) await heldByWhere!.future;
     await scripted?.until?.future;
+    if (late) answer = _answer(request, table, who, body);
     if (failing) return _json({'message': 'refused SECRET', 'code': 'XX000'}, 500, request);
     if (scripted?.outcome == Outcome.lost) {
       // Made — and the connection dropped before the answer came back.

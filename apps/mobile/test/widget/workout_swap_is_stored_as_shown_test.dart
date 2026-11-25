@@ -179,7 +179,7 @@ void main() {
       final first = Completer<void>();
       final second = Completer<void>();
       scripted(Outcome.refused, first);
-      scripted(Outcome.ok, second);
+      scripted(Outcome.overtaken, second);
       final y1 = await swap(t, 0);
       await settle(t, 3);
       final y2 = await swap(t, 1);
@@ -356,6 +356,20 @@ void main() {
       expect(find.text('Swapped to $y'), findsOneWidget);
       await restore(t);
       expect(nameAt(0), y, reason: 'the reload brought back the replaced exercise');
+      await close(t);
+    });
+
+    testWidgets('no session could be opened: kept, and not called saved', (t) async {
+      server.fails.add('POST workout_sessions:$memberA');
+      c.read(selectedWorkoutProvider.notifier).state = _aWorkout;
+      await mount(t);
+      await t.tap(find.textContaining('Warmed Up'));
+      await settle(t, 50);
+      final y = await swap(t);
+      await settle(t, 6);
+      expect(nameAt(0), y);
+      expect(find.text('Swapped to $y — but the change could not be saved.'), findsOneWidget);
+      expect(find.text('Swapped to $y'), findsNothing);
       await close(t);
     });
 
