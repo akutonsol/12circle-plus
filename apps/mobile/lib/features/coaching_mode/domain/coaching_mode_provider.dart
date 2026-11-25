@@ -120,6 +120,13 @@ class CoachingModeNotifier extends StateNotifier<AsyncValue<CoachingMode>> {
     }
     // Replaced meanwhile: its successor reads its own member's everything.
     if (!mounted) return;
+    // …or about to be: re-read now, they would be read before the change of
+    // account has reached them.
+    if (!_isOwnerSignedIn) {
+      reportError('CoachingModeNotifier.setMode.identity',
+          StateError('re-reads: the signed-in account changed'));
+      return;
+    }
 
     // ── Single point of propagation ──────────────────────────────────────────
     // Every mode-derived view must reconverge to DB truth, not just Home (which

@@ -14,6 +14,7 @@
 // so do "a second tap" and "A's reaction is stored after B signed in" (they
 // guard what is already right).
 import 'dart:async';
+import 'dart:ui' as ui show Tristate;
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/community/data/live_community_service.dart';
@@ -296,6 +297,94 @@ void main() {
       await close(t);
     });
 
+    testWidgets('a second post saved meanwhile keeps the draft of the first, '
+        'which failed', (t) async {
+      await open(t);
+      await writePost(t);
+      const key = 'POST community_posts:$memberA';
+      final first = server.holds[key] = Completer();
+      await t.tap(submit());
+      await settle(t, 2);
+      await t.tap(find.text(postCancelLabel));
+      await settle(t);
+      server.holds.remove(key);
+      await t.tap(find.text('Post'));
+      await settle(t);
+      server.fails.add(key);
+      first.complete();
+      await settle(t);
+      server.fails.clear();
+      await t.enterText(
+          find.descendant(
+              of: find.byType(CreatePostSheet),
+              matching: find.byType(TextField)),
+          'Second post');
+      await t.pump();
+      await t.tap(submit());
+      await settle(t);
+      expect(server.writes('community_posts').last.row['content'], 'Second post',
+          reason: 'premise');
+      expect(find.byType(CreatePostSheet), findsNothing, reason: 'premise');
+      await t.pump(const Duration(seconds: 6)); // the first one's notice goes
+      await settle(t);
+      await t.tap(find.text('Post'));
+      await settle(t);
+      expect(find.text(_draft), findsOneWidget);
+      // …and once IT is posted it is gone (from the sheet; it is in the feed).
+      await t.tap(submit());
+      await settle(t);
+      await t.tap(find.text('Post'));
+      await settle(t);
+      expect(
+          find.descendant(
+              of: find.byType(CreatePostSheet), matching: find.text(_draft)),
+          findsNothing);
+      await close(t);
+    });
+
+    testWidgets('while it is out the button says so, disabled, and is still the '
+        'button; 320 wide at 3x text it fits', (t) async {
+      final semantics = t.ensureSemantics();
+      await open(t);
+      await writePost(t);
+      expect(find.bySemanticsLabel('Posting'), findsNothing);
+      final hold = server.holds['POST community_posts:$memberA'] = Completer();
+      await t.tap(submit());
+      await settle(t, 2);
+      final button = t.getSemantics(submit()).getSemanticsData();
+      expect(button.label, 'Posting');
+      expect(button.flagsCollection.isButton, isTrue);
+      expect(button.flagsCollection.isEnabled, ui.Tristate.isFalse);
+      expect(button.flagsCollection.isLiveRegion, isTrue,
+          reason: 'said when it starts');
+      expect(
+          find.descendant(
+              of: submit(), matching: find.byType(CircularProgressIndicator)),
+          findsOneWidget);
+      await t.binding.setSurfaceSize(const Size(320, 900));
+      t.platformDispatcher.textScaleFactorTestValue = 3;
+      addTearDown(t.platformDispatcher.clearTextScaleFactorTestValue);
+      final previous = FlutterError.onError;
+      final inButton = <String>[];
+      FlutterError.onError = (d) {
+        if (d.exceptionAsString().contains('overflowed')) {
+          if ('${d.informationCollector?.call()}'
+              .contains('create_post_sheet')) {
+            inButton.add(d.exceptionAsString());
+          }
+          return;
+        }
+        previous?.call(d);
+      };
+      await settle(t, 2);
+      FlutterError.onError = previous;
+      expect(inButton.where((e) => e.contains('right')), isEmpty);
+      hold.complete();
+      await settle(t);
+      semantics.dispose();
+      await close(t);
+    });
+
     testWidgets('a second tap while it is out sends nothing more', (t) async {
       await open(t);
       await writePost(t);
@@ -434,6 +523,55 @@ void main() {
       expect(asB(), isEmpty);
       expect(origins(), contains('community.addComment.identity'));
       expect(haptics, isNot(contains(commentDone)));
+      await close(t);
+    });
+
+    testWidgets("A's comment is stored after B signed in, no frame: the author "
+        'is not looked up, or notified, as B', (t) async {
+      await open(t);
+      await write(t);
+      final hold = server.holds['POST post_comments:$memberA'] = Completer();
+      await t.tap(find.byIcon(Icons.send));
+      await noFrame(t);
+      expect(server.writes('post_comments'), hasLength(1), reason: 'premise');
+      server.seen.clear();
+      await t.runAsync(() => switchAnd(memberB, hold.complete));
+      await noFrame(t);
+      expect(
+          server.seen.where((r) =>
+              r.target == 'community_posts' && r.query['select'] == 'user_id'),
+          isEmpty, reason: "A's post's author was looked up as B");
+      expect(server.writes('notifications'), isEmpty);
+      expect(origins(), contains('community.addComment.identity'));
+      await settle(t);
+      await close(t);
+    });
+
+    testWidgets("B opens the same post's comments: A's draft is not in the box",
+        (t) async {
+      await open(t);
+      await write(t);
+      await switchTo(t, memberB);
+      await settle(t);
+      await t.tap(find.text('Comment'));
+      await settle(t);
+      expect(t.widget<TextField>(find.byType(TextField)).controller!.text, '');
+      await close(t);
+    });
+
+    testWidgets('the same member types on while one is sent: what they typed '
+        'is kept', (t) async {
+      await open(t);
+      await write(t);
+      final hold = server.holds['POST post_comments:$memberA'] = Completer();
+      await t.tap(find.byIcon(Icons.send));
+      await settle(t, 2);
+      await t.enterText(find.byType(TextField), 'And another thing');
+      await t.pump();
+      hold.complete();
+      await settle(t);
+      expect(server.writes('post_comments').single.row['content'], _comment);
+      expect(find.text('And another thing'), findsOneWidget);
       await close(t);
     });
 

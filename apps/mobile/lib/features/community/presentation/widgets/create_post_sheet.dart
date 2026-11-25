@@ -221,7 +221,23 @@ class _CreatePostSheetState extends State<CreatePostSheet> {
             ],
             ElevatedButton(
               onPressed: _empty || _posting ? null : _submit,
-              child: const Text(postSubmitLabel),
+              child: !_posting
+                  ? const Text(postSubmitLabel)
+                  : Row(mainAxisSize: MainAxisSize.min, children: [
+                      Semantics(
+                        label: 'Posting',
+                        liveRegion: true,
+                        child: const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: AppColors.white),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Flexible(
+                          child: ExcludeSemantics(child: Text(postSubmitLabel))),
+                    ]),
             ),
           ],
         )),

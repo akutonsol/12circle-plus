@@ -679,6 +679,8 @@ class _CoachingModeRow extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final mode = ref.watch(coachingModeProvider);
+    // P0-FL-59e · whose mode that is: what it is keyed by, bound into the tap.
+    final owner = ref.watch(currentUserProvider.select((u) => u?.id));
 
     final modeColor = switch (mode) {
       CoachingMode.selfGuided  => _C.primary,
@@ -695,7 +697,7 @@ class _CoachingModeRow extends ConsumerWidget {
       iconColor: modeColor,
       title: 'Coaching Mode',
       trailing: GestureDetector(
-        onTap: () => _showCoachingModeSheet(context, ref, mode),
+        onTap: () => _showCoachingModeSheet(context, mode, owner),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -717,20 +719,28 @@ class _CoachingModeRow extends ConsumerWidget {
   }
 
   void _showCoachingModeSheet(
-      BuildContext context, WidgetRef ref, CoachingMode current) {
+      BuildContext context, CoachingMode current, String? owner) {
+    // A row still up from before a switch shows another member's mode.
+    if (Supabase.instance.client.auth.currentUser?.id != owner) {
+      reportError('CoachingModeRow.identity',
+          StateError('coaching mode: the signed-in account changed'));
+      return;
+    }
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => _CoachingModeSheet(current: current, ref: ref),
+      builder: (_) => _CoachingModeSheet(current: current, owner: owner),
     );
   }
 }
 
 class _CoachingModeSheet extends StatefulWidget {
   final CoachingMode current;
-  final WidgetRef ref;
-  const _CoachingModeSheet({required this.current, required this.ref});
+
+  /// The member whose mode [current] is.
+  final String? owner;
+  const _CoachingModeSheet({required this.current, required this.owner});
   @override
   State<_CoachingModeSheet> createState() => _CoachingModeSheetState();
 }
@@ -739,9 +749,10 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
   late CoachingMode _selected;
   bool _saving = false;
 
-  /// P0-FL-59e · the member who opened this sheet. The mode picked here (and
-  /// the coaching it ends) is theirs; it closes with them.
-  final String? _owner = _signedIn;
+  /// P0-FL-59e · the member whose row opened this sheet, not whoever is signed
+  /// in when it is first built. The mode picked here (and the coaching it
+  /// ends) is theirs; it closes with them.
+  late final String? _owner = widget.owner;
   StreamSubscription<AuthState>? _authSub;
 
   /// The open "End coaching with …" dialog, which names this member's coach.
@@ -790,6 +801,8 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
   Future<void> _apply() async {
     if (!_stillOwner('coaching mode')) return;
     final messenger = ScaffoldMessenger.of(context);
+    // The lists re-read below outlive this sheet, and the page under it.
+    final container = ProviderScope.containerOf(context, listen: false);
 
     // Self/AI-Guided means no coach. If the client is leaving an active-coach
     // state for self/AI, they must end coaching first. (No prompt for a plain
@@ -799,7 +812,7 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
       // Self/AI-Guided with the coaching still active, never asked to end it.
       final List<Map<String, dynamic>> coaches;
       try {
-        coaches = await widget.ref.read(myCoachesProvider.future);
+        coaches = await container.read(myCoachesProvider.future);
       } catch (e) {
         reportError('CoachingModeSheet.apply.coaches', e);
         if (!mounted || !_stillOwner('coaching mode')) return;
@@ -834,9 +847,9 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
           reportError('CoachingModeSheet.apply.cancelCoach', e, st);
           if (!_stillOwner('end coaching')) return;
           // One of several may have ended: re-read even if the sheet is gone.
-          widget.ref.invalidate(myCoachesProvider);
-          widget.ref.invalidate(assignedCoachProvider);
-          widget.ref.invalidate(clientRelationshipProvider);
+          container.invalidate(myCoachesProvider);
+          container.invalidate(assignedCoachProvider);
+          container.invalidate(clientRelationshipProvider);
           if (!mounted) return;
           setState(() => _saving = false);
           messenger.showSnackBar(const SnackBar(
@@ -846,9 +859,9 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
         // Ended: the coach lists are re-read even if the sheet was swiped away
         // meanwhile (they are the page's, not the sheet's).
         if (!_stillOwner('coaching mode')) return;
-        widget.ref.invalidate(myCoachesProvider);
-        widget.ref.invalidate(assignedCoachProvider);
-        widget.ref.invalidate(clientRelationshipProvider);
+        container.invalidate(myCoachesProvider);
+        container.invalidate(assignedCoachProvider);
+        container.invalidate(clientRelationshipProvider);
         if (!mounted) return;
       }
     }
@@ -856,7 +869,7 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
     if (!mounted || !_stillOwner('coaching mode')) return;
     setState(() => _saving = true);
     try {
-      await widget.ref
+      await container
           .read(coachingModeNotifierProvider.notifier)
           .setMode(_selected);
     } catch (e, st) {
@@ -870,9 +883,9 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
     if (!mounted || !_stillOwner('coaching mode')) return;
     // Refresh coach-dependent views so a mode change is reflected immediately
     // (e.g. the profile's My Coach section), even if the prompt path didn't run.
-    widget.ref.invalidate(assignedCoachProvider);
-    widget.ref.invalidate(clientRelationshipProvider);
-    widget.ref.invalidate(myCoachesProvider);
+    container.invalidate(assignedCoachProvider);
+    container.invalidate(clientRelationshipProvider);
+    container.invalidate(myCoachesProvider);
     Navigator.pop(context);
     if (_selected == CoachingMode.coachGuided) {
       context.push('/coach-marketplace');
@@ -920,7 +933,11 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
 
   @override
   Widget build(BuildContext context) {
-    if (_signedIn != _owner) return const SizedBox.shrink();
+    if (_signedIn != _owner) {
+      // First built after the switch, it was not listening to hear of it.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _closeForOwner());
+      return const SizedBox.shrink();
+    }
     final bottom = MediaQuery.of(context).padding.bottom;
     return Container(
       padding: EdgeInsets.fromLTRB(20, 0, 20, bottom + 20),
