@@ -9,11 +9,10 @@ import '../data/notification_model.dart';
 
 final _svc = NotificationService();
 
-/// Who is signed in, BY ID (P0-FL-60c): a token refresh is the same member, and
-/// keeps their list, their count and their live feed.
-final _uid = currentUserProvider.select((u) => u?.id);
-
-// P0-FL-60c · whose a value is never follows from loading/data/error: riverpod
+// All of these follow who is signed in BY ID (P0-FL-60c): a token refresh is the
+// same member, and keeps their list, their count and their live feed.
+//
+// Whose a value is never follows from loading/data/error: riverpod
 // carries the last value through all three. The feed is kept per account; the
 // count remembers whose it was and is forgotten for anybody else.
 
@@ -24,7 +23,7 @@ final _feedOf =
 /// The signed-in member's live feed; nothing while nobody is signed in.
 final notificationsStreamProvider =
     Provider<AsyncValue<List<AppNotification>>>((ref) {
-  final uid = ref.watch(_uid);
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
   return uid == null ? const AsyncLoading() : ref.watch(_feedOf(uid));
 });
 
@@ -38,7 +37,7 @@ final _countOwner = Provider<_CountOwner>((ref) => _CountOwner());
 /// The signed-in member's unread count; null while it is not known (nobody is
 /// signed in, or their own count was never read).
 final unreadCountProvider = FutureProvider<int?>((ref) async {
-  final uid = ref.watch(_uid);
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
   // Re-fetches whenever the stream fires (via invalidation from notifier)
   ref.watch(notificationsStreamProvider);
   final last = ref.read(_countOwner);
@@ -172,7 +171,7 @@ final notificationsProvider =
       (ref) {
         // A new list for each account: the notifier holds one account's rows
         // and its stream, and outlived sign-out.
-        ref.watch(_uid);
+        ref.watch(currentUserProvider.select((u) => u?.id));
         return NotificationsNotifier();
       },
     );
