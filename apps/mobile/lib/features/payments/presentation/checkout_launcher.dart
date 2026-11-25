@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../data/payment_service.dart' show CheckoutRefused;
+import '../../../core/observability/app_failure.dart';
+import '../data/payment_service.dart'
+    show CheckoutRefused, signedInUid;
 import '../domain/payment_provider.dart';
 
 /// What a client is told when a checkout could not be started for a reason
@@ -15,7 +17,9 @@ const checkoutFailedMessage = 'Could not start checkout. Try again.';
 /// It is also the ONE place a failed start is reported, with ONE message: the
 /// server's refusal when the client already has what they are buying
 /// (create-checkout's 409 `already_subscribed` -- "try again" would never work),
-/// otherwise [checkoutFailedMessage]. Callers do not add their own.
+/// otherwise [checkoutFailedMessage]. Callers do not add their own. When the
+/// account that asked is gone, nothing is said: it is not the new one's action
+/// (P0-FL-60a).
 Future<bool> launchCheckout(
   BuildContext context,
   WidgetRef ref, {
@@ -24,6 +28,7 @@ Future<bool> launchCheckout(
   String? eventId,
   String? tier,
 }) async {
+  final owner = signedInUid();
   String problem;
   try {
     final ok = await ref.read(paymentServiceProvider).startCheckout(
@@ -33,12 +38,41 @@ Future<bool> launchCheckout(
     problem = checkoutFailedMessage;
   } on CheckoutRefused catch (e) {
     problem = e.message;
-  } catch (_) {
+  } catch (e, st) {
+    reportError('launchCheckout', e, st);
     problem = checkoutFailedMessage;
   }
+  // The service recorded it.
+  if (signedInUid() != owner) return false;
   if (context.mounted) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(problem), backgroundColor: const Color(0xFFFFB4AB)));
   }
   return false;
+}
+
+/// A dialog about one account's payment: it closes itself, unanswered, when
+/// that account is no longer the one signed in, and never draws for another
+/// (P0-FL-60a). The caller's check after the dialog still decides the action.
+class OwnedDialog extends ConsumerStatefulWidget {
+  const OwnedDialog({super.key, required this.child});
+  final Widget child;
+  @override
+  ConsumerState<OwnedDialog> createState() => _OwnedDialogState();
+}
+
+class _OwnedDialogState extends ConsumerState<OwnedDialog> {
+  late final String? _owner = ref.read(paymentAccountProvider);
+
+  @override
+  Widget build(BuildContext context) {
+    ref.listen<String?>(paymentAccountProvider, (_, uid) {
+      if (uid == _owner) return;
+      final route = ModalRoute.of(context);
+      if (route != null && route.isCurrent) Navigator.of(context).pop();
+    });
+    return ref.watch(paymentAccountProvider) == _owner
+        ? widget.child
+        : const SizedBox.shrink();
+  }
 }
