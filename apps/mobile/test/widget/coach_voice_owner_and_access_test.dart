@@ -55,15 +55,17 @@ void main() {
 
   Iterable<String> origins() => reported.map((f) => f.origin);
 
-  Future<void> mount(WidgetTester t, Widget child) async {
-    await t.runAsync(() => signInAs(memberA));
+  Future<void> mount(WidgetTester t, Widget child, {String uid = memberA}) async {
+    await t.runAsync(() => signInAs(uid));
     await t.pumpWidget(MaterialApp(home: Scaffold(
         body: SingleChildScrollView(child: child))));
     await settleReal(t);
   }
 
-  Future<void> recorder(WidgetTester t) => mount(t, CoachVoiceRecorder(
-      exerciseId: 'ex-1', resolveExpiry: () => null, onRecorded: () => recorded++));
+  Future<void> recorder(WidgetTester t, {String uid = memberA}) => mount(t,
+      CoachVoiceRecorder(
+          exerciseId: 'ex-1', resolveExpiry: () => null, onRecorded: () => recorded++),
+      uid: uid);
 
   Future<void> player(WidgetTester t, {String url = 'voice/$memberA/x.m4a',
           int? ms = 12000, String? name = 'Coach Ana'}) =>
@@ -162,7 +164,7 @@ void main() {
 
     for (final drawn in [true, false]) {
       testWidgets('sign-out while recording (${drawn ? 'drawn' : 'no frame'}): it '
-          'stops, is dropped and removed; B and then A again start clean', (t) async {
+          'stops, is dropped and removed; it stays A\'s, and B\'s own is B\'s', (t) async {
         await recorder(t);
         var g = await hold(t);
         await hear(t);
@@ -175,18 +177,23 @@ void main() {
         expect(server.writes, isEmpty);
         expect(find.textContaining("Couldn't"), findsNothing);
 
-        // B records and sends B's own; A's never goes out.
+        // B cannot record on A's recorder (round 3, R2-5); A's never goes out.
         await switchTo(t, memberB);
         await t.pump(const Duration(seconds: 31)); // A's 30 s limit
         await settleReal(t);
         expect(server.writes, isEmpty);
-        g = await hold(t);
+        expect(reported, isEmpty);
+        audio.calls.clear();
+        g = await hold(t, runs: false);
         await hear(t);
         await g.up();
-        await pumpUntil(t, () => recorded == 1, what: 'sent');
-        await idle(t);
-        expect(server.writes.map((s) => s.who).toSet(), {memberB});
-        expect(server.writes.first.path, contains('voice/$memberB/'));
+        await settleReal(t);
+        expect(audio.calls, isNot(contains('start')));
+        expect(server.writes, isEmpty);
+        expect(recorded, 0);
+        expect(origins(), ['CoachVoiceRecorder._start']);
+        expect(find.textContaining("Couldn't"), findsNothing);
+        reported.clear();
 
         // The same coach back: at rest, and theirs to use.
         await signOutNow(t);
@@ -196,14 +203,116 @@ void main() {
         g = await hold(t);
         await hear(t);
         await g.up();
-        await pumpUntil(t, () => recorded == 2, what: 'sent');
+        await pumpUntil(t, () => recorded == 1, what: 'sent');
         await idle(t);
         expect(server.writes.map((s) => s.who).toSet(), {memberA});
+        expect(audio.filesLeft, isEmpty);
+        expect(reported, isEmpty);
+
+        // B records and sends B's own, on the one B opens.
+        await unmountAll(t);
+        server.log.clear();
+        await recorder(t, uid: memberB);
+        g = await hold(t);
+        await hear(t);
+        await g.up();
+        await pumpUntil(t, () => recorded == 2, what: 'sent');
+        await idle(t);
+        expect(server.writes.map((s) => s.who).toSet(), {memberB});
+        expect(server.writes.first.path, contains('voice/$memberB/'));
         expect(audio.filesLeft, isEmpty);
         expect(reported, isEmpty);
         await unmountAll(t);
       });
     }
+
+    for (final way in ['hold', 'assistive tap']) {
+      testWidgets("no frame: B's $way on A's recorder records nothing (R2-5)", (t) async {
+        final h = t.ensureSemantics();
+        await recorder(t);
+        final start = way == 'hold'
+            ? () => t.widget<GestureDetector>(find.descendant(
+                    of: bar, matching: find.byType(GestureDetector)).first)
+                .onLongPressStart!(const LongPressStartDetails())
+            : t.widget<Semantics>(find.descendant(of: bar, matching: find.byWidgetPredicate(
+                (w) => w is Semantics && w.properties.label == _idle))).properties.onTap!;
+        await switchNoFrame(t, memberB);
+        audio.calls.clear();
+        start();
+        await settleNoFrame(t);
+        await hear(t);
+        expect(audio.calls, isEmpty,
+            reason: "B's microphone was opened by A's sheet");
+        await settleReal(t);
+        expect(isRecording(t), isFalse);
+        expect(origins(), ['CoachVoiceRecorder._start']);
+        expect(server.writes, isEmpty);
+        h.dispose();
+        await unmountAll(t);
+      });
+    }
+
+    testWidgets('A, B, and A back while permission is asked for: the microphone '
+        'is not opened', (t) async {
+      await recorder(t);
+      audio.permissionGate = Completer<void>();
+      final g = await hold(t, runs: false);
+      await switchNoFrame(t, memberB);
+      await switchNoFrame(t, memberA);
+      audio.permissionGate!.complete();
+      audio.permissionGate = null;
+      await settleNoFrame(t);
+      await settleReal(t);
+      expect(audio.calls, isNot(contains('start')));
+      expect(isRecording(t), isFalse);
+      expect(origins(), ['CoachVoiceRecorder._start']);
+      await g.up();
+      // Theirs to use again.
+      final g2 = await hold(t);
+      await g2.up();
+      await idle(t);
+      await unmountAll(t);
+    });
+
+    testWidgets("A, B, and A back while sending: the old send does not end the new "
+        "one's busy state", (t) async {
+      await recorder(t);
+      var g = await hold(t);
+      await hear(t);
+      final first = server.hold((s) => s.path.startsWith('/storage/v1/'));
+      await g.up();
+      await pumpUntil(t, () => server.writes.length == 1, what: 'the first upload');
+      await switchNoFrame(t, memberB);
+      await switchNoFrame(t, memberA);
+      await settleReal(t);
+      g = await hold(t);
+      await hear(t);
+      server.held.clear();
+      final second = server.hold((s) => s.path.startsWith('/storage/v1/'));
+      await g.up();
+      await pumpUntil(t, () => server.writes.length == 2, what: 'the second upload');
+      first.complete();
+      await settleReal(t);
+      expect(find.text('Sending…'), findsOneWidget);
+      second.complete();
+      await idle(t);
+      expect(server.writes.map((s) => s.who).toSet(), {memberA});
+      await unmountAll(t);
+    });
+
+    testWidgets('control: the same coach, a new token and no frame — a hold records',
+        (t) async {
+      await recorder(t);
+      await refreshNoFrame(t);
+      final g = await hold(t);
+      await hear(t);
+      await g.up();
+      await pumpUntil(t, () => recorded == 1, what: 'sent');
+      await idle(t);
+      expect(server.writes.map((s) => s.who).toSet(), {memberA});
+      expect(reported, isEmpty);
+      await unmountAll(t);
+    });
 
     testWidgets('A, out, and A back while recording: the old capture is not sent',
         (t) async {
@@ -221,8 +330,9 @@ void main() {
     });
 
     // (A control: `record` runs one call at a time, so with it A's late stop
-    // cannot meet B's file. The local copy of the path is for one that does.)
-    testWidgets("control: A's stop that fails late does not remove what B is recording",
+    // cannot meet the next file. The local copy of the path is for one that
+    // does. Round 3: the next recording is A's, back again.)
+    testWidgets("control: A's stop that fails late does not remove the next recording",
         (t) async {
       await recorder(t);
       var g = await hold(t);
@@ -232,17 +342,18 @@ void main() {
       await g.up();
       await settleReal(t);
       await switchTo(t, memberB);
+      await switchTo(t, memberA);
       g = await hold(t, runs: false);
       audio.stopGate!.complete();
       audio.stopGate = null;
       await settleReal(t);
       audio.stopFails = null;
-      await pumpUntil(t, () => isRecording(t), what: "B's recording");
-      expect(audio.filesLeft, hasLength(1), reason: "B's capture was deleted");
+      await pumpUntil(t, () => isRecording(t), what: 'the next recording');
+      expect(audio.filesLeft, hasLength(1), reason: 'the next capture was deleted');
       await hear(t);
       await g.up();
       await pumpUntil(t, () => recorded == 1, what: 'sent');
-      expect(server.writes.map((s) => s.who).toSet(), {memberB});
+      expect(server.writes.map((s) => s.who).toSet(), {memberA});
       await unmountAll(t);
     });
 

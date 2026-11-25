@@ -3,6 +3,7 @@ import 'package:circle_fitness/features/coach/presentation/coach_availability_sc
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 
 import '../support/coach_tools_server.dart';
 import '../support/two_member_postgrest.dart';
@@ -545,6 +546,141 @@ void main() {
       await remove(t);
       expect(find.text('No availability published'), findsOneWidget);
       expect(find.textContaining("Couldn't"), findsNothing);
+      await unmountAll(t);
+    });
+
+    final cue = find.byWidgetPredicate((w) =>
+        w is Semantics && w.properties.label == 'Refreshing your availability');
+
+    // Round 3 (UX-5). Fails on 911b117: no cue.
+    testWidgets('a refresh is said while it runs, and moves nothing', (t) async {
+      final h = t.ensureSemantics();
+      // (The first load is the spinner.)
+      final first = server.hold((s) => !s.isWrite);
+      await open(t);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(cue, findsNothing);
+      first.complete();
+      await settleReal(t);
+      expect(cue, findsNothing, reason: 'at rest');
+      List<Rect> places() => [
+            for (final f in [anas, anasSlot, anasSecond, find.text('YOUR AVAILABILITY'),
+              find.text('Add Slot')]) t.getRect(f)
+          ];
+      final before = places();
+
+      await t.tap(find.text('Add Slot').last);
+      await settleReal(t);
+      server.held.clear();
+      final again = server.hold((s) => !s.isWrite);
+      await t.tap(find.text('Publish Slot'));
+      await settleReal(t);
+      expect(find.text('Publish Slot'), findsNothing, reason: 'premise: saved');
+      expect(cue, findsOneWidget, reason: 'the new slot is on its way, unsaid');
+      expect(t.getSemantics(cue).getSemanticsData().flagsCollection.isLiveRegion, isTrue);
+      expect(places(), before, reason: '1x: nothing moved');
+      server.tables['coach_availability']!.add(slot(memberA, 'nutrition_review'));
+      again.complete();
+      await settleReal(t);
+      expect(cue, findsNothing);
+      expect(places(), before);
+      h.dispose();
+      await unmountAll(t);
+    });
+
+    testWidgets("the cue is the coach's whose list it is: not B's first load, nor a "
+        'failed refresh', (t) async {
+      final h = t.ensureSemantics();
+      await open(t);
+      final again = server.hold((s) => !s.isWrite);
+      await remove(t);
+      expect(cue, findsOneWidget, reason: 'premise');
+      await switchNoFrame(t, memberB);
+      await t.pump();
+      expect(cue, findsNothing);
+      nothingOfAs(t);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      again.complete();
+      await settleReal(t);
+      expect(bobs, findsOneWidget);
+      server.failing = (s) => !s.isWrite;
+      await remove(t);
+      expect(find.text("Couldn't load your availability"), findsOneWidget, reason: 'premise');
+      expect(cue, findsNothing);
+      server.held.clear();
+      final retry = server.hold((s) => !s.isWrite);
+      await t.tap(find.text('Try again'));
+      await settleReal(t);
+      expect(find.bySemanticsLabel('Retrying'), findsOneWidget);
+      expect(cue, findsNothing, reason: 'said once: by the failure');
+      retry.complete();
+      await settleReal(t);
+      h.dispose();
+      await unmountAll(t);
+    });
+
+    // Round 3 (R2-4). Something that hears of the switch before this page does
+    // (it subscribed first) sets off a load. Fails on 911b117: that load took
+    // the page over for B with A's list still on it, and the page's own answer
+    // to the switch was then "nothing to do".
+    for (final to in [memberB, null]) {
+      testWidgets('a load asked for before the page heard of the switch '
+          "(${to == null ? 'signed out' : 'A→B'}): A's list goes first", (t) async {
+        VoidCallback? tap;
+        var fired = 0;
+        final auth = Supabase.instance.client.auth;
+        final sub = auth.onAuthStateChange.listen((_) {
+          if (tap == null || auth.currentUser?.id == memberA) return;
+          fired++;
+          tap();
+        });
+        await open(t);
+        server.failing = (s) => !s.isWrite;
+        await remove(t);
+        expect(anas, findsOneWidget, reason: 'premise: kept over a failed refresh');
+        tap = tapOf(t, 'Try again');
+        server.failing = (s) => false;
+        final hold = server.hold((s) => s.who == memberB);
+        await switchNoFrame(t, to);
+        tap = null;
+        expect(fired, 1, reason: 'premise');
+        await t.pump();
+        nothingOfAs(t);
+        expect(anasSecond, findsNothing);
+        expect(find.byType(SnackBar), findsNothing);
+        hold.complete();
+        await settleReal(t);
+        nothingOfAs(t);
+        expect(bobs, to == null ? findsNothing : findsOneWidget);
+        await t.runAsync(sub.cancel);
+        await unmountAll(t);
+      });
+    }
+
+    testWidgets('control: a load asked for at a token refresh keeps the list', (t) async {
+      VoidCallback? tap;
+      var fired = 0;
+      final sub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+        if (tap == null) return;
+        fired++;
+        tap();
+      });
+      await open(t);
+      server.failing = (s) => !s.isWrite;
+      await remove(t);
+      tap = tapOf(t, 'Try again');
+      server.failing = (_) => false;
+      final hold = server.hold((s) => !s.isWrite);
+      await refreshNoFrame(t);
+      tap = null;
+      expect(fired, 1, reason: 'the event arrived');
+      await t.pump();
+      expect(anas, findsOneWidget);
+      hold.complete();
+      await settleReal(t);
+      expect(anas, findsOneWidget);
+      expect(find.textContaining("Couldn't"), findsNothing);
+      await t.runAsync(sub.cancel);
       await unmountAll(t);
     });
   });

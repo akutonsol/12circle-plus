@@ -179,9 +179,10 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
     }
   }
 
-  Future<void> _retry() async {
+  /// [owner] is the member the retry was drawn for.
+  Future<void> _retry(String? owner) async {
+    if (_uid != owner) return _followAccount(); // (that loads the new one's)
     if (_retrying) return;
-    final owner = _owner;
     setState(() => _retrying = true);
     await _loadConnected();
     if (mounted && _owner == owner) setState(() => _retrying = false);
@@ -244,6 +245,7 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
   Widget build(BuildContext context) {
     final top    = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
+    final owner = _owner; // whose state this frame draws
 
     return Scaffold(
       backgroundColor: _bg,
@@ -290,7 +292,7 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
                     error: _loadError,
                     detail: 'Connecting is paused until it loads.',
                     busy: _retrying,
-                    onRetry: _retry),
+                    onRetry: () => _retry(owner)),
                   const SizedBox(height: 20),
                 ],
 

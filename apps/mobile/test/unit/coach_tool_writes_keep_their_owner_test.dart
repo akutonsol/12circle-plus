@@ -8,6 +8,7 @@ import 'package:circle_fitness/features/exercise_database/data/models/exercise_d
 import 'package:circle_fitness/features/exercise_database/domain/exercise_database_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 
 import '../support/coach_tools_server.dart';
 import '../support/two_member_postgrest.dart';
@@ -364,6 +365,33 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(c.read(selectedExerciseDetailProvider), isNull);
     });
+    // Round 3 · asked for, or invalidated, while the change has not been
+    // flushed (no frame; this container never schedules one).
+    for (final invalidated in [false, true]) {
+      test("unflushed${invalidated ? ' and invalidated' : ''}: it is never A's for B",
+          () async {
+        final seen = <String?>[];
+        final auth = Supabase.instance.client.auth;
+        final sub = auth.onAuthStateChange.listen((_) {
+          if (auth.currentUser?.id != memberB) return;
+          // Riverpod's own listener on the stream came first; nothing is flushed.
+          if (invalidated) c.invalidate(selectedExerciseDetailProvider);
+          seen.add(c.read(selectedExerciseDetailProvider)?.id);
+        });
+        addTearDown(sub.cancel);
+        await Future<void>.delayed(Duration.zero);
+        c.listen(selectedExerciseDetailProvider, (_, v) => seen.add(v?.id));
+        await signInAs(memberB);
+        expect(seen, isNotEmpty, reason: 'premise');
+        expect(seen.whereType<String>(), isEmpty);
+        await Future<void>.delayed(Duration.zero);
+        expect(c.read(selectedExerciseDetailProvider), isNull);
+        // B's own stays through B's token refresh.
+        c.read(selectedExerciseDetailProvider.notifier).state = ex;
+        await refreshSession();
+        expect(c.read(selectedExerciseDetailProvider), same(ex));
+      });
+    }
     test('a token refresh keeps it (control)', () async {
       await refreshSession();
       await Future<void>.delayed(Duration.zero);

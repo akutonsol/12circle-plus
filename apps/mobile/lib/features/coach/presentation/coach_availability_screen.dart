@@ -117,6 +117,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
   @override
   void initState() {
     super.initState();
+    _owner = _uid;
     _load();
     // Same coach (a token refresh, the stream's replay) changes nothing.
     _authSub = _db.auth.onAuthStateChange.listen((_) => _followAccount(),
@@ -135,6 +136,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
   void _followAccount() {
     if (!mounted || _uid == _owner) return;
     ScaffoldMessenger.of(context)..clearSnackBars()..removeCurrentSnackBar();
+    _owner = _uid;
     _shown = false;
     _slots = [];
     _sessions = [];
@@ -155,10 +157,12 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
 
   Future<void> _load() async {
     final uid = _uid;
+    // Asked for by a list that is the last coach's: it goes first (a load that
+    // took the page over for the next coach drew that list as theirs).
+    if (uid != _owner) return _followAccount();
     final seq = ++_loadSeq;
     bool current() => seq == _loadSeq && _uid == uid;
     setState(() {
-      _owner = uid;
       _loading = uid != null;
       if (!_shown) _loadError = null; // (over a list: until this answers)
     });
@@ -390,8 +394,8 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
           final again = await _reopenSlot(slotId, owner);
           if (_uid != owner) return;
           if (again == null) {
-            messenger.showSnackBar(
-                const SnackBar(content: Text('Slot reopened.')));
+            _endWithAccount(messenger, owner, messenger.showSnackBar(
+                const SnackBar(content: Text('Slot reopened.'))));
           } else {
             _sayReopenFailed(messenger, slotId, again, owner);
           }
@@ -399,16 +403,28 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
         },
       ),
     ));
-    final sub = _db.auth.onAuthStateChange.listen((_) {
-      if (_uid == owner || !messenger.mounted) return;
-      messenger..clearSnackBars()..removeCurrentSnackBar();
-    }, onError: (Object e, StackTrace s) =>
-        reportError('CoachAvailabilityScreen._sayReopenFailed', e, s));
-    bar.closed.whenComplete(sub.cancel);
+    _endWithAccount(messenger, owner, bar);
   }
 
-  void _showAddSheet() {
-    final owner = _owner;
+  /// [bar] goes when [owner] does, whether or not this page is still open.
+  ///
+  /// It listens once: `clearSnackBars` drops a QUEUED message without ever
+  /// closing it, and the listener that message left behind took away the next
+  /// coach's own.
+  void _endWithAccount(ScaffoldMessengerState messenger, String? owner,
+      ScaffoldFeatureController<SnackBar, SnackBarClosedReason> bar) {
+    StreamSubscription<AuthState>? sub;
+    sub = _db.auth.onAuthStateChange.listen((_) {
+      if (_uid == owner) return;
+      sub?.cancel();
+      if (messenger.mounted) messenger..clearSnackBars()..removeCurrentSnackBar();
+    }, onError: (Object e, StackTrace s) =>
+        reportError('CoachAvailabilityScreen._endWithAccount', e, s));
+    bar.closed.whenComplete(() => sub?.cancel());
+  }
+
+  /// [owner] is the coach whose page the button was drawn on.
+  void _showAddSheet(String? owner) {
     if (owner == null || _accountChanged('_showAddSheet', 'Adding a slot', owner)) return;
     showModalBottomSheet(
       context: context,
@@ -428,7 +444,7 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
     // P0-FL-14 (UX-2) · while the load has failed the coach cannot see the
     // schedule, so adding a slot to it is disabled until it loads. P0-FL-58 r2 ·
     // the floating button too: it stayed live over a failed load.
-    final onAdd = _loadError != null || _owner == null ? null : _showAddSheet;
+    final onAdd = _loadError != null || owner == null ? null : () => _showAddSheet(owner);
     // Over a list kept after a failed refresh, too: nothing is removed from a
     // schedule that could not be read again.
     final held = _loadError != null;
@@ -468,7 +484,9 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
           : _loadError != null && !_shown
           ? _LoadFailed(message: "Couldn't load your availability — "
                 '${_nextStep(_loadError!)}', onRetry: _load)
-          : ListView(
+          // The same coach's refresh: their list stays, and it is said (and
+          // drawn over the list: nothing moves).
+          : Stack(children: [ListView(
               // P0-FL-58 · room under the last card: the Add Slot button
               // floats over the list and covered its delete button. (96 at 1×;
               // it grows with that button.)
@@ -529,6 +547,12 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
                 }),
               ],
             ),
+            if (_loading && !held) Positioned(top: 0, left: 0, right: 0,
+              child: Semantics(container: true, liveRegion: true,
+                label: 'Refreshing your availability', excludeSemantics: true,
+                child: const LinearProgressIndicator(
+                  minHeight: 3, color: _brand, backgroundColor: Colors.transparent))),
+            ]),
       // P0-FL-58 · 56px at least (it was 56px exactly: 3× text was cut), and its
       // label wraps inside the screen: 104 = margins, padding, icon and gap.
       floatingActionButton: Theme(

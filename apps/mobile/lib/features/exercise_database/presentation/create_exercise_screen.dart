@@ -628,9 +628,9 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   }
 
   /// Paste an exercise JSON (e.g. AI-generated) to prefill the form.
-  Future<void> _importJson() async {
+  Future<void> _importJson(int form) async {
+    if (_accountChanged(form, 'Importing an exercise')) return;
     final ctrl = TextEditingController();
-    final form = _form;
     final owner = _owner;
     final ok = await showDialog<bool>(
       context: context,
@@ -728,10 +728,10 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   /// unguarded, so a denied permission was an uncaught error and the tile did
   /// nothing. [what] is 'image' or 'video'; whatever was chosen before stays.
   Future<(XFile, Uint8List)?> _pickMedia(
-      String what, Future<XFile?> Function() open) async {
+      int form, String what, Future<XFile?> Function() open) async {
     if (_picking) return null;
+    if (_accountChanged(form, 'Choosing media')) return null;
     _picking = true;
-    final form = _form;
     try {
       final XFile? file;
       try {
@@ -764,10 +764,10 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     }
   }
 
-  Future<void> _pickImage() async {
-    final picked = await _pickMedia('image',
+  Future<void> _pickImage(int form) async {
+    final picked = await _pickMedia(form, 'image',
         () => _picker.pickImage(source: ImageSource.gallery, imageQuality: 80));
-    if (picked == null || !mounted) return;
+    if (picked == null || !mounted || !_still(form)) return;
     final (file, bytes) = picked;
     setState(() {
       _imageBytes = bytes;
@@ -780,13 +780,12 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     return (i >= 0 && i < name.length - 1) ? name.substring(i + 1).toLowerCase() : fallback;
   }
 
-  Future<void> _pickVideo(int index) async {
+  Future<void> _pickVideo(int form, _VideoEntry entry) async {
     // The entry, not its index: one removed while its file is read must not
     // hand the video to the next entry (or throw past the end of the list).
-    final entry = _videoEntries[index];
     final picked = await _pickMedia(
-        'video', () => _picker.pickVideo(source: ImageSource.gallery));
-    if (picked == null || !mounted) return;
+        form, 'video', () => _picker.pickVideo(source: ImageSource.gallery));
+    if (picked == null || !mounted || !_still(form)) return;
     final (file, bytes) = picked;
     setState(() {
       entry.bytes = bytes;
@@ -810,7 +809,10 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     };
   }
 
-  Future<void> _save() async {
+  /// [form] is the one the tapped Save was drawn on: its own coach's, at every
+  /// step below (P0-FL-59d).
+  Future<void> _save(int form) async {
+    if (_accountChanged(form, 'Saving an exercise')) return;
     // The SnackBar's "Save again" can be tapped while a save is running; the
     // Save button is disabled then, and so is this.
     if (_saving) return;
@@ -818,9 +820,6 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     if (_prefillPending) return;
     // P0-FL-56a · nor one whose picked file is still being read.
     if (_readingMedia) return;
-    // P0-FL-59d · the form's own coach, at every step below.
-    final form = _form;
-    if (_accountChanged(form, 'Saving an exercise')) return;
     if (!_formKey.currentState!.validate()) {
       _tabs.animateTo(0);
       return;
@@ -1036,7 +1035,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
             duration: const Duration(seconds: 10),
             // U3: retry from the message itself.
             action: SnackBarAction(label: 'Save again',
-                onPressed: () { if (mounted && form == _form) _save(); }),
+                onPressed: () => _saveAgain(form, owner, messenger)),
             content: Text(exerciseMediaFailureMessage(
               mediaOnly: mediaOnly,
               mediaWriteFailed: mediaWriteFailed,
@@ -1047,12 +1046,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
             ))));
         // P0-FL-59d · a message with an action waits on the app's messenger
         // when this screen is left: it watches the account itself.
-        final sub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
-          if (_uid == owner || !messenger.mounted) return;
-          messenger..clearSnackBars()..removeCurrentSnackBar();
-        }, onError: (Object e, StackTrace s) =>
-            reportError('CreateExerciseScreen._save.message', e, s));
-        bar.closed.whenComplete(sub.cancel);
+        _endWithAccount(messenger, owner, bar);
       } else if (reviewSubmitFailed) {
         // Saved, but not queued: say so rather than leave it invisible to reviewers.
         // U2: there is no "submit for review" control for a saved draft, so
@@ -1097,6 +1091,38 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
         duration: const Duration(seconds: 8),
         content: Text(text)));
     }
+  }
+
+  /// [bar] goes when [owner] does, whether or not this screen is still open.
+  ///
+  /// It listens once: `clearSnackBars` drops a QUEUED message without ever
+  /// closing it, and the listener that message left behind took away the next
+  /// coach's own.
+  void _endWithAccount(ScaffoldMessengerState messenger, String? owner,
+      ScaffoldFeatureController<SnackBar, SnackBarClosedReason> bar) {
+    StreamSubscription<AuthState>? sub;
+    sub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+      if (_uid == owner) return;
+      sub?.cancel();
+      if (messenger.mounted) messenger..clearSnackBars()..removeCurrentSnackBar();
+    }, onError: (Object e, StackTrace s) =>
+        reportError('CreateExerciseScreen._endWithAccount', e, s));
+    bar.closed.whenComplete(() => sub?.cancel());
+  }
+
+  /// The message outlives the form: once that is closed there is nothing left
+  /// to save again, and the tap did nothing and said nothing.
+  void _saveAgain(int form, String? owner, ScaffoldMessengerState messenger) {
+    if (_uid != owner) return; // another account's tap: nothing is said of it
+    if (mounted) {
+      if (form == _form) _save(form);
+      return;
+    }
+    _endWithAccount(messenger, owner, messenger.showSnackBar(SnackBar(
+        duration: const Duration(seconds: 8),
+        content: Semantics(liveRegion: true, child: const Text(
+            "Couldn't save again — this form was closed. Open the exercise from "
+            'your library to finish it.')))));
   }
 
   /// P0-FL-5 · the text of an error this app wrote on purpose, or null.
@@ -1178,6 +1204,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     ref.watch(currentUserProfileProvider);
     ref.watch(currentUserProvider);
     final locked = _isCoachMediaOnly();
+    final form = _form; // the form this frame draws
     return Scaffold(
       backgroundColor: _C.bg,
       body: Column(children: [
@@ -1195,7 +1222,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
               Expanded(child: Text(_editingId != null ? 'Edit Exercise' : 'Create Exercise',
                 style: const TextStyle(color: _C.wht, fontSize: 20, fontWeight: FontWeight.w700))),
               if (locked) const SizedBox() else GestureDetector(
-                onTap: _importJson,
+                onTap: () => _importJson(form),
                 child: Container(
                   margin: const EdgeInsets.only(right: 8),
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1216,7 +1243,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
                 enabled: !(_saving || _prefillPending || _readingMedia),
                 label: 'Save',
                 child: GestureDetector(
-                  onTap: _saving || _prefillPending || _readingMedia ? null : _save,
+                  onTap: _saving || _prefillPending || _readingMedia ? null : () => _save(form),
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     decoration: BoxDecoration(
@@ -1414,6 +1441,7 @@ class _MediaTabState extends State<_MediaTab> {
   @override
   Widget build(BuildContext context) {
     final s = widget.s;
+    final form = s._form; // the form this frame draws
     return ListView(padding: const EdgeInsets.all(20), children: [
       // Encourage adding real media.
       Container(
@@ -1437,7 +1465,7 @@ class _MediaTabState extends State<_MediaTab> {
       const Text('EXERCISE IMAGE', style: TextStyle(color: _C.mut, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
       const SizedBox(height: 10),
       GestureDetector(
-        onTap: () async { await s._pickImage(); if (mounted) setState(() {}); },
+        onTap: () async { await s._pickImage(form); if (mounted) setState(() {}); },
         child: Container(
           height: 160,
           decoration: BoxDecoration(
@@ -1480,9 +1508,7 @@ class _MediaTabState extends State<_MediaTab> {
             Text('No videos yet. Tap + to add.', style: TextStyle(color: _C.mut, fontSize: 12)),
           ]))
       else
-        ...s._videoEntries.asMap().entries.map((e) {
-          final i = e.key;
-          final entry = e.value;
+        ...s._videoEntries.map((entry) {
           return Container(
             margin: const EdgeInsets.only(bottom: 12),
             padding: const EdgeInsets.all(14),
@@ -1502,7 +1528,7 @@ class _MediaTabState extends State<_MediaTab> {
                     ))),
                 const Spacer(),
                 GestureDetector(
-                  onTap: () => setState(() => s._videoEntries.removeAt(i)),
+                  onTap: () => setState(() => s._videoEntries.remove(entry)),
                   child: const Icon(Icons.remove_circle_outline, color: _C.error, size: 18)),
               ]),
               const SizedBox(height: 10),
@@ -1518,7 +1544,7 @@ class _MediaTabState extends State<_MediaTab> {
               const SizedBox(height: 8),
               // File upload
               GestureDetector(
-                onTap: () async { await s._pickVideo(i); if (mounted) setState(() {}); },
+                onTap: () async { await s._pickVideo(form, entry); if (mounted) setState(() {}); },
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   decoration: BoxDecoration(

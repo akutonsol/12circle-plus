@@ -97,8 +97,13 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
   String? _path;
 
   /// P0-FL-59d · the coach this recorder was opened by: what it captures is
-  /// theirs, and is sent as theirs or not at all.
-  String? _owner;
+  /// theirs, and is sent as theirs or not at all. Nobody else records on it: it
+  /// is in their sheet, over the overlay they opened.
+  late final String? _owner;
+  bool _away = false;
+
+  /// Counts the owner's leavings: what was started before one is dropped.
+  int _run = 0;
   StreamSubscription<AuthState>? _authSub;
 
   @override
@@ -125,15 +130,17 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
     super.dispose();
   }
 
-  /// The previous coach's recording stops and is dropped; the next account
-  /// starts with nothing said.
+  /// The owner left: their recording stops and is dropped, nothing is said.
+  /// Back again, they start afresh.
   void _followAccount() {
-    final uid = _signedInUid;
-    if (!mounted || uid == _owner) return;
+    final away = _signedInUid != _owner;
+    if (!mounted || away == _away) return;
+    _away = away;
+    if (!away) return; // theirs again: at rest
+    _run++;
     final wasRecording = _recording;
     _timer?.cancel();
     setState(() {
-      _owner = uid;
       _recording = false;
       _busy = false;
       _failure = null;
@@ -143,7 +150,7 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
 
   /// Stops the capture running now and removes it. Nothing is sent.
   Future<void> _abandon({bool release = false}) async {
-    final capture = _path; // [_path] is the next coach's once they record
+    final capture = _path; // [_path] is the next recording's once it starts
     try {
       final path = await _rec.stop();
       await _discard(path ?? capture);
@@ -166,9 +173,10 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
     return true;
   }
 
-  /// True when [owner] is no longer signed in: recorded; nothing is sent.
-  bool _accountChanged(String method, String? owner) {
-    if (owner != null && _signedInUid == owner) return false;
+  /// True when the owner is not signed in, or has been away since [run]:
+  /// recorded; nothing is sent.
+  bool _accountChanged(String method, int run) {
+    if (_owner != null && _signedInUid == _owner && run == _run) return false;
     reportError('CoachVoiceRecorder.$method',
         StateError('Voice note: the signed-in account changed'));
     _followAccount();
@@ -182,13 +190,15 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
 
   Future<void> _start() async {
     if (_busy || _recording || _starting) return;
-    final owner = _owner;
-    if (_accountChanged('_start', owner)) return;
+    final run = _run;
+    if (_accountChanged('_start', run)) return;
+    // Still this attempt's: what went wrong with it may be said.
+    bool mine() => _signedInUid == _owner && run == _run;
     _starting = true;
     if (_failure != null) setState(() => _failure = null);
     try {
       if (!await _rec.hasPermission()) {
-        if (_signedInUid == owner) _say(micDeniedMessage);
+        if (mine()) _say(micDeniedMessage);
         return;
       }
       final String path;
@@ -200,14 +210,14 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
       }
       if (!mounted) return;
       // The microphone is not opened for the next account.
-      if (_accountChanged('_start', owner)) return;
+      if (_accountChanged('_start', run)) return;
       _path = path;
       await _rec.start(const RecordConfig(encoder: AudioEncoder.aacLc, numChannels: 1), path: path);
       _startedAt = DateTime.now();
       // `_start` awaits twice before this; the widget can be gone by now
       // (then `dispose` has stopped and removed the capture) — or the coach.
       if (!mounted) return;
-      if (_accountChanged('_start', owner)) return _abandon();
+      if (_accountChanged('_start', run)) return _abandon();
       setState(() { _recording = true; _elapsed = 0; });
       _timer = Timer.periodic(const Duration(seconds: 1), (t) {
         if (!mounted) return;
@@ -219,7 +229,7 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
       // start looked like a broken button.
       reportError('CoachVoiceRecorder._start', e, st);
       if (mounted) setState(() => _recording = false);
-      if (_signedInUid == owner) _say(couldntMessage('start recording', e));
+      if (mine()) _say(couldntMessage('start recording', e));
     } finally {
       _starting = false;
     }
@@ -228,7 +238,8 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
   Future<void> _stop() async {
     if (!_recording) return;
     final owner = _owner;
-    if (_accountChanged('_stop', owner)) return; // dropped, not sent
+    final run = _run;
+    if (_accountChanged('_stop', run)) return; // dropped, not sent
     final capture = _path;
     _timer?.cancel();
     setState(() { _recording = false; _busy = true; });
@@ -242,12 +253,12 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
         throw StateError('the recorder returned no recording');
       }
       if (path == null || durationMs < 800) { // discard taps
-        if (mounted && _owner == owner) setState(() => _busy = false);
+        if (mounted && run == _run) setState(() => _busy = false);
         return;
       }
       final bytes = await XFile(path).readAsBytes();
       // One coach across both steps: their path, their overlay row.
-      if (_accountChanged('_stop', owner)) return;
+      if (_accountChanged('_stop', run)) return;
       final url = await _svc.uploadCoachVoice(widget.exerciseId, bytes,
           expectedUid: owner);
       // `url == null` is how `uploadCoachVoice` reports failure — it catches
@@ -287,7 +298,7 @@ class _CoachVoiceRecorderState extends State<CoachVoiceRecorder> {
       path ??= capture;
       await _discard(path);
     }
-    if (mounted && _owner == owner) setState(() => _busy = false);
+    if (mounted && run == _run) setState(() => _busy = false);
   }
 
   /// Removes the local capture once it has been read.

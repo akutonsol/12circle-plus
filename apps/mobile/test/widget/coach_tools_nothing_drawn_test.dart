@@ -11,6 +11,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../support/coach_tools_server.dart';
 import '../support/fake_coach_audio.dart';
+import '../support/fake_image_picker.dart';
+import '../support/pump_until.dart';
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-59d round 2 · a switch while NOTHING IS DRAWN (a hidden tab).
@@ -28,16 +30,20 @@ import '../support/two_member_postgrest.dart';
 void main() {
   final server = CoachToolsServer();
   final audio = FakeCoachAudio();
+  final picker = FakeImagePicker();
   final reported = <AppFailure>[];
   late Routes routes;
 
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
     await initTwoMemberSupabase(server);
+    picker.install();
   });
+  tearDownAll(picker.dispose);
 
   setUp(() {
     server.reset();
+    picker.reset();
     reported.clear();
     routes = Routes();
     setFailureSink(reported.add);
@@ -544,6 +550,9 @@ void main() {
       await unmountAll(t);
     });
 
+    const closedForm = "Couldn't save again — this form was closed. Open the "
+        'exercise from your library to finish it.';
+
     Future<void> leaveWithSaveAgain(WidgetTester t) async {
       await open(t, const CreateExerciseScreen());
       await t.enterText(find.widgetWithText(TextFormField, 'Exercise Name *'), 'A squat');
@@ -581,6 +590,263 @@ void main() {
       await t.tap(find.text('Save again'));
       await settleReal(t);
       expect(server.writes.length, writes);
+      // Round 3 (UX-4): and that is said, in place of the message it was on.
+      expect(find.text(closedForm), findsOneWidget,
+          reason: 'the tap did nothing and said nothing');
+      expect(liveRegionOver(closedForm), findsWidgets);
+      expect(find.text('Save again'), findsNothing);
+      await unmountAll(t);
+    });
+
+    // Round 3. Fails on 911b117: nothing was said.
+    for (final to in [memberB, null]) {
+      testWidgets('why "Save again" could not is not said to the next account '
+          '(${to == null ? 'signed out' : 'A→B'})', (t) async {
+        await leaveWithSaveAgain(t);
+        final again = t.widget<SnackBarAction>(find.byType(SnackBarAction)).onPressed;
+        await t.tap(find.text('Save again'));
+        await settleReal(t);
+        expect(find.text(closedForm), findsOneWidget, reason: 'premise');
+        await switchNoFrame(t, to);
+        again(); // and a tap still on its way says nothing
+        await settleNoFrame(t);
+        await t.pump();
+        await settleReal(t);
+        expect(find.byType(SnackBar), findsNothing);
+        await unmountAll(t);
+      });
+    }
+
+    testWidgets('"Slot reopened." after the page is left goes with its account', (t) async {
+      await leaveWithReopen(t);
+      await t.tap(find.text('Reopen slot'));
+      await settleReal(t);
+      expect(find.text('Slot reopened.'), findsOneWidget, reason: 'premise');
+      await switchNoFrame(t, memberB);
+      await t.pump();
+      await settleReal(t, rounds: 2);
+      expect(find.text('Slot reopened.'), findsNothing,
+          reason: "A's action is told to the next account");
+      await unmountAll(t);
+    });
+
+    // Round 3 (R2-1). Fails on 911b117 with two messages: the second was queued,
+    // and dropping it left its listener behind.
+    for (final messages in [1, 2, 3]) {
+      testWidgets("$messages \"Reopen slot\" of A's, then B's own: B's token refresh "
+          'leaves it', (t) async {
+        Map<String, Object?> call(String coach, String name) => {
+              ...server.tables['coaching_calls']!.first,
+              'id': 'call-$name', 'coach_id': coach, 'availability_slot_id': 'slot-$name',
+            };
+        final own = [for (var i = 0; i < messages; i++) call(memberA, 'a$i')];
+        server.tables['coaching_calls'] = [...own, call(memberB, 'b')];
+        server.failing = (s) => s.table == 'coach_availability' && s.isWrite;
+        Future<void> cancelOne() async {
+          await t.tap(find.widgetWithText(TextButton, 'Cancel').first);
+          await settleReal(t);
+          await t.tap(find.text('Cancel session'));
+          await settleReal(t);
+        }
+
+        await open(t, const CoachAvailabilityScreen());
+        for (var i = 0; i < messages; i++) {
+          server.tables['coaching_calls']!.remove(own[i]); // (what its re-read answers)
+          await cancelOne();
+        }
+        Iterable<Sent> reopens() =>
+            server.to('coach_availability').where((s) => s.isWrite);
+        expect(reopens().length, messages, reason: 'premise');
+        expect(find.text('Reopen slot'), findsOneWidget, reason: 'premise: one shown');
+        // A's own token refresh keeps them, too.
+        await refreshNoFrame(t);
+        await t.pump();
+        expect(find.text('Reopen slot'), findsOneWidget);
+
+        await switchNoFrame(t, memberB);
+        await t.pump();
+        await settleReal(t);
+        expect(find.byType(SnackBar), findsNothing, reason: "A's are gone");
+        await cancelOne();
+        expect(find.text('Reopen slot'), findsOneWidget, reason: "premise: B's own");
+        await refreshNoFrame(t);
+        await t.pump();
+        await settleReal(t);
+        expect(find.text('Reopen slot'), findsOneWidget,
+            reason: "A's old listener took B's message: the slot stays booked");
+        server.failing = (_) => false;
+        await t.tap(find.text('Reopen slot'));
+        await settleReal(t);
+        expect(reopens().last.who, memberB);
+        expect(reopens().last.query, contains('id=eq.slot-b'));
+        await unmountAll(t);
+      });
+
+      testWidgets("$messages \"Save again\" of A's, then B's own: B's token refresh "
+          'leaves it', (t) async {
+        server.failing = (s) => s.table == 'sync_exercise_relations';
+        Future<void> saveOne() async {
+          await t.tap(find.text('Save'));
+          await settleReal(t);
+        }
+
+        final field = find.byType(TextFormField).first;
+        await open(t, const CreateExerciseScreen());
+        await t.enterText(field, 'A squat');
+        for (var i = 0; i < messages; i++) {
+          await saveOne();
+        }
+        expect(server.to('sync_exercise_relations').length, messages, reason: 'premise');
+        expect(find.text('Save again'), findsOneWidget, reason: 'premise: one shown');
+        await refreshNoFrame(t);
+        await t.pump();
+        expect(find.text('Save again'), findsOneWidget);
+
+        await switchNoFrame(t, memberB);
+        await t.pump();
+        await settleReal(t);
+        expect(find.byType(SnackBar), findsNothing, reason: "A's are gone");
+        await t.enterText(field, 'B squat');
+        await saveOne();
+        expect(find.text('Save again'), findsOneWidget, reason: "premise: B's own");
+        await refreshNoFrame(t);
+        await t.pump();
+        await settleReal(t);
+        expect(find.text('Save again'), findsOneWidget,
+            reason: "A's old listener took B's message");
+        server.failing = (_) => false;
+        await t.tap(find.text('Save again'));
+        await settleReal(t);
+        expect(server.to('sync_exercise_relations').last.who, memberB);
+        expect(find.text('Exercise Saved!'), findsOneWidget);
+        await unmountAll(t);
+      });
+    }
+  });
+
+  // Round 3 · the owner of an action is the account its button was drawn for.
+  // Fails on 911b117: each read the owner (or the form) at the tap.
+  group("a button drawn for A, tapped as B with nothing drawn since", () {
+    VoidCallback on(WidgetTester t, Finder label) => t
+        .widget<GestureDetector>(
+            find.ancestor(of: label, matching: find.byType(GestureDetector)).first)
+        .onTap!;
+
+    testWidgets('Save: refused and recorded, nothing is said on B\'s form', (t) async {
+      await open(t, const CreateExerciseScreen());
+      await t.enterText(find.byType(TextFormField).first, 'A squat');
+      final save = on(t, find.text('Save'));
+      await switchNoFrame(t, memberB);
+      save();
+      await settleNoFrame(t);
+      await settleReal(t);
+      expect(server.writes, isEmpty);
+      expect(find.text('Required'), findsNothing, reason: "B is told A's form is wrong");
+      expect(changed(), ['CreateExerciseScreen._save']);
+      pageIsThere();
+      await unmountAll(t);
+    });
+
+    testWidgets('Save, with A back again: the form it was drawn on is gone', (t) async {
+      await open(t, const CreateExerciseScreen());
+      await t.enterText(find.byType(TextFormField).first, 'A squat');
+      final save = on(t, find.text('Save'));
+      await switchNoFrame(t, memberB);
+      await switchNoFrame(t, memberA);
+      save();
+      await settleNoFrame(t);
+      await settleReal(t);
+      expect(server.writes, isEmpty);
+      expect(find.text('Required'), findsNothing);
+      expect(changed(), ['CreateExerciseScreen._save']);
+      await unmountAll(t);
+    });
+
+    testWidgets('Import JSON opens nothing', (t) async {
+      await open(t, const CreateExerciseScreen());
+      final import = on(t, find.text('Import JSON'));
+      final before = routes.pushed;
+      await switchNoFrame(t, memberB);
+      import();
+      await settleNoFrame(t);
+      await settleReal(t);
+      expect(routes.pushed, before);
+      expect(changed(), ['CreateExerciseScreen._save']);
+      pageIsThere();
+      await unmountAll(t);
+    });
+
+    testWidgets("the image and a video: the picker is not opened, and A's removed "
+        'video is not looked for in B\'s', (t) async {
+      await open(t, const CreateExerciseScreen());
+      await t.tap(find.text('MEDIA'));
+      await settleReal(t);
+      await t.tap(find.byIcon(Icons.add_circle_outline));
+      await settleReal(t);
+      final image = on(t, find.text('Tap to add image'));
+      final video = on(t, find.text('Upload from device'));
+      final remove = on(t, find.byIcon(Icons.remove_circle_outline));
+      await switchNoFrame(t, memberB);
+      image();
+      video();
+      remove();
+      await settleNoFrame(t);
+      await settleReal(t);
+      expect(t.takeException(), isNull);
+      expect(picker.calls, isEmpty);
+      expect(changed(), ['CreateExerciseScreen._save', 'CreateExerciseScreen._save']);
+      expect(find.text('Tap to add image'), findsOneWidget);
+      pageIsThere();
+      await unmountAll(t);
+    });
+
+    testWidgets('Add Slot opens nothing', (t) async {
+      await open(t, const CoachAvailabilityScreen());
+      final add = t.widget<FloatingActionButton>(find.byType(FloatingActionButton)).onPressed!;
+      final before = routes.pushed;
+      await switchNoFrame(t, memberB);
+      add();
+      await settleNoFrame(t);
+      await settleReal(t);
+      expect(routes.pushed, before);
+      expect(changed(), ['CoachAvailabilityScreen._showAddSheet']);
+      pageIsThere();
+      await unmountAll(t);
+    });
+
+    testWidgets('control: the same coach, a new token — each works', (t) async {
+      await open(t, const CoachAvailabilityScreen());
+      final add = t.widget<FloatingActionButton>(find.byType(FloatingActionButton)).onPressed!;
+      await refreshNoFrame(t);
+      add();
+      await settleReal(t);
+      expect(find.text('Add Availability Slot'), findsOneWidget);
+      await unmountAll(t);
+
+      routes.open.clear();
+      await open(t, const CreateExerciseScreen());
+      final import = on(t, find.text('Import JSON'));
+      await refreshNoFrame(t);
+      import();
+      await settleReal(t);
+      expect(find.text('Paste exercise JSON'), findsOneWidget);
+      await t.tap(find.text('Cancel'));
+      await settleReal(t);
+      await t.enterText(find.byType(TextFormField).first, 'A squat');
+      await t.tap(find.text('MEDIA'));
+      await settleReal(t);
+      final image = on(t, find.text('Tap to add image'));
+      await refreshNoFrame(t);
+      image();
+      await pumpUntil(t, () => find.text('Tap to add image').evaluate().isEmpty,
+          what: 'the picked image');
+      final save = on(t, find.text('Save'));
+      await refreshNoFrame(t);
+      save();
+      await pumpUntil(t, () => find.text('Exercise Saved!').evaluate().isNotEmpty,
+          what: 'saved');
+      expect(server.writes.map((s) => s.who).toSet(), {memberA});
+      expect(reported, isEmpty);
       await unmountAll(t);
     });
   });

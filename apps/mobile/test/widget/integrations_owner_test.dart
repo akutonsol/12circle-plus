@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 
 import '../support/coach_tools_server.dart';
 import '../support/fit_matrix.dart';
@@ -475,6 +476,53 @@ void main() {
       final name = t.getRect(find.text('Strava'));
       expect(state.left, greaterThan(name.right));
       expect(state.top, lessThan(name.bottom + 30));
+      await unmountAll(t);
+    });
+  });
+
+  // Round 3 · the retry's owner is the member it was drawn for. Fails on
+  // 911b117: a retry that beat the page's own answer to the switch left B's
+  // page "Retrying" for ever.
+  group('Try again, drawn for A', () {
+    testWidgets("tapped before the page heard of the switch: B's own retry works", (t) async {
+      VoidCallback? tap;
+      var fired = 0;
+      final auth = Supabase.instance.client.auth;
+      final sub = auth.onAuthStateChange.listen((_) {
+        if (tap == null || auth.currentUser?.id != memberB) return;
+        fired++;
+        tap();
+      });
+      server.failing = (s) => !s.isWrite;
+      await open(t);
+      expect(find.text(failedLoad), findsOneWidget, reason: 'premise');
+      tap = tapOf(t, 'Try again');
+      await switchNoFrame(t, memberB);
+      tap = null;
+      expect(fired, 1, reason: 'premise');
+      await settleReal(t);
+      expect(find.text(failedLoad), findsOneWidget, reason: "B's read failed too");
+      server.failing = (_) => false;
+      server.tables['user_integrations'] = [row(memberA, 'strava'), row(memberB, 'polar')];
+      await t.tap(find.text('Try again'));
+      await settleReal(t);
+      expect(find.text(failedLoad), findsNothing);
+      expect(connected, findsOneWidget);
+      expect(server.log.last.who, memberB);
+      await t.runAsync(sub.cancel);
+      await unmountAll(t);
+    });
+
+    testWidgets('control: the same member, a new token: it loads', (t) async {
+      server.failing = (s) => !s.isWrite;
+      await open(t);
+      final retry = tapOf(t, 'Try again');
+      server.failing = (_) => false;
+      await refreshNoFrame(t);
+      retry();
+      await settleReal(t);
+      expect(find.text(failedLoad), findsNothing);
+      expect(connected, findsOneWidget);
       await unmountAll(t);
     });
   });
