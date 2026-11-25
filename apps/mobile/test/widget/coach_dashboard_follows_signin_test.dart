@@ -1320,10 +1320,14 @@ void main() {
     });
 
     // SECR4-3 · a refresh of A's failure is AsyncError(isLoading) for B.
-    for (final when in ['before', 'after']) {
+    for (final (who, when) in [
+      ('the bell', 'before'),
+      ('the bell', 'after'),
+      ('the open sheet', 'before'),
+      ('the open sheet', 'after'),
+    ]) {
       testWidgets("A's failed read, invalidated $when the switch and before any "
-          "frame: neither the bell nor the open sheet says it to B; then B's "
-          'own', (tester) async {
+          "frame: $who does not say it to B; then B's own", (tester) async {
         notes();
         server.fails.add('GET notifications:$memberA');
         await show(tester, realNotifications: true);
@@ -1342,10 +1346,13 @@ void main() {
         if (when == 'after') c.invalidate(coachNotificationsProvider);
         for (var i = 0; i < 8; i++) {
           await tester.pump(const Duration(milliseconds: 100));
-          expect(c.read(unreadNotificationCountProvider), 0,
-              reason: "THE defect: the bell said A's failure to B (frame $i)");
-          expect(said(), findsNothing,
-              reason: "THE defect: the sheet said A's failure to B (frame $i)");
+          if (who == 'the bell') {
+            expect(c.read(unreadNotificationCountProvider), 0,
+                reason: "THE defect: A's failure was said to B (frame $i)");
+          } else {
+            expect(said(), findsNothing,
+                reason: "THE defect: A's failure was said to B (frame $i)");
+          }
         }
         server.seed('notifications', memberB, [
           {

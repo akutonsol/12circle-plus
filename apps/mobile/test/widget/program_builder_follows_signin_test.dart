@@ -568,6 +568,20 @@ void main() {
     });
   }
 
+  testWidgets('New Program, built and tapped with nobody signed in: opens '
+      'nothing, and it is recorded', (tester) async {
+    await library(tester);
+    await become(tester, null);
+    final tap = fab(tester, 'New Program');
+    reported.clear();
+    tap();
+    await frames(tester);
+    expect(find.text('Create & build'), findsNothing);
+    expect(reported.map((f) => f.origin),
+        contains('ProgramLibrary._createProgram'));
+    await unmount(tester);
+  });
+
   // ── what is open ──────────────────────────────────────────────────────────
 
   Future<void> metaSheet(WidgetTester tester) async {
