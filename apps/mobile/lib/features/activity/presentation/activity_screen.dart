@@ -42,6 +42,13 @@ final _memberWorkouts = forMember<List<Workout>>(assignedWorkoutsProvider);
 final _memberMonth =
     forMember<List<Map<String, dynamic>>>(monthScoresProvider);
 final _memberWeek = forMember<List<Map<String, dynamic>>>(weekScoresProvider);
+// P0-FL-60b round 4 · today's totals were `valueOrNull`: A's kcal and macros,
+// drawn as B's while B's read was pending or after it failed.
+final _memberToday = forMember<Map<String, double>>(todayNutritionProvider);
+
+/// What a total not known for this member is drawn as. Never '0': 0 is only
+/// for a read that said 0.
+const _unknown = '—';
 
 // ── Fit and touch helpers (P0-FL-58) ──────────────────────────────────────────
 
@@ -809,9 +816,18 @@ class _StepsCard extends ConsumerWidget {
 class _CaloriesCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final totals = ref.watch(todayNutritionProvider).valueOrNull;
+    // Unknown (B's first read pending, or failed with nothing held) is a dash,
+    // not 0. A failure is said once, on the macros section.
+    final totals = ref.watch(_memberToday).value;
     final calories = ((totals?['calories'] ?? 0.0) as num).toInt();
     const goal = 2000;
+    final bar = ClipRRect(
+      borderRadius: BorderRadius.circular(3),
+      child: LinearProgressIndicator(
+        value: (calories / goal).clamp(0.0, 1.0),
+        minHeight: 4,
+        backgroundColor: Colors.white.withValues(alpha: 0.07),
+        valueColor: const AlwaysStoppedAnimation<Color>(_C.error)));
     return _GlassCard(
       padding: const EdgeInsets.all(14),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -822,17 +838,15 @@ class _CaloriesCard extends ConsumerWidget {
             color: _C.error.withValues(alpha: 0.15)),
           child: const Icon(Icons.local_fire_department_rounded, color: _C.error, size: 18)),
         const SizedBox(height: 10),
-        Text(calories == 0 ? '0' : '$calories',
-          style: const TextStyle(color: _C.onSurface, fontSize: 24, fontWeight: FontWeight.w800, height: 1)),
+        Semantics(
+          label: totals == null ? "Today's calories not loaded" : null,
+          excludeSemantics: totals == null,
+          child: Text(totals == null ? _unknown : '$calories',
+            style: const TextStyle(color: _C.onSurface, fontSize: 24, fontWeight: FontWeight.w800, height: 1))),
         const Text('kcal', style: TextStyle(color: _C.error, fontSize: 12)),
         const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(3),
-          child: LinearProgressIndicator(
-            value: (calories / goal).clamp(0.0, 1.0),
-            minHeight: 4,
-            backgroundColor: Colors.white.withValues(alpha: 0.07),
-            valueColor: const AlwaysStoppedAnimation<Color>(_C.error))),
+        // Unknown: the bar is drawn empty, and says no "0%".
+        totals == null ? ExcludeSemantics(child: bar) : bar,
         const SizedBox(height: 4),
         Text('Goal: $goal kcal', style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.5), fontSize: 10)),
       ]),
@@ -844,17 +858,21 @@ class _CaloriesCard extends ConsumerWidget {
 class _NutritionGrid extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final totals   = ref.watch(todayNutritionProvider).valueOrNull;
+    // P0-FL-60b round 4 · this member's totals only; unknown is a dash. A
+    // failure is said here (once for the screen), with what is held beside it.
+    final read     = ref.watch(_memberToday);
+    final totals   = read.value;
     final calories = ((totals?['calories'] ?? 0.0) as num).toInt();
     final protein  = ((totals?['protein']  ?? 0.0) as num).toInt();
     final carbs    = ((totals?['carbs']    ?? 0.0) as num).toInt();
     final fat      = ((totals?['fat']      ?? 0.0) as num).toInt();
+    String or(String known) => totals == null ? _unknown : known;
 
     final items = [
-      (Icons.local_fire_department_outlined, 'CALORIES', calories == 0 ? '0 kcal' : '$calories kcal', _C.error),
-      (Icons.egg_outlined,                   'PROTEIN',  '${protein}g', _C.teal),
-      (Icons.grain_rounded,                  'CARBS',    '${carbs}g',   _C.primary),
-      (Icons.water_drop_outlined,            'FAT',      '${fat}g',     _C.blue),
+      (Icons.local_fire_department_outlined, 'CALORIES', or('$calories kcal'), _C.error),
+      (Icons.egg_outlined,                   'PROTEIN',  or('${protein}g'), _C.teal),
+      (Icons.grain_rounded,                  'CARBS',    or('${carbs}g'),   _C.primary),
+      (Icons.water_drop_outlined,            'FAT',      or('${fat}g'),     _C.blue),
     ];
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -868,6 +886,15 @@ class _NutritionGrid extends ConsumerWidget {
           label: "Log food for today's macros",
           onTap: () => context.go('/nutrition'),
           child: Text('Log food', style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.5), fontSize: 11)))),
+      if (read.error != null) ...[
+        SectionLoadFailure(
+          what: "today's nutrition",
+          error: read.error,
+          busy: read.busy,
+          onRetry: () => ref.invalidate(todayNutritionProvider),
+          accent: _C.primary, textColor: _C.onSurface, mutedColor: _C.onSurfVar),
+        const SizedBox(height: 8),
+      ],
       // P0-FL-58 · a fixed 2.4:1 grid cell cut its text off at large text. The
       // same cell is now a MINIMUM: it grows; past 1.3× there is one per line.
       LayoutBuilder(builder: (context, box) {
@@ -886,8 +913,11 @@ class _NutritionGrid extends ConsumerWidget {
                 Expanded(child: Text(item.$2, style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.6),
                   fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 1))),
               ]),
-              Text(item.$3,
-                style: TextStyle(color: item.$4, fontSize: 14, fontWeight: FontWeight.w700)),
+              Semantics(
+                label: totals == null ? "Today's ${item.$2.toLowerCase()} not loaded" : null,
+                excludeSemantics: totals == null,
+                child: Text(item.$3,
+                  style: TextStyle(color: item.$4, fontSize: 14, fontWeight: FontWeight.w700))),
             ]),
           ))).toList());
       }),
