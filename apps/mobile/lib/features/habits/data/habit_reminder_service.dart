@@ -115,9 +115,8 @@ class HabitReminderService {
     final run = ++_run;
     _cancelled = false;
     await initialize();
-    if (!await _clear(() => run == _run && signedInUid() == owner)) {
-      return _leave(run);
-    }
+    await _clear(run, 'HabitReminderService.schedule', owner: owner);
+    if (run != _run || signedInUid() != owner) return _leave(run);
 
     final habitsWithReminders = habits
         .where((h) => h.reminderTime != null && h.reminderTime!.isNotEmpty)
@@ -155,21 +154,16 @@ class HabitReminderService {
     await _cancel(placed, 'HabitReminderService.schedule');
   }
 
-  /// Cancels every id this service uses, while [going]; false if it stopped.
-  /// One that cannot be cancelled does not keep the rest; the first failure is
-  /// recorded.
-  Future<bool> _clear(bool Function() going,
-      {String origin = 'HabitReminderService.schedule',
-      void Function()? onFailure}) async {
-    var recorded = false;
+  /// Cancels every id this service uses; true when all are gone. Stops when a
+  /// newer run has begun, or [owner] (if given) has left. One that cannot be
+  /// cancelled does not keep the rest; the first failure is recorded.
+  Future<bool> _clear(int run, String origin, {String? owner}) async {
+    var all = true;
     for (int i = 1000; i < 2000; i++) {
-      if (!going()) return false;
-      if (!await _cancel(i, recorded ? null : origin)) {
-        recorded = true;
-        onFailure?.call();
-      }
+      if (run != _run || (owner != null && signedInUid() != owner)) return false;
+      if (!await _cancel(i, all ? origin : null)) all = false;
     }
-    return true;
+    return all;
   }
 
   /// Recorded under [origin] (null: not again).
@@ -225,14 +219,12 @@ class HabitReminderService {
     if (kIsWeb) return; // nothing is ever scheduled on web
     final run = ++_run;
     _cancelled = true;
-    var failed = false;
     try {
       await initialize();
-      final all = await _clear(() => run == _run,
-          origin: 'HabitReminderService.cancelAll',
-          onFailure: () => failed = true);
       // Kept after a failure: the next launch tries again.
-      if (all && !failed && run == _run) await _rememberOwner(null);
+      if (await _clear(run, 'HabitReminderService.cancelAll') && run == _run) {
+        await _rememberOwner(null);
+      }
     } catch (e, st) {
       reportError('HabitReminderService.cancelAll', e, st);
     }
