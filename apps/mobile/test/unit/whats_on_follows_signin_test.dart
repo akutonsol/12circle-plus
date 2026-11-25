@@ -36,7 +36,9 @@ Future<Map<String, bool>> _invalidatedBeforeTheFlush(
       // Read at once: an invalidated provider is rebuilt without asking first
       // whether what it watches has changed.
       ..read(liveClassesFromDbProvider)
-      ..read(liveChallengesProvider);
+      ..read(liveChallengesProvider)
+      // As a tap on Join does.
+      ..read(challengeNotifierProvider);
   });
   await change();
   sub.close();
@@ -286,6 +288,22 @@ void main() {
       expect(c.read(scheduleClassesProvider).where((k) => k.isBooked), isEmpty);
     });
 
+    test("$source: A's own refresh in flight as B signs in is not B's",
+        () async {
+      final holdA = server.holds['GET $source:$memberA'] = Completer<void>();
+      c
+        ..invalidate(liveClassesFromDbProvider)
+        ..invalidate(liveChallengesProvider);
+      await until(() => server.count('GET $source:$memberA') > 1, 'refresh');
+      server.holds['GET $source:$memberB'] = Completer<void>();
+      await becomes(memberB);
+      expect(actions(), isNot(contains(theirs)));
+      expect(now(), isA<AsyncLoading<WhatsOn>>());
+      holdA.complete();
+      await pumpEventQueue();
+      expect(actions(), isNot(contains(theirs)));
+    });
+
     test('control: $source invalidated as A\'s token refreshes hold the list',
         () async {
       final hold = server.holds['GET $source:$memberA'] = Completer<void>();
@@ -332,6 +350,53 @@ void main() {
       await until(() => list().length == 1, "B's own");
       expect(joined(), isEmpty);
       expect(seen, isEmpty, reason: 'not for one build');
+    });
+
+    test("A's own refresh in flight as B signs in: A's rows do not start B's "
+        'list', () async {
+      // Riverpod keeps calling it a refresh through the change of account.
+      final holdA = server.holds['GET challenges:$memberA'] = Completer<void>();
+      c.invalidate(liveChallengesProvider);
+      await until(
+          () => server.count('GET challenges:$memberA') > 1, "A's refresh");
+      final hold =
+          server.holds['GET challenges:$memberB'] = Completer<void>();
+      await becomes(memberB);
+      final held = c.read(liveChallengesProvider);
+      expect(held.requireValue.single.isJoined, isTrue,
+          reason: "premise: A's are what it holds");
+      expect(list(), isEmpty,
+          reason: "THE defect: A's joined challenges were B's list");
+      expect(c.read(challengeNotifierProvider.notifier).hasLoaded, isFalse,
+          reason: 'nor is B told they have none');
+      holdA.complete();
+      await pumpEventQueue();
+      expect(list(), isEmpty, reason: "A's answer, late");
+      hold.complete();
+      await until(() => list().length == 1, "B's own");
+      expect(joined(), isEmpty);
+    });
+
+    // However they came. (Through the real read they come as AsyncLoading, which
+    // starts nobody's list: the two tests above hold with or without the guard.)
+    test("rows marked for A, settled, do not start B's list; rows marked for B "
+        'do', () async {
+      final rows = c.read(liveChallengesProvider).requireValue;
+      await becomes(memberB);
+      for (final (owner, shown) in [(memberA, 0), (memberB, 1)]) {
+        final other = ProviderContainer(overrides: [
+          liveChallengesProvider
+              .overrideWith((ref) async => ownedBy(owner, rows)),
+        ]);
+        other.listen(challengeNotifierProvider, (_, __) {});
+        await until(
+            () => other.read(liveChallengesProvider) is AsyncData, 'read');
+        expect(other.read(challengeNotifierProvider), hasLength(shown),
+            reason: "THE defect: A's joined challenges were B's list");
+        expect(other.read(challengeNotifierProvider.notifier).hasLoaded,
+            shown == 1);
+        other.dispose();
+      }
     });
 
     test("and B's own read fails: still nothing of A's", () async {

@@ -270,7 +270,8 @@ void main() {
       await unmount(tester);
     });
 
-    testWidgets("A's answer, late, is nobody's", (tester) async {
+    testWidgets("A's refresh in flight as B signs in: A's clients are not "
+        "B's, nor when A's answer lands", (tester) async {
       await show(tester);
       final hold = server.holds['$_rels:$memberA'] = Completer<void>();
       c.invalidate(complianceRosterProvider);
@@ -278,6 +279,7 @@ void main() {
           what: "A's re-read");
       server.holds['$_rels:$memberB'] = Completer<void>();
       await become(tester, memberB);
+      expect(alma(), findsNothing, reason: 'THE defect: drawn as B\'s');
       hold.complete();
       await frames(tester, 10);
       expect(alma(), findsNothing);

@@ -991,6 +991,27 @@ void main() {
         await unmount(tester);
       });
 
+      testWidgets("${e.key}: A's refresh in flight as B signs in, drawn: A's "
+          "are not B's while B's read is out", (tester) async {
+        await ready(tester);
+        final holdA = server.holds['$request:$memberA'] = Completer<void>();
+        final before = server.count('$request:$memberA');
+        c.invalidate(provider);
+        await pumpUntil(
+            tester, () => server.count('$request:$memberA') > before,
+            what: "A's refresh");
+        server.holds['$request:$memberB'] = Completer<void>();
+        await become(tester, memberB);
+        expect(find.text(theirs), findsNothing,
+            reason: "THE defect: A's ${e.key} were B's");
+        holdA.complete();
+        await frames(tester, 10);
+        expect(find.text(theirs), findsNothing);
+        server.holds['$request:$memberB']!.complete();
+        await pumpUntil(tester, () => seen(find.text(bs)), what: "B's own");
+        await unmount(tester);
+      });
+
       testWidgets("${e.key}: A's failure, its Try again tapped after B signed "
           "in and before any frame, is not B's", (tester) async {
         await ready(tester);

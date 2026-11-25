@@ -584,11 +584,21 @@ void main() {
       await frames(tester);
     }
 
-    for (final fate in ['still out', 'failed']) {
-      testWidgets("the notes sheet, B's read $fate: none of A's notes",
+    for (final (fate, drawn) in [
+      ('still out', true),
+      ('still out', false),
+      ('failed', true),
+      ('failed', false),
+    ]) {
+      testWidgets("the notes sheet, B's read $fate"
+          "${drawn ? '' : ' and no frame since the switch'}: none of A's notes",
           (tester) async {
         await aReadTheNotes(tester);
-        await become(tester, memberB);
+        if (drawn) {
+          await become(tester, memberB);
+        } else {
+          await tester.runAsync(() => signInAs(memberB));
+        }
         if (fate == 'failed') {
           server.fails.add('GET coach_notes:$memberB');
         } else {
@@ -618,6 +628,30 @@ void main() {
       });
     }
 
+    testWidgets("the notes sheet, A's re-read still out from before: none of "
+        "A's notes", (tester) async {
+      await aReadTheNotes(tester);
+      server.holds['GET coach_notes:$memberA'] = Completer<void>();
+      await tester.tap(find.text('notes'));
+      await pumpUntil(tester,
+          () => server.count('GET coach_notes:$memberA') > 1,
+          what: "A's re-read");
+      server.holds['GET coach_notes:$memberB'] = Completer<void>();
+      await become(tester, memberB);
+      await frames(tester, 10);
+      await tester.tap(find.text('notes'));
+      await frames(tester);
+      expect(find.text('Private Notes · Alma Stone'), findsOneWidget,
+          reason: "premise: B's own sheet");
+      expect(find.text('private about Alma'), findsNothing);
+      server.holds['GET coach_notes:$memberA']!.complete();
+      await frames(tester);
+      expect(find.text('private about Alma'), findsNothing);
+      server.holds['GET coach_notes:$memberB']!.complete();
+      await frames(tester);
+      await unmount(tester);
+    });
+
     testWidgets('control: the same coach opening them again sees them while '
         'they are re-read', (tester) async {
       await aReadTheNotes(tester);
@@ -641,7 +675,7 @@ void main() {
       for (final table in ['user_profiles', 'subscriptions']) {
         server.seed(table, memberB, server.data[table]![memberA]!);
       }
-      await become(tester, memberB);
+      await tester.runAsync(() => signInAs(memberB));
       c.invalidate(myProgramsProvider); // a program write does
       Navigator.of(tester.element(find.byType(ClientDetailScreen))).push(
           MaterialPageRoute<void>(builder: (_) => const ClientDetailScreen(
