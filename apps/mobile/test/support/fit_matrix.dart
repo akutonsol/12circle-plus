@@ -48,7 +48,9 @@ List<String> recordOverflows() {
     if (d.exception is FlutterError &&
         d.library == 'rendering library' &&
         text.contains('A RenderFlex overflowed by')) {
-      seen.add(text.split('\n').take(14).join('\n'));
+      // Whole: [overflowsIn] needs the name of the overflowing Flex, and a
+      // varying number of lines comes before it.
+      seen.add(text);
     } else {
       previous?.call(d);
     }
@@ -62,17 +64,30 @@ List<String> recordOverflows() {
 
 List<String>? _recording;
 
-/// The overflow reports in [seen] that name a Row/Column inside [surface].
-/// (`bySubtype`: `byType(Flex)` never matches a Row or a Column.)
+/// The overflow reports in [seen] about a Row/Column inside [surface] —
+/// [surface] itself included.
+///
+/// It cannot pass vacuously (P0-FL-61): [surface] must be on screen and hold a
+/// Row/Column, and a report that cannot be placed — it names no Flex, or one
+/// that is no longer in the tree — is returned as well. Only a report about a
+/// Flex that is in the tree, outside [surface], is left out.
 List<String> overflowsIn(WidgetTester tester, List<String> seen, Finder surface) {
-  final ids = tester
-      .renderObjectList(find.descendant(of: surface, matching: find.bySubtype<Flex>()))
-      .map(describeIdentity)
-      .toSet();
-  return [
-    for (final e in seen)
-      if (ids.any((id) => e.contains('$id ') || e.contains('$id\n') || e.contains('$id:'))) e
-  ];
+  // (`bySubtype`: `byType(Flex)` never matches a Row or a Column.)
+  final flexes = find.bySubtype<Flex>(skipOffstage: false);
+  Set<String> ids(Finder f) => tester.renderObjectList(f).map(describeIdentity).toSet();
+  expect(surface, findsWidgets, reason: 'premise: the surface is on screen');
+  final inside = ids(find.descendant(
+      of: surface, matching: flexes, matchRoot: true, skipOffstage: false));
+  expect(inside, isNotEmpty, reason: 'premise: the surface holds a Row or Column');
+  final everywhere = ids(flexes);
+  bool counts(String report) {
+    final flex = RegExp(r'The specific RenderFlex in question is:\s*(RenderFlex#[0-9a-f]+)')
+        .firstMatch(report)
+        ?.group(1);
+    return inside.contains(flex) || !everywhere.contains(flex);
+  }
+
+  return seen.where(counts).toList();
 }
 
 /// No text inside [surface] is rendered smaller than its own font size times
@@ -115,7 +130,8 @@ double renderedFontSize(WidgetTester tester, Finder text) {
 }
 
 /// Every node a person can tap (or adjust) in the semantics tree under
-/// [surface]: its label and its size.
+/// [surface]: its label and its size. A node merged into its parent is not one
+/// of them: what a person meets is the parent, which has its action and label.
 List<({String label, Size size})> tapNodes(WidgetTester tester, Finder surface) {
   final out = <({String label, Size size})>[];
   void visit(SemanticsNode n, Matrix4 to) {
@@ -125,7 +141,7 @@ List<({String label, Size size})> tapNodes(WidgetTester tester, Finder surface) 
         d.hasAction(SemanticsAction.increase) ||
         d.hasAction(SemanticsAction.decrease) ||
         d.hasAction(SemanticsAction.longPress);
-    if (act && !d.flagsCollection.isHidden) {
+    if (act && !n.isMergedIntoParent && !d.flagsCollection.isHidden) {
       out.add((
         label: [d.label, d.tooltip].where((s) => s.isNotEmpty).join('\n'),
         size: MatrixUtils.transformRect(t, n.rect).size,

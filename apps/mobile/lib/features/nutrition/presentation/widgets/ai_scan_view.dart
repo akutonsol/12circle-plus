@@ -177,6 +177,8 @@ class _AiScanViewState extends State<AiScanView> {
   XFile? _image;
   _ScanStage _stage = _ScanStage.idle;
   _Estimate? _result;
+  /// The member [_result] was read for, and the one who typed the description.
+  String? _resultUid, _descUid;
   double _portion = 1.0; // serving multiplier applied before logging
   /// A picker is open (or its file is being read): no second one opens.
   bool _picking = false;
@@ -219,13 +221,24 @@ class _AiScanViewState extends State<AiScanView> {
 
   String? _signedInUid() => Supabase.instance.client.auth.currentUser?.id;
 
-  /// True (recorded; the view goes back to its start, nothing is said) when
-  /// [uid] — whose meal this is — is no longer the member signed in.
+  /// True (recorded; the view goes back to its start without that member's
+  /// photo, words or result, and nothing is said) when [uid] — whose meal this
+  /// is — is no longer the member signed in.
   bool _memberChanged(String? uid) {
     if (_signedInUid() == uid) return false;
     reportError('nutrition.scan.identity',
         StateError('the member changed during a scan'));
-    if (mounted) setState(() { _image = null; _stage = _ScanStage.idle; });
+    if (mounted) {
+      _descCtrl.clear();
+      setState(() {
+        _image = null;
+        _result = null;
+        _resultUid = null;
+        _descUid = null;
+        _notice = null;
+        _stage = _ScanStage.idle;
+      });
+    }
     return true;
   }
 
@@ -234,12 +247,19 @@ class _AiScanViewState extends State<AiScanView> {
     final text = _descCtrl.text.trim();
     if (text.isEmpty) return;
     FocusScope.of(context).unfocus();
-    final uid = _signedInUid();
+    // Whoever typed it: another member's tap does not send it.
+    final uid = _descUid;
+    if (_memberChanged(uid)) return;
     setState(() { _image = null; _notice = null; _stage = _ScanStage.scanning; });
     try {
       final r = await NutritionService().analyzeFood(description: text);
       if (!mounted || _memberChanged(uid)) return;
-      setState(() { _result = _parse(r); _portion = 1.0; _stage = _ScanStage.result; });
+      setState(() {
+        _result = _parse(r);
+        _resultUid = uid;
+        _portion = 1.0;
+        _stage = _ScanStage.result;
+      });
     } catch (e, st) {
       reportError('nutrition.scan.describe', e, st);
       if (!mounted || _memberChanged(uid)) return;
@@ -304,6 +324,8 @@ class _AiScanViewState extends State<AiScanView> {
   }
 
   Future<void> _analyze(XFile file, Uint8List bytes, String? uid) async {
+    // Again: awaits lie between the last check and here.
+    if (_memberChanged(uid)) return;
     try {
       final ext = file.name.toLowerCase().split('.').last;
       final mime = ext == 'png' ? 'image/png'
@@ -314,6 +336,7 @@ class _AiScanViewState extends State<AiScanView> {
       if (!mounted || _memberChanged(uid)) return;
       setState(() {
         _result = _parse(r);
+        _resultUid = uid;
         _portion = 1.0;
         _stage = _ScanStage.result;
       });
@@ -328,10 +351,18 @@ class _AiScanViewState extends State<AiScanView> {
     }
   }
 
+  void _save(ScanResult meal) {
+    // Another member signed in with it on screen: not their meal to log.
+    // (`initialResult`, the tests' seam, was read for nobody.)
+    if (widget.initialResult == null && _memberChanged(_resultUid)) return;
+    widget.onAccept(meal);
+  }
+
   void _retake() {
     setState(() {
       _image = null;
       _result = null;
+      _resultUid = null;
       _stage = _ScanStage.idle;
     });
   }
@@ -573,6 +604,8 @@ class _AiScanViewState extends State<AiScanView> {
           // Named: the hint is its only name, and goes once something is typed.
           Semantics(label: 'Describe your meal', child: TextField(
             controller: _descCtrl,
+            onChanged: (text) => _descUid =
+                text.isEmpty ? null : _descUid ?? _signedInUid(),
             style: const TextStyle(color: _white, fontSize: 14),
             minLines: 1, maxLines: 2,
             textInputAction: TextInputAction.send,
@@ -815,8 +848,10 @@ class _AiScanViewState extends State<AiScanView> {
           // A value the analysis did not give is never saved as 0: say which,
           // and what to do instead (P0-FL-61).
           if (missing != null) ...[
-            _failureNotice("Couldn't read the $missing for this meal — retake "
-                'it, or add the meal manually. Saving is off for this scan.'),
+            _failureNotice("Couldn't read the $missing for this meal — retake it"
+                // The control below, by its own words, when it is there.
+                "${widget.onSearchInstead == null ? '' : ', or tap Search instead to add it yourself'}. "
+                'Saving is off for this scan.'),
             const SizedBox(height: 16),
           ],
           // ── Retake / Accept ──────────────────────────────────────
@@ -836,7 +871,7 @@ class _AiScanViewState extends State<AiScanView> {
               label: scanSaveLabel(widget.mealType),
               color: _white,
               weight: FontWeight.w700,
-              onTap: meal == null ? null : () => widget.onAccept(meal),
+              onTap: meal == null ? null : () => _save(meal),
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
                   colors: [Color(0xFF7C3AED), Color(0xFFB44CF0)],

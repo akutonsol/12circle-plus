@@ -120,9 +120,8 @@ void main() {
 
   void tall(WidgetTester t) => fitWindow(t, 400, 2400, 1);
 
-  /// Every tap/adjust node of the result stage is >= 44 and named. (As
-  /// `expectTargets`, which also counts a node merged into its parent as one
-  /// of its own: the slider's thumb, whose name is on the merged node.)
+  /// Every tap/adjust node of the result stage is >= 44 and named, and the
+  /// ones it must have are there.
   void expectResultTargets(WidgetTester t) {
     final found = <String>[];
     void visit(SemanticsNode n) {
@@ -237,9 +236,7 @@ void main() {
           await mount(t, mealType: 'protein_shake');
           seen.clear(); // the idle stage has its own test
           await analyse(t);
-          // (The analysing stage it passes through is in [seen] too. Not
-          // `overflowsIn`: it finds the Flex's id in the report's first 14
-          // lines, and here the id comes after them.)
+          // (The analysing stage it passes through is in [seen] too.)
           expect(seen, isEmpty);
           expectTextNotShrunk(t, view, scale);
           expect(renderedFontSize(t, find.text('Retake')),
@@ -362,8 +359,10 @@ void main() {
         expect(find.text('45g'),
             keys.contains('protein_g') ? findsNothing : findsOneWidget);
 
+        // (Round 2: it names the control that is there, by its own words.)
         final msg = "Couldn't read the $names for this meal — retake it, or "
-            'add the meal manually. Saving is off for this scan.';
+            'tap Search instead to add it yourself. Saving is off for this '
+            'scan.';
         expect(find.text(msg), findsOneWidget);
         expect(liveRegionOver(msg), findsWidgets);
         expect(reported.map((f) => f.origin), ['nutrition.scan.incomplete']);

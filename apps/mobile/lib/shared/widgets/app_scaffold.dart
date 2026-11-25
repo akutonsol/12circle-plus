@@ -19,8 +19,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../core/widgets/app_top_nav.dart' show SignedInUnread, unreadDetail;
 import '../../features/auth/domain/auth_provider.dart';
-import '../../features/notifications/domain/notification_provider.dart';
 import '../theme/app_background.dart';
 
 class _C {
@@ -89,8 +89,10 @@ class _AppHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final top = MediaQuery.of(context).padding.top;
     return Container(
-      padding: EdgeInsets.only(left: showBackButton ? 8 : 20, right: 20, top: top),
-      height: top + 64,
+      // The right margin is 20: the last 18 of it are the bell's own target.
+      padding: EdgeInsets.only(left: showBackButton ? 8 : 20, right: 2, top: top),
+      // Grows with large text, which was cut off at a fixed 64 (P0-FL-61).
+      constraints: BoxConstraints(minHeight: top + 64),
       decoration: BoxDecoration(
         color: _C.surface.withValues(alpha: 0.85),
         border: Border(
@@ -118,11 +120,12 @@ class _AppHeader extends StatelessWidget {
             ),
           const SizedBox(width: 12),
           Expanded(
-            child: title != null
+            // Off the header's edges once the text is what makes it grow.
+            child: Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: title != null
                 ? Text(title!,
                     style: const TextStyle(color: _C.primary, fontSize: 18,
                       fontWeight: FontWeight.w800, letterSpacing: 2))
-                : _HomeGreeting(firstName: firstName),
+                : _HomeGreeting(firstName: firstName)),
           ),
           const _ShakingBellIcon(),
         ],
@@ -179,9 +182,9 @@ class _HomeGreeting extends StatelessWidget {
           style: const TextStyle(color: _C.primary, fontSize: 10,
             fontWeight: FontWeight.w600, letterSpacing: 2)),
         Row(children: [
-          Text(displayName,
+          Flexible(child: Text(displayName,
             style: const TextStyle(color: _C.onSurface, fontSize: 20,
-              fontWeight: FontWeight.w800, letterSpacing: -0.5)),
+              fontWeight: FontWeight.w800, letterSpacing: -0.5))),
           const SizedBox(width: 4),
           Icon(Icons.bolt, color: _C.primary, size: 20),
         ]),
@@ -197,14 +200,11 @@ class _ShakingBellIcon extends ConsumerStatefulWidget {
 }
 
 class _ShakingBellIconState extends ConsumerState<_ShakingBellIcon>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, SignedInUnread {
   late final AnimationController _ctrl;
   late final Animation<double> _shake;
   /// The next shake; null while animations are off.
   Timer? _next;
-  /// The last unread count read for [_countUid].
-  int? _count;
-  String? _countUid;
 
   @override
   void initState() {
@@ -243,23 +243,10 @@ class _ShakingBellIconState extends ConsumerState<_ShakingBellIcon>
   @override
   void dispose() { _next?.cancel(); _ctrl.dispose(); super.dispose(); }
 
-  /// The signed-in account's unread count; null while nobody has read it (so
-  /// it is never said as "none"). The provider carries the previous account's
-  /// number through the next one's read, and through its failure: only a
-  /// settled read counts, and it is kept for that account alone.
-  int? _unread() {
-    final uid = ref.watch(currentUserProvider.select((u) => u?.id));
-    final read = ref.watch(unreadCountProvider);
-    if (uid == null || uid != _countUid) _count = null;
-    _countUid = uid;
-    if (uid != null && !read.isLoading && !read.hasError) _count = read.value;
-    return _count;
-  }
-
   @override
   Widget build(BuildContext context) {
     // Real unread count drives the badge; tap opens the notifications screen.
-    final known = _unread();
+    final known = watchUnread();
     final unread = known ?? 0;
     final bell = AnimatedBuilder(
       animation: _shake,
@@ -290,24 +277,22 @@ class _ShakingBellIconState extends ConsumerState<_ShakingBellIcon>
         ],
       ),
     );
+    final detail = unreadDetail(known);
     void open() => context.go('/notifications');
     return Semantics(
       container: true,
       button: true,
-      label: switch (known) {
-        null => 'Notifications',
-        0 => 'Notifications, none unread',
-        _ => 'Notifications, $known unread',
-      },
+      label: detail == null ? 'Notifications' : 'Notifications, $detail',
       excludeSemantics: true,
       onTap: open,
       child: GestureDetector(
         onTap: open,
         behavior: HitTestBehavior.opaque,
-        // The icon stays where it was; the target grows to 44 around it.
+        // The icon stays where it was: the target grows to 44 into the
+        // header's right margin, not into the title's width.
         child: Container(
           width: 44, height: 44,
-          alignment: Alignment.centerRight,
+          alignment: Alignment.centerLeft,
           child: bell,
         ),
       ),

@@ -249,7 +249,8 @@ void main() {
           final r = t.getRect(icon);
           expect(r.size, const Size(26, 26));
           expect(r.right, closeTo(width - 20, 0.01));
-          await t.tapAt(Offset(r.right - 42, r.center.dy - 20));
+          // (Round 2: the target grows into the right margin, not the title.)
+          await t.tapAt(Offset(r.left + 42, r.center.dy - 20));
           await settle(t);
           expect(find.text('the list'), findsOneWidget);
           handle.dispose();
@@ -357,7 +358,9 @@ void main() {
           : throw const PostgrestException(message: 'SECRET', code: 'XX000');
       await mount(t);
       expect(find.text('3'), findsOneWidget);
-      // The same member's session again (as a token refresh): a re-read.
+      // The same member's session again. (It emits no event — the literal
+      // token refresh is in bells_real_unread_count_test.dart — so the
+      // re-read is asked for.)
       await switchTo(t, _a);
       container.invalidate(unreadCountProvider);
       await settle(t);
