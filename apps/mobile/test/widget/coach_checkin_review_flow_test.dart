@@ -9,6 +9,9 @@ import 'package:circle_fitness/features/checkins/data/weekly_checkin_service.dar
 import 'package:circle_fitness/features/checkins/domain/checkin_provider.dart';
 import 'package:circle_fitness/features/checkins/presentation/coach_checkin_review_screen.dart';
 
+import '../support/owned_writes_postgrest.dart';
+import '../support/two_member_postgrest.dart';
+
 /// FIT-033 · the review flow, mounted.
 ///
 /// `test/unit/coach_review_queue_test.dart` pins the rules. This pins the part
@@ -122,6 +125,13 @@ List<Map<String, dynamic>> _six() => [
     ];
 
 void main() {
+  // The screen asks the auth client who is replying, so there has to be one.
+  setUpAll(() async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    await initTwoMemberSupabase(OwnedWritesPostgrest());
+    await signInAs(memberA);
+  });
+
   testWidgets('the header is paged — Week 14 · 1 of 6', (tester) async {
     await _pump(tester, _six());
     expect(find.text('Amara Osei'), findsOneWidget);

@@ -355,7 +355,7 @@ void main() {
         await switchTo(t, memberB);
         await settle(t);
         expect(find.text(done), findsNothing);
-        expect(find.text(checkinHistoryFailure), findsOneWidget);
+        expect(find.text("Couldn't load this week's check-in"), findsOneWidget);
         await close(t);
       });
 
