@@ -38,6 +38,13 @@ var _sweeps = 0;
 
 GoTrueClient get _auth => Supabase.instance.client.auth;
 
+const _acctC = 'acc7c000-0000-4000-8000-00000000000c';
+
+/// What gotrue tells the other tabs: everything but `initialSession`, and what
+/// they told it.
+Iterable<AuthState> _goesOut(Iterable<AuthState> heard) => heard.where((s) =>
+    !s.fromBroadcast && s.event != AuthChangeEvent.initialSession);
+
 void main() {
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
@@ -53,8 +60,7 @@ void main() {
       return call.method == 'initialize' ? true : null;
     });
     await initAccountSupabase(_server, _realtime, _store, session: _stored);
-    _auth.onAuthStateChange.listen((_) {}, onError: (Object _) {});
-  });
+    _auth.onAuthStateChange.listen((_) {}, onError: (Object _) {});  });
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -63,7 +69,11 @@ void main() {
     accountReadFailureNotifier.value = null;
     setFailureSink((_) {});
     addTearDown(resetFailureSink);
-    for (final (id, name) in [(acctA, 'Alba'), (acctB, 'Bruno')]) {
+    for (final (id, name) in [
+      (acctA, 'Alba'),
+      (acctB, 'Bruno'),
+      (_acctC, 'Carla'),
+    ]) {
       _server.rows['user_profiles:$id'] = [
         {'id': id, 'role': 'client', 'onboarding_complete': true, 'first_name': name}
       ];
@@ -238,6 +248,52 @@ void main() {
       expect(appContainer(t), same(gen));
     });
 
+    for (final expired in [false, true]) {
+      for (final (what, leave, then, path) in [
+        ('a sign-out', signOut, null, '/login'),
+        ("C's sign-in", () => signInAs(_acctC), _acctC, '/home'),
+      ]) {
+        rootTest('a mixed session another tab told of (token '
+            "${expired ? 'expired' : 'good'}) is put back here only, and $what "
+            'that follows stands', (t) async {
+          await mountApp(t, as: acctB, at: '/forgot-password', overrides: [
+            clientPlanProvider.overrideWith((ref) async => ClientPlan.coachGuided),
+          ]);
+          final token = _server.holds['POST token'] = Completer<void>();
+          final gen = appContainer(t);
+          final heard = <AuthState>[];
+          final sub = _auth.onAuthStateChange.listen(heard.add);
+          await tick(t);
+          heard.clear(); // the replayed one
+          hearMixedFromAnotherTab(
+              user: acctA, subject: acctB, expired: expired);
+          await tick(t);
+          expect(
+              heard.where((s) => s.fromBroadcast && isMixedSession(s.session)),
+              isNotEmpty,
+              reason: 'premise');
+          expectBsOwnSession('before any frame');
+          expect(_goesOut(heard), isEmpty,
+              reason: 'told on, it would undo what the other tabs did since');
+          expect(_server.of('token'), isEmpty);
+          expect(_stored.who, (acctB, acctB));
+          expect(appContainer(t), same(gen));
+
+          // No frame since.
+          await t.runAsync(leave);
+          token.complete();
+          await tick(t);
+          expect(_auth.currentUser?.id, then);
+          expect(_stored.who, then == null ? null : (then, then));
+          await settleApp(t);
+          final now = appContainer(t).read(accountGenerationProvider);
+          expect((now.number, now.startedAs), (1, then));
+          expect(appPath(t), path);
+          unawaited(sub.cancel());
+        });
+      }
+    }
+
     rootTest('control: one account — updated once, no new generation, its own '
         'session stored', (t) async {
       final hold = await updateOutAndBIn(t);
@@ -282,21 +338,106 @@ void main() {
       await t.pump(const Duration(seconds: 5));
     }
 
-    testWidgets("B's own token has expired: B's user is put back first, then the "
-        'token is asked for', (t) async {
+    /// A's answer mixes B's session, whose token has expired.
+    Future<void> mixedOnExpiredToken(WidgetTester t) async {
       final hold = await updateOut(t);
-      final token = _server.holds['POST token'] = Completer<void>();
       await t.runAsync(() => _auth
           .setInitialSession(jsonEncode(sessionOf(acctB, expired: true))));
       await settleApp(t, 2);
       hold.complete();
       await tick(t);
-      expectBsOwnSession('while the new token is still out');
-      token.complete();
-      await tick(t);
-      expectBsOwnSession('with the new token');
-      expect(_auth.currentSession!.isExpired, isFalse);
+      expectBsOwnSession("B's user is put back");
+      expect(_auth.currentSession!.isExpired, isTrue, reason: 'premise');
       expect(_stored.who, (acctB, acctB));
+    }
+
+    for (final (what, leave, then) in [
+      ('a sign-out', signOut, null),
+      ("C's sign-in", () => signInAs(_acctC), _acctC),
+    ]) {
+      testWidgets("B's own token has expired: B's user is put back with no request "
+          'of ours, so $what is not undone by the answer', (t) async {
+        final token = _server.holds['POST token'] = Completer<void>();
+        await mixedOnExpiredToken(t);
+        expect(_server.of('token'), isEmpty);
+        await t.runAsync(leave);
+        token.complete();
+        await tick(t);
+        expect(_auth.currentUser?.id, then);
+        expect(_stored.who, then == null ? null : (then, then));
+        await end(t);
+      });
+    }
+
+    for (final (what, renew) in [
+      ('its next request', () async {
+        await Supabase.instance.client.from('habits').select();
+        expect(_server.of('habits').map((s) => s.who), [acctB]);
+      }),
+      ('its next tick', () async {
+        _auth.startAutoRefresh();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        _auth.stopAutoRefresh();
+      }),
+    ]) {
+      testWidgets('control: gotrue renews the expired token put back, at $what',
+          (t) async {
+        await mixedOnExpiredToken(t);
+        await t.runAsync(renew);
+        await tick(t);
+        expectBsOwnSession('with the new token');
+        expect(_auth.currentSession!.isExpired, isFalse);
+        expect(_stored.who, (acctB, acctB));
+        expect(_server.of('token').single.body, contains(acctB),
+            reason: "asked for with B's");
+        await end(t);
+      });
+    }
+
+    for (final expired in [false, true]) {
+      testWidgets('told of the mixed session by another tab (token '
+          "${expired ? 'expired' : 'good'}): the form puts B back here only",
+          (t) async {
+        final hold = await updateOut(t);
+        await t.runAsync(() => signInAs(acctB));
+        await settleApp(t, 2);
+        final heard = <AuthState>[];
+        final sub = _auth.onAuthStateChange.listen(heard.add);
+        await tick(t);
+        heard.clear(); // the replayed one
+        hearMixedFromAnotherTab(user: acctA, subject: acctB, expired: expired);
+        await tick(t);
+        expect(heard.where((s) => s.fromBroadcast && isMixedSession(s.session)),
+            isNotEmpty, reason: 'premise');
+        expectBsOwnSession('at once');
+        expect(_goesOut(heard), isEmpty);
+        expect(_server.of('token'), isEmpty);
+        hold.complete();
+        await tick(t);
+        expect(_stored.who, (acctB, acctB));
+        unawaited(sub.cancel());
+        await end(t);
+      });
+    }
+
+    testWidgets('told of one whose own user is not known here: nothing is asked',
+        (t) async {
+      await t.runAsync(signOut);
+      await t.runAsync(() => signInAs(acctA));
+      // A's user on B's token, with no event.
+      await t.runAsync(() => _auth.recoverSession(
+          jsonEncode(sessionOf(acctB)..['user'] = userOf(acctA))));
+      expect(isMixedSession(_auth.currentSession), isTrue, reason: 'premise');
+      for (final own in [
+        null,
+        Session.fromJson(jsonDecode(jsonEncode(sessionOf(_acctC)))),
+      ]) {
+        await t.runAsync(() => putBackOwnUser(own, fromBroadcast: true));
+        expect(_server.of('token'), isEmpty);
+      }
+      // Control: this tab's own (what an earlier run stored) is asked about.
+      await t.runAsync(() => putBackOwnUser(null));
+      expectBsOwnSession('the answer');
       await end(t);
     });
 

@@ -52,6 +52,13 @@ Future<void> _openLink({Uri? uri}) async {
 const _notSet = "Couldn't set the new password — the account signed in here "
     'changed. Ask for a new reset link.';
 
+/// With nobody signed in.
+const _notSetSignedOut = "Couldn't set the new password — the account changed. "
+    'Ask for a new reset link.';
+
+const _notSignedOut = "Couldn't sign you out — try again in a moment. If it "
+    'keeps happening, contact support.';
+
 Iterable<Sent> get _passwordWrites => _server.of('user', method: 'PUT');
 
 void main() {
@@ -114,10 +121,10 @@ void main() {
       await t.pump(const Duration(seconds: 5));
     }
 
-    for (final (what, change) in [
-      ('A -> B', () => signInAs(acctB)),
-      ('A signed out', signOut),
-      ("A's session ended remotely", () => expire(_server)),
+    for (final (what, change, said) in [
+      ('A -> B', () => signInAs(acctB), _notSet),
+      ('A signed out', signOut, _notSetSignedOut),
+      ("A's session ended remotely", () => expire(_server), _notSetSignedOut),
     ]) {
       testWidgets('$what: Update sends nothing, clears and leaves', (t) async {
         await mountForm(t);
@@ -133,10 +140,10 @@ void main() {
         expect(_passwordWrites, isEmpty,
             reason: 'THE defect: the password of whoever is signed in was set');
         expect(find.text('SIGN-IN'), findsOneWidget, reason: 'the form is left');
-        expect(find.text(_notSet), findsOneWidget,
+        expect(find.text(said), findsOneWidget,
             reason: 'and why is said where it lands');
-        expect(
-            t.widget<Text>(find.text(_notSet)).data, isNot(contains(acctB)));
+        expect(find.byType(SnackBar), findsOneWidget);
+        expect(t.widget<Text>(find.text(said)).data, isNot(contains(acctB)));
         expect(passwordRecoveryNotifier.value, isNull);
         expect(_failures.where((f) => '${f.error}'.contains('account changed')),
             isNotEmpty);
@@ -217,6 +224,86 @@ void main() {
       expect(_server.of('logout'), isEmpty, reason: 'B stays signed in');
       expect(_auth.currentUser?.id, acctB);
       expect(find.text('SIGN-IN'), findsOneWidget);
+      await end(t);
+    });
+
+    /// A's password set, and "Back to Sign In" on screen.
+    Future<void> reachDone(WidgetTester t) async {
+      await mountForm(t);
+      await type(t, 'alba-new-pw');
+      await t.tap(find.text('Update Password'));
+      await settleApp(t, 4);
+      expect(find.text('Password updated'), findsOneWidget, reason: 'premise');
+    }
+
+    testWidgets('the done page: the device keeps the session — said, every time, '
+        'and not left for the sign-in page until it is gone', (t) async {
+      addTearDown(() => _store.refuseRemoval = false);
+      await reachDone(t);
+      final told = <AuthState>[];
+      final sub = _auth.onAuthStateChange.listen(told.add);
+      _store.refuseRemoval = true;
+      // The second press finds nobody signed in, and the session still stored.
+      for (final press in ['first', 'second']) {
+        await t.tap(find.text('Back to Sign In'));
+        await settleApp(t);
+        expect(find.text(_notSignedOut), findsOneWidget, reason: press);
+        expect(find.text('Password updated'), findsOneWidget, reason: press);
+        expect(find.text('SIGN-IN'), findsNothing,
+            reason: 'THE defect: as if signed out; the next start signs in');
+        expect(find.textContaining('storage'), findsNothing);
+        await t.pump(const Duration(seconds: 6));
+        await settleApp(t);
+        expect(find.byType(SnackBar), findsNothing);
+      }
+      expect(told.map((s) => s.event),
+          isNot(contains(AuthChangeEvent.signedOut)), reason: 'why');
+      _store.refuseRemoval = false;
+      await t.tap(find.text('Back to Sign In'));
+      await settleApp(t);
+      expect(told.last.event, AuthChangeEvent.signedOut);
+      expect(find.text('SIGN-IN'), findsOneWidget);
+      expect(find.byType(SnackBar), findsNothing);
+      unawaited(sub.cancel());
+      await end(t);
+    });
+
+    testWidgets('the done page: B arrives while the device refuses — nothing is '
+        'said to B, and B stays signed in', (t) async {
+      addTearDown(() {
+        _store.refuseRemoval = false;
+        _store.holdRemoval = null;
+      });
+      await reachDone(t);
+      final back = t.widget<AuthButton>(find.byType(AuthButton)).onTap!;
+      _store.refuseRemoval = true;
+      final hold = _store.holdRemoval = Completer<void>();
+      _server.sent.clear();
+      await t.runAsync(() async {
+        back();
+        await signInAs(acctB);
+        hold.complete();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      });
+      await settleApp(t);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(find.text('SIGN-IN'), findsOneWidget, reason: "not A's page");
+      expect(_auth.currentUser?.id, acctB);
+      expect(_server.of('logout'), isEmpty);
+      _store.refuseRemoval = false;
+      await end(t);
+    });
+
+    testWidgets('control: the server refuses the sign-out — the device is signed '
+        'out, nothing is said', (t) async {
+      await reachDone(t);
+      _server.fails['POST logout'] = 500;
+      await t.tap(find.text('Back to Sign In'));
+      await settleApp(t);
+      expect(_auth.currentSession, isNull);
+      expect(find.text('SIGN-IN'), findsOneWidget);
+      expect(find.byType(SnackBar), findsNothing);
+      _server.fails.clear();
       await end(t);
     });
 
@@ -335,9 +422,9 @@ void main() {
       await expectFormWorksFor(t, acctA);
     });
 
-    for (final (what, change, dest) in [
-      ('A -> B', () => signInAs(acctB), '/home'),
-      ('A signed out', signOut, '/login'),
+    for (final (what, change, dest, said) in [
+      ('A -> B', () => signInAs(acctB), '/home', _notSet),
+      ('A signed out', signOut, '/login', _notSetSignedOut),
     ]) {
       rootTest('$what, then Update before any frame: one neutral line where the '
           'member lands, once', (t) async {
@@ -359,21 +446,21 @@ void main() {
         await settleApp(t);
         expect(_passwordWrites, isEmpty);
         expect(appPath(t), dest);
-        expect(find.text(_notSet), findsOneWidget);
+        expect(find.text(said), findsOneWidget);
         expect(
             find.ancestor(
-                of: find.text(_notSet),
+                of: find.text(said),
                 matching: find.byWidgetPredicate(
                     (w) => w is Semantics && w.properties.liveRegion == true)),
             findsWidgets);
         handle.dispose();
         await t.pump(const Duration(seconds: 6));
         await settleApp(t);
-        expect(find.text(_notSet), findsNothing, reason: 'not left standing');
+        expect(find.text(said), findsNothing, reason: 'not left standing');
         // Nor said again to whoever comes next.
         await t.runAsync(dest == '/home' ? signOut : () => signInAs(acctB));
         await settleApp(t);
-        expect(find.text(_notSet), findsNothing);
+        expect(find.text(said), findsNothing);
       });
     }
 

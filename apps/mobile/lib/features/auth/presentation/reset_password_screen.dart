@@ -6,7 +6,13 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/errors/auth_error_text.dart';
 import '../../../core/identity/account_scope.dart'
-    show accountNoticeNotifier, isMixedSession, putBackOwnUser, signedInUid;
+    show
+        accountNoticeNotifier,
+        isMixedSession,
+        putBackOwnUser,
+        signOutFailedText,
+        signOutOfDevice,
+        signedInUid;
 import '../../../core/observability/app_failure.dart';
 import '../../../core/router/app_router.dart'
     show endPasswordRecovery, passwordRecoveryNotifier;
@@ -26,6 +32,10 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   final _confirmCtrl = TextEditingController();
   bool _loading = false;
   bool _done = false;
+
+  /// The device kept [_owner]'s stored session: the next press of Back to Sign
+  /// In tries again, though nobody is signed in by then.
+  bool _signOutFailed = false;
 
   /// The account this form sets the password of (P0-FL-59a, W2): the one the
   /// reset link was for, else the one signed in when the form opened.
@@ -74,12 +84,18 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   /// (which this one's messenger does not outlive).
   void _sayNothingWasSet() {
     if (!mounted) return;
-    accountNoticeNotifier.value = (uid: _signedIn, text: _notSet);
-    _snack(_notSet);
+    final now = _signedIn;
+    final text = now == null ? _notSetSignedOut : _notSet;
+    accountNoticeNotifier.value = (uid: now, text: text);
+    _snack(text);
   }
 
   static const _notSet = "Couldn't set the new password — the account signed in "
       'here changed. Ask for a new reset link.';
+
+  /// Nobody is signed in here.
+  static const _notSetSignedOut = "Couldn't set the new password — the account "
+      'changed. Ask for a new reset link.';
 
   @override
   void dispose() {
@@ -120,7 +136,8 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
       final session = state.session;
       if (isMixedSession(session)) {
         changed = true;
-        puttingBack = putBackOwnUser(arrived);
+        puttingBack =
+            putBackOwnUser(arrived, fromBroadcast: state.fromBroadcast);
       } else if (session?.user.id != owner) {
         changed = true;
         arrived = session;
@@ -131,7 +148,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
       await Future<void>.delayed(Duration.zero); // let the last event land
       if (changed) {
         _reportChanged();
-        await (puttingBack ?? putBackOwnUser(arrived));
+        await puttingBack;
         // Already the next account's own form: theirs, with what they typed.
         if (_owner == owner) _accountChanged();
         return;
@@ -152,13 +169,17 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   /// Signs out the account whose password was set, and only that one.
   Future<void> _backToSignIn() async {
     final router = GoRouter.maybeOf(context);
-    if (_signedIn == _owner) {
-      try {
-        await Supabase.instance.client.auth.signOut();
-      } catch (e, st) {
-        // The session is gone from this device either way (gotrue removes it
-        // before it tells the server).
-        reportError('ResetPasswordScreen._backToSignIn', e, st);
+    final owner = _owner;
+    if (_signedIn == owner || (_signOutFailed && _signedIn == null)) {
+      final error = await signOutOfDevice('ResetPasswordScreen._backToSignIn',
+          Supabase.instance.client.auth.signOut);
+      if (!mounted) return;
+      final now = _signedIn;
+      if (error != null && (now == null || now == owner)) {
+        // Still on the device: not /login as if signed out.
+        _signOutFailed = true;
+        _snack(signOutFailedText(error));
+        return;
       }
     }
     if (mounted) router?.go('/login');

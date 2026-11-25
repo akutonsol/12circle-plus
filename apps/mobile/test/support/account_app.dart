@@ -346,6 +346,9 @@ class MemoryStore extends GotrueAsyncStorage {
 
   /// After each refusal.
   void Function()? onRefused;
+
+  /// Removals wait for this (and are refused, or not, after it).
+  Completer<void>? holdRemoval;
   @override
   Future<String?> getItem({required String key}) async => m[key];
   @override
@@ -353,6 +356,7 @@ class MemoryStore extends GotrueAsyncStorage {
       m[key] = value;
   @override
   Future<void> removeItem({required String key}) async {
+    await holdRemoval?.future;
     if (refuseRemoval) {
       onRefused?.call();
       throw StateError('storage: cannot remove $key');
@@ -394,21 +398,25 @@ class MemorySession extends LocalStorage {
 
 /// Unroutable URL: nothing can reach a real service.
 Future<void> initAccountSupabase(
-        AccountServer server, FakeRealtime realtime, MemoryStore store,
-        {LocalStorage session = const EmptyLocalStorage()}) =>
-    Supabase.initialize(
-      url: 'http://127.0.0.1:1',
-      publishableKey: 'test-publishable-key',
-      httpClient: server,
-      realtimeClientOptions: RealtimeClientOptions(transport: realtime.connect),
-      authOptions: FlutterAuthClientOptions(
-        localStorage: session,
-        pkceAsyncStorage: store,
-        detectSessionInUri: false,
-        autoRefreshToken: true,
-      ),
-      debug: false,
-    );
+    AccountServer server, FakeRealtime realtime, MemoryStore store,
+    {LocalStorage session = const EmptyLocalStorage()}) async {
+  await Supabase.initialize(
+    url: 'http://127.0.0.1:1',
+    publishableKey: 'test-publishable-key',
+    httpClient: server,
+    realtimeClientOptions: RealtimeClientOptions(transport: realtime.connect),
+    authOptions: FlutterAuthClientOptions(
+      localStorage: session,
+      pkceAsyncStorage: store,
+      detectSessionInUri: false,
+      autoRefreshToken: true,
+    ),
+    debug: false,
+  );
+  // Its ten-second tick runs on the real clock: it would renew (or fail to) an
+  // expired session a test has set, at any moment.
+  _auth.stopAutoRefresh();
+}
 
 GoTrueClient get _auth => Supabase.instance.client.auth;
 
@@ -432,6 +440,20 @@ Future<void> sameMemberInAnotherTab(String uid) => _expectEvent(() async {
           session: session.session, broadcast: false);
       return null;
     }, AuthChangeEvent.signedIn);
+
+/// [user]'s user on [subject]'s token (a mixed session), as another tab tells
+/// this one of it: the session is replaced, and every listener told of a
+/// broadcast. gotrue's own channel is web only, so the session is replaced with
+/// `setInitialSession`, which delivers one more event after the broadcast.
+void hearMixedFromAnotherTab(
+    {required String user, required String subject, bool expired = false}) {
+  final json =
+      jsonEncode(sessionOf(subject, expired: expired)..['user'] = userOf(user));
+  // ignore: invalid_use_of_internal_member
+  _auth.notifyAllSubscribers(AuthChangeEvent.userUpdated,
+      session: Session.fromJson(jsonDecode(json)), broadcast: false);
+  unawaited(_auth.setInitialSession(json)); // at once; listeners run later
+}
 
 /// Runs [f] and checks that [event], for whoever was signed in, arrived.
 Future<void> _expectEvent(

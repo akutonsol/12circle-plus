@@ -43,25 +43,36 @@ String? signedInUid() {
 }
 
 /// Ends a mixed session ([isMixedSession]): puts the user its token was issued
-/// to back on it, as in [own] (the last session heard of with that user), here
-/// and (recoverSession tells them, for another uid) in every other tab, with no
-/// network. Synchronously when [own]'s token is good, so nothing else runs under
-/// the wrong name. Without [own] the server is asked. Records failures.
-Future<void> putBackOwnUser(Session? own) async {
+/// to back on it, as in [own] (the last session heard of with that user),
+/// synchronously and with no network, so nothing else runs under the wrong name
+/// and no account that arrives, or leaves, meanwhile is undone. Records failures.
+///
+/// In every other tab too (recoverSession tells them), unless another one told
+/// this ([fromBroadcast]): such a message may be an old one, read by a tab that
+/// was suspended, and telling the others again would put its account back over
+/// the sign-out, or the next account, that they know of and this tab has yet to
+/// hear. An expired token is left to gotrue, which renews it at its next tick or
+/// request: asked for here, the answer would bring back an account that left
+/// meanwhile.
+///
+/// Without [own] the server is asked: nothing here knows that user. That is a
+/// mixed session an earlier run stored, at launch. Never for a broadcast.
+Future<void> putBackOwnUser(Session? own, {bool fromBroadcast = false}) async {
   final auth = Supabase.instance.client.auth;
   final mixed = auth.currentSession;
   if (mixed == null || !isMixedSession(mixed)) return;
   try {
     if (own != null && sessionSubject(mixed) == own.user.id) {
       final json = jsonEncode(mixed.copyWith(user: own.user).toJson());
-      if (!mixed.isExpired) {
+      // For an expired token recoverSession would first ask for a new one.
+      if (fromBroadcast || mixed.isExpired) {
+        await auth.setInitialSession(json);
+      } else {
         await auth.recoverSession(json);
-        return;
       }
-      // recoverSession would first ask the server for a new token.
-      await auth.setInitialSession(json);
+    } else if (!fromBroadcast) {
+      await auth.refreshSession();
     }
-    await auth.refreshSession();
   } catch (e, st) {
     reportError('putBackOwnUser', e, st);
   }
@@ -75,7 +86,14 @@ Future<void> putBackOwnUser(Session? own) async {
 /// only then tells anyone (which removes the stored session) and the server. A
 /// refusal by the SERVER is therefore after the fact: the device is signed out.
 /// But when that removal throws, nobody is told, and the stored session signs
-/// the account back in at the next start. That is tried once more.
+/// the account back in at the next start. That is tried once more, unless an
+/// account has arrived by then.
+///
+/// One that arrives DURING the second try cannot be kept out of it: gotrue
+/// 2.21.0's `signOut` awaits the removal between forgetting the session and
+/// announcing the sign-out, and takes no condition. The announcement then
+/// carries the arrived session, so nobody signs it out and it is stored; but
+/// realtime goes back to the anon key. So that session is announced once more.
 Future<Object?> signOutOfDevice(
     String origin, Future<void> Function() signOut) async {
   final auth = Supabase.instance.client.auth;
@@ -93,10 +111,15 @@ Future<Object?> signOutOfDevice(
     if (auth.currentSession != null) return signedInUid() == uid ? e : null;
     try {
       await auth.signOut(); // no token left: nothing is sent
+      final arrived = auth.currentSession;
+      if (arrived != null) {
+        await auth.setInitialSession(jsonEncode(arrived.toJson()));
+      }
       return null;
     } catch (e, st) {
       reportError(origin, e, st);
-      return e;
+      // Not to be said to an account that has arrived meanwhile.
+      return auth.currentSession == null ? e : null;
     }
   } finally {
     unawaited(events.cancel());
@@ -200,7 +223,7 @@ class _AccountScopeState extends State<AccountScope> {
     _auth = auth.onAuthStateChange.listen(
       (state) {
         if (isMixedSession(state.session)) {
-          putBackOwnUser(_session);
+          putBackOwnUser(_session, fromBroadcast: state.fromBroadcast);
           return;
         }
         _session = state.session;

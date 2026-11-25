@@ -36,6 +36,7 @@ void main() {
     _server.reset();
     _store.refuseRemoval = false;
     _store.onRefused = null;
+    _store.holdRemoval = null;
     _failures.clear();
     setFailureSink(_failures.add);
     addTearDown(resetFailureSink);
@@ -97,7 +98,79 @@ void main() {
     expect(_stored.stored, isNull);
   });
 
-  test('the sign-out never began: the session is still there, and it is said',
+  group('B signs in', () {
+    /// Holds the next removal and returns what lets it go.
+    Completer<void> holdRemoval() => _store.holdRemoval = Completer<void>();
+
+    Future<List<AuthState>> heardFrom(Future<void> Function() f) async {
+      final heard = <AuthState>[];
+      final sub = _auth.onAuthStateChange.listen(heard.add);
+      await _landed();
+      heard.clear(); // the replayed one
+      await f();
+      await _landed();
+      await sub.cancel();
+      return heard;
+    }
+
+    void expectBs() {
+      expect(_auth.currentUser?.id, acctB);
+      expect(_stored.who, (acctB, acctB));
+      expect(AccountServer.sub(Supabase.instance.client.realtime.accessToken!),
+          acctB,
+          reason: "realtime is B's");
+    }
+
+    test('control: before the second try — there is none, and no sign-out is '
+        'announced', () async {
+      final hold = holdRemoval();
+      _store.refuseRemoval = true;
+      Object? error = 'unanswered';
+      final heard = await heardFrom(() async {
+        final out = _signOut();
+        await signInAs(acctB);
+        hold.complete();
+        error = await out;
+      });
+      expect(error, isNull);
+      expect(heard.map((s) => s.event),
+          isNot(contains(AuthChangeEvent.signedOut)));
+      expect(_failures, hasLength(1));
+      expectBs();
+    });
+
+    for (final refusedAgain in [false, true]) {
+      test('during the second try${refusedAgain ? ', refused as well' : ''}: '
+          "B's app stays B's, and nothing is said to B", () async {
+        late Completer<void> hold;
+        _store.refuseRemoval = true;
+        _store.onRefused = () {
+          if (_store.holdRemoval != null) return;
+          hold = holdRemoval();
+          _store.refuseRemoval = refusedAgain;
+        };
+        Object? error = 'unanswered';
+        final heard = await heardFrom(() async {
+          final out = _signOut();
+          await _landed();
+          await signInAs(acctB);
+          hold.complete();
+          error = await out;
+        });
+        expect(error, isNull);
+        expect(heard.last.session?.user.id, acctB);
+        expect(heard.last.event, isNot(AuthChangeEvent.signedOut));
+        for (final s in heard) {
+          expect(s.session?.user.id, acctB,
+              reason: 'nobody is told that B, or nobody, left: ${s.event}');
+        }
+        expect(_failures, hasLength(refusedAgain ? 2 : 1));
+        expectBs();
+      });
+    }
+  });
+
+  test('the sign-out never began:the session is still there, and it is said',
       () async {
     final error =
         await signOutOfDevice('test', () async => throw StateError('no'));
