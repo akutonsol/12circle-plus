@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../support/owned_rows_postgrest.dart';
 import '../support/quiet_realtime.dart';
+import '../support/settled.dart';
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-60c round 2 (B3) · The bell badge reads `unreadCountProvider` with
@@ -44,7 +45,7 @@ void main() {
     await initTwoMemberSupabaseQuietly(server);
   });
 
-  Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 80));
+  Future<void> settle() => settled(server);
 
   setUp(() async {
     server.reset();
@@ -88,13 +89,13 @@ void main() {
   }
 
   test('control: each member is told their own', () async {
-    expect(count(), 2);
-    expect(rows(), containsAll(['a-1', 'a-2']));
+    await eventually(count, 2);
+    await eventually(rows, containsAll(['a-1', 'a-2']));
     await signInAs(memberB);
+    await eventually(count, 1);
+    await eventually(rows, ['b-1']);
+    await eventually(() => told.last.$2, 1);
     await settle();
-    expect(count(), 1);
-    expect(rows(), ['b-1']);
-    expect(told.last.$2, 1);
     expect(reported, isEmpty);
   });
 
@@ -102,8 +103,8 @@ void main() {
     server.rows[_t] = [];
     c.invalidate(unreadCountProvider);
     await settle();
+    await eventually(count, 0);
     expect(state(), isA<AsyncData<int?>>());
-    expect(count(), 0);
   });
 
   test("B's read pending: nothing of A's, and the badge is told", () async {
@@ -117,8 +118,7 @@ void main() {
     expect(told.last.$2, isNull);
     expectNothingOfAsTold(from);
     server.holds['GET $_t:$memberB']!.complete();
-    await settle();
-    expect(count(), 1);
+    await eventually(count, 1);
   });
 
   test("A's refresh pending when B signs in: the badge is told all the same",
@@ -127,17 +127,16 @@ void main() {
     server.holds['GET $_t:$memberB'] = Completer<void>();
     c.invalidate(unreadCountProvider);
     await settle();
-    expect(state().isLoading, isTrue, reason: 'premise');
+    await eventually(() => state().isLoading, isTrue, reason: 'premise');
     final from = told.length;
     await signInAs(memberB);
     await settle();
-    expect(told.length, greaterThan(from),
+    await eventually(() => told.length, greaterThan(from),
         reason: 'loading -> loading is not announced by riverpod');
     expect(told.last.$2, isNull);
     holdA.complete();
     server.holds['GET $_t:$memberB']!.complete();
-    await settle();
-    expect(count(), 1);
+    await eventually(count, 1);
   });
 
   test("B's read failed: an error, recorded, and nothing of A's", () async {
@@ -145,7 +144,7 @@ void main() {
     final from = told.length;
     await signInAs(memberB);
     await settle();
-    expect(state().hasError, isTrue);
+    await eventually(() => state().hasError, isTrue);
     expect(count(), isNull, reason: "THE defect: AsyncError carried A's count");
     expect(rows(), isEmpty);
     expect(reported.map((f) => f.origin), contains('unreadCountProvider'),
@@ -163,8 +162,8 @@ void main() {
     server.rows[_t]!.add(_n('a-3', memberA));
     await signInAs(memberA);
     await settle();
-    expect(count(), 3);
-    expect(rows(), hasLength(3));
+    await eventually(count, 3);
+    await eventually(rows, hasLength(3));
   });
 
   for (final afterB in [false, true]) {
@@ -179,14 +178,14 @@ void main() {
       await settle();
       if (afterB) {
         holdB.complete();
-        await settle();
-        expect(count(), 1);
+        await eventually(count, 1);
       }
       holdA.complete();
       await settle();
       expect(count(), afterB ? 1 : isNull);
       expect(rows(), afterB ? ['b-1'] : isEmpty);
       if (!afterB) holdB.complete();
+      await eventually(count, 1);
       await settle();
       expect(count(), 1);
       expectNothingOfAsTold(from);
@@ -209,8 +208,7 @@ void main() {
     expect(count(), isNull);
     expectNothingOfAsTold(from);
     server.holds['GET $_t:$memberB']!.complete();
-    await settle();
-    expect(count(), 1);
+    await eventually(count, 1);
   });
 
   test("A's count landing in the turn the client changes is told to nobody",
@@ -222,6 +220,7 @@ void main() {
     hold.complete();
     unawaited(signInAs(memberB)); // the client has B; nobody was told
     expect(signedIn(), memberB, reason: 'premise');
+    await eventually(count, 1);
     await settle();
     expectNothingOfAsTold(from);
     expect(count(), 1);
@@ -242,7 +241,7 @@ void main() {
     own.listen(notificationsStreamProvider, (_, v) {
       if (v.hasValue) emitted.add([for (final n in v.requireValue) n.id]);
     });
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    await settle();
     unawaited(signInAs(memberB)); // the client has B at once
     expect(signedIn(), memberB, reason: 'premise');
     hold.complete();
@@ -255,14 +254,15 @@ void main() {
     server.fails.add('GET $_t:$memberA');
     c.invalidate(unreadCountProvider);
     await settle();
-    expect(counts(memberA).length, greaterThan(1), reason: 'it was read again');
-    expect(state().hasError, isTrue);
+    await eventually(() => counts(memberA).length, greaterThan(1),
+        reason: 'it was read again');
+    await eventually(() => state().hasError, isTrue);
     expect(count(), 2);
     expect(reported.map((f) => f.origin), contains('unreadCountProvider'));
     server.fails.clear();
     c.invalidate(unreadCountProvider);
     await settle();
-    expect(state().hasError, isFalse);
+    await eventually(() => state().hasError, isFalse);
     expect(count(), 2);
   });
 
@@ -271,9 +271,10 @@ void main() {
     final asked = server.log.length;
     final from = told.length;
     await refreshSession();
-    await settle();
-    expect(identical(c.read(currentUserProvider), before), isFalse,
+    await eventually(
+        () => identical(c.read(currentUserProvider), before), isFalse,
         reason: 'premise: the event arrived');
+    await settle();
     expect(server.log.length, asked,
         reason: 'the feed was opened, or the count read, again');
     expect(told.length, from);

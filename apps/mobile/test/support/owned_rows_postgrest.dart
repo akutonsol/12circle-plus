@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'two_member_postgrest.dart';
 
@@ -37,6 +39,26 @@ class OwnedRowsPostgrest extends TwoMemberPostgrest {
   /// Writes RLS filters to no row, in silence.
   final filtered = <String>{};
 
+  /// Requests not answered yet, with what holds them.
+  final _open = <http.BaseRequest, Completer<void>?>{};
+  StreamSubscription<AuthState>? _auth;
+  String? _authTold;
+
+  /// Requests that arrived, plus those answered: changes whenever either does.
+  int activity = 0;
+
+  // By id: `recoverSession` for the member already signed in emits no event.
+  String? get _authNow => Supabase.instance.client.auth.currentUser?.id;
+
+  /// What has not happened yet that nothing is holding back.
+  List<String> get waitingFor => [
+        for (final e in _open.entries)
+          if (e.value == null || e.value!.isCompleted)
+            'an answer to ${e.key.method} ${e.key.url.path}',
+        if (_authTold != _authNow) 'an auth change to be delivered',
+      ];
+  bool get idle => waitingFor.isEmpty;
+
   static const _ownerOf = {
     'goals': 'client_id',
     'notifications': 'recipient_id',
@@ -54,6 +76,11 @@ class OwnedRowsPostgrest extends TwoMemberPostgrest {
     log.clear();
     offline.clear();
     filtered.clear();
+    _open.clear(); // of a test that ended, and will not be answered
+    // Heard in the real zone: every file resets from `setUp`.
+    _auth ??= Supabase.instance.client.auth.onAuthStateChange.listen(
+        (s) => _authTold = s.session?.user.id,
+        onError: (Object _) {});
   }
 
   List<Asked> writes(String table) =>
@@ -63,6 +90,18 @@ class OwnedRowsPostgrest extends TwoMemberPostgrest {
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    activity++;
+    _open[request] = holds['${request.method} '
+        '${request.url.path.split('/').last}:${TwoMemberPostgrest.who(request)}'];
+    try {
+      return await _send(request);
+    } finally {
+      activity++;
+      _open.remove(request);
+    }
+  }
+
+  Future<http.StreamedResponse> _send(http.BaseRequest request) async {
     final u = request.url;
     if (!u.path.startsWith('/rest/v1/')) return super.send(request);
     final table = u.path.split('/').last;

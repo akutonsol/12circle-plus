@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../support/owned_rows_postgrest.dart';
 import '../support/pump_until.dart';
+import '../support/settled.dart';
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-60c (c) + E12 + S8 · the event ticket. A failed read of the
@@ -46,13 +47,8 @@ void main() {
       });
   Iterable<String> origins() => reported.map((f) => f.origin);
 
-  Future<void> settle(WidgetTester tester) async {
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 5)));
-      await tester.pump(const Duration(milliseconds: 20));
-    }
-  }
+  Future<void> settle(WidgetTester tester) => settledFrames(tester, server,
+      step: const Duration(milliseconds: 20));
 
   Future<void> show(WidgetTester tester, {bool free = true}) async {
     tester.view

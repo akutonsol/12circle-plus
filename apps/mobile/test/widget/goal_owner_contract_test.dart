@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/owned_rows_postgrest.dart';
+import '../support/settled.dart';
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-60c round 2 · what is new in the goals service and provider: the changes
@@ -52,13 +53,8 @@ void main() {
   List<Asked> writes() => server.writes('goals');
   Finder text(String s) => find.text(s);
 
-  Future<void> settle(WidgetTester tester) async {
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 5)));
-      await tester.pump(const Duration(milliseconds: 50));
-    }
-  }
+  Future<void> settle(WidgetTester tester) => settledFrames(tester, server,
+      step: const Duration(milliseconds: 50));
 
   Future<void> show(WidgetTester tester) async {
     tester.view
@@ -86,23 +82,25 @@ void main() {
     final hold = server.holds['GET goals:$memberA'] = Completer<void>();
     final provider = goalsOfProvider(memberA);
     c.listen(provider, (_, __) {});
-    await Future<void>.delayed(const Duration(milliseconds: 60));
+    await settled(server);
     await signInAs(memberB);
     hold.complete();
-    await Future<void>.delayed(const Duration(milliseconds: 60));
-    expect(c.read(provider), isA<AsyncError<Object?>>(), reason: 'landed as B');
+    await settled(server);
+    await eventually(() => c.read(provider), isA<AsyncError<Object?>>(),
+        reason: 'landed as B');
     expect(reported.single.origin, 'goalsOfProvider');
     // Asked for with B signed in: B's are not read into A's list.
     final asked = server.log.length;
     c.invalidate(provider);
-    await Future<void>.delayed(const Duration(milliseconds: 60));
+    await settled(server);
     expect(server.log.length, asked);
     expect(c.read(provider).hasValue, isFalse);
     // Control: A again.
     await signInAs(memberA);
     c.invalidate(provider);
-    await Future<void>.delayed(const Duration(milliseconds: 60));
-    expect(c.read(provider).requireValue.single.title, 'Bench 100 kg');
+    await settled(server);
+    await eventually(
+        () => c.read(provider).valueOrNull?.single.title, 'Bench 100 kg');
   });
 
   test('a change for a member no longer signed in is not sent, and is recorded '

@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/owned_rows_postgrest.dart';
+import '../support/settled.dart';
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-60c (e) · `pendingCoachProvider` and `clientRelationshipProvider`
@@ -42,7 +43,7 @@ void main() {
     resetFailureSink();
   });
 
-  Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 60));
+  Future<void> settle() => settled(server);
 
   void linked(String uid) {
     server.rows[_rel] = [
@@ -66,24 +67,25 @@ void main() {
         server.fails.add('GET $_rel:$memberA');
         c.invalidate(provider);
         await settle();
-        expect(c.read(provider), isA<AsyncError<Map<String, dynamic>?>>(),
+        await eventually(
+            () => c.read(provider), isA<AsyncError<Map<String, dynamic>?>>(),
             reason: 'THE defect: an unread relationship was "no relationship"');
         expect(reported.map((f) => f.origin), contains(name));
         // …and it can be read again.
         server.fails.clear();
         c.invalidate(provider);
-        await settle();
-        expect(c.read(provider).requireValue, isNotNull);
+        await eventually(() => c.read(provider).valueOrNull, isNotNull);
       });
 
       test('control: no row is none; a row is read', () async {
         await settle();
-        expect(c.read(provider), isA<AsyncData<Map<String, dynamic>?>>());
+        await eventually(
+            () => c.read(provider), isA<AsyncData<Map<String, dynamic>?>>());
         expect(c.read(provider).requireValue, isNull);
         linked(memberA);
         c.invalidate(provider);
+        await eventually(() => c.read(provider).valueOrNull, isNotNull);
         await settle();
-        expect(c.read(provider).requireValue, isNotNull);
         expect(reported, isEmpty);
       });
 
@@ -101,8 +103,8 @@ void main() {
         await settle();
         expect(c.read(provider).requireValue, isNull);
         await signInAs(memberA);
-        await settle();
-        expect(c.read(provider).requireValue, isNotNull, reason: 'A, back again');
+        await eventually(() => c.read(provider).valueOrNull, isNotNull,
+            reason: 'A, back again');
       });
 
       // Round 2 (fails on fd5d076): riverpod keeps the last value through a
@@ -117,7 +119,7 @@ void main() {
         linked(memberA);
         c.invalidate(provider);
         await settle();
-        expect(value(), isNotNull, reason: 'premise');
+        await eventually(value, isNotNull, reason: 'premise');
         final hold = server.holds['GET $_rel:$memberB'] = Completer<void>();
         server.fails.add('GET $_rel:$memberB');
         await signInAs(memberB);
@@ -126,7 +128,8 @@ void main() {
         expect(c.read(provider).isLoading, isTrue, reason: 'not read is not none');
         hold.complete();
         await settle();
-        expect(c.read(provider), isA<AsyncError<Map<String, dynamic>?>>());
+        await eventually(
+            () => c.read(provider), isA<AsyncError<Map<String, dynamic>?>>());
         expect(value(), isNull, reason: "THE defect: AsyncError carried A's link");
         expect(reported.map((f) => f.origin), contains(name));
       });
@@ -147,8 +150,7 @@ void main() {
           await settle();
           if (afterB) {
             holdB.complete();
-            await settle();
-            expect(value(), isNotNull);
+            await eventually(value, isNotNull);
           }
           holdA.complete();
           await settle();
@@ -189,8 +191,8 @@ void main() {
         await settle();
         expect(value(), isNull);
         server.holds['GET $_rel:$memberB']!.complete();
-        await settle();
-        expect(c.read(provider), isA<AsyncData<Map<String, dynamic>?>>());
+        await eventually(
+            () => c.read(provider), isA<AsyncData<Map<String, dynamic>?>>());
       });
 
       test('control: a failed refresh keeps the same member\'s link', () async {
@@ -199,8 +201,7 @@ void main() {
         await settle();
         server.fails.add('GET $_rel:$memberA');
         c.invalidate(provider);
-        await settle();
-        expect(c.read(provider).hasError, isTrue);
+        await eventually(() => c.read(provider).hasError, isTrue);
         expect(value(), isNotNull);
       });
 
@@ -211,8 +212,9 @@ void main() {
         final before = c.read(currentUserProvider);
         final asked = server.log.length;
         await refreshSession();
+        await eventually(
+            () => identical(c.read(currentUserProvider), before), isFalse);
         await settle();
-        expect(identical(c.read(currentUserProvider), before), isFalse);
         expect(server.log.length, asked);
       });
     });

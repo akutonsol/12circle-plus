@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../support/owned_rows_postgrest.dart';
 import '../support/pump_until.dart';
+import '../support/settled.dart';
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-60c (a) · /goals. A failed create/update was swallowed unrecorded, an
@@ -71,13 +72,8 @@ void main() {
         what: "A's goals");
   }
 
-  Future<void> settle(WidgetTester tester) async {
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 5)));
-      await tester.pump(const Duration(milliseconds: 50));
-    }
-  }
+  Future<void> settle(WidgetTester tester) => settledFrames(tester, server,
+      step: const Duration(milliseconds: 50));
 
   Future<void> become(WidgetTester tester, String? uid) async {
     await tester

@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/owned_rows_postgrest.dart';
+import '../support/settled.dart';
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-60c (d) · Notifications. A failed mark-read / mark-all / delete was
@@ -66,13 +67,8 @@ void main() {
   bool readOf(String id) =>
       server.rows[_t]!.firstWhere((r) => r['id'] == id)['read']! as bool;
 
-  Future<void> settle(WidgetTester tester) async {
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 5)));
-      await tester.pump(const Duration(milliseconds: 50));
-    }
-  }
+  Future<void> settle(WidgetTester tester) => settledFrames(tester, server,
+      step: const Duration(milliseconds: 50));
 
   /// The notifier is created in real time: its live feed opens a socket.
   Future<void> create(WidgetTester tester) => tester.runAsync(() async {
@@ -80,7 +76,7 @@ void main() {
           c.listen(notificationsProvider, (_, __) {});
         }
         c.read(notificationsProvider);
-        await Future<void>.delayed(const Duration(milliseconds: 60));
+        await settled(server);
       });
 
   Future<void> show(WidgetTester tester) async {
@@ -97,11 +93,9 @@ void main() {
   Future<void> become(WidgetTester tester, String? uid) async {
     await tester.runAsync(() async {
       await (uid == null ? signOut() : signInAs(uid));
-      for (var i = 0; i < 200 && c.read(currentUserProvider)?.id != uid; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 5));
-      }
+      await eventually(() => c.read(currentUserProvider)?.id, uid,
+          reason: 'premise');
     });
-    expect(c.read(currentUserProvider)?.id, uid, reason: 'premise');
     await create(tester);
     await settle(tester);
   }
@@ -111,7 +105,7 @@ void main() {
     await tester.pump(const Duration(seconds: 6));
     await tester.runAsync(() async {
       c.dispose();
-      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await settled(server);
     });
     await tester.pump(const Duration(minutes: 2));
   }
@@ -289,12 +283,10 @@ void main() {
       final notifier = c.read(notificationsProvider.notifier);
       await tester.runAsync(() async {
         await refreshSession();
-        for (var i = 0; i < 200 && identical(c.read(currentUserProvider), before); i++) {
-          await Future<void>.delayed(const Duration(milliseconds: 5));
-        }
+        await eventually(
+            () => identical(c.read(currentUserProvider), before), isFalse,
+            reason: 'premise: a new User');
       });
-      expect(identical(c.read(currentUserProvider), before), isFalse,
-          reason: 'premise: a new User');
       await create(tester);
       expect(identical(c.read(notificationsProvider.notifier), notifier), isTrue,
           reason: 'THE defect: the list was dropped on a token refresh');

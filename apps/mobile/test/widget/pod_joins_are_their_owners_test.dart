@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../support/owned_rows_postgrest.dart';
+import '../support/settled.dart';
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-60c round 2 (B2) · /pods followed the account through riverpod, which
@@ -68,22 +69,11 @@ void main() {
       a.who != memberA &&
       a.query.values.any((v) => v.contains(memberA)));
 
-  Future<void> settle(WidgetTester tester) async {
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 5)));
-      await tester.pump(const Duration(milliseconds: 20));
-    }
-  }
+  Future<void> settle(WidgetTester tester) => settledFrames(tester, server,
+      step: const Duration(milliseconds: 20));
 
   /// Real time passes and answers land; no frame runs.
-  Future<void> noFrame(WidgetTester tester) async {
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 5)));
-      await tester.idle();
-    }
-  }
+  Future<void> noFrame(WidgetTester tester) => settledNoFrame(tester, server);
 
   Future<void> show(WidgetTester tester) async {
     tester.view

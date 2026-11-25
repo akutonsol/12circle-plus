@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../support/owned_rows_postgrest.dart';
 import '../support/pump_until.dart';
+import '../support/settled.dart';
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-60c round 2 (QA 3) · A Register button drawn for A registered B: the
@@ -46,22 +47,11 @@ void main() {
   Iterable<String> checkouts() =>
       server.calls.where((k) => k.contains(_checkout));
 
-  Future<void> settle(WidgetTester tester) async {
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 5)));
-      await tester.pump(const Duration(milliseconds: 20));
-    }
-  }
+  Future<void> settle(WidgetTester tester) => settledFrames(tester, server,
+      step: const Duration(milliseconds: 20));
 
   /// Real time passes and answers land; no frame runs.
-  Future<void> noFrame(WidgetTester tester) async {
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 5)));
-      await tester.idle();
-    }
-  }
+  Future<void> noFrame(WidgetTester tester) => settledNoFrame(tester, server);
 
   Future<void> show(WidgetTester tester, {bool free = true}) async {
     tester.view
@@ -84,6 +74,14 @@ void main() {
   /// The rendered button, as it was built.
   VoidCallback button(WidgetTester tester) =>
       tester.widget<ElevatedButton>(find.byType(ElevatedButton)).onPressed!;
+
+  /// A checkout is encoded in an isolate: only its arrival says it was sent.
+  Future<void> pressed(WidgetTester tester, {required bool free}) async {
+    if (!free) {
+      await pumpUntil(tester, () => checkouts().isNotEmpty, what: 'the checkout');
+    }
+    await settle(tester);
+  }
 
   for (final free in [true, false]) {
     final what = free ? 'Register' : 'Buy';
@@ -138,7 +136,7 @@ void main() {
       await tester.runAsync(() => signInAs(memberB));
       await settle(tester);
       button(tester)();
-      await settle(tester);
+      await pressed(tester, free: free);
       if (free) {
         expect(server.writes(_regs).single.body['user_id'], memberB);
         expect(text('CONFIRMED'), findsOneWidget);
@@ -161,7 +159,7 @@ void main() {
       await noFrame(tester);
       expect(refreshed, isTrue, reason: 'premise: the event arrived');
       tap();
-      await settle(tester);
+      await pressed(tester, free: free);
       if (free) {
         expect(server.writes(_regs).single.body['user_id'], memberA);
         expect(text('CONFIRMED'), findsOneWidget);
@@ -178,7 +176,7 @@ void main() {
           Completer<void>();
       await show(tester, free: free);
       button(tester)();
-      await settle(tester);
+      await pressed(tester, free: free);
       expect(
           find.bySemanticsLabel(free ? 'Registering' : 'Starting checkout'),
           findsOneWidget,

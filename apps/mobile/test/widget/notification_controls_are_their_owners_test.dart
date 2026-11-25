@@ -12,6 +12,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../support/owned_rows_postgrest.dart';
 import '../support/quiet_realtime.dart';
+import '../support/settled.dart';
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-60c round 2 (B1) · A control drawn for member A acted for member B when
@@ -66,29 +67,18 @@ void main() {
   Iterable<AppFailure> accountChanged() => reported
       .where((f) => '${f.error}'.contains('the signed-in account changed'));
 
-  Future<void> settle(WidgetTester tester) async {
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 5)));
-      await tester.pump(const Duration(milliseconds: 50));
-    }
-  }
+  Future<void> settle(WidgetTester tester) => settledFrames(tester, server,
+      step: const Duration(milliseconds: 50));
 
   /// Real time passes and answers land; no frame runs.
-  Future<void> noFrame(WidgetTester tester) async {
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 5)));
-      await tester.idle();
-    }
-  }
+  Future<void> noFrame(WidgetTester tester) => settledNoFrame(tester, server);
 
   Future<void> create(WidgetTester tester) => tester.runAsync(() async {
         if (!c.exists(notificationsProvider)) {
           c.listen(notificationsProvider, (_, __) {});
         }
         c.read(notificationsProvider);
-        await Future<void>.delayed(const Duration(milliseconds: 60));
+        await settled(server);
       });
 
   Future<void> show(WidgetTester tester) async {
@@ -105,11 +95,9 @@ void main() {
   Future<void> become(WidgetTester tester, String? uid) async {
     await tester.runAsync(() async {
       await (uid == null ? signOut() : signInAs(uid));
-      for (var i = 0; i < 200 && c.read(currentUserProvider)?.id != uid; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 5));
-      }
+      await eventually(() => c.read(currentUserProvider)?.id, uid,
+          reason: 'premise');
     });
-    expect(c.read(currentUserProvider)?.id, uid, reason: 'premise');
     await create(tester);
     await settle(tester);
   }
@@ -119,7 +107,7 @@ void main() {
     await tester.pump(const Duration(seconds: 6));
     await tester.runAsync(() async {
       c.dispose();
-      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await settled(server);
     });
     await tester.pump(const Duration(minutes: 2));
   }
@@ -154,7 +142,7 @@ void main() {
           WidgetTester tester, void Function(WidgetTester) control) =>
       tester.runAsync(() async {
         control(tester);
-        await Future<void>.delayed(const Duration(milliseconds: 80));
+        await settled(server);
       });
 
   for (final (name, control, method, took) in controls) {
@@ -190,10 +178,10 @@ void main() {
       final before = c.read(currentUserProvider);
       await tester.runAsync(() async {
         await refreshSession();
-        await Future<void>.delayed(const Duration(milliseconds: 30));
+        await eventually(
+            () => identical(c.read(currentUserProvider), before), isFalse,
+            reason: 'premise: the event arrived');
       });
-      expect(identical(c.read(currentUserProvider), before), isFalse,
-          reason: 'premise: the event arrived');
       await press(tester, control);
       await settle(tester);
       expect(server.writes(_t).map((w) => '${w.method} ${w.who}'),
@@ -288,6 +276,38 @@ void main() {
     });
   }
 
+  testWidgets("A's refresh in flight when B signs in, B's read pending: "
+      "nothing of A's, and A's late answer changes nothing", (tester) async {
+    Iterable<Asked> reads(String uid) =>
+        server.log.where((a) => a.method == 'GET' && a.who == uid);
+    await show(tester);
+    expect(text('For A one'), findsOneWidget, reason: 'premise');
+    final holdA = server.holds['GET $_t:$memberA'] = Completer<void>();
+    final holdB = server.holds['GET $_t:$memberB'] = Completer<void>();
+    final asked = reads(memberA).length;
+    await tester.runAsync(() async {
+      unawaited(c.read(notificationsProvider.notifier).refresh());
+      await settled(server);
+    });
+    await settle(tester);
+    expect(reads(memberA).length, greaterThan(asked),
+        reason: 'premise: in flight');
+    expect(text('For A one'), findsOneWidget, reason: 'control: A keeps it');
+    await become(tester, memberB);
+    expect(reads(memberB), isNotEmpty, reason: "premise: B's is pending");
+    expect(text('For A one'), findsNothing,
+        reason: "THE defect: A's notifications were shown to B");
+    holdA.complete();
+    await settle(tester);
+    expect(text('For A one'), findsNothing);
+    expect(find.textContaining("Couldn't"), findsNothing);
+    holdB.complete();
+    await settle(tester);
+    expect(text('For B'), findsOneWidget);
+    expect(text('For A one'), findsNothing);
+    await done(tester);
+  });
+
   testWidgets("A's held reads landing with B signed in and nothing flushed",
       (tester) async {
     // The list's own read and the live feed's: both are A's, both are dropped.
@@ -315,7 +335,7 @@ void main() {
       c.invalidate(notificationsProvider); // no frame, nothing flushed
       final AsyncValue<List<AppNotification>> s = c.read(notificationsProvider);
       expect(s.hasValue, isFalse);
-      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await settled(server);
     });
     await settle(tester);
     expect(text('For A one'), findsNothing);

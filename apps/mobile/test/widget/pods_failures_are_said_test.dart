@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../support/owned_rows_postgrest.dart';
 import '../support/pump_until.dart';
+import '../support/settled.dart';
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-60c (b) + E16 · /pods. A failed load was "No open pods yet", a failed
@@ -60,13 +61,8 @@ void main() {
   });
 
   Finder text(String s) => find.text(s);
-  Future<void> settle(WidgetTester tester) async {
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 5)));
-      await tester.pump(const Duration(milliseconds: 20));
-    }
-  }
+  Future<void> settle(WidgetTester tester) => settledFrames(tester, server,
+      step: const Duration(milliseconds: 20));
 
   Future<void> show(WidgetTester tester) async {
     tester.view
@@ -278,6 +274,42 @@ void main() {
         await done(tester);
       });
     }
+
+    testWidgets("A's refresh in flight, B's read pending: nothing of A's, and "
+        "A's late answer changes nothing", (tester) async {
+      await show(tester);
+      expectAsPods();
+      final holdA = server.holds['GET $_pods:$memberA'] = Completer<void>();
+      final holdB = server.holds['GET $_pods:$memberB'] = Completer<void>();
+      // "Already a member" is answered by reading the pods again, in silence.
+      server.rows[_members]!.add({'pod_id': 'p-c', 'user_id': memberA});
+      final asked = server.log.length;
+      await join(tester, 'Charlie Pod');
+      expect(
+          server.log.skip(asked).where((a) => a.method == 'GET' && a.who == memberA),
+          hasLength(2), reason: 'premise: in flight');
+      expect(text('Alpha Pod'), findsNWidgets(2), reason: 'control: A keeps them');
+      await become(tester, memberB);
+      expect(server.asked('GET $_pods:$memberB'), isTrue,
+          reason: "premise: B's is pending");
+      void nothingOfAs() {
+        expect(text('My Pods'), findsNothing,
+            reason: "THE defect: A's pods were shown to B");
+        expect(text('Alpha Pod'), findsNothing);
+        expect(text('No open pods yet'), findsNothing);
+        expect(find.textContaining("Couldn't"), findsNothing);
+      }
+
+      nothingOfAs();
+      holdA.complete();
+      await settle(tester);
+      nothingOfAs();
+      holdB.complete();
+      await settle(tester);
+      expect(text('Bravo Pod'), findsNWidgets(2));
+      expect(text('Alpha Pod'), findsOneWidget);
+      await done(tester);
+    });
 
     testWidgets("A's join in flight: nothing of it is said or shown to B",
         (tester) async {

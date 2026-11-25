@@ -12,6 +12,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../support/owned_rows_postgrest.dart';
 import '../support/pump_until.dart';
+import '../support/settled.dart';
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-60c round 2 · /goals: the card, dialog, sheet and date picker are the
@@ -66,22 +67,11 @@ void main() {
   Iterable<AppFailure> accountChanged() => reported
       .where((f) => '${f.error}'.contains('the signed-in account changed'));
 
-  Future<void> settle(WidgetTester tester) async {
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 5)));
-      await tester.pump(const Duration(milliseconds: 50));
-    }
-  }
+  Future<void> settle(WidgetTester tester) => settledFrames(tester, server,
+      step: const Duration(milliseconds: 50));
 
   /// Real time passes and answers land; no frame runs.
-  Future<void> noFrame(WidgetTester tester) async {
-    for (var i = 0; i < 12; i++) {
-      await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 5)));
-      await tester.idle();
-    }
-  }
+  Future<void> noFrame(WidgetTester tester) => settledNoFrame(tester, server);
 
   Future<void> show(WidgetTester tester) async {
     tester.view
@@ -355,6 +345,38 @@ void main() {
         await done(tester);
       });
     }
+
+    // Loading -> loading is not announced by riverpod, so a kept list is not
+    // dropped by B's read starting: the list is dropped by whose it is.
+    testWidgets("A's refresh in flight when B signs in, B's read pending: "
+        "nothing of A's, and A's late answer changes nothing", (tester) async {
+      await show(tester);
+      expect(text('Bench 100 kg'), findsOneWidget, reason: 'premise');
+      final holdA = server.holds['GET goals:$memberA'] = Completer<void>();
+      final holdB = server.holds['GET goals:$memberB'] = Completer<void>();
+      final asked = reads(memberA);
+      unawaited(tester
+          .widget<RefreshIndicator>(find.byType(RefreshIndicator))
+          .onRefresh());
+      await settle(tester);
+      expect(reads(memberA) - asked, 1, reason: 'premise: in flight');
+      expect(text('Bench 100 kg'), findsOneWidget, reason: 'control: A keeps it');
+      await become(tester, memberB);
+      expect(reads(memberB), 1, reason: "premise: B's is pending");
+      expect(text('Bench 100 kg'), findsNothing,
+          reason: "THE defect: A's goals were shown to B");
+      expect(text('No goals yet'), findsNothing);
+      holdA.complete();
+      await settle(tester);
+      expect(text('Bench 100 kg'), findsNothing);
+      expect(text('No goals yet'), findsNothing);
+      expect(find.textContaining("Couldn't"), findsNothing);
+      holdB.complete();
+      await settle(tester);
+      expect(text('Row 2k'), findsOneWidget);
+      expect(text('Bench 100 kg'), findsNothing);
+      await done(tester);
+    });
 
     for (final empty in [false, true]) {
       testWidgets(
