@@ -31,9 +31,9 @@ import '../support/two_member_postgrest.dart';
 // flight at the switch is never notified, so a reader that does not watch the
 // uid went on drawing A's.
 //
-// A real auth client, real transitions, no AccountScope. The challenges,
-// streak, classes and events are the real providers; the other reads are
-// replaced by ones that follow the uid as the real ones do.
+// A real auth client, real transitions, no AccountScope. The streak, classes
+// and events are the real providers; the challenges are the real read, keyed
+// either way ([_Key]); the other reads are replaced, and keyed either way.
 //
 // HOW TO SEE IT FAIL: `git checkout e708fda --` activity_screen.dart,
 // directory_screen.dart, meal_plan_screen.dart and dashboard_provider.dart;
@@ -63,6 +63,18 @@ Workout _workout(String title) => Workout(
       scheduledDate: DateTime.now(),
     );
 
+/// How a replaced read follows the sign-in. `AsyncData(isLoading)` of A's under
+/// B's uid needs a read keyed by uid (P0-FL-59f keys the challenges so; the
+/// ruled pattern). Keyed by the whole User, as the others are today, the same
+/// moment is `AsyncLoading` of A's.
+enum _Key { uid, user }
+
+var _key = _Key.uid;
+
+String? _signedIn(Ref ref) => _key == _Key.uid
+    ? ref.watch(currentUserProvider.select((u) => u?.id))
+    : ref.watch(currentUserProvider)?.id;
+
 /// A read replaced here: it follows the uid, can be held or failed for one
 /// member, and answers per member.
 class _Reads<T> {
@@ -70,16 +82,21 @@ class _Reads<T> {
   final Map<String, T> answers;
   final holds = <String, Completer<void>>{};
   final fails = <String>{};
-  final asked = <String>[];
 
   Future<T> call(Ref ref) async {
-    final uid =
-        ref.watch(currentUserProvider.select((u) => u?.id)) ?? 'nobody';
-    asked.add(uid);
+    final uid = _signedIn(ref) ?? 'nobody';
     final hold = holds[uid];
     if (hold != null) await hold.future;
     if (fails.contains(uid)) throw StateError('SECRET read');
     return answers[uid]!;
+  }
+}
+
+Iterable<(_Key, MapEntry<String, T>)> _ways<T>(Map<String, T> around) sync* {
+  for (final key in _Key.values) {
+    for (final way in around.entries) {
+      yield (key, way);
+    }
   }
 }
 
@@ -120,6 +137,7 @@ void main() {
       memberB: {'calories': 1500, 'protein': 100, 'carbs': 150, 'fat': 50},
       'nobody': {'calories': 2000},
     });
+    _key = _Key.uid;
     reported.clear();
     setFailureSink(reported.add);
     await signInAs(memberA);
@@ -151,6 +169,10 @@ void main() {
       assignedWorkoutsProvider.overrideWith((ref) => workouts(ref)),
       programSessionStatusProvider.overrideWith((ref) => statuses(ref)),
       nutritionGoalsProvider.overrideWith((ref) => goals(ref)),
+      liveChallengesProvider.overrideWith((ref) {
+        _signedIn(ref);
+        return ref.watch(liveChallengeServiceProvider).getActiveChallenges();
+      }),
     ]);
     addTearDown(c.dispose);
     await t.pumpWidget(UncontrolledProviderScope(
@@ -225,9 +247,10 @@ void main() {
       return c;
     }
 
-    for (final way in around.entries) {
-      testWidgets("${way.key}, B's read pending: nothing of A, from the first "
+    for (final (key, way) in _ways(around)) {
+      testWidgets("${way.key} (by ${key.name}), B's read pending: nothing of A, from the first "
           'frame; then B\'s own', (t) async {
+        _key = key;
         final c = await asA(t);
         await way.value(t, c, liveChallengesProvider, hold);
         await t.pump();
@@ -247,8 +270,9 @@ void main() {
         await close(t);
       });
 
-      testWidgets("${way.key}, B's read failed: the failure, and nothing of A "
+      testWidgets("${way.key} (by ${key.name}), B's read failed: the failure, and nothing of A "
           'under it, nor while B tries again', (t) async {
+        _key = key;
         server.fails.add('GET challenges:$memberB');
         final c = await asA(t);
         await way.value(t, c, liveChallengesProvider, hold);
@@ -275,7 +299,8 @@ void main() {
         await close(t);
       });
 
-      testWidgets("${way.key}: A's failure is not B's", (t) async {
+      testWidgets("${way.key} (by ${key.name}): A's failure is not B's", (t) async {
+        _key = key;
         server.fails.add('GET challenges:$memberA');
         final c = await show(t, const ActivityScreen());
         expect(notice, findsOneWidget, reason: 'premise');
@@ -451,49 +476,30 @@ void main() {
   // QA mutant 7: `if (!read.isLoading)` → `if (read is! AsyncLoading)`. These
   // pass at e708fda and fail under the mutant.
   group('the refresh guard (q7)', () {
-    testWidgets("streak, read again around the switch: A's number is not B's",
-        (t) async {
-      for (final way in around.values) {
-        final c = await show(t, const ActivityScreen());
-        expect(find.text('day streak'), findsOneWidget, reason: 'premise');
-        await way(t, c, streakProvider, (u) => holdServer('daily_scores', u));
-        await t.pump();
-        expect(find.text('9'), findsNothing);
-        expect(find.text('day streak'), findsNothing);
-        await settle(t);
-        expect(find.text('day streak'), findsNothing);
-        for (final h in server.holds.values) {
-          h.complete();
-        }
-        server.holds.clear();
-        await settle(t);
-        expect(find.text('2'), findsOneWidget);
-        await close(t);
-        await hear(t, () => signInAs(memberA));
+    for (final way in around.entries) {
+      for (final (what, aFails) in [('number', false), ('failure', true)]) {
+        testWidgets("streak, ${way.key}: A's $what is not B's", (t) async {
+          if (aFails) server.fails.add('GET daily_scores:$memberA');
+          final mine = find.text(aFails ? _streakFailed : '9');
+          final c = await show(t, const ActivityScreen());
+          expect(mine, findsOneWidget, reason: 'premise');
+          await way.value(
+              t, c, streakProvider, (u) => holdServer('daily_scores', u));
+          await t.pump();
+          expect(mine, findsNothing);
+          expect(find.text('day streak'), findsNothing);
+          await settle(t);
+          expect(mine, findsNothing);
+          expect(find.text('day streak'), findsNothing);
+          for (final h in server.holds.values) {
+            h.complete();
+          }
+          await settle(t);
+          expect(find.text('2'), findsOneWidget);
+          await close(t);
+        });
       }
-    });
-
-    testWidgets("streak, read again around the switch: A's failure is not B's",
-        (t) async {
-      for (final way in around.values) {
-        server.fails.add('GET daily_scores:$memberA');
-        final c = await show(t, const ActivityScreen());
-        expect(find.text(_streakFailed), findsOneWidget, reason: 'premise');
-        await way(t, c, streakProvider, (u) => holdServer('daily_scores', u));
-        await t.pump();
-        expect(find.text(_streakFailed), findsNothing);
-        await settle(t);
-        expect(find.text(_streakFailed), findsNothing);
-        for (final h in server.holds.values) {
-          h.complete();
-        }
-        server.holds.clear();
-        await settle(t);
-        expect(find.text('2'), findsOneWidget);
-        await close(t);
-        await hear(t, () => signInAs(memberA));
-      }
-    });
+    }
 
     for (final (name, provider, member, table)
         in <(String, FutureProvider<Object?>,
@@ -578,8 +584,9 @@ void main() {
       await close(t);
     });
 
-    for (final way in around.entries) {
-      testWidgets("${way.key}: A's month is not B's", (t) async {
+    for (final (key, way) in _ways(around)) {
+      testWidgets("${way.key} (by ${key.name}): A's month is not B's", (t) async {
+        _key = key;
         month.answers[memberA] = rows(List.filled(31, 100));
         final c = await show(t, const ActivityScreen());
         expect(find.text("You're Crushing it"), findsOneWidget,
@@ -599,7 +606,8 @@ void main() {
         await close(t);
       });
 
-      testWidgets("${way.key}: A's week is not in B's card", (t) async {
+      testWidgets("${way.key} (by ${key.name}): A's week is not in B's card", (t) async {
+        _key = key;
         month.answers
           ..[memberA] = rows([10])
           ..[memberB] = rows([10, 10]);
@@ -645,8 +653,9 @@ void main() {
       final a = find.text(title);
       final b = find.text('Blake Push');
 
-      for (final way in around.entries) {
-        testWidgets("${way.key}: A's workout is not B's", (t) async {
+      for (final (key, way) in _ways(around)) {
+        testWidgets("${way.key} (by ${key.name}): A's workout is not B's", (t) async {
+          _key = key;
           final c = await show(t, screen);
           expect(a, findsOneWidget, reason: 'premise');
           await way.value(t, c, assignedWorkoutsProvider,
@@ -666,6 +675,7 @@ void main() {
       }
 
       testWidgets("A → B, B's read pending, then failed: never A's", (t) async {
+        _key = _Key.user; // as today
         await show(t, screen);
         final gate = workouts.holds[memberB] = Completer<void>();
         workouts.fails.add(memberB);
@@ -723,8 +733,9 @@ void main() {
   group('meal plan targets', () {
     final a = find.text('2600 kcal');
 
-    for (final way in around.entries) {
-      testWidgets("${way.key}: A's targets are not taken as B's", (t) async {
+    for (final (key, way) in _ways(around)) {
+      testWidgets("${way.key} (by ${key.name}): A's targets are not taken as B's", (t) async {
+        _key = key;
         final c = await show(t, const MealPlanScreen());
         expect(a, findsOneWidget, reason: 'premise');
         await way.value(t, c, nutritionGoalsProvider,
