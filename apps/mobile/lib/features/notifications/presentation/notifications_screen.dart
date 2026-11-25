@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../data/notification_model.dart';
 import '../domain/notification_provider.dart';
 import '../domain/notification_groups.dart';
+import '../../auth/domain/auth_provider.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../../../core/widgets/named_icon_button.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -18,9 +20,26 @@ class _C {
   static const onSurface   = Color(0xFFDAE2FD);
   static const onSurfVar   = Color(0xFFCFC2D6);
   static const outline     = Color(0xFF988D9F);
-  static const outlineVar  = Color(0xFF4D4354);
   static const error       = Color(0xFFFFB4AB);
   static const errCont     = Color(0xFF93000A);
+}
+
+/// Runs [change] (one of the notifier's three) and says it when the server did
+/// not take it — to the member who asked, not to whoever signed in meanwhile
+/// (P0-FL-60c).
+Future<bool> _saySo(BuildContext context, String doWhat,
+    Future<bool> Function(NotificationsNotifier) change) async {
+  final c = ProviderScope.containerOf(context, listen: false);
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final uid = currentUserProvider.select((u) => u?.id);
+  final owner = c.read(uid);
+  final notifier = c.read(notificationsProvider.notifier);
+  final ok = await change(notifier);
+  if (!ok && c.read(uid) == owner) {
+    messenger?.showSnackBar(
+        SnackBar(content: Text(couldntMessage(doWhat, notifier.lastError))));
+  }
+  return ok;
 }
 
 class NotificationsScreen extends ConsumerStatefulWidget {
@@ -92,13 +111,7 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
                   fontWeight: FontWeight.w700)),
               const Spacer(),
               GestureDetector(
-                onTap: () async {
-                  final ok = await ref.read(notificationsProvider.notifier).markAllRead();
-                  if (!ok && context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                        content: Text("Couldn't mark them read — try again.")));
-                  }
-                },
+                onTap: () => _saySo(context, 'mark them read', (n) => n.markAllRead()),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                   decoration: BoxDecoration(
@@ -114,29 +127,43 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
           // ── Content ──────────────────────────────────────────────────────
           Expanded(
             child: state.when(
+              // A failed refresh keeps the list that was read.
+              skipError: true,
               loading: () => const Center(
                 child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2)),
               error: (e, _) => Center(
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.wifi_off_rounded, color: _C.outlineVar, size: 40),
-                  const SizedBox(height: 12),
-                  Text('Couldn\'t load notifications',
-                    style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.6))),
-                  const SizedBox(height: 8),
-                  GestureDetector(
-                    onTap: () => ref.read(notificationsProvider.notifier).refresh(),
-                    child: Text('Try again',
-                      style: const TextStyle(color: _C.primary, fontSize: 13))),
-                ])),
-              data: (list) => list.isEmpty
-                  ? _EmptyState()
-                  : _NotificationList(list: list),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: _LoadFailure(state: state))),
+              data: (list) => Column(children: [
+                if (state.hasError)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: _LoadFailure(state: state)),
+                Expanded(child: list.isEmpty
+                    ? _EmptyState()
+                    : _NotificationList(list: list)),
+              ]),
             ),
           ),
         ]),
       ]),
     );
   }
+}
+
+class _LoadFailure extends ConsumerWidget {
+  final AsyncValue<List<AppNotification>> state;
+  const _LoadFailure({required this.state});
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => SectionLoadFailure(
+        what: state.hasValue ? 'your latest notifications' : 'your notifications',
+        error: state.error,
+        busy: state.isLoading,
+        onRetry: () => ref.read(notificationsProvider.notifier).refresh(),
+        accent: _C.primary,
+        textColor: _C.onSurface,
+        mutedColor: _C.onSurfVar);
 }
 
 // ── Notification List ─────────────────────────────────────────────────────────
@@ -161,8 +188,8 @@ class _NotificationList extends ConsumerWidget {
           return Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: _NotificationCard(notification: n,
-              onTap: () => ref.read(notificationsProvider.notifier).markRead(n.id),
-              onDismiss: () => ref.read(notificationsProvider.notifier).delete(n.id)));
+              onTap: () => _saySo(context, 'mark that read', (x) => x.markRead(n.id)),
+              onDismiss: () => _saySo(context, 'delete that', (x) => x.delete(n.id))));
         },
       ),
     );
@@ -231,7 +258,8 @@ class _GroupHeader extends StatelessWidget {
 class _NotificationCard extends StatelessWidget {
   final AppNotification notification;
   final VoidCallback onTap;
-  /// Deletes the notification; true when the server took it.
+  /// Deletes the notification, saying so when the server did not take it; true
+  /// when it did.
   final AsyncValueGetter<bool> onDismiss;
   const _NotificationCard({
     required this.notification,
@@ -259,14 +287,7 @@ class _NotificationCard extends StatelessWidget {
         child: const Icon(Icons.delete_outline_rounded, color: _C.error, size: 24)),
       // Delete first, dismiss only if it was deleted: a row whose delete failed
       // slides back, still there, and the member is told.
-      confirmDismiss: (_) async {
-        final ok = await onDismiss();
-        if (!ok && context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text("Couldn't delete that — try again.")));
-        }
-        return ok;
-      },
+      confirmDismiss: (_) => onDismiss(),
       child: GestureDetector(
         onTap: onTap,
         child: AnimatedContainer(

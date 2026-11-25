@@ -1,5 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../../vendor/presentation/event_agenda_screen.dart';
 import '../../payments/data/payment_service.dart';
 
@@ -27,15 +31,76 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
   bool _loading = false;
   String? _ticketCode;
 
+  /// Whose ticket this is (P0-FL-60c); null when nobody is signed in.
+  String? _owner;
+
+  /// One per account shown: an answer that started under another one is
+  /// dropped, even when the same member is back.
+  int _epoch = 0;
+
+  /// [_owner]'s registration was read. Until then "not registered" is not
+  /// known, and registering is not offered.
+  bool _checked = false;
+  bool _checking = false;
+  Object? _checkError;
+
+  /// Who is signed in is followed here, without a frame: the ticket is a
+  /// credential, and goes with the member it belongs to.
+  StreamSubscription<AuthState>? _authSub;
+
   @override
   void initState() {
     super.initState();
+    _owner = _db.auth.currentUser?.id;
+    _authSub = _db.auth.onAuthStateChange.listen((_) => _followAccount(),
+        onError: (Object e, StackTrace st) =>
+            reportError('EventTicketScreen.onAuthStateChange', e, st));
     _checkRegistration();
   }
 
-  Future<void> _checkRegistration() async {
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  /// The same member (a token refresh) changes nothing.
+  void _followAccount() {
+    if (!mounted) return;
     final uid = _db.auth.currentUser?.id;
-    if (uid == null) return;
+    if (uid == _owner) return;
+    setState(() {
+      _owner = uid;
+      _epoch++;
+      _registered = false;
+      _ticketCode = null;
+      _loading = false;
+      _checked = false;
+      _checking = false;
+      _checkError = null;
+    });
+    _checkRegistration();
+  }
+
+  /// [_owner] when they are still the one signed in. Otherwise nothing is
+  /// sent: recorded, and the screen follows whoever is.
+  String? _stillOwner(String what) {
+    final owner = _owner;
+    if (owner != null && _db.auth.currentUser?.id == owner) return owner;
+    reportError('EventTicketScreen.$what',
+        StateError('$what: the signed-in account changed'), StackTrace.current);
+    _followAccount();
+    return null;
+  }
+
+  void _say(String message) => ScaffoldMessenger.of(context)
+      .showSnackBar(SnackBar(content: Text(message)));
+
+  Future<void> _checkRegistration() async {
+    final uid = _owner;
+    final epoch = _epoch;
+    if (uid == null || _checking) return;
+    setState(() => _checking = true);
     try {
       final reg = await _db
           .from('event_registrations')
@@ -43,19 +108,33 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
           .eq('event_id', widget.event['id'] as String)
           .eq('user_id', uid)
           .maybeSingle();
-      if (reg != null) {
-        if (!mounted) return;
-        setState(() {
+      if (!mounted || epoch != _epoch) return;
+      setState(() {
+        _checking = false;
+        _checked = true;
+        _checkError = null;
+        if (reg != null) {
           _registered = true;
           _ticketCode = reg['qr_code'] as String?;
-        });
-      }
-    } catch (_) {}
+        }
+      });
+    } catch (e, st) {
+      // Not "not registered": the status is unknown until it is read.
+      reportError('EventTicketScreen.checkRegistration', e, st);
+      if (!mounted || epoch != _epoch) return;
+      setState(() {
+        _checking = false;
+        _checked = false;
+        _checkError = e;
+      });
+    }
   }
 
   Future<void> _register() async {
-    final uid = _db.auth.currentUser?.id;
+    if (_loading || _checking || !_checked || _registered) return;
+    final uid = _stillOwner('register');
     if (uid == null) return;
+    final epoch = _epoch;
     setState(() => _loading = true);
     try {
       final code = 'TKT-${uid.substring(0, 6).toUpperCase()}-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
@@ -65,9 +144,9 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
         'qr_code': code,
         'status': 'confirmed',
       });
-      if (!mounted) return;
+      if (!mounted || epoch != _epoch) return;
       setState(() { _registered = true; _ticketCode = code; });
-    } catch (_) {
+    } catch (e, st) {
       // I-COM-01 / DAT-4. This block used to invent a demo ticket code and set
       // `_registered = true`, so a failed write rendered the same _TicketView as
       // a real registration. QA_CLOSURE_STANDARD §9 invariant I-1 names that
@@ -75,37 +154,95 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
       // demo data presented as the user's own" — and PD-B27 requires the
       // fabricating catch deleted "regardless of the answer".
       //
-      // The failure is now surfaced through the mechanism this screen already
-      // uses for the paid path (_buyTicket, below): no state is invented, so
+      // The failure is recorded and said: no state is invented, so
       // `_registered` stays false and the build falls through to the register
-      // affordance. What becomes of the error object is ERR-1/EC-11 territory
-      // and is deliberately NOT changed here.
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Could not complete your registration. Try again.')));
+      // affordance.
+      reportError('EventTicketScreen.register', e, st);
+      if (!mounted || epoch != _epoch) return;
+      // "Already registered" (23505) is answered by the registration itself:
+      // read it again, so the ticket shown is the one that exists.
+      if (e is PostgrestException && e.code == '23505') {
+        await _checkRegistration();
+        if (!mounted || epoch != _epoch) return;
+        if (_registered || !_checked) return; // the ticket, or the failure, shows
       }
+      _say(couldntMessage('complete your registration', e));
     } finally {
-      setState(() => _loading = false);
+      if (mounted && epoch == _epoch) setState(() => _loading = false);
     }
   }
 
   /// Paid events go through Stripe Checkout; the webhook grants the registration.
   /// Uses in-app Embedded Checkout on web when configured, else hosted redirect.
   Future<void> _buyTicket() async {
+    if (_loading || _checking || !_checked || _registered) return;
+    if (_stillOwner('buyTicket') == null) return;
+    final epoch = _epoch;
     final eventId = widget.event['id'] as String;
     final svc = PaymentService();
     setState(() => _loading = true);
 
     // Hosted redirect only — Stripe Checkout can't run in an iframe.
-    final ok = await svc.startCheckout(kind: 'event_ticket', eventId: eventId);
-    if (!mounted) return;
+    Object? error;
+    try {
+      final ok = await svc.startCheckout(kind: 'event_ticket', eventId: eventId);
+      if (!ok) throw StateError('the ticket checkout did not start');
+    } catch (e, st) {
+      reportError('EventTicketScreen.buyTicket', e, st);
+      error = e;
+    }
+    if (!mounted || epoch != _epoch) return;
     setState(() => _loading = false);
-    if (!ok) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Could not start checkout. Try again.')));
+    if (error != null) {
+      _say(couldntMessage('start checkout', error));
     } else {
       _checkRegistration();
     }
+  }
+
+  /// The ticket; or what is known about [_owner]'s registration.
+  List<Widget> _ticketOrAction({
+    required Map<String, dynamic> event,
+    required bool isFree,
+    required Object? price,
+  }) {
+    // Nobody is signed in, or the sign-in changed a moment ago: no one's
+    // ticket and no one's registration.
+    if (_owner == null || _db.auth.currentUser?.id != _owner) return const [];
+    final code = _ticketCode;
+    if (_registered && code != null) {
+      return [_TicketView(code: code, eventName: event['title'] as String? ?? 'Event')];
+    }
+    if (_registered) {
+      // Registered is registered: a second registration is not offered.
+      return const [Text("You're registered, but this registration has no ticket code. Contact support.",
+        style: TextStyle(color: _wht, fontSize: 14), textAlign: TextAlign.center)];
+    }
+    if (_checkError != null) {
+      return [SectionLoadFailure(
+        what: 'your registration',
+        error: _checkError,
+        busy: _checking,
+        onRetry: _checkRegistration,
+        detail: isFree ? 'Registering is paused until it loads.' : 'Buying a ticket is paused until it loads.')];
+    }
+    final busy = _loading || _checking || !_checked;
+    return [
+      SizedBox(width: double.infinity, child: ElevatedButton(
+        onPressed: busy ? null : (isFree ? _register : _buyTicket),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: _brand, foregroundColor: _wht,
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+        child: busy
+            ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(
+                color: _wht, strokeWidth: 2,
+                semanticsLabel: _loading ? null : 'Checking your registration'))
+            : Text(
+                isFree ? 'Register & Get Ticket' : 'Buy Ticket — \$$price',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+      )),
+    ];
   }
 
   @override
@@ -169,22 +306,7 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
             ]),
           ),
           const SizedBox(height: 24),
-          if (_registered && _ticketCode != null) ...[
-            _TicketView(code: _ticketCode!, eventName: event['title'] as String? ?? 'Event'),
-          ] else ...[
-            SizedBox(width: double.infinity, child: ElevatedButton(
-              onPressed: _loading ? null : (isFree ? _register : _buyTicket),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _brand, foregroundColor: _wht,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
-              child: _loading
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: _wht, strokeWidth: 2))
-                  : Text(
-                      isFree ? 'Register & Get Ticket' : 'Buy Ticket — \$$price',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-            )),
-          ],
+          ..._ticketOrAction(event: event, isFree: isFree, price: price),
           const SizedBox(height: 12),
           SizedBox(width: double.infinity, child: OutlinedButton.icon(
             onPressed: () => Navigator.push(context, MaterialPageRoute(

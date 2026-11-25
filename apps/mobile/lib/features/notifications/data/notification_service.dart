@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import 'notification_model.dart';
 
 class NotificationService {
@@ -82,22 +83,58 @@ class NotificationService {
     return (rows as List).length;
   }
 
-  Future<void> markRead(String id) async {
-    await _db.from('notifications').update({'read': true}).eq('id', id);
+  // P0-FL-60c · the three changes below are made for [owner], the account
+  // whose list is on screen. Once another account is signed in nothing is
+  // sent, and a change the server made to no row throws: no error is raised
+  // for one.
+
+  void _mustBeSignedIn(String? owner, String what) {
+    if (owner == null || _uid != owner) {
+      throw StateError('$what: the signed-in account changed');
+    }
   }
 
-  Future<void> markAllRead() async {
-    final uid = _uid;
-    if (uid == null) return;
-    await _db
+  Future<void> markRead(String id, {required String? owner}) async {
+    _mustBeSignedIn(owner, 'marking a notification read');
+    final rows = await _db
         .from('notifications')
         .update({'read': true})
-        .eq('recipient_id', uid)
-        .eq('read', false);
+        .eq('id', id)
+        .eq('recipient_id', owner!)
+        .select('id');
+    if (rows.isEmpty) throw StateError('no notification was marked read');
   }
 
-  Future<void> deleteNotification(String id) async {
-    await _db.from('notifications').delete().eq('id', id);
+  Future<void> markAllRead({required String? owner}) async {
+    _mustBeSignedIn(owner, 'marking all notifications read');
+    final rows = await _db
+        .from('notifications')
+        .update({'read': true})
+        .eq('recipient_id', owner!)
+        .eq('read', false)
+        .select('id');
+    if (rows.isNotEmpty) return;
+    // Nothing changed: either nothing was unread (fine), or the change was
+    // refused in silence.
+    final unread = await _db
+        .from('notifications')
+        .select('id')
+        .eq('recipient_id', owner)
+        .eq('read', false);
+    if (unread.isNotEmpty) {
+      throw StateError('no notification was marked read');
+    }
+  }
+
+  Future<void> deleteNotification(String id, {required String? owner}) async {
+    _mustBeSignedIn(owner, 'deleting a notification');
+    final rows = await _db
+        .from('notifications')
+        .delete()
+        .eq('id', id)
+        .eq('recipient_id', owner!)
+        .select('id');
+    if (rows.isEmpty) throw StateError('no notification was deleted');
   }
 
   // Insert a test notification (used from settings / debug)
@@ -118,7 +155,9 @@ class NotificationService {
   }
 
   /// Send a notification to an arbitrary recipient (e.g. coach -> client,
-  /// client -> coach). Never throws so callers can fire-and-forget.
+  /// client -> coach). Never throws so callers can fire-and-forget: a failure
+  /// is recorded here, and is NOT a delivery — a caller that means to say
+  /// "notified" cannot learn that from this.
   Future<void> notifyUser({
     required String recipientId,
     required String type,
@@ -133,8 +172,8 @@ class NotificationService {
         'body': body,
         'read': false,
       });
-    } catch (_) {
-      // ignore notification failures
+    } catch (e, st) {
+      reportError('NotificationService.notifyUser', e, st);
     }
   }
 }

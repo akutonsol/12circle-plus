@@ -28,7 +28,12 @@ class GoalService {
     }
   }
 
+  /// Creates the goal for [owner], the account the form was opened for. Throws
+  /// when it was not saved (P0-FL-60c): recorded, and nothing is sent once
+  /// another account — or nobody — is signed in, so a goal one member typed is
+  /// never another member's.
   Future<bool> createGoal({
+    required String? owner,
     required String title,
     required String type,
     double? startValue,
@@ -36,11 +41,12 @@ class GoalService {
     String unit = '',
     DateTime? targetDate,
   }) async {
-    final uid = _uid;
-    if (uid == null) return false;
     try {
+      if (owner == null || _uid != owner) {
+        throw StateError('creating a goal: the signed-in account changed');
+      }
       await _db.from('goals').insert({
-        'client_id': uid,
+        'client_id': owner,
         'title': title,
         'type': type,
         'start_value': startValue,
@@ -51,38 +57,60 @@ class GoalService {
         'status': 'active',
       });
       return true;
-    } catch (_) {
-      return false;
+    } catch (e, st) {
+      reportError('GoalService.createGoal', e, st);
+      rethrow;
     }
   }
 
+  /// Throws when the progress was not saved, and records it (P0-FL-60c): an
+  /// update that changed no row (the goal is gone, or is not this account's)
+  /// used to be reported as saved.
   Future<bool> updateProgress(String id, double currentValue) async {
     final uid = _uid;
     if (uid == null) return false;
     try {
-      await _db
-          .from('goals')
-          .update({'current_value': currentValue})
-          .eq('id', id)
-          .eq('client_id', uid);
+      _mustChange(
+          await _db
+              .from('goals')
+              .update({'current_value': currentValue})
+              .eq('id', id)
+              .eq('client_id', uid)
+              .select('id'),
+          'updated');
       return true;
-    } catch (_) {
-      return false;
+    } catch (e, st) {
+      reportError('GoalService.updateProgress', e, st);
+      rethrow;
     }
+  }
+
+  /// No error is raised for a write that matched no row.
+  static void _mustChange(List<dynamic> rows, String what) {
+    if (rows.isEmpty) throw StateError('the goal was not $what: no row matched');
   }
 
   Future<void> complete(String id) async {
     final uid = _uid;
     if (uid == null) throw StateError('Not signed in — the goal was not updated.');
-    await _db.from('goals').update({
-      'status': 'completed',
-      'completed_at': DateTime.now().toUtc().toIso8601String(),
-    }).eq('id', id).eq('client_id', uid);
+    _mustChange(
+        await _db.from('goals').update({
+          'status': 'completed',
+          'completed_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', id).eq('client_id', uid).select('id'),
+        'updated');
   }
 
   Future<void> deleteGoal(String id) async {
     final uid = _uid;
     if (uid == null) throw StateError('Not signed in — the goal was not deleted.');
-    await _db.from('goals').delete().eq('id', id).eq('client_id', uid);
+    _mustChange(
+        await _db
+            .from('goals')
+            .delete()
+            .eq('id', id)
+            .eq('client_id', uid)
+            .select('id'),
+        'deleted');
   }
 }

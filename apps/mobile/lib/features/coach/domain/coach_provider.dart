@@ -40,14 +40,17 @@ final assignedCoachProvider = FutureProvider<Map<String, dynamic>?>((ref) async 
 });
 
 // ── Pending coach request (for showing "Request Sent" state) ─────────────────
+//
+// A failed read is recorded and rethrown (P0-FL-60c). It used to return null,
+// which is "no pending request" — the answer that offers another one.
 final pendingCoachProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
-  final user = ref.watch(currentUserProvider);
-  if (user == null) return null;
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+  if (uid == null) return null;
   try {
     final rel = await _db
         .from('coach_client_relationships')
         .select('coach_id, status, pending_at')
-        .eq('client_id', user.id)
+        .eq('client_id', uid)
         .eq('status', 'pending')
         .maybeSingle();
     final coachId = rel?['coach_id'] as String?;
@@ -60,7 +63,10 @@ final pendingCoachProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
         .maybeSingle();
     if (coach == null) return null;
     return {...coach, 'pending_at': rel?['pending_at']};
-  } catch (_) { return null; }
+  } catch (e, st) {
+    reportError('pendingCoachProvider', e, st);
+    rethrow;
+  }
 });
 
 // ── All of the client's active coaches (multi-coach support) ──────────────────
@@ -187,16 +193,22 @@ final availableCoachesProvider = FutureProvider<List<Map<String, dynamic>>>((ref
 });
 
 // ── Relationship status for the current client ────────────────────────────────
+//
+// A failed read is recorded and rethrown (P0-FL-60c): null is "no
+// relationship", and an unread one is not that.
 final clientRelationshipProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
-  final user = ref.watch(currentUserProvider);
-  if (user == null) return null;
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+  if (uid == null) return null;
   try {
     return await _db
         .from('coach_client_relationships')
         .select('id, coach_id, status, created_at, activated_at')
-        .eq('client_id', user.id)
+        .eq('client_id', uid)
         .order('created_at', ascending: false)
         .limit(1)
         .maybeSingle();
-  } catch (_) { return null; }
+  } catch (e, st) {
+    reportError('clientRelationshipProvider', e, st);
+    rethrow;
+  }
 });
