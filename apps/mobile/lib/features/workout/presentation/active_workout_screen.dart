@@ -188,6 +188,13 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// The activation in flight, shared by every caller so a session is never
   /// opened twice concurrently. Null when none is running.
   Future<WorkoutSessionRecord?>? _activation;
+  /// The session's start from initState. It opens the session with the workout
+  /// as it was when it began, so a swap made meanwhile is saved after it.
+  Future<void>? _starting;
+  /// Snapshot saves, one at a time and in the order they were asked for: a
+  /// save that overtook a slower one could store a swap whose failure the
+  /// slower one then undid on screen.
+  Future<Object?> _snapshotSaves = Future<Object?>.value();
   /// Whether the warm-up question has been settled for this mount — either
   /// asked, or found already answered for the session.
   bool _warmupSettled = false;
@@ -253,7 +260,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       onHide: () => _saveElapsed(),
       onPause: () => _saveElapsed(),
     );
-    _startSession();
+    _starting = _startSession();
     _loadExerciseMeta();
     // The warm-up prompt is raised by _startSession once the session is known:
     // it is the session that has (or hasn't) been warmed up, not the screen.
@@ -400,7 +407,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       // it. Say so rather than failing silently: a silent failure here is what
       // left an older workout as the resume candidate while the Zone showed a
       // newer one.
-      _toastSave('Could not start this workout.');
+      _toastSave(couldntMessage('start this workout', e));
       // Session state is unknown, so the warm-up can't be looked up — ask.
       _promptWarmupIfNeeded(null);
     }
@@ -586,7 +593,8 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       final sid = await _ensureSession();
       if (!_isOwner('saving a set')) return;
       if (sid == null) {
-        _toastSave('No active workout session.');
+        // No session could be opened to hold it.
+        _toastSave(couldntMessage('save that set', null));
         return;
       }
       await _workoutService.saveSetLog(
@@ -1562,24 +1570,37 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     // the workout the client is doing rather than the one they started. Awaited
     // and surfaced: a lost re-snapshot silently resurrects the replaced
     // exercise on the next reload, along with its set ids.
-    final (:saved, :error) = await _resnapshotSession(updated);
+    final first = await _saveSelectedSnapshot('swapping an exercise');
     if (!mounted || !_isOwner('swapping an exercise')) return;
-    // A save that failed is undone, unless a set has been logged on the new
-    // movement meanwhile: that is work done, and taking its row off the screen
-    // would lose sight of it.
-    final undone = error != null && _revertSwap(we, replacement);
-    if (undone && repointed && replacement.setById(_currentSetId) != null) {
-      _currentSetId = cursorBefore;
-      _saveCursor(we.instanceId, cursorBefore);
+    var landed = first.saved;
+    var undone = false;
+    if (first.error != null) {
+      // A save that failed is undone, unless a set has been logged on the new
+      // movement meanwhile: that is work done, and taking its row off the
+      // screen would lose sight of it.
+      undone = _revertSwap(we, replacement);
+      if (undone && repointed && replacement.setById(_currentSetId) != null) {
+        _currentSetId = cursorBefore;
+        _saveCursor(we.instanceId, cursorBefore);
+      }
+      // The failure does not say what is stored: another swap's save may have
+      // carried this one, or the write landed and only its answer was lost.
+      // Screen and session agree again only once what is on screen is saved.
+      landed = (await _saveSelectedSnapshot('swapping an exercise')).saved;
+      if (!mounted || !_isOwner('swapping an exercise')) return;
     }
+    final ok = landed && !undone;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(saved
-          ? 'Swapped to ${newEx.name}'
-          : undone
-              ? couldntMessage('swap to ${newEx.name}', error)
-              : 'Swapped to ${newEx.name} — but the change could not be saved. '
-                  'Reloading will bring back ${we.exercise.name}.'),
-      backgroundColor: saved ? null : _error));
+      content: Text(switch ((landed, undone)) {
+        (true, false) => 'Swapped to ${newEx.name}',
+        (true, true) => couldntMessage('swap to ${newEx.name}', first.error),
+        // Not known what a reload would bring back, so nothing is promised.
+        (false, true) =>
+          '${we.exercise.name} is back — but the change could not be saved.',
+        (false, false) =>
+          'Swapped to ${newEx.name} — but the change could not be saved.',
+      }),
+      backgroundColor: ok ? null : _error));
   }
 
   /// Puts [replaced] back where [replacement] is now — another swap may have
@@ -1599,20 +1620,48 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   }
 
   /// Re-stores the session's workout snapshot after a mid-session change, so
-  /// restoration rebuilds the same exercises in the same order. Returns whether
-  /// the snapshot reached the database, and the failure if it was refused. With
-  /// no session yet there is neither: the session is opened with the workout as
-  /// it is by then.
-  Future<({bool saved, Object? error})> _resnapshotSession(Workout workout) async {
+  /// restoration rebuilds the same exercises in the same order.
+  ///
+  /// Queued behind any save still running, and stores the workout selected
+  /// when its turn comes, so the last save to land is what is on screen.
+  /// Returns whether it reached the database, and the failure if it was
+  /// refused or its answer lost. A session still opening was given the workout
+  /// as it was when it began, so this waits for it and saves after it. With no
+  /// session at all there is neither saved nor an error: the next session is
+  /// opened with the workout as it is then.
+  Future<({bool saved, Object? error})> _saveSelectedSnapshot(String what) {
+    final turn = _snapshotSaves.then((_) => _saveSnapshotNow(what));
+    _snapshotSaves = turn;
+    return turn;
+  }
+
+  Future<({bool saved, Object? error})> _saveSnapshotNow(String what) async {
+    const none = (saved: false, error: null);
+    final opening = _activation ?? _starting;
+    if (_sessionId == null && opening != null) {
+      // Its failure is reported, and said, by whoever started it.
+      await opening.then<void>((_) {}, onError: (Object _) {});
+    }
     final sid = _sessionId;
-    if (sid == null) return (saved: false, error: null);
+    if (sid == null || !mounted) return none;
+    // The workout selected now is the next member's by now.
+    if (!_isOwner(what)) return none;
+    final workout = ref.read(selectedWorkoutProvider);
+    if (workout == null) return none;
     try {
       await _sessions.saveSnapshot(sid, workout);
-      return (saved: true, error: null);
     } catch (e, st) {
       reportError('ActiveWorkoutScreen.saveSnapshot', e, st);
       return (saved: false, error: e);
     }
+    if (!_isOwner(what)) return none;
+    if (_sessionId != sid) {
+      // Stored on a session this screen no longer runs.
+      reportError('ActiveWorkoutScreen.saveSnapshot',
+          StateError('$what: the session changed while it saved'));
+      return none;
+    }
+    return (saved: true, error: null);
   }
 
   Widget _columnHeaders({bool showRpe = true}) {
@@ -1917,6 +1966,8 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     final app = ProviderScope.containerOf(context, listen: false);
     final appState = app.read(appWorkoutStateProvider);
     final isStillThis = _stillThisWorkout(app, ref.read(selectedWorkoutProvider));
+    // App-wide: the rest running now is this workout's, and stops with it.
+    final rest = ref.read(restTimerProvider);
     if (sid != null) {
       try {
         await _sessions.abandonSession(sid);
@@ -1935,6 +1986,11 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     _timer?.cancel();
     _sessionId = null;
     if (!isStillThis()) {
+      // Another workout is open by now. Its own rest is kept; the ended
+      // one's would sound, and charge, over it.
+      if (rest != null && identical(app.read(restTimerProvider), rest)) {
+        _dismissRest(app);
+      }
       app.invalidate(activeSessionProvider);
       if (mounted) context.go('/home');
       return;
