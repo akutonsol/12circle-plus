@@ -3,8 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/observability/app_failure.dart';
+import '../data/models/workout_model.dart';
 import '../data/workout_session_store.dart';
 import '../domain/workout_provider.dart';
+import 'widgets/section_load_failure.dart' show couldntMessage;
 
 // ── UC10: Resume Incomplete Workout Banner ────────────────────────────────────
 // Drop this widget anywhere in the home/train hub screen to show the prompt
@@ -31,7 +33,7 @@ class _ResumeWorkoutBannerState extends ConsumerState<ResumeWorkoutBanner> {
   /// Whether [session] is the signed-in member's (P0-FL-59b). While B's lookup
   /// is in flight, and after it fails, the provider still holds A's session.
   bool _isMine(WorkoutSessionRecord session) =>
-      session.userId == ref.read(restoringUserIdProvider);
+      session.userId == signedInNow(ref);
 
   /// Discards the in-progress session -- and hides the banner only once the
   /// server has it. It used to hide first and swallow a failed abandon: the
@@ -67,7 +69,16 @@ class _ResumeWorkoutBannerState extends ConsumerState<ResumeWorkoutBanner> {
 
   Future<void> _resume(WorkoutSessionRecord session) async {
     if (!_isMine(session)) return _reportChanged('resuming a workout');
-    final workout = await bindSessionToSelectedWorkout(ref, session);
+    final Workout? workout;
+    try {
+      workout = await bindSessionToSelectedWorkout(ref, session);
+    } catch (e, st) {
+      reportError('ResumeWorkoutBanner.resume', e, st);
+      if (!mounted || !_isMine(session)) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(couldntMessage('open that workout', e))));
+      return;
+    }
     if (!mounted || !_isMine(session)) return;
     if (workout == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

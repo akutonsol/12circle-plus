@@ -26,6 +26,16 @@ class WorkoutMembersServer extends http.BaseClient {
   final holds = <String, Completer<void>>{};
   final fails = <String>{};
 
+  /// The same, for the requests [holdWhere] picks out of one table's.
+  bool Function(Asked)? holdWhere;
+  Completer<void>? heldByWhere;
+
+  /// What an RPC or an Edge Function answers, keyed `name:<who>`.
+  final answers = <String, Object?>{};
+
+  /// Rows that stop matching updates — as a row the caller may no longer touch.
+  final locked = <Object?>{};
+
   final asked = <Asked>[];
   int _ids = 0;
 
@@ -35,6 +45,10 @@ class WorkoutMembersServer extends http.BaseClient {
     rows.clear();
     holds.clear();
     fails.clear();
+    holdWhere = null;
+    heldByWhere = null;
+    answers.clear();
+    locked.clear();
     asked.clear();
     _ids = 0;
   }
@@ -93,12 +107,15 @@ class WorkoutMembersServer extends http.BaseClient {
     final table = u.path.split('/').last;
     final who = TwoMemberPostgrest.who(request);
     final body = request is http.Request ? request.body : '';
-    asked.add((method: request.method, table: table, who: who, query: u.query, body: body));
+    final Asked ask =
+        (method: request.method, table: table, who: who, query: u.query, body: body);
+    asked.add(ask);
     final key = '${request.method} $table:$who';
     final failing = fails.contains(key);
     final answer = failing ? null : _answer(request, table, who, body);
     final hold = holds[key];
     if (hold != null) await hold.future;
+    if (holdWhere?.call(ask) ?? false) await heldByWhere!.future;
     if (failing) return _json({'message': 'refused SECRET', 'code': 'XX000'}, 500, request);
     return answer!;
   }
@@ -122,12 +139,13 @@ class WorkoutMembersServer extends http.BaseClient {
       if (single) return _json(found.isEmpty ? null : found.first, 200, r);
       return _json(found, 200, r);
     }
+    if (answers.containsKey('$table:$who')) return _json(answers['$table:$who'], 200, r);
     if (store == null) return wantsRows ? _json([{'id': 'row'}], 200, r) : _empty(r);
     final sent = Map<String, Object?>.from(jsonDecode(body) as Map);
     if (r.method == 'PATCH') {
       final hit = [
         for (final row in store)
-          if (row['user_id'] == who && _matches(row, u)) row
+          if (row['user_id'] == who && !locked.contains(row['id']) && _matches(row, u)) row
       ];
       for (final row in hit) {
         row.addAll(sent);

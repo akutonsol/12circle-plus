@@ -14,6 +14,7 @@ import '../domain/workout_restoration.dart';
 import '../domain/workout_session_manager.dart';
 import 'widgets/set_tracker_row.dart';
 import 'widgets/rest_timer_widget.dart';
+import 'widgets/section_load_failure.dart' show couldntMessage;
 import 'widgets/zone_action.dart';
 import 'widgets/exercise_guide_sheet.dart';
 import 'widgets/swap_substitutes_list.dart';
@@ -107,13 +108,14 @@ class ActiveWorkoutScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // One view per member: when the account changes, the previous member's view
     // — its session id, clock, idle total and typed fields — goes with them.
-    final view = _ActiveWorkoutView(
-        key: ValueKey(ref.watch(restoringUserIdProvider)));
+    final uid = ref.watch(restoringUserIdProvider);
+    final view = _ActiveWorkoutView(key: ValueKey(uid));
 
     // A workout already in memory (started, or resumed from a Resume card) is
-    // authoritative — the database has nothing to add.
+    // authoritative — the database has nothing to add. Not one read for
+    // somebody else, however it got there (A-10).
     final workout = ref.watch(selectedWorkoutProvider);
-    if (workout != null) return view;
+    if (workout != null && workout.isFor(uid)) return view;
 
     final restoration = ref.watch(activeWorkoutRestorationProvider);
     return restoration.when(
@@ -122,9 +124,15 @@ class ActiveWorkoutScreen extends ConsumerWidget {
         onRetry: () => ref.invalidate(activeWorkoutRestorationProvider)),
       // Restoring hydrates `selectedWorkoutProvider`, so a restored session
       // lands in the Zone on the very next build.
+      //
+      // A refresh keeps the value it is replacing, and that value may be the
+      // previous member's: it says nothing about this one, and the view would
+      // open with no workout in it.
       data: (restored) => restored == null
           ? const _NoActiveWorkoutView()
-          : view,
+          : restored.session.userId == uid
+              ? view
+              : const _RestoringWorkoutView(),
     );
   }
 }
@@ -200,12 +208,20 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// that could outlive them — from the auth client itself, not the widget
   /// tree: a hidden web tab runs timers but no frames, so nothing has rebuilt.
   /// When they are not, the caller does nothing; that is recorded here.
+  ///
+  /// Once per view: a hidden tab's clock and rest keep asking for as long as it
+  /// is hidden, and one change of account is one event.
   bool _isOwner(String what) {
     if (_db.auth.currentUser?.id == _owner) return true;
-    reportError('ActiveWorkoutScreen',
-        StateError('$what: the signed-in account changed'));
+    if (!_changeRecorded) {
+      _changeRecorded = true;
+      reportError('ActiveWorkoutScreen',
+          StateError('$what: the signed-in account changed'));
+    }
     return false;
   }
+
+  bool _changeRecorded = false;
 
   bool _showRpeFor(String name) => _showRpe[name] ?? true;
 
@@ -281,8 +297,11 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     if (sessionId == null || !_isOwner('recording the warm-up')) return;
     try {
       await _sessions.acknowledgeWarmup(sessionId);
-    } catch (_) {}
-    if (!mounted) return;
+    } catch (e, st) {
+      // Not shown: the worst a lost answer costs is being asked again.
+      reportError('ActiveWorkoutScreen.acknowledgeWarmup', e, st);
+    }
+    if (!mounted || !_isOwner('recording the warm-up')) return;
     ref.invalidate(activeSessionProvider);
     ref.invalidate(activeWorkoutRestorationProvider);
   }
@@ -425,7 +444,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       }
     } catch (e, st) {
       reportError('ActiveWorkoutScreen._restoreLoggedSets', e, st);
-      _toastSave('Could not restore your logged sets.');
+      _toastSave(couldntMessage('restore your logged sets', e));
     }
   }
 
@@ -516,8 +535,9 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     try {
       await _sessions.saveCursor(
           sessionId: sid, exerciseId: exerciseId, setId: setId);
-    } catch (_) {
-      // A lost cursor write costs the client a scroll, not their data: the
+    } catch (e, st) {
+      reportError('ActiveWorkoutScreen.saveCursor', e, st);
+      // Not shown: a lost cursor write costs the client a scroll, not their data: the
       // restore falls back to the first outstanding set.
     }
   }
@@ -585,7 +605,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       );
     } catch (e, st) {
       reportError('ActiveWorkoutScreen._persistSet', e, st);
-      _toastSave('Could not save set.');
+      _toastSave(couldntMessage('save that set', e));
     }
   }
 
@@ -707,7 +727,10 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     if (sid == null || !_isOwner('saving the workout clock')) return;
     try {
       await _sessions.saveElapsed(sid, _elapsedSeconds);
-    } catch (_) {}
+    } catch (e, st) {
+      // Not shown: the next checkpoint writes it again.
+      reportError('ActiveWorkoutScreen.saveElapsed', e, st);
+    }
   }
 
   @override
@@ -735,6 +758,9 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     // throws once it is disposed — which skipped the reset, every re-read and
     // clearing the selection, so the finished workout was started again.
     final app = ProviderScope.containerOf(context, listen: false);
+    final appState = app.read(appWorkoutStateProvider);
+    final isStillThis = _stillThisWorkout(app, workout);
+    final entered = app.read(activeWorkoutProvider);
 
     _dismissRest(); // bank any in-progress overtime + silence the siren
     setState(() => _saving = true);
@@ -827,14 +853,19 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       return;
     }
     if (mounted) setState(() => _saveFailedCompleting = false);
+    // The account change threw this app's state away; there is none to clear.
+    if (!appState.alive) return;
+    // The member may have gone and come back while this was saving: the
+    // workout in memory is then another one, with entries of its own. What was
+    // finished is filed, and re-read below; nothing of theirs is cleared (N4).
+    final still = isStillThis();
     // Captured before the reset below wipes it — FIT-018's stats come from
     // here, and reading them after would make every session read 0 sets.
-    final completedSets = app
-        .read(activeWorkoutProvider)
+    final completedSets = (still ? app.read(activeWorkoutProvider) : entered)
         .values
         .where((st) => st['completed'] == true)
         .toList(growable: false);
-    app.read(activeWorkoutProvider.notifier).reset();
+    if (still) app.read(activeWorkoutProvider.notifier).reset();
     // The session id is spent for logging purposes, but the feedback sheet
     // still has to name the session it is rating, so hand it the captured id.
     final finishedSessionId = _sessionId;
@@ -867,6 +898,8 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     app.invalidate(myBadgeIdsProvider);
 
     if (mounted) {
+      // Now, not at the tap: the screen behind the dialog can be gone by then.
+      final router = GoRouter.maybeOf(context);
       showDialog(
         context: context,
         barrierDismissible: false,
@@ -894,20 +927,38 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
           // the root navigator; this screen's own context reaches the shell's.
           onDone: () {
             Navigator.pop(dialogContext);
-            _leaveFinishedWorkout(app);
-            context.go('/home');
+            _leaveFinishedWorkout(app, isStillThis);
+            router?.go('/home');
           },
         )),
       );
     } else {
       // Finish Early → Skip can pop this screen before the dialog is raised.
       // Clearing here too means a completed workout is never left selected.
-      _leaveFinishedWorkout(app);
+      _leaveFinishedWorkout(app, isStillThis);
     }
     // Guarded: _completeWorkout awaits four network round-trips, and Finish
     // Early → Skip pops this screen while they are still in flight. An
     // unguarded setState there throws "setState() called after dispose()".
     if (mounted) setState(() => _saving = false);
+  }
+
+  /// Whether the workout in memory is still [workout], running the session it
+  /// runs now — asked after an await, before clearing anything (N4).
+  ///
+  /// The owner is not enough: they can leave and come back while a save is in
+  /// flight, and what they have open by then is not what they finished. False
+  /// once the account change threw the whole container away.
+  bool Function() _stillThisWorkout(ProviderContainer app, Workout? workout) {
+    final state = app.read(appWorkoutStateProvider);
+    final sets = app.read(activeWorkoutProvider.notifier);
+    // Null: a session not bound yet, or let go by "Leave For Now".
+    final ours = {null, _sessionId, sets.sessionId};
+    return () =>
+        state.alive &&
+        identical(app.read(activeWorkoutProvider.notifier), sets) &&
+        (ours.contains(sets.sessionId) || sets.sessionId == _sessionId) &&
+        app.read(selectedWorkoutProvider)?.id == workout?.id;
   }
 
   /// Drops the finished workout from the selection.
@@ -920,8 +971,8 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// selection is what makes completion final.
   ///
   /// Through [app], not `ref`: this also runs after the screen is gone.
-  void _leaveFinishedWorkout(ProviderContainer app) {
-    if (!_isOwner('closing a finished workout')) return;
+  void _leaveFinishedWorkout(ProviderContainer app, bool Function() isStillThis) {
+    if (!_isOwner('closing a finished workout') || !isStillThis()) return;
     app.read(selectedWorkoutProvider.notifier).state = null;
   }
 
@@ -1082,7 +1133,9 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
 
                 // ── Today's coach adjustment (applied as load guidance) ──
                 ref.watch(coachAdjustmentProvider).maybeWhen(
-                  data: (adj) => adj == null ? const SizedBox.shrink() : _ActiveCoachBanner(adj: adj),
+                  data: (adj) => adj == null || adj.readFor != _owner
+                      ? const SizedBox.shrink()
+                      : _ActiveCoachBanner(adj: adj),
                   orElse: () => const SizedBox.shrink()),
 
                 // ── Render groups (superset / circuit / solo) ──
@@ -1496,8 +1549,10 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     // The cursor pointed into the exercise that is gone. Re-point it at the
     // replacement's first set so a refresh lands somewhere that exists.
     final replacement = updated.exercises[index];
-    if (shouldRepointCursor(
-        currentSetId: _currentSetId, replaced: we, replacement: replacement)) {
+    final cursorBefore = _currentSetId;
+    final repointed = shouldRepointCursor(
+        currentSetId: _currentSetId, replaced: we, replacement: replacement);
+    if (repointed) {
       _currentSetId = replacement.sets.first.id;
       _saveCursor(replacement.instanceId, replacement.sets.first.id);
     }
@@ -1507,27 +1562,56 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     // the workout the client is doing rather than the one they started. Awaited
     // and surfaced: a lost re-snapshot silently resurrects the replaced
     // exercise on the next reload, along with its set ids.
-    final saved = await _resnapshotSession(updated);
+    final (:saved, :error) = await _resnapshotSession(updated);
     if (!mounted || !_isOwner('swapping an exercise')) return;
+    // A save that failed is undone, unless a set has been logged on the new
+    // movement meanwhile: that is work done, and taking its row off the screen
+    // would lose sight of it.
+    final undone = error != null && _revertSwap(we, replacement);
+    if (undone && repointed && replacement.setById(_currentSetId) != null) {
+      _currentSetId = cursorBefore;
+      _saveCursor(we.instanceId, cursorBefore);
+    }
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(saved
           ? 'Swapped to ${newEx.name}'
-          : 'Swapped to ${newEx.name} — but the change could not be saved. '
-              'Reloading will bring back ${we.exercise.name}.'),
+          : undone
+              ? couldntMessage('swap to ${newEx.name}', error)
+              : 'Swapped to ${newEx.name} — but the change could not be saved. '
+                  'Reloading will bring back ${we.exercise.name}.'),
       backgroundColor: saved ? null : _error));
+  }
+
+  /// Puts [replaced] back where [replacement] is now — another swap may have
+  /// been made since — and answers whether it did.
+  bool _revertSwap(WorkoutExercise replaced, WorkoutExercise replacement) {
+    final workout = ref.read(selectedWorkoutProvider);
+    final at = workout?.exercises
+            .indexWhere((e) => e.instanceId == replacement.instanceId) ??
+        -1;
+    if (workout == null || at < 0) return false;
+    final sets = ref.read(activeWorkoutProvider);
+    if (replacement.sets.any((s) => sets.containsKey(s.id))) return false;
+    ref.read(selectedWorkoutProvider.notifier).state =
+        workout.replacingExerciseAt(at, replaced);
+    setState(() {});
+    return true;
   }
 
   /// Re-stores the session's workout snapshot after a mid-session change, so
   /// restoration rebuilds the same exercises in the same order. Returns whether
-  /// the snapshot reached the database.
-  Future<bool> _resnapshotSession(Workout workout) async {
+  /// the snapshot reached the database, and the failure if it was refused. With
+  /// no session yet there is neither: the session is opened with the workout as
+  /// it is by then.
+  Future<({bool saved, Object? error})> _resnapshotSession(Workout workout) async {
     final sid = _sessionId;
-    if (sid == null) return false;
+    if (sid == null) return (saved: false, error: null);
     try {
       await _sessions.saveSnapshot(sid, workout);
-      return true;
-    } catch (_) {
-      return false;
+      return (saved: true, error: null);
+    } catch (e, st) {
+      reportError('ActiveWorkoutScreen.saveSnapshot', e, st);
+      return (saved: false, error: e);
     }
   }
 
@@ -1808,7 +1892,9 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     if (sid != null) {
       // Fire-and-forget: the elapsed clock is a convenience, and losing it must
       // not stop the client leaving.
-      unawaited(_sessions.saveElapsed(sid, _elapsedSeconds).catchError((_) {}));
+      unawaited(_sessions.saveElapsed(sid, _elapsedSeconds).catchError(
+          (Object e, StackTrace st) =>
+              reportError('ActiveWorkoutScreen.saveElapsed', e, st)));
     }
     ref.read(activeWorkoutProvider.notifier).reset();
     ref.invalidate(activeSessionProvider);
@@ -1829,6 +1915,8 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     // `ref` throws once the screen is gone, and the ended workout stayed
     // selected.
     final app = ProviderScope.containerOf(context, listen: false);
+    final appState = app.read(appWorkoutStateProvider);
+    final isStillThis = _stillThisWorkout(app, ref.read(selectedWorkoutProvider));
     if (sid != null) {
       try {
         await _sessions.abandonSession(sid);
@@ -1836,16 +1924,22 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
         reportError('ActiveWorkoutScreen._endWorkout', e, st);
         if (!mounted || _db.auth.currentUser?.id != _owner) return;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Could not end the workout.'),
+          content: Text(couldntMessage('end the workout', e)),
           backgroundColor: _error));
         return;
       }
     }
-    // The in-memory workout below is the next member's by now.
-    if (!_isOwner('ending a workout')) return;
+    // The in-memory workout below is the next member's by now — or another
+    // one of this member's (N4).
+    if (!_isOwner('ending a workout') || !appState.alive) return;
     _timer?.cancel();
-    _dismissRest(app);
     _sessionId = null;
+    if (!isStillThis()) {
+      app.invalidate(activeSessionProvider);
+      if (mounted) context.go('/home');
+      return;
+    }
+    _dismissRest(app);
     app.read(activeWorkoutProvider.notifier).reset();
     // The workout must not stay selected: the Zone treats an in-memory
     // selection as authoritative, so re-entering would start a fresh session

@@ -294,10 +294,16 @@ class SupabaseWorkoutSessionStore implements WorkoutSessionStore {
   @override
   Future<void> saveSnapshot(String sessionId, Map<String, dynamic> snapshot) async {
     _requireOwner([sessionId], 'saving a swapped workout');
-    await _db
+    final rows = await _db
         .from('workout_sessions')
         .update({'workout_snapshot': snapshot})
-        .eq('id', sessionId);
+        .eq('id', sessionId)
+        .select('id');
+    // Nothing stored: the replaced exercise would be back on the next reload,
+    // after the client was told it was swapped.
+    if (rows.isEmpty) {
+      throw StateError('saving a swapped workout: no session was updated');
+    }
   }
 
   @override

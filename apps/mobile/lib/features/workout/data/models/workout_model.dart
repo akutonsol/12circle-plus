@@ -246,6 +246,16 @@ class Workout {
   final bool isCompleted;
   final DateTime? scheduledDate;
 
+  /// The member this workout was read for — the owner of the program or the
+  /// session it came out of — or null for one that is nobody's: a catalogue
+  /// sample, or one generated on this screen.
+  ///
+  /// It travels WITH the workout (P0-FL-59b, A-10). A card keeps the workout it
+  /// was built with across an account change, and nothing about the read it
+  /// came from says whose it is by then; every path that selects or starts a
+  /// workout refuses one read for somebody else.
+  final String? readFor;
+
   Workout({
     required this.id,
     required this.title,
@@ -258,7 +268,31 @@ class Workout {
     this.coachName,
     this.isCompleted = false,
     this.scheduledDate,
+    this.readFor,
   }) : exercises = _uniquifyAcrossWorkout(exercises);
+
+  /// Whether [uid] may open or start this workout.
+  bool isFor(String? uid) => readFor == null || readFor == uid;
+
+  /// This workout, as read for [uid].
+  Workout asReadFor(String uid) => _rebuilt(readFor: uid);
+
+  /// The one place a workout is rebuilt from another, so nothing it carries —
+  /// its owner least of all — is dropped on the way.
+  Workout _rebuilt({List<WorkoutExercise>? exercises, String? readFor}) => Workout(
+        id: id,
+        title: title,
+        description: description,
+        estimatedDuration: estimatedDuration,
+        difficulty: difficulty,
+        category: category,
+        exercises: exercises ?? this.exercises,
+        coachId: coachId,
+        coachName: coachName,
+        isCompleted: isCompleted,
+        scheduledDate: scheduledDate,
+        readFor: readFor ?? this.readFor,
+      );
 
   /// Makes instance and set identity unique at **workout** scope.
   ///
@@ -309,19 +343,7 @@ class Workout {
   Workout replacingExerciseAt(int index, WorkoutExercise replacement) {
     final list = List<WorkoutExercise>.from(exercises);
     list[index] = replacement;
-    return Workout(
-      id: id,
-      title: title,
-      description: description,
-      estimatedDuration: estimatedDuration,
-      difficulty: difficulty,
-      category: category,
-      exercises: list,
-      coachId: coachId,
-      coachName: coachName,
-      isCompleted: isCompleted,
-      scheduledDate: scheduledDate,
-    );
+    return _rebuilt(exercises: list);
   }
 }
 

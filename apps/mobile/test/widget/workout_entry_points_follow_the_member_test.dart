@@ -185,6 +185,61 @@ void main() {
       await t.pump(const Duration(seconds: 5));
     });
 
+    testWidgets('a discard in flight and FAILING across the switch says nothing to B', (t) async {
+      server.fails.add('PATCH workout_sessions:$memberA');
+      final hold = server.holds['PATCH workout_sessions:$memberA'] = Completer<void>();
+      await mount(t, const ResumeWorkoutBanner());
+      await t.tap(find.byIcon(Icons.close_rounded));
+      await t.pump();
+      await switchUnseen(t, memberB);
+      hold.complete();
+      await t.pump();
+      expect(find.byType(SnackBar), findsNothing, reason: "A's failure said to B");
+      await settle(t);
+      expect(find.textContaining("Couldn't discard"), findsNothing);
+      expect(server.writes(by: memberB), isEmpty);
+    });
+
+    testWidgets('a resume whose program fails says so to A, and nothing to B', (t) async {
+      server.fails.add('GET workout_program_assignments:$memberA');
+      final hold =
+          server.holds['GET workout_program_assignments:$memberA'] = Completer<void>();
+      await mount(t, Consumer(builder: (context, ref, _) {
+        ref.watch(assignedWorkoutsProvider);
+        return const ResumeWorkoutBanner();
+      }));
+      await t.tap(find.text('Resume'));
+      await t.pump();
+      await switchUnseen(t, memberB);
+      hold.complete();
+      await t.pump();
+      expect(find.byType(SnackBar), findsNothing);
+      await settle(t);
+      expect(find.textContaining("Couldn't"), findsNothing);
+      expect(t.takeException(), isNull);
+    });
+
+    testWidgets('control: a resume whose program fails is said to A', (t) async {
+      server.fails.add('GET workout_program_assignments:$memberA');
+      await mount(t, const ResumeWorkoutBanner());
+      await t.tap(find.text('Resume'));
+      await settle(t);
+      expect(find.textContaining("Couldn't open that workout — try again in a moment"),
+          findsOneWidget);
+      expect(find.textContaining('SECRET'), findsNothing);
+      await t.pump(const Duration(seconds: 5));
+    });
+
+    testWidgets('control: a discard failing for A is said to A', (t) async {
+      server.fails.add('PATCH workout_sessions:$memberA');
+      await mount(t, const ResumeWorkoutBanner());
+      await t.tap(find.byIcon(Icons.close_rounded));
+      await settle(t);
+      expect(find.textContaining("Couldn't discard"), findsOneWidget);
+      expect(named(a), findsOneWidget);
+      await t.pump(const Duration(seconds: 5));
+    });
+
     testWidgets('control: A resumes, also after a token refresh', (t) async {
       await mount(t, const ResumeWorkoutBanner());
       await t.runAsync(refreshSession);
@@ -202,6 +257,37 @@ void main() {
       await mount(t, const ResumeWorkoutBanner());
       expect(find.text('Resume Workout?'), findsNothing);
       expect(find.textContaining("Couldn't"), findsNothing);
+    });
+  });
+
+  group('bindSessionToSelectedWorkout', () {
+    late WidgetRef at;
+    Widget binder() => Consumer(builder: (context, ref, _) {
+          at = ref;
+          ref.watch(assignedWorkoutsProvider);
+          return const SizedBox();
+        });
+
+    for (final frame in [true, false]) {
+      testWidgets("A's record, as B (${frame ? 'after a frame' : 'no frame'}): nothing is bound",
+          (t) async {
+        server.seedSession(memberA, workoutId: _w.id, title: _w.title);
+        await mount(t, binder());
+        final record = (await c.read(workoutSessionManagerProvider).activeSession(memberA))!;
+        expect(record.userId, memberA);
+        frame ? await switchTo(t, memberB) : await switchUnseen(t, memberB);
+        expect(await bindSessionToSelectedWorkout(at, record), isNull,
+            reason: "THE defect: A's session bound for B");
+        expect(c.read(selectedWorkoutProvider), isNull);
+      });
+    }
+
+    testWidgets('control: A binds A\'s own', (t) async {
+      server.seedSession(memberA, workoutId: _w.id, title: _w.title);
+      await mount(t, binder());
+      final record = (await c.read(workoutSessionManagerProvider).activeSession(memberA))!;
+      expect((await bindSessionToSelectedWorkout(at, record))?.id, _w.id);
+      expect(c.read(selectedWorkoutProvider)?.id, _w.id);
     });
   });
 
@@ -296,6 +382,23 @@ void main() {
       await settle(t);
       expect(find.text('Alma of A'), findsNothing);
       expect(find.text('Bruno of B'), findsOneWidget);
+    });
+
+    testWidgets('A\'s late answer landing BEFORE B\'s own is not shown', (t) async {
+      final holdA =
+          server.holds['GET coach_client_workout_stats:$memberA'] = Completer<void>();
+      final holdB =
+          server.holds['GET coach_client_workout_stats:$memberB'] = Completer<void>();
+      await mount(t, const CoachClientWorkoutScreen());
+      await switchTo(t, memberB);
+      holdA.complete();
+      await settle(t);
+      expect(find.text('Alma of A'), findsNothing, reason: "THE defect: A's client for coach B");
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      holdB.complete();
+      await settle(t);
+      expect(find.text('Bruno of B'), findsOneWidget);
+      expect(find.text('Alma of A'), findsNothing);
     });
 
     testWidgets('a client both coach: A\'s open card is closed for B', (t) async {

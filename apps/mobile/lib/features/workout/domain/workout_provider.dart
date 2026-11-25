@@ -17,8 +17,10 @@ import '../../auth/domain/auth_provider.dart';
 /// Today's coaching adjustment from the AI coach's daily insight — drives an
 /// intensity/focus banner on the workout screen. null when there's no brief yet.
 final coachAdjustmentProvider = FutureProvider.autoDispose<CoachAdjustment?>((ref) async {
-  // The signed-in member's own brief: re-read when the account changes.
+  // The signed-in member's own brief: re-read when the account changes, and
+  // carrying whose it is.
   ref.watch(restoringUserIdProvider);
+  final uid = Supabase.instance.client.auth.currentUser?.id;
   final insight = await AICoachService().getTodayInsight();
   if (insight == null) return null;
   final data = (insight['data'] as Map?) ?? const {};
@@ -27,6 +29,7 @@ final coachAdjustmentProvider = FutureProvider.autoDispose<CoachAdjustment?>((re
     body: insight['body']?.toString() ?? '',
     focus: data['focus']?.toString(),
     intensityDelta: (data['intensity_delta'] as num?)?.round() ?? 0,
+    readFor: uid,
   );
 });
 
@@ -35,7 +38,9 @@ class CoachAdjustment {
   final String body;
   final String? focus;
   final int intensityDelta; // % vs planned (-30..+10)
-  const CoachAdjustment({required this.title, required this.body, this.focus, required this.intensityDelta});
+  /// The member whose brief this is. Shown to nobody else.
+  final String? readFor;
+  const CoachAdjustment({required this.title, required this.body, this.focus, required this.intensityDelta, this.readFor});
 }
 
 /// Per-workout session status: the most recent session's
@@ -67,7 +72,8 @@ final programSessionStatusProvider =
     // Newest first, so putIfAbsent keeps the most recent session per key.
     final byKey = <String, Map<String, dynamic>>{};
     for (final s in (sessions as List)) {
-      final row = Map<String, dynamic>.from(s as Map);
+      // Whose status this is travels with it: see [sessionStatusFor].
+      final row = {...Map<String, dynamic>.from(s as Map), 'user_id': uid};
       final id = row['workout_id']?.toString();
       if (id != null && id.isNotEmpty) {
         byKey.putIfAbsent(id, () => row);
@@ -95,7 +101,18 @@ final programSessionStatusProvider =
 ///
 /// The one lookup every surface uses, so no caller re-invents the precedence
 /// and reintroduces the title-keyed reading.
+///
+/// Two clients of one coach program share workout ids, and the program and the
+/// statuses are two reads: after an account change one can be B's while the
+/// other is still A's. A status is only a status of its own member's workout.
 Map<String, dynamic>? sessionStatusFor(
+    Map<String, Map<String, dynamic>> statuses, Workout workout) {
+  final status = _statusOf(statuses, workout);
+  final whose = status?['user_id']?.toString();
+  return whose == null || workout.isFor(whose) ? status : null;
+}
+
+Map<String, dynamic>? _statusOf(
     Map<String, Map<String, dynamic>> statuses, Workout workout) {
   if (workout.id.isNotEmpty) {
     final byId = statuses[workout.id];
@@ -216,13 +233,25 @@ final filteredExercisesProvider = Provider<List<Exercise>>((ref) {
 ///
 /// A training day the client finished under this assignment is marked done, so
 /// Home stops offering it. Completing a session invalidates this provider.
+///
+/// Each workout carries the member the program was read for
+/// ([Workout.readFor]): a reload keeps the previous member's list on the cards
+/// that read it, and none of them can say whose it is.
 final assignedWorkoutsProvider = FutureProvider<List<Workout>>((ref) async {
   ref.watch(currentUserProvider);
+  final db = Supabase.instance.client;
+  // The same answer, in the same turn, as the read below takes.
+  final uid = db.auth.currentUser?.id;
   final service = CoachProgramService();
   final program = await service.getMyAssignedProgram();
-  if (program == null) return [];
-  return assignedProgramToWorkouts(program,
-      sessions: await service.getMyCompletedProgramSessions(program));
+  if (program == null || uid == null) return [];
+  // The second half of the read asks as whoever is signed in by then.
+  requireWorkoutOwner(db, uid, 'reading the assigned program');
+  final sessions = await service.getMyCompletedProgramSessions(program);
+  return [
+    for (final w in assignedProgramToWorkouts(program, sessions: sessions))
+      w.asReadFor(uid),
+  ];
 });
 
 /// Generate a one-off, library-grounded AI workout for today (personalized to
@@ -564,6 +593,32 @@ final activeWorkoutRestorationProvider =
   return restored;
 });
 
+/// The member signed in NOW, by the auth client itself.
+///
+/// For the moment of a tap, and for what follows an await: the providers hear
+/// of a change through the auth stream, a turn later than the client. Where
+/// [restoringUserIdProvider] is supplied without an auth stream (a test), it is
+/// the answer.
+String? signedInNow(WidgetRef ref) => ref.exists(authStateProvider)
+    ? Supabase.instance.client.auth.currentUser?.id
+    : ref.read(restoringUserIdProvider);
+
+/// Whether the workout state held by a [ProviderContainer] is still the app's.
+///
+/// An in-flight finish outlives its screen on purpose, through the container —
+/// and an account change may throw the container itself away. Read before the
+/// first await, it says so without touching the container again.
+class AppWorkoutState {
+  bool _alive = true;
+  bool get alive => _alive;
+}
+
+final appWorkoutStateProvider = Provider<AppWorkoutState>((ref) {
+  final state = AppWorkoutState();
+  ref.onDispose(() => state._alive = false);
+  return state;
+});
+
 /// Rebuilds the workout an active session belongs to and makes it the selected
 /// workout, so every "Resume" entry point lands in the Workout Zone bound to
 /// the session's own workout instead of whatever was last left in memory.
@@ -574,7 +629,7 @@ Future<Workout?> bindSessionToSelectedWorkout(
   WidgetRef ref,
   WorkoutSessionRecord session,
 ) async {
-  final uid = ref.read(restoringUserIdProvider);
+  final uid = signedInNow(ref);
   if (session.userId != uid) {
     reportError('bindSessionToSelectedWorkout',
         StateError('resuming a workout: the signed-in account changed'));
@@ -583,7 +638,7 @@ Future<Workout?> bindSessionToSelectedWorkout(
   final manager = ref.read(workoutSessionManagerProvider);
   final assigned = await ref.read(assignedWorkoutsProvider.future);
   if (!ref.context.mounted) return null;
-  if (ref.read(restoringUserIdProvider) != uid) {
+  if (signedInNow(ref) != uid) {
     reportError('bindSessionToSelectedWorkout',
         StateError('resuming a workout: the signed-in account changed'));
     return null;

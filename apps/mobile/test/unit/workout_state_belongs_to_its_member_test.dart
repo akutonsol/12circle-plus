@@ -21,6 +21,7 @@ import '../support/workout_members_server.dart';
 // HOW TO SEE IT FAIL: `git checkout a82f993 --` the lib/features/workout files.
 
 final Workout _w = WorkoutService().getSampleWorkouts().first;
+final Workout _w2 = WorkoutService().getSampleWorkouts()[1];
 
 Future<void> _tick([int n = 20]) async {
   for (var i = 0; i < n; i++) {
@@ -137,6 +138,26 @@ void main() {
       expectEmpty();
     });
 
+    test("A's restore landing BEFORE B's own read: B's is the one hydrated", () async {
+      server.seedSession(memberA, workoutId: _w.id, title: _w.title);
+      final b = server.seedSession(memberB, workoutId: _w2.id, title: _w2.title);
+      final holdA = server.holds['GET workout_set_logs:$memberA'] = Completer<void>();
+      final holdB = server.holds['GET workout_sessions:$memberB'] = Completer<void>();
+      c.listen(activeWorkoutRestorationProvider, (_, __) {});
+      await _tick();
+      await become(memberB);
+      await _tick();
+      holdA.complete();
+      await _tick(40);
+      expectEmpty();
+      expect(c.read(activeWorkoutRestorationProvider).isLoading, isTrue, reason: 'B is not answered');
+      holdB.complete();
+      await _tick(40);
+      expect((await c.read(activeWorkoutRestorationProvider.future))?.sessionId, b['id']);
+      expect(c.read(selectedWorkoutProvider)?.title, _w2.title);
+      expect(c.read(activeWorkoutProvider.notifier).sessionId, b['id']);
+    });
+
     test('control: A\'s own restore hydrates', () async {
       final row = server.seedSession(memberA, workoutId: _w.id, title: _w.title);
       c.listen(activeWorkoutRestorationProvider, (_, __) {});
@@ -184,6 +205,31 @@ void main() {
 
     test('an abandon that matched no row is a failure', () async {
       await expectLater(store().abandonSessions(['not-there']), throwsStateError);
+    });
+
+    test('an abandon that matched one of two is a failure: the other is still open', () async {
+      final mine = server.seedSession(memberA, workoutId: 'w', title: 'W')['id'] as String;
+      await expectLater(store().abandonSessions([mine, 'not-there']), throwsStateError);
+    });
+
+    test('control: an abandon that matched them all is not', () async {
+      final ids = [
+        for (final w in ['w1', 'w2'])
+          server.seedSession(memberA, workoutId: w, title: w)['id'] as String
+      ];
+      await store().abandonSessions(ids);
+      expect([for (final s in server.sessions) s['status']], ['abandoned', 'abandoned']);
+    });
+
+    test('a swapped workout that matched no row is a failure', () async {
+      await expectLater(store().saveSnapshot('not-there', const {}), throwsStateError,
+          reason: 'THE defect: 0 rows counted as saved');
+    });
+
+    test('control: a swapped workout is stored', () async {
+      final row = server.seedSession(memberA, workoutId: 'w', title: 'W');
+      await store().saveSnapshot(row['id'] as String, const {'title': 'New'});
+      expect(row['workout_snapshot'], {'title': 'New'});
     });
 
     test('negative control: nothing to abandon sends nothing and is not a failure', () async {
@@ -339,6 +385,47 @@ void main() {
           await reads('workout_sessions', memberB,
               () => c.listen(clientRecentSessionsProvider('client'), (_, __) {})),
           1);
+    });
+
+    for (final (table, read) in [
+      ('workout_set_logs', () => clientPersonalRecordsProvider('client')),
+      ('workout_sessions', () => clientRecentSessionsProvider('client')),
+    ]) {
+      test("a client's $table: A's late answer, before and after B's, is not B's", () async {
+        for (final aFirst in [true, false]) {
+          await become(memberA);
+          final own = ProviderContainer();
+          addTearDown(own.dispose);
+          final holdA = server.holds['GET $table:$memberA'] = Completer<void>();
+          final holdB = server.holds['GET $table:$memberB'] = Completer<void>();
+          server.fails.add('GET $table:$memberA'); // A's answer, recognisably A's
+          own.listen<Object?>(read(), (_, __) {});
+          await _tick(40);
+          await become(memberB);
+          own.read(restoringUserIdProvider);
+          await _tick(40);
+          (aFirst ? holdA : holdB).complete();
+          await _tick(40);
+          final between = own.read(read());
+          expect(between.hasError, isFalse, reason: "THE defect: A's answer stood as B's");
+          expect(between.isLoading, aFirst);
+          (aFirst ? holdB : holdA).complete();
+          await _tick(40);
+          expect(own.read(read()).requireValue, isEmpty);
+          server.holds.clear();
+          server.fails.clear();
+        }
+      });
+    }
+
+    test('the AI adjustment says whose it is', () async {
+      server.rows['ai_insights:$memberA'] = [
+        {'title': 'Easy day, A', 'body': '', 'data': {'intensity_delta': -20}}
+      ];
+      c.listen(coachAdjustmentProvider, (_, __) {});
+      // dynamic: the member is new, and this file must compile on 3f17006.
+      final dynamic brief = await c.read(coachAdjustmentProvider.future);
+      expect(brief.readFor, memberA);
     });
 
     test('control: a token refresh re-reads none of them', () async {

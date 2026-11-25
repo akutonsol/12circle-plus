@@ -343,7 +343,7 @@ void main() {
       });
       await t.tap(logSet().first);
       await settle(t, 5);
-      expect(find.text('Could not save set.'), findsOneWidget,
+      expect(find.textContaining("Couldn't save that set"), findsOneWidget,
           reason: "THE defect: A's set was lost silently");
       await close(t);
     });
@@ -355,7 +355,7 @@ void main() {
       expect(server.setLogs, hasLength(1));
       expect(server.setLogs.single['user_id'], memberA);
       expect(server.setLogs.single['session_id'], sid);
-      expect(find.text('Could not save set.'), findsNothing);
+      expect(find.textContaining("Couldn't save that set"), findsNothing);
       await close(t);
     });
   });
@@ -464,7 +464,7 @@ void main() {
       await settle(t, 5);
       await t.tap(find.text('End Workout'));
       await settle(t, 5);
-      expect(find.text('Could not end the workout.'), findsOneWidget);
+      expect(find.textContaining("Couldn't end the workout"), findsOneWidget);
       expect(find.text('home screen'), findsNothing);
       await close(t);
     });
@@ -724,6 +724,768 @@ void main() {
       expect(c.read(activeWorkoutProvider.notifier).sessionId, sid);
       expect(c.read(activeWorkoutProvider.notifier).completedSetCount, 1);
       expect(server.sessions, hasLength(1));
+      await close(t);
+    });
+  });
+
+  // ── Round 2 (independent review of 3f17006) ───────────────────────────────
+
+  void expectNothingSaid() {
+    expect(find.byType(SnackBar), findsNothing, reason: "A's failure said to B");
+    expect(find.textContaining("Couldn't"), findsNothing);
+    expect(find.textContaining('Could not'), findsNothing);
+  }
+
+  /// [_aWorkout] again, as a second workout of A's.
+  Workout another(String id) => Workout(
+      id: id, title: 'Second of A', description: '', estimatedDuration: 20,
+      difficulty: 'x', category: 'Strength', exercises: _bWorkout.exercises);
+
+  /// Opens the swap sheet of exercise [at] and answers the substitute on offer.
+  Future<String> openSwap(WidgetTester t, [int at = 0]) async {
+    server.rows['custom_exercises:$memberA'] = [
+      {'name': 'Goblet Squat', 'muscle_group': 'Legs', 'equipment': 'Dumbbell', 'difficulty': 'x'}
+    ];
+    await t.tap(find.byIcon(Icons.swap_horizontal_circle_rounded).at(at));
+    await settle(t, 10);
+    return (t.widget<ListTile>(find.byType(ListTile).first).title! as Text).data!;
+  }
+
+  group('a rest that keeps running over', () {
+    Future<void> overrun(WidgetTester t) async {
+      c.read(restTimerProvider.notifier).state =
+          RestTimerState(DateTime.now().add(const Duration(milliseconds: 400)), 90);
+      await t.pump();
+      await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 600)));
+      await t.pump(const Duration(milliseconds: 300));
+      await settle(t, 3);
+      expect(server.writes(to: 'penalize_points').map((w) => w.who), [memberA],
+          reason: 'premise: A is in overtime');
+    }
+
+    void tick(WidgetTester t) =>
+        t.widget<RestTimerWidget>(find.byType(RestTimerWidget)).onOvertimePenaltyTick!();
+
+    testWidgets('its repeating charge is not B\'s', (t) async {
+      await aTrains(t);
+      await overrun(t);
+      await switchUnseen(t);
+      for (var i = 0; i < 8; i++) {
+        tick(t);
+      }
+      await settle(t);
+      expect(server.writes(to: 'penalize_points').map((w) => w.who), [memberA],
+          reason: "THE defect: A's overtime drained B's points");
+      expect(server.writes(by: memberB), isEmpty);
+      await close(t);
+    });
+
+    testWidgets('control: it keeps costing A, up to the cap', (t) async {
+      await aTrains(t);
+      await overrun(t);
+      for (var i = 0; i < 12; i++) {
+        tick(t);
+      }
+      await settle(t, 3);
+      final charged = server.writes(to: 'penalize_points');
+      expect(charged.map((w) => w.who).toSet(), {memberA});
+      expect(charged, hasLength(8));
+      await close(t);
+    });
+  });
+
+  group('restoring into the Zone', () {
+    Map<String, Object?> seedA() {
+      final row = server.seedSession(memberA, workoutId: _aWorkout.id, title: _aWorkout.title,
+          snapshot: _snap(_aWorkout));
+      server.setLogs.add({
+        'id': 'log-a', 'session_id': row['id'], 'user_id': memberA,
+        'exercise_instance_id': _aWorkout.exercises.first.instanceId,
+        'set_id': _aWorkout.exercises.first.sets.first.id,
+        'set_number': 1, 'reps': 8, 'weight_kg': 60, 'completed': true,
+      });
+      return row;
+    }
+
+    testWidgets('A\'s logged sets landing after an unseen switch are not seated', (t) async {
+      seedA();
+      final hold = server.holds['GET workout_set_logs:$memberA'] = Completer<void>();
+      c.read(selectedWorkoutProvider.notifier).state = _aWorkout;
+      await mount(t);
+      expect(server.asked.map((a) => '${a.table}:${a.who}'), contains('workout_set_logs:$memberA'),
+          reason: "premise: A's sets are being read");
+      await switchUnseen(t);
+      hold.complete();
+      await settle(t);
+      expect(c.read(activeWorkoutProvider), isEmpty,
+          reason: "THE defect: A's sets seated in B's workout");
+      expectNoWritesByB();
+      await close(t);
+    });
+
+    testWidgets('A\'s logged sets failing to load after the switch: nothing is said to B',
+        (t) async {
+      seedA();
+      server.fails.add('GET workout_set_logs:$memberA');
+      final hold = server.holds['GET workout_set_logs:$memberA'] = Completer<void>();
+      c.read(selectedWorkoutProvider.notifier).state = _aWorkout;
+      await mount(t);
+      await switchUnseen(t);
+      hold.complete();
+      await t.pump(); // the answer, then the first frame since the switch
+      expectNothingSaid();
+      await settle(t);
+      expectNothingSaid();
+      await close(t);
+    });
+
+    testWidgets('control: A\'s own are seated; and a failure is said to A, honestly', (t) async {
+      seedA();
+      c.read(selectedWorkoutProvider.notifier).state = _aWorkout;
+      await mount(t);
+      expect(c.read(activeWorkoutProvider.notifier).completedSetCount, 1);
+      router.go('/home');
+      await settle(t);
+      server.fails.add('GET workout_set_logs:$memberA');
+      router.go('/active-workout');
+      await settle(t, 5);
+      expect(find.textContaining("Couldn't restore your logged sets — try again in a moment"),
+          findsOneWidget);
+      expect(find.textContaining('SECRET'), findsNothing);
+      await close(t);
+    });
+
+    testWidgets('a session created just before an unseen switch is not bound to B\'s sets',
+        (t) async {
+      final hold = server.holds['POST workout_sessions:$memberA'] = Completer<void>();
+      c.read(selectedWorkoutProvider.notifier).state = _aWorkout;
+      await mount(t);
+      expect(server.sessions, hasLength(1), reason: 'premise: created, not yet answered');
+      await switchUnseen(t);
+      // Nothing has drawn: the Zone, and its `ref`, are still A's.
+      hold.complete();
+      await t.pump();
+      expect(c.read(activeWorkoutProvider.notifier).sessionId, isNull,
+          reason: "THE defect: B's sets were bound to A's session");
+      await settle(t);
+      expect(c.read(activeWorkoutProvider.notifier).sessionId, isNull);
+      expectNoWritesByB();
+      await close(t);
+    });
+
+    testWidgets('re-read before the switch is seen: A\'s answer is not B\'s', (t) async {
+      // Invalidated with the account change unflushed, riverpod takes the
+      // re-read for a REFRESH: data, loading, and the value is A's. The Zone
+      // opened B's view on it, with no workout, and B's own session — landing
+      // later — was never resumed in it.
+      seedA();
+      server.seedSession(memberB, workoutId: _bWorkout.id, title: _bWorkout.title,
+          snapshot: _snap(_bWorkout))['elapsed_seconds'] = 600;
+      await mount(t); // a cold start: the restore provider seats A's workout
+      expect(find.text(_aWorkout.title), findsOneWidget);
+      final hold = server.holds['GET workout_sessions:$memberB'] = Completer<void>();
+      await switchUnseen(t);
+      c.invalidate(activeWorkoutRestorationProvider);
+      await settle(t);
+      expect(find.text('Restoring your workout…'), findsOneWidget);
+      expect(find.text(_aWorkout.title), findsNothing);
+      hold.complete();
+      await settle(t);
+      expect(find.text(_bWorkout.title), findsOneWidget);
+      expect(find.textContaining('10:0'), findsOneWidget,
+          reason: "THE defect: B's session was not resumed — its clock restarted at 0");
+      expectNoWritesByB();
+      await close(t);
+    });
+
+    testWidgets('the coach brief, re-read before the switch is seen, is not shown to B',
+        (t) async {
+      server.rows['ai_insights:$memberA'] = [
+        {'title': 'Easy day, A', 'body': 'x', 'data': {'intensity_delta': -20}}
+      ];
+      server.seedSession(memberB, workoutId: _bWorkout.id, title: _bWorkout.title,
+          snapshot: _snap(_bWorkout));
+      await aTrains(t);
+      expect(find.textContaining('20%'), findsWidgets, reason: 'premise: shown to A');
+      server.holds['GET ai_insights:$memberB'] = Completer<void>();
+      await switchUnseen(t);
+      c.read(selectedWorkoutProvider.notifier).state = _bWorkout; // the very next frame is B's Zone
+      c.invalidate(coachAdjustmentProvider);
+      await settle(t);
+      expect(find.text(_bWorkout.title), findsOneWidget);
+      expect(find.textContaining('20%'), findsNothing,
+          reason: "THE defect: A's load guidance applied to B's workout");
+      await close(t);
+    });
+
+    testWidgets('control: a same-member re-read mid-workout keeps the Zone', (t) async {
+      final sid = await aTrains(t);
+      await t.tap(logSet().first);
+      await settle(t, 5);
+      c.invalidate(activeWorkoutRestorationProvider);
+      await t.runAsync(refreshSession);
+      await settle(t);
+      expect(find.text(_aWorkout.title), findsOneWidget);
+      expect(c.read(activeWorkoutProvider.notifier).sessionId, sid);
+      expect(c.read(activeWorkoutProvider.notifier).completedSetCount, 1);
+      await close(t);
+    });
+  });
+
+  group('B\'s own workout, on the same mounted Zone', () {
+    Future<void> bTrainsAndFinishes(WidgetTester t, String sidB) async {
+      expect(find.text(_bWorkout.title), findsOneWidget);
+      await t.tap(logSet().first);
+      await settle(t, 3);
+      expect(c.read(restTimerProvider), isNotNull, reason: "B's rest starts");
+      await settle(t);
+      await t.tap(find.textContaining('Finish Early'));
+      await settle(t);
+      expect(find.byType(WorkoutCompleteDialog), findsOneWidget);
+      Map sent(String table, [bool Function(Map)? where]) => [
+            for (final w in server.writes(by: memberB, to: table))
+              if (w.body.isNotEmpty) jsonDecode(w.body) as Map
+          ].firstWhere(where ?? (_) => true);
+      final set = server.setLogs.singleWhere((r) => r['user_id'] == memberB);
+      expect([set['session_id'], set['set_id'], set['completed']],
+          [sidB, _bWorkout.exercises.first.sets.first.id, true]);
+      final done = sent('workout_sessions', (m) => m['status'] == 'completed');
+      expect(done['idle_seconds'], 0, reason: "A's rest overrun booked as B's");
+      expect(server.writes(by: memberB, to: 'workout_sessions').last.query, contains(sidB));
+      expect(sent('workout_logs')['user_id'], memberB);
+      expect(server.writes(to: 'daily_scores').map((w) => w.who), [memberB]);
+      expect([
+        for (final w in server.writes(by: memberB, to: 'award_points'))
+          (jsonDecode(w.body) as Map)['p_action']
+      ], contains('workout_complete'));
+      expect(server.writes(to: 'penalize_points').where((w) => w.who == memberB), isEmpty);
+    }
+
+    testWidgets('A -> B: B logs, rests and finishes, as B and only B', (t) async {
+      final sidB = server.seedSession(memberB, workoutId: _bWorkout.id, title: _bWorkout.title,
+          snapshot: _snap(_bWorkout))['id'] as String;
+      final sidA = await aTrains(t);
+      // A's rest ran over, for a long time.
+      c.read(restTimerProvider.notifier).state =
+          RestTimerState(DateTime.now().subtract(const Duration(seconds: 500)), 90);
+      await t.pump();
+      await switchTo(t, memberB);
+      await bTrainsAndFinishes(t, sidB);
+      expect(server.sessions.singleWhere((s) => s['id'] == sidA)['status'], 'in_progress');
+      expect(server.setLogs.where((r) => r['user_id'] == memberA), isEmpty);
+      await close(t);
+    });
+
+    testWidgets('the next frame already holds B\'s workout: the view is B\'s, not A\'s', (t) async {
+      final sidB = server.seedSession(memberB, workoutId: _bWorkout.id, title: _bWorkout.title,
+          snapshot: _snap(_bWorkout))['id'] as String;
+      await aTrains(t);
+      await switchUnseen(t);
+      c.read(selectedWorkoutProvider.notifier).state = _bWorkout;
+      await settle(t);
+      await bTrainsAndFinishes(t, sidB);
+      await close(t);
+    });
+  });
+
+  group('pressed or answered after a switch no frame followed', () {
+    testWidgets('Save Correction', (t) async {
+      await aTrains(t);
+      await t.tap(logSet().first);
+      await settle(t);
+      await t.tap(find.text('Adjust weight or reps').first);
+      await settle(t, 5);
+      expect(find.text('Save Correction'), findsOneWidget, reason: 'premise');
+      final sent = server.writes(to: 'workout_set_logs').length;
+      await switchUnseen(t);
+      await t.tap(find.text('Save Correction'));
+      await settle(t);
+      expect(server.writes(to: 'workout_set_logs'), hasLength(sent));
+      expectNoWritesByB();
+      expect(find.textContaining('corrected'), findsNothing);
+      expect(c.read(activeWorkoutProvider), isEmpty);
+      expectRecorded();
+      await close(t);
+    });
+
+    testWidgets('a substitute exercise', (t) async {
+      await aTrains(t);
+      await openSwap(t);
+      await switchUnseen(t);
+      await t.tap(find.byType(ListTile).first);
+      await settle(t);
+      expect(c.read(selectedWorkoutProvider), isNull,
+          reason: "THE defect: A's workout, swapped, selected for B");
+      expectNoWritesByB();
+      expect(find.textContaining('Swapped'), findsNothing);
+      expectRecorded();
+      await close(t);
+    });
+
+    testWidgets('Leave For Now', (t) async {
+      await aTrains(t);
+      await t.tap(find.bySemanticsLabel('End session'));
+      await settle(t, 5);
+      await switchUnseen(t);
+      c.read(selectedWorkoutProvider.notifier).state = _bWorkout;
+      c.read(activeWorkoutProvider.notifier)
+        ..beginSession('b-session')
+        ..completeSet(_bWorkout.exercises.first.sets.first, {'reps': 8});
+      await t.tap(find.text('Leave For Now'));
+      expect(c.read(activeWorkoutProvider), isNotEmpty,
+          reason: "THE defect: A's leaving reset B's sets");
+      expect(c.read(activeWorkoutProvider.notifier).sessionId, 'b-session');
+      expectNoWritesByB();
+      expectRecorded();
+      await close(t);
+    });
+
+    testWidgets('the warm-up', (t) async {
+      c.read(selectedWorkoutProvider.notifier).state = _aWorkout;
+      await mount(t);
+      expect(find.textContaining('Warmed Up'), findsOneWidget);
+      await switchUnseen(t);
+      await t.tap(find.textContaining('Warmed Up'));
+      await settle(t);
+      expectNoWritesByB();
+      expect(server.sessions.single['warmup_acknowledged_at'], isNull);
+      expectRecorded();
+      await close(t);
+    });
+
+    testWidgets('a warm-up answer in flight: nothing is re-read for A, or of A', (t) async {
+      c.read(selectedWorkoutProvider.notifier).state = _aWorkout;
+      await mount(t);
+      final hold = server.holds['PATCH workout_sessions:$memberA'] = Completer<void>();
+      await t.tap(find.textContaining('Warmed Up'));
+      await settle(t, 3);
+      await switchUnseen(t);
+      hold.complete();
+      await t.pump();
+      expectRecorded();
+      await settle(t);
+      expect(find.text('No workout selected'), findsOneWidget);
+      expectNoWritesByB();
+      await close(t);
+    });
+
+    testWidgets('control: A\'s correction, swap and Leave For Now', (t) async {
+      final sid = await aTrains(t);
+      await t.tap(logSet().first);
+      await settle(t);
+      await t.tap(find.text('Adjust weight or reps').first);
+      await settle(t, 5);
+      await t.tap(find.text('Save Correction'));
+      await settle(t, 5);
+      expect(find.textContaining('corrected'), findsOneWidget);
+      await settle(t, 50);
+      await openSwap(t, 1);
+      await t.tap(find.byType(ListTile).first);
+      await settle(t, 5);
+      expect(find.textContaining('Swapped to'), findsOneWidget);
+      await t.tap(find.bySemanticsLabel('End session'));
+      await settle(t, 5);
+      await t.tap(find.text('Leave For Now'));
+      await settle(t);
+      expect(find.text('home screen'), findsOneWidget);
+      expect(server.sessions.single['id'], sid);
+      expect(server.sessions.single['status'], 'in_progress');
+      expect(server.writes().map((w) => w.who).toSet(), {memberA});
+      await close(t);
+    });
+  });
+
+  group('the dialogs go with A', () {
+    testWidgets('End', (t) async {
+      await aTrains(t);
+      await t.tap(find.bySemanticsLabel('End session'));
+      await settle(t, 5);
+      expect(find.text('Leave this workout?'), findsOneWidget);
+      await switchTo(t, memberB);
+      expect(find.text('Leave this workout?'), findsNothing,
+          reason: "THE defect: A's dialog over B's screen");
+      await close(t);
+    });
+
+    testWidgets('the warm-up, which nothing else can dismiss', (t) async {
+      c.read(selectedWorkoutProvider.notifier).state = _aWorkout;
+      await mount(t);
+      expect(find.textContaining('Warmed Up'), findsOneWidget);
+      await switchTo(t, memberB);
+      expect(find.textContaining('Warmed Up'), findsNothing);
+      await t.tap(find.text('Browse Workouts')); // B can use the screen
+      await settle(t);
+      expect(find.text('train screen'), findsOneWidget);
+      await close(t);
+    });
+
+    testWidgets('pushed, and the switch before its first frame: never drawn', (t) async {
+      await aTrains(t);
+      await t.tap(find.bySemanticsLabel('End session')); // pushed; no frame yet
+      await switchUnseen(t);
+      await t.pump();
+      expect(find.text('Leave this workout?'), findsNothing);
+      expect(find.text('End Workout'), findsNothing);
+      await settle(t);
+      expect(find.text('No workout selected'), findsOneWidget);
+      await close(t);
+    });
+
+    testWidgets('control: A\'s own stay up through a token refresh', (t) async {
+      await aTrains(t);
+      await t.tap(find.bySemanticsLabel('End session'));
+      await settle(t, 5);
+      await t.runAsync(refreshSession);
+      await settle(t);
+      expect(find.text('Leave this workout?'), findsOneWidget);
+      await close(t);
+    });
+  });
+
+  group('A\'s failure after the switch is not said to B', () {
+    testWidgets('a set that did not save', (t) async {
+      await aTrains(t);
+      server.fails.add('PATCH workout_set_logs:$memberA');
+      final hold = server.holds['PATCH workout_set_logs:$memberA'] = Completer<void>();
+      await t.tap(logSet().first);
+      await settle(t, 3);
+      await switchUnseen(t);
+      hold.complete();
+      await t.pump();
+      expectNothingSaid();
+      await settle(t);
+      expectNothingSaid();
+      await close(t);
+    });
+
+    testWidgets('a workout that did not start', (t) async {
+      server.fails.add('POST workout_sessions:$memberA');
+      final hold = server.holds['POST workout_sessions:$memberA'] = Completer<void>();
+      c.read(selectedWorkoutProvider.notifier).state = _aWorkout;
+      await mount(t);
+      await switchUnseen(t);
+      hold.complete();
+      await t.pump();
+      expectNothingSaid();
+      await settle(t);
+      expectNothingSaid();
+      expect(find.textContaining('Warmed Up'), findsNothing);
+      await close(t);
+    });
+
+    testWidgets('a workout that did not end', (t) async {
+      await aTrains(t);
+      server.fails.add('PATCH workout_sessions:$memberA');
+      final hold = server.holds['PATCH workout_sessions:$memberA'] = Completer<void>();
+      await t.tap(find.bySemanticsLabel('End session'));
+      await settle(t, 5);
+      await t.tap(find.text('End Workout'));
+      await settle(t, 3);
+      await switchUnseen(t);
+      hold.complete();
+      await t.pump();
+      expectNothingSaid();
+      await settle(t);
+      expectNothingSaid();
+      await close(t);
+    });
+
+    testWidgets('a swap that did not save', (t) async {
+      await aTrains(t);
+      server.fails.add('PATCH workout_sessions:$memberA');
+      final hold = server.holds['PATCH workout_sessions:$memberA'] = Completer<void>();
+      await openSwap(t);
+      await t.tap(find.byType(ListTile).first);
+      await settle(t, 5);
+      await switchUnseen(t);
+      hold.complete();
+      await t.pump();
+      expectNothingSaid();
+      expect(find.textContaining('Swapped'), findsNothing);
+      await settle(t);
+      expect(c.read(selectedWorkoutProvider), isNull);
+      await close(t);
+    });
+
+    testWidgets('control: each is said to A, with the next step and no backend text', (t) async {
+      await aTrains(t);
+      server.fails.addAll(['PATCH workout_set_logs:$memberA', 'PATCH workout_sessions:$memberA']);
+      await t.tap(logSet().first);
+      await settle(t, 5);
+      expect(find.textContaining("Couldn't save that set — try again in a moment"), findsOneWidget);
+      await settle(t, 50);
+      await t.tap(find.bySemanticsLabel('End session'));
+      await settle(t, 5);
+      await t.tap(find.text('End Workout'));
+      await settle(t, 5);
+      expect(find.textContaining("Couldn't end the workout — try again in a moment"), findsOneWidget);
+      expect(find.textContaining('SECRET'), findsNothing);
+      await close(t);
+    });
+  });
+
+  group('what is recorded', () {
+    testWidgets('a hidden tab\'s clock records the change once, not every tick', (t) async {
+      await aTrains(t);
+      await switchUnseen(t);
+      failures.clear();
+      for (var i = 0; i < 4; i++) {
+        // A checkpoint, with the tab hidden: no frame.
+        t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+        t.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+        t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+        t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      }
+      Supabase.instance.client.auth.stopAutoRefresh();
+      expect(failures.where((f) => f.origin == 'ActiveWorkoutScreen'), hasLength(1));
+      expectNoWritesByB();
+      await settle(t);
+      await close(t);
+    });
+
+    testWidgets('best-effort saves that fail are recorded, and not shown', (t) async {
+      c.read(selectedWorkoutProvider.notifier).state = _aWorkout;
+      await mount(t);
+      server.fails.add('PATCH workout_sessions:$memberA');
+      await t.tap(find.textContaining('Warmed Up'));
+      await settle(t);
+      await t.tap(logSet().first); // moves the cursor
+      await settle(t, 3);
+      await t.tap(find.bySemanticsLabel('Pause session')); // saves the clock
+      await settle(t, 3);
+      expect(failures.map((f) => f.origin), containsAll([
+        'ActiveWorkoutScreen.acknowledgeWarmup',
+        'ActiveWorkoutScreen.saveCursor',
+        'ActiveWorkoutScreen.saveElapsed',
+      ]));
+      expectNothingSaid();
+      await close(t);
+    });
+
+    testWidgets('leaving for now with a clock that does not save still leaves', (t) async {
+      await aTrains(t);
+      server.fails.add('PATCH workout_sessions:$memberA');
+      await t.tap(find.bySemanticsLabel('End session'));
+      await settle(t, 5);
+      failures.clear();
+      await t.tap(find.text('Leave For Now'));
+      await settle(t);
+      expect(find.text('home screen'), findsOneWidget);
+      expect(failures.map((f) => f.origin), contains('ActiveWorkoutScreen.saveElapsed'));
+      await close(t);
+    });
+  });
+
+  group('a swap', () {
+    final before = _aWorkout.exercises.first.exercise.name;
+    Future<String> swapFirst(WidgetTester t) async {
+      final name = await openSwap(t);
+      await t.tap(find.byType(ListTile).first);
+      await t.pump();
+      return name;
+    }
+
+    String first() => c.read(selectedWorkoutProvider)!.exercises.first.exercise.name;
+
+    testWidgets('that matched no session is said, and reverted', (t) async {
+      final sid = await aTrains(t);
+      server.locked.add(sid);
+      final to = await swapFirst(t);
+      await settle(t, 6);
+      expect(find.textContaining("Couldn't swap to $to — try again in a moment"), findsOneWidget,
+          reason: 'THE defect: 0 rows counted as swapped');
+      expect(find.text('Swapped to $to'), findsNothing);
+      expect(first(), before, reason: 'it would be back on the next reload anyway');
+      expect(c.read(selectedWorkoutProvider)!.exercises.first.instanceId,
+          _aWorkout.exercises.first.instanceId,
+          reason: 'the same slot, so its logged sets are still its own');
+      expect(failures.map((f) => f.origin), contains('ActiveWorkoutScreen.saveSnapshot'));
+      await close(t);
+    });
+
+    testWidgets('that failed puts the cursor back too', (t) async {
+      await aTrains(t);
+      final ex = _aWorkout.exercises.first;
+      // The cursor is on the swapped exercise's second set.
+      await t.enterText(find.byType(TextField).first, '70');
+      await t.pump(const Duration(seconds: 1));
+      await settle(t, 3);
+      server.fails.add('PATCH workout_sessions:$memberA');
+      await swapFirst(t);
+      await settle(t, 6);
+      expect(first(), before);
+      final cursors = [
+        for (final w in server.writes(by: memberA, to: 'workout_sessions'))
+          if (w.body.contains('current_set_id')) (jsonDecode(w.body) as Map)['current_set_id']
+      ];
+      expect(cursors.last, ex.sets.first.id);
+      expect(cursors.length, greaterThan(2), reason: 'premise: it had been re-pointed');
+      await close(t);
+    });
+
+    testWidgets('that failed, with a set logged on the new movement meanwhile, keeps it',
+        (t) async {
+      await aTrains(t);
+      server.fails.add('PATCH workout_sessions:$memberA');
+      final hold = server.holds['PATCH workout_sessions:$memberA'] = Completer<void>();
+      final to = await swapFirst(t);
+      await settle(t, 5);
+      await t.tap(logSet().first);
+      await settle(t, 3);
+      hold.complete();
+      await settle(t, 6);
+      expect(first(), to, reason: 'a logged set must not lose its row');
+      expect(find.textContaining('the change could not be saved'), findsOneWidget);
+      expect(c.read(activeWorkoutProvider.notifier).completedSetCount, 1);
+      await close(t);
+    });
+
+    testWidgets('with no session yet is kept: the session opens with it', (t) async {
+      server.fails.add('POST workout_sessions:$memberA');
+      await aTrains(t, sessionOpens: false);
+      await settle(t, 50);
+      final to = await swapFirst(t);
+      await settle(t, 6);
+      expect(first(), to);
+      server.fails.clear();
+      await t.tap(logSet().first);
+      await settle(t);
+      expect(jsonEncode(server.sessions.single['workout_snapshot']), contains(to));
+      await close(t);
+    });
+
+    testWidgets('control: one that saved stays, and says so', (t) async {
+      final sid = await aTrains(t);
+      final to = await swapFirst(t);
+      await settle(t, 6);
+      expect(find.text('Swapped to $to'), findsOneWidget);
+      expect(first(), to);
+      expect(server.sessions.single['id'], sid);
+      expect(jsonEncode(server.sessions.single['workout_snapshot']), contains(to));
+      expect(failures, isEmpty);
+      await close(t);
+    });
+  });
+
+  group('A -> B -> A while a finish or an End is in flight (N4)', () {
+    Future<Completer<void>> finishHeld(WidgetTester t) async {
+      final hold = server.holds['PATCH workout_sessions:$memberA'] = Completer<void>();
+      await t.tap(find.textContaining('Finish Early'));
+      await settle(t, 3);
+      return hold;
+    }
+
+    Future<Completer<void>> endHeld(WidgetTester t) async {
+      final hold = server.holds['PATCH workout_sessions:$memberA'] = Completer<void>();
+      await t.tap(find.bySemanticsLabel('End session'));
+      await settle(t, 5);
+      await t.tap(find.text('End Workout'));
+      await settle(t, 3);
+      return hold;
+    }
+
+    for (final (what, start) in [('finish', finishHeld), ('End', endHeld)]) {
+      testWidgets('$what: the workout A has opened since keeps its sets', (t) async {
+        await aTrains(t);
+        final hold = await start(t);
+        await switchTo(t, memberB);
+        await switchTo(t, memberA);
+        router.go('/home');
+        await settle(t);
+        final w2 = another('w2');
+        c.read(selectedWorkoutProvider.notifier).state = w2;
+        c.read(activeWorkoutProvider.notifier)
+          ..beginSession('s2')
+          ..setSetData(w2.exercises.first.sets.first, {'reps': 7});
+        final rest = RestTimerState(DateTime.now().add(const Duration(minutes: 1)), 60);
+        c.read(restTimerProvider.notifier).state = rest;
+        hold.complete();
+        await settle(t);
+        expect(t.takeException(), isNull);
+        expect(c.read(selectedWorkoutProvider), same(w2), reason: 'THE defect: W2 cleared');
+        expect(c.read(activeWorkoutProvider), isNotEmpty, reason: "THE defect: W2's entries lost");
+        expect(c.read(activeWorkoutProvider.notifier).sessionId, 's2');
+        expect(c.read(restTimerProvider), same(rest));
+        expect(find.byType(WorkoutCompleteDialog), findsNothing);
+        await close(t);
+      });
+
+      testWidgets('$what: the same workout begun again keeps its sets', (t) async {
+        await aTrains(t);
+        final hold = await start(t);
+        await switchTo(t, memberB);
+        await switchTo(t, memberA);
+        router.go('/home');
+        await settle(t);
+        c.read(selectedWorkoutProvider.notifier).state = _aWorkout;
+        c.read(activeWorkoutProvider.notifier)
+          ..beginSession('s2')
+          ..setSetData(_aWorkout.exercises.first.sets.first, {'reps': 7});
+        hold.complete();
+        await settle(t);
+        expect(c.read(selectedWorkoutProvider), same(_aWorkout));
+        expect(c.read(activeWorkoutProvider), isNotEmpty);
+        await close(t);
+      });
+
+      testWidgets('$what: the app\'s state thrown away meanwhile is not touched', (t) async {
+        await aTrains(t);
+        final hold = await start(t);
+        await switchTo(t, memberB);
+        await t.pumpWidget(const SizedBox());
+        c.dispose(); // what an account scope does
+        await t.runAsync(() => signInAs(memberA));
+        hold.complete();
+        await t.pump(const Duration(seconds: 5));
+        expect(t.takeException(), isNull, reason: 'THE defect: a disposed container was read');
+      });
+
+      testWidgets('$what: an unseen round trip is the same workout, and clears it', (t) async {
+        await aTrains(t);
+        final hold = await start(t);
+        await switchUnseen(t);
+        await switchUnseen(t, memberA);
+        hold.complete();
+        await settle(t);
+        if (what == 'finish') {
+          expect(find.byType(WorkoutCompleteDialog), findsOneWidget);
+          await t.tap(find.text('Skip'));
+          await settle(t);
+        }
+        expect(c.read(selectedWorkoutProvider), isNull);
+        expect(c.read(activeWorkoutProvider), isEmpty);
+        expect(find.text('home screen'), findsOneWidget);
+        await close(t);
+      });
+    }
+
+    testWidgets('control: finishing before the session opened still ends in the dialog', (t) async {
+      server.fails.add('POST workout_sessions:$memberA');
+      await aTrains(t, sessionOpens: false);
+      await settle(t, 50);
+      await t.tap(find.textContaining('Finish Early'));
+      await settle(t);
+      expect(find.byType(WorkoutCompleteDialog), findsOneWidget);
+      await t.tap(find.text('Skip'));
+      await settle(t);
+      expect(c.read(selectedWorkoutProvider), isNull);
+      await close(t);
+    });
+
+    testWidgets('control: a session that opens while finishing is not left in the way', (t) async {
+      final hold = server.holds['POST workout_sessions:$memberA'] = Completer<void>();
+      final log = server.holds['POST workout_logs:$memberA'] = Completer<void>();
+      c.read(selectedWorkoutProvider.notifier).state = _aWorkout;
+      await mount(t);
+      await t.tap(find.textContaining('Finish Early'));
+      await settle(t, 3);
+      hold.complete();
+      await settle(t, 3);
+      log.complete();
+      await settle(t);
+      expect(server.sessions.single['status'], 'completed');
+      expect(find.byType(WorkoutCompleteDialog), findsOneWidget);
+      expect(c.read(activeWorkoutProvider.notifier).sessionId, isNull);
       await close(t);
     });
   });
