@@ -37,6 +37,11 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   /// In tries again, though nobody is signed in by then.
   bool _signOutFailed = false;
 
+  /// Back to Sign In is running: a second press must not find nobody signed in
+  /// (gotrue forgets the session before the device has removed it) and leave
+  /// for the sign-in page as if signed out.
+  bool _signingOut = false;
+
   /// The account this form sets the password of (P0-FL-59a, W2): the one the
   /// reset link was for, else the one signed in when the form opened.
   String? _owner;
@@ -63,6 +68,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     final now = _signedIn;
     _pwCtrl.clear();
     _confirmCtrl.clear();
+    _signOutFailed = false;
     setState(() {
       _loading = false;
       _done = false;
@@ -167,13 +173,18 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   }
 
   /// Signs out the account whose password was set, and only that one.
+  /// Not once the done page is gone: [_accountChanged] may already have made
+  /// the next account's own recovery this form's, with no frame since.
   Future<void> _backToSignIn() async {
+    if (!_done || _signingOut) return;
     final router = GoRouter.maybeOf(context);
     final owner = _owner;
     if (_signedIn == owner || (_signOutFailed && _signedIn == null)) {
+      setState(() => _signingOut = true);
       final error = await signOutOfDevice('ResetPasswordScreen._backToSignIn',
           Supabase.instance.client.auth.signOut);
       if (!mounted) return;
+      setState(() => _signingOut = false);
       final now = _signedIn;
       if (error != null && (now == null || now == owner)) {
         // Still on the device: not /login as if signed out.
@@ -203,7 +214,10 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
               border: Border.all(color: AuthColors.purpleLight.withValues(alpha: 0.4), width: 1.5)),
             child: const Icon(Icons.check_rounded, color: AuthColors.purpleLight, size: 44))),
           const SizedBox(height: 32),
-          AuthButton(label: 'Back to Sign In', onTap: _backToSignIn),
+          AuthButton(
+              label: 'Back to Sign In',
+              loading: _signingOut,
+              onTap: _backToSignIn),
         ],
       );
     }
