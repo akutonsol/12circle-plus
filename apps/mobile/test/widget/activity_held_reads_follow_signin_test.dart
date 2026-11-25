@@ -374,6 +374,7 @@ void main() {
     // At e708fda the rows gave way to a spinner until the re-read landed.
     testWidgets("CONTROL: a token refresh keeps the same member's rows",
         (t) async {
+      _key = _Key.user; // as today: read again
       final c = await asA(t);
       final before = c.read(currentUserProvider);
       final gate = hold(memberA);
