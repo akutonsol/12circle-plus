@@ -1,9 +1,11 @@
+import 'dart:async' show Timer;
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../nutrition/domain/nutrition_provider.dart';
@@ -208,6 +210,9 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
         SystemUiOverlayStyle.light.copyWith(statusBarColor: Colors.transparent));
     final topPad = MediaQuery.of(context).padding.top;
     final userName = ref.watch(currentFirstNameProvider);
+    // P0-FL-60b · a failure and its Try again need the whole width.
+    final streakFailed =
+        ref.watch(memberStreakProvider.select((s) => s.error != null));
     // P0-FL-58 · the bar is 64px, between the buttons: a greeting that does
     // not fit it on one line each (past 1.3×, or a long name on a narrow
     // phone) moves to the top of the page, where it wraps. The buttons stay.
@@ -241,7 +246,7 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
                 const SizedBox(height: 16),
 
                 // ── Streak + Water row ─────────────────────────────────────────
-                if (large) ...[
+                if (large || streakFailed) ...[
                   SizedBox(width: double.infinity, child: _StreakCard()),
                   const SizedBox(height: 12),
                   SizedBox(width: double.infinity, child: _WaterTrackerCard()),
@@ -440,8 +445,10 @@ class _WorkoutBadge extends StatelessWidget {
 class _StreakCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final streakAsync = ref.watch(streakProvider);
-    final streak = streakAsync.valueOrNull ?? 0;
+    // P0-FL-60b · a failed read was "0 day streak"; it is said instead, and a
+    // number already read for this member stays beside it.
+    final read = ref.watch(memberStreakProvider);
+    final streak = read.streak;
     return _GlassCard(
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -456,7 +463,7 @@ class _StreakCard extends ConsumerWidget {
               shape: BoxShape.circle,
               color: _C.brand.withValues(alpha: 0.2)),
             child: const Icon(Icons.local_fire_department_rounded, color: _C.primary, size: 18)),
-          Container(
+          if (streak != null) Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
               color: _C.brand.withValues(alpha: 0.15),
@@ -465,12 +472,28 @@ class _StreakCard extends ConsumerWidget {
               style: TextStyle(color: _C.primary, fontSize: 9, fontWeight: FontWeight.w700))),
         ])),
         const SizedBox(height: 12),
+        if (streak != null) ...[
         Text('$streak',
           style: const TextStyle(color: _C.onSurface, fontSize: 36, fontWeight: FontWeight.w800, height: 1)),
         Text('day streak', style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.7), fontSize: 12)),
         const SizedBox(height: 10),
         Text(streak == 0 ? 'Start today!' : streak >= 7 ? 'Keep it up!' : 'Building momentum',
           style: TextStyle(color: _C.primary.withValues(alpha: 0.8), fontSize: 11, fontWeight: FontWeight.w600)),
+        ] else if (read.error == null)
+          // Loading: no claim either way about the streak.
+          Semantics(
+            label: 'Loading your streak',
+            child: const SizedBox(width: 20, height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2, color: _C.primary))),
+        if (read.error != null) ...[
+          if (streak != null) const SizedBox(height: 10),
+          SectionLoadFailure(
+            what: 'your streak',
+            error: read.error,
+            busy: read.busy,
+            onRetry: () => ref.invalidate(streakProvider),
+            accent: _C.primary, textColor: _C.onSurface, mutedColor: _C.onSurfVar),
+        ],
       ]),
     );
   }
@@ -1296,14 +1319,27 @@ class _ShakingBellState extends ConsumerState<_ShakingBell> with SingleTickerPro
       TweenSequenceItem(tween: Tween(begin: 0.15, end: -0.1), weight: 2),
       TweenSequenceItem(tween: Tween(begin: -0.1, end: 0.0), weight: 1),
     ]).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
-    Future.delayed(const Duration(seconds: 1), _loop);
+  }
+
+  /// P0-FL-60b · the next shake. None while animations are turned off.
+  Timer? _next;
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _next?.cancel();
+      _next = null;
+      _ctrl.reset();
+    } else {
+      _next ??= Timer(const Duration(seconds: 1), _loop);
+    }
   }
   void _loop() {
-    if (!mounted) return;
-    _ctrl.forward(from: 0).then((_) => Future.delayed(const Duration(seconds: 3), _loop));
+    _ctrl.forward(from: 0);
+    _next = Timer(const Duration(milliseconds: 3500), _loop);
   }
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  void dispose() { _next?.cancel(); _ctrl.dispose(); super.dispose(); }
 
   void _showNotifications() {
     showModalBottomSheet(
@@ -1375,11 +1411,12 @@ class _NotificationsPanel extends ConsumerWidget {
             padding: EdgeInsets.fromLTRB(20, 0, 20, bottom + 24),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               // Classes
-              classesAsync.when(
-                loading: () => const SizedBox(height: 60, child: Center(child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2))),
-                error: (_, __) => const SizedBox.shrink(),
-                data: (classes) {
-                  if (classes.isEmpty) return const SizedBox.shrink();
+              ..._upcomingSection(
+                classesAsync,
+                what: 'upcoming classes',
+                onRetry: () => ref.invalidate(upcomingClassesProvider),
+                loading: const SizedBox(height: 60, child: Center(child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2))),
+                rows: (classes) {
                   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     _PanelSectionLabel(label: 'Classes'),
                     const SizedBox(height: 10),
@@ -1398,11 +1435,12 @@ class _NotificationsPanel extends ConsumerWidget {
               ),
               const SizedBox(height: 16),
               // Events
-              eventsAsync.when(
-                loading: () => const SizedBox.shrink(),
-                error: (_, __) => const SizedBox.shrink(),
-                data: (events) {
-                  if (events.isEmpty) return const SizedBox.shrink();
+              ..._upcomingSection(
+                eventsAsync,
+                what: 'upcoming events',
+                onRetry: () => ref.invalidate(upcomingEventsProvider),
+                loading: const SizedBox.shrink(),
+                rows: (events) {
                   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     _PanelSectionLabel(label: 'Events'),
                     const SizedBox(height: 10),
@@ -1424,6 +1462,28 @@ class _NotificationsPanel extends ConsumerWidget {
     );
   }
 
+  /// P0-FL-60b · a failed read was a section that vanished. The failure is
+  /// said in its place; rows already read stay under it. Read and empty still
+  /// shows nothing.
+  static List<Widget> _upcomingSection(
+    AsyncValue<List<Map<String, dynamic>>> read, {
+    required String what,
+    required VoidCallback onRetry,
+    required Widget loading,
+    required Widget Function(List<Map<String, dynamic>> rows) rows,
+  }) => [
+    if (read.hasError)
+      SectionLoadFailure(
+        what: what, error: read.error, busy: read.isLoading, onRetry: onRetry,
+        accent: _C.primary, textColor: _C.onSurface, mutedColor: _C.onSurfVar)
+    else if (read.isLoading && !read.hasValue)
+      loading,
+    if (read.hasValue && read.requireValue.isNotEmpty) ...[
+      if (read.hasError) const SizedBox(height: 10),
+      rows(read.requireValue),
+    ],
+  ];
+
   String _formatDate(String? iso) {
     if (iso == null) return '';
     try {
@@ -1433,8 +1493,10 @@ class _NotificationsPanel extends ConsumerWidget {
       final m = d.minute.toString().padLeft(2, '0');
       final ampm = d.hour < 12 ? 'AM' : 'PM';
       return '${months[d.month - 1]} ${d.day} • $h:$m $ampm';
-    } catch (_) {
-      return '';
+    } catch (e, st) {
+      // Was blank, as if the class or event had no time.
+      reportError('activity.upcoming.date', e, st);
+      return 'Date unavailable';
     }
   }
 }

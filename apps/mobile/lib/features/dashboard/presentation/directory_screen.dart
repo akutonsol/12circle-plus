@@ -1,12 +1,15 @@
+import 'dart:async' show Timer;
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../dashboard/domain/dashboard_provider.dart';
 import '../../workout/domain/workout_provider.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../../workout/presentation/zone_entry.dart';
 
 // ── Colors (matches Stitch design system) ────────────────────────────────────
@@ -150,7 +153,7 @@ class _DirectoryScreenState extends ConsumerState<DirectoryScreen> {
                       ]),
                       const Spacer(),
                       _IconBtn(icon: Icons.chat_bubble_outline_rounded, onTap: () => context.go('/messages')),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 4), // the 44px target adds the rest
                       _BellBtn(),
                     ]),
                   ),
@@ -196,20 +199,48 @@ class _BellBtnState extends State<_BellBtn> with SingleTickerProviderStateMixin 
       TweenSequenceItem(tween: Tween(begin: 0.15, end: -0.1), weight: 2),
       TweenSequenceItem(tween: Tween(begin: -0.1, end: 0.0), weight: 1),
     ]).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
-    Future.delayed(const Duration(seconds: 1), _loop);
   }
-  void _loop() { if (!mounted) return; _ctrl.forward(from: 0).then((_) => Future.delayed(const Duration(seconds: 3), _loop)); }
+
+  /// P0-FL-60b · the next shake. None while animations are turned off.
+  Timer? _next;
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _next?.cancel();
+      _next = null;
+      _ctrl.reset();
+    } else {
+      _next ??= Timer(const Duration(seconds: 1), _loop);
+    }
+  }
+  void _loop() {
+    _ctrl.forward(from: 0);
+    _next = Timer(const Duration(milliseconds: 3500), _loop);
+  }
   @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: () => showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _DirectoryNotificationsPanel(),
-    ),
-    child: AnimatedBuilder(
+  void dispose() { _next?.cancel(); _ctrl.dispose(); super.dispose(); }
+
+  void _showNotifications() => showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (_) => _DirectoryNotificationsPanel(),
+  );
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    container: true,
+    button: true,
+    label: 'Show upcoming classes and events',
+    onTap: _showNotifications,
+    excludeSemantics: true,
+    child: GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onTap: _showNotifications,
+    child: ConstrainedBox(
+    constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+    child: Center(widthFactor: 1, heightFactor: 1, child: AnimatedBuilder(
       animation: _shake,
       builder: (_, child) => Transform.rotate(angle: _shake.value, child: child),
       child: Container(
@@ -220,7 +251,7 @@ class _BellBtnState extends State<_BellBtn> with SingleTickerProviderStateMixin 
           Positioned(top: 8, right: 8, child: Container(width: 7, height: 7,
             decoration: BoxDecoration(shape: BoxShape.circle, color: _C.error,
               boxShadow: [BoxShadow(color: _C.error.withValues(alpha: 0.6), blurRadius: 4)]))),
-        ]))));
+        ])))))));
 }
 
 // ── Directory Notifications Panel ─────────────────────────────────────────────
@@ -264,11 +295,12 @@ class _DirectoryNotificationsPanel extends ConsumerWidget {
             padding: EdgeInsets.fromLTRB(20, 0, 20, bottom + 24),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               // Upcoming classes
-              classesAsync.when(
-                loading: () => const Center(child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2)),
-                error: (_, __) => const SizedBox.shrink(),
-                data: (classes) {
-                  if (classes.isEmpty) return const SizedBox.shrink();
+              ..._upcomingSection(
+                classesAsync,
+                what: 'upcoming classes',
+                onRetry: () => ref.invalidate(upcomingClassesProvider),
+                loading: const Center(child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2)),
+                rows: (classes) {
                   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     _NotifSectionLabel(label: 'Upcoming Classes'),
                     const SizedBox(height: 10),
@@ -287,11 +319,12 @@ class _DirectoryNotificationsPanel extends ConsumerWidget {
               ),
               const SizedBox(height: 16),
               // Upcoming events
-              eventsAsync.when(
-                loading: () => const SizedBox.shrink(),
-                error: (_, __) => const SizedBox.shrink(),
-                data: (events) {
-                  if (events.isEmpty) return const SizedBox.shrink();
+              ..._upcomingSection(
+                eventsAsync,
+                what: 'upcoming events',
+                onRetry: () => ref.invalidate(upcomingEventsProvider),
+                loading: const SizedBox.shrink(),
+                rows: (events) {
                   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     _NotifSectionLabel(label: 'Upcoming Events'),
                     const SizedBox(height: 10),
@@ -313,6 +346,28 @@ class _DirectoryNotificationsPanel extends ConsumerWidget {
     );
   }
 
+  /// P0-FL-60b · a failed read was a section that vanished. The failure is
+  /// said in its place; rows already read stay under it. Read and empty still
+  /// shows nothing.
+  static List<Widget> _upcomingSection(
+    AsyncValue<List<Map<String, dynamic>>> read, {
+    required String what,
+    required VoidCallback onRetry,
+    required Widget loading,
+    required Widget Function(List<Map<String, dynamic>> rows) rows,
+  }) => [
+    if (read.hasError)
+      SectionLoadFailure(
+        what: what, error: read.error, busy: read.isLoading, onRetry: onRetry,
+        accent: _C.primary, textColor: _C.onSurface, mutedColor: _C.onSurfVar)
+    else if (read.isLoading && !read.hasValue)
+      loading,
+    if (read.hasValue && read.requireValue.isNotEmpty) ...[
+      if (read.hasError) const SizedBox(height: 10),
+      rows(read.requireValue),
+    ],
+  ];
+
   String _fmtDate(String? iso) {
     if (iso == null) return '';
     try {
@@ -322,7 +377,11 @@ class _DirectoryNotificationsPanel extends ConsumerWidget {
       final m = d.minute.toString().padLeft(2, '0');
       final ampm = d.hour < 12 ? 'AM' : 'PM';
       return '${months[d.month - 1]} ${d.day} • $h:$m $ampm';
-    } catch (_) { return ''; }
+    } catch (e, st) {
+      // Was blank, as if the class or event had no time.
+      reportError('directory.upcoming.date', e, st);
+      return 'Date unavailable';
+    }
   }
 }
 

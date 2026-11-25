@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show PlatformException;
@@ -75,17 +76,34 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
   Future<void> _sendMessage(String message, {File? image}) async {
     if (message.trim().isEmpty && image == null) return;
     _messageController.clear();
+    // The notifier draws a failed turn (with "Send it again") and records it.
+    await _whileThinking(() => ref
+        .read(aiNutritionNotifierProvider.notifier)
+        .sendMessage(message, image: image));
+  }
+
+  Future<void> _retryTurn() => _whileThinking(
+      () => ref.read(aiNutritionNotifierProvider.notifier).retryLastTurn());
+
+  Future<void> _whileThinking(Future<void> Function() turn) async {
+    final epoch = _epoch;
     setState(() => _isLoading = true);
-    await ref.read(aiNutritionNotifierProvider.notifier).sendMessage(message, image: image);
-    if (!mounted) return;
+    await turn();
+    if (!mounted || epoch != _epoch) return;
     setState(() => _isLoading = false);
-    // The notifier draws the failed turn (with "Send it again") but records
-    // nothing; a photo turn's failure is recorded here (P0-FL-56a).
-    if (image != null && ref.read(aiNutritionNotifierProvider).last.failed) {
-      reportError('aiNutrition.photo.analyze',
-          StateError('the photo turn was not answered'));
-    }
     _scrollToBottom();
+  }
+
+  /// P0-FL-60b · bumped when the account changes: what an earlier one started
+  /// no longer touches this screen.
+  int _epoch = 0;
+
+  /// The half-typed (or dictated) question is the member's who left.
+  void _forget() {
+    _epoch++;
+    _messageController.clear();
+    if (_isListening) unawaited(_speech.cancel());
+    setState(() => _isLoading = _isListening = false);
   }
 
   void _say(String message) {
@@ -194,8 +212,10 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
     } else {
       if (!mounted) return;
       setState(() => _isListening = true);
+      final epoch = _epoch;
       await _speech.listen(
         onResult: (result) {
+          if (!mounted || epoch != _epoch) return; // another member's composer
           _messageController.text = result.recognizedWords;
           _messageController.selection = TextSelection.fromPosition(
             TextPosition(offset: _messageController.text.length));
@@ -213,6 +233,10 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // A new notifier is a new account (see `_OneMember`).
+    ref.listen(aiNutritionNotifierProvider.notifier, (was, now) {
+      if (!identical(was, now)) _forget();
+    });
     final messages = ref.watch(aiNutritionNotifierProvider);
 
     return Scaffold(
@@ -307,9 +331,7 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
                 // Only the turn the conversation is currently sitting on can
                 // be re-sent; an older failure is history.
                 onRetry: m.failed && index == messages.length - 1
-                    ? () => ref
-                        .read(aiNutritionNotifierProvider.notifier)
-                        .retryLastTurn()
+                    ? (_isLoading ? null : _retryTurn)
                     : null,
               );
             })),

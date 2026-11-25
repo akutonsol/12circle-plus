@@ -952,7 +952,11 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       final res = await _db.functions.invoke('send-invite-email',
           body: {'email': email, 'type': 'team'});
       ok = (res.data is Map) && res.data['sent'] == true;
-    } catch (_) { ok = false; }
+    } catch (e, s) {
+      // The invite is saved; only its email failed (said below).
+      reportError('CoachBusinessScreen._showInviteTeam.email', e, s);
+      ok = false;
+    }
     if (!_stillInvitingAs(uid)) return;
     messenger.showSnackBar(ok
         ? SnackBar(content: Text('Invite email sent to $email'))

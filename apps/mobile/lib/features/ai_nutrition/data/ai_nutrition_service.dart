@@ -1,13 +1,21 @@
+import 'dart:async' show TimeoutException;
 import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
+import 'package:http/http.dart' as http show ClientException;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/config/app_env.dart';
+import '../../../core/observability/network_failure.dart';
 
 /// Thrown when the AI nutrition coach can't be reached or refuses the request.
 class AiNutritionException implements Exception {
   final String message;
-  const AiNutritionException(this.message);
+
+  /// P0-FL-60b · what to record, and what picks the next step (the shared
+  /// `isNetworkFailure`). Never the `DioException`: it carries the member's
+  /// token and what they asked.
+  final Object? cause;
+  const AiNutritionException(this.message, {this.cause});
   @override
   String toString() => message;
 }
@@ -57,8 +65,9 @@ class AiNutritionService {
     File? imageFile,
   }) async {
     if (_env.supabaseUrl.isEmpty) {
-      throw const AiNutritionException(
-        'AI coach is unavailable: this build has no SUPABASE_URL configured.',
+      throw AiNutritionException(
+        _noAnswer,
+        cause: StateError('this build has no SUPABASE_URL configured'),
       );
     }
 
@@ -89,12 +98,42 @@ class AiNutritionService {
       );
       final text = response.data?['text'];
       if (text is! String || text.isEmpty) {
-        throw const AiNutritionException('AI coach returned an empty reply.');
+        throw AiNutritionException(_noAnswer,
+            cause: StateError('ai-nutrition answered with no text'));
       }
       return text;
     } on DioException catch (e) {
-      throw AiNutritionException(_messageForStatus(e.response?.statusCode));
+      final cause = _causeOf(e);
+      throw AiNutritionException(
+          isNetworkFailure(cause)
+              ? _notReached
+              : _messageForStatus(e.response?.statusCode),
+          cause: cause);
     }
+  }
+
+  static const _notReached =
+      "Couldn't reach the AI coach — check your connection and try again.";
+  static const _noAnswer =
+      "Couldn't get an answer from the AI coach — try again in a moment. If it "
+      'keeps happening, contact support.';
+
+  /// An error `isNetworkFailure` accepts only when the request did not get an
+  /// answer; otherwise what was answered, without its body.
+  static Object _causeOf(DioException e) {
+    final status = e.response?.statusCode;
+    if (status != null) return StateError('ai-nutrition answered $status');
+    final inner = e.error;
+    if (inner != null && isNetworkFailure(inner)) return inner;
+    return switch (e.type) {
+      DioExceptionType.connectionTimeout ||
+      DioExceptionType.sendTimeout ||
+      DioExceptionType.receiveTimeout =>
+        TimeoutException('ai-nutrition: ${e.type.name}'),
+      DioExceptionType.connectionError =>
+        http.ClientException('ai-nutrition: ${e.type.name}'),
+      _ => StateError('ai-nutrition: ${e.type.name}'),
+    };
   }
 
   static Future<Map<String, dynamic>> _encodeImage(File imageFile) async {
@@ -119,7 +158,8 @@ class AiNutritionService {
       case 503:
         return 'The AI coach is temporarily unavailable. Please try again.';
       default:
-        return 'Could not reach the AI coach. Please try again.';
+        // It was reached: anything that was not is [_notReached].
+        return _noAnswer;
     }
   }
 
