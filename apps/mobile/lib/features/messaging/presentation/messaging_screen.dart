@@ -4,9 +4,11 @@ import 'package:go_router/go_router.dart';
 import '../../../core/observability/network_failure.dart';
 import '../../../core/widgets/named_icon_button.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../checkins/domain/checkin_provider.dart' show heldFor;
 import '../../coach/domain/coach_provider.dart';
 import '../../community/domain/community_provider.dart';
 import '../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../domain/messaging_provider.dart';
 import 'connect_sections_view.dart';
 
@@ -24,7 +26,32 @@ class MessagingScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final convsAsync = ref.watch(conversationsProvider);
+    // P0-FL-59c · watched for itself: a refresh in flight when the account
+    // changes does not rebuild this screen, and the last member's threads would
+    // stay drawn until the next one's read settled.
+    final uid = ref.watch(messagingUidProvider);
+    final state = ref.watch(conversationsProvider);
+    final convsAsync = heldFor(state, () => uid);
+    bool may(String what) => mayActAs(uid, 'MessagingScreen', what);
+    void reread() {
+      if (may('inbox not refreshed')) ref.invalidate(conversationsProvider);
+    }
+
+    Widget rows(List<Map<String, dynamic>> convs) => Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(children: [
+            for (var i = 0; i < convs.length; i++) ...[
+              if (i > 0) const SizedBox(height: 10),
+              _ConversationTile(
+                conv: convs[i],
+                onTap: () {
+                  if (!may('conversation not opened')) return;
+                  ref.read(selectedConversationProvider.notifier).state = convs[i];
+                  context.go('/chat');
+                }),
+            ],
+          ]),
+        );
 
     return Scaffold(
       backgroundColor: _bg,
@@ -61,7 +88,7 @@ class MessagingScreen extends ConsumerWidget {
               _HeaderAction(
                 icon: Icons.refresh,
                 label: 'Refresh',
-                onTap: () => ref.invalidate(conversationsProvider)),
+                onTap: reread),
             ])),
 
           // ── Body ──
@@ -76,11 +103,26 @@ class MessagingScreen extends ConsumerWidget {
               color: _brand,
               backgroundColor: _card,
               onRefresh: () async {
+                if (!may('inbox not refreshed')) return;
                 ref.invalidate(conversationsProvider);
                 ref.invalidate(livePostsProvider);
                 ref.invalidate(liveGroupsProvider);
               },
               child: ListView(children: [
+                // The same member's threads stay under a refresh that failed.
+                if (convsAsync.hasError &&
+                    convsAsync.hasValue &&
+                    convsAsync.requireValue.isNotEmpty) ...[
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                    child: SectionLoadFailure(
+                      what: 'your messages',
+                      error: convsAsync.error,
+                      busy: state.isLoading,
+                      onRetry: reread),
+                  ),
+                  rows(convsAsync.requireValue),
+                ] else
                 convsAsync.when(
               // Inside a ListView these states need a bounded height; 320 is
               // roughly a phone's remaining viewport under the header, so they
@@ -95,8 +137,8 @@ class MessagingScreen extends ConsumerWidget {
               // and a busy-aware Try again.
               error: (err, _) => _LoadFailure(
                 network: isNetworkFailure(err),
-                busy: convsAsync.isLoading,
-                onRetry: () => ref.invalidate(conversationsProvider)),
+                busy: state.isLoading,
+                onRetry: reread),
               data: (convs) {
                 if (convs.isEmpty) {
                   // ── FIT-028 · "/messages · the state that sells the plan
@@ -142,20 +184,7 @@ class MessagingScreen extends ConsumerWidget {
                     orElse: () => neutral,
                   );
                 }
-                return Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(children: [
-                    for (var i = 0; i < convs.length; i++) ...[
-                      if (i > 0) const SizedBox(height: 10),
-                      _ConversationTile(
-                        conv: convs[i],
-                        onTap: () {
-                          ref.read(selectedConversationProvider.notifier).state = convs[i];
-                          context.go('/chat');
-                        }),
-                    ],
-                  ]),
-                );
+                return rows(convs);
               }),
                 const ConnectSectionsView(),
                 const SizedBox(height: 80),

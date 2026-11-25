@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../challenges/domain/challenge_provider.dart';
+import '../../classes/domain/class_provider.dart';
 import '../../classes/domain/whats_on.dart';
 import '../../classes/domain/whats_on_provider.dart';
+import '../../community/data/models/post_model.dart';
 import '../../community/domain/community_provider.dart';
 import '../domain/connect_sections.dart';
+import '../domain/messaging_provider.dart';
 
 /// FIT-005 · the relationship layer under `/messages`' conversations.
 ///
@@ -14,14 +18,39 @@ import '../domain/connect_sections.dart';
 ///
 /// Visible for testing: `messaging_screen.dart` reaches Supabase through four
 /// providers, so the sections are mounted here where they can be driven.
-class ConnectSectionsView extends ConsumerWidget {
+class ConnectSectionsView extends ConsumerStatefulWidget {
   const ConnectSectionsView({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final feed = teaserFrom(ref.watch(livePostsProvider));
-    final groups = teaserFrom(ref.watch(liveGroupsProvider));
-    final whatsOn = whatsOnTeaser(ref.watch(whatsOnProvider));
+  ConsumerState<ConnectSectionsView> createState() =>
+      _ConnectSectionsViewState();
+}
+
+class _ConnectSectionsViewState extends ConsumerState<ConnectSectionsView> {
+  final _feed = KeptTeaser<CommunityPost>();
+  final _groups = KeptTeaser<CommunityGroup>();
+  final _whatsOn = KeptTeaser<WhatsOnItem>();
+
+  @override
+  Widget build(BuildContext context) {
+    // Watched first, and for itself: a read in flight when the account changes
+    // rebuilds nothing on its own (see [KeptTeaser]).
+    final uid = ref.watch(messagingUidProvider);
+    final posts = ref.watch(livePostsProvider);
+    final feed = _feed.draw(uid, teaserFrom(posts), reading: posts.isLoading);
+    final groupsRead = ref.watch(liveGroupsProvider);
+    final groups = _groups.draw(uid, teaserFrom(groupsRead),
+        reading: groupsRead.isLoading);
+    // The merged list is "data" while a source behind it is being read again,
+    // so whether it is finished is asked of the sources.
+    final sources = [
+      ref.watch(liveClassesFromDbProvider).isLoading,
+      ref.watch(whatsOnEventsProvider).isLoading,
+      ref.watch(liveChallengesProvider).isLoading,
+    ];
+    final whatsOn = _whatsOn.draw(
+        uid, whatsOnTeaser(ref.watch(whatsOnProvider)),
+        reading: sources.contains(true));
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _Section(
@@ -102,8 +131,11 @@ class _Section extends StatelessWidget {
               child: Text(failure,
                 style: const TextStyle(color: _error, fontSize: 13)),
             ),
-          ])
-        else if (state == ConnectSectionState.empty)
+          ]),
+        // A failed refresh keeps the rows that were there, under the failure.
+        if (state == ConnectSectionState.failed && rows.isNotEmpty)
+          const SizedBox(height: 8),
+        if (state == ConnectSectionState.empty)
           // Deliberately quiet: FIT-005 declares no empty copy for these
           // teasers, and writing three sentences would be OD-8. The section's
           // own screen has an empty state; this one just offers the way there.

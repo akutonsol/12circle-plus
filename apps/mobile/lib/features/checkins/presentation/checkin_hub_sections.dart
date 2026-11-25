@@ -50,7 +50,10 @@ class CheckinHubSections extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final historyAsync = ref.watch(checkinHistoryProvider);
-    final mine = heldFor(historyAsync, () => ref.watch(checkinUidProvider));
+    // Watched whatever is held: a read in flight when the account changes
+    // rebuilds nothing on its own.
+    final uid = ref.watch(checkinUidProvider);
+    final mine = heldFor(historyAsync, () => uid);
     final history = historyFrom(mine);
     // A failed refresh keeps this member's weeks under the failure it states.
     final weeks = history.state == CheckinHistoryState.failed && mine.hasValue

@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../checkins/domain/checkin_provider.dart' show ownedRead;
 import '../data/messaging_service.dart';
 import '../../../core/realtime/realtime.dart';
 
@@ -16,12 +18,25 @@ final messagingServiceProvider = Provider<MessagingService>((ref) => MessagingSe
 final messagingUidProvider = Provider<String?>(
     (ref) => ref.watch(currentUserProvider.select((u) => u?.id)));
 
+/// Whether an action built for [uid] may be taken. If not, it belonged to the
+/// account that left: recorded, and nothing is said (P0-FL-59c).
+bool mayActAs(String? uid, String origin, String what) {
+  if (Supabase.instance.client.auth.currentUser?.id == uid) return true;
+  reportError(origin, StateError('$what: the signed-in account changed'),
+      StackTrace.current);
+  return false;
+}
+
+/// The inbox. Its rows carry the account that read them (`OwnedRows`): being
+/// keyed by the uid does not clear the screen when a refresh is in flight at the
+/// switch, because riverpod 2.6.1 tells nobody when one loading state replaces
+/// another, and both hold the last member's threads (P0-FL-59c).
 final conversationsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   ref.watch(currentUserProvider.select((u) => u?.id));
   ref.watch(messagingUidProvider);
   ref.watch(tableTickerProvider('messages'));       // live: new messages
   ref.watch(tableTickerProvider('conversations'));  // live: new conversations
-  return ref.watch(messagingServiceProvider).getConversations();
+  return ownedRead(ref.watch(messagingServiceProvider).getConversations);
 });
 
 /// One member's unread count, kept under that member's uid. Not asked for while
