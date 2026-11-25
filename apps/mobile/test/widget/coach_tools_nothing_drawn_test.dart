@@ -307,8 +307,10 @@ void main() {
         await t.tap(find.text('Publish Slot'));
         await settleReal(t);
         await switchNoFrame(t, memberB);
+        final asked = server.log.length;
         write.complete();
         await settleNoFrame(t);
+        expect(server.log.length, asked, reason: "A's save re-read B's page");
         await settleReal(t);
         expect(find.text('Add Availability Slot'), findsNothing);
         pageIsThere();
@@ -325,8 +327,10 @@ void main() {
         await t.tap(find.text('Save coaching'));
         await settleReal(t);
         await switchNoFrame(t, memberB);
+        final asked = server.log.length;
         write.complete();
         await settleNoFrame(t);
+        expect(server.log.length, asked, reason: "A's save re-read B's section");
         await settleReal(t);
         expect(find.text('Coach this exercise'), findsNothing);
         pageIsThere();
@@ -572,6 +576,11 @@ void main() {
       await leaveWithSaveAgain(t);
       await refreshToken(t);
       expect(find.text('Save again'), findsOneWidget);
+      // The form is gone: there is nothing to save again, and it does not throw.
+      final writes = server.writes.length;
+      await t.tap(find.text('Save again'));
+      await settleReal(t);
+      expect(server.writes.length, writes);
       await unmountAll(t);
     });
   });

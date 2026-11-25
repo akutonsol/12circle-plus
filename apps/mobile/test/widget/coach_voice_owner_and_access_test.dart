@@ -719,16 +719,39 @@ void main() {
         });
       }
 
-      testWidgets("A's failure landing after B is recorded, not said", (t) async {
+      for (final heard in [true, false]) {
+        testWidgets("A's failure landing after B is recorded, not said "
+            "(${heard ? 'the player has' : 'it has not yet'} heard of B)", (t) async {
+          await player(t);
+          await t.tap(control);
+          await pumpUntil(t, () => playing(t), what: 'playing');
+          if (heard) await switchNoFrame(t, memberB);
+          final b = heard ? null : t.runAsync(() => signInAs(memberB));
+          audio.streamError();
+          await b;
+          await settleReal(t);
+          expect(find.textContaining("Couldn't"), findsNothing);
+          expect(origins(), ['CoachVoicePlayer._toggle']);
+          await unmountAll(t);
+        });
+      }
+
+      testWidgets('A, out and A back while it loads: the old play is not "Playing"',
+          (t) async {
         await player(t);
+        audio.playGate = Completer<void>();
+        await t.tap(control);
+        await pumpUntil(t, () => audio.calls.contains('setSourceUrl'), what: 'loading');
+        await switchNoFrame(t, null);
+        await switchNoFrame(t, memberA);
+        audio.playGate!.complete();
+        audio.playGate = null;
+        await settleReal(t);
+        expect(audio.calls, isNot(contains('resume')), reason: 'premise: no sound');
+        expect(playing(t), isFalse);
         await t.tap(control);
         await pumpUntil(t, () => playing(t), what: 'playing');
-        final b = t.runAsync(() => signInAs(memberB));
-        audio.streamError();
-        await b;
-        await settleReal(t);
-        expect(find.textContaining("Couldn't"), findsNothing);
-        expect(origins(), ['CoachVoicePlayer._toggle']);
+        expect(audio.calls.where((c) => c == 'resume'), hasLength(1));
         await unmountAll(t);
       });
 

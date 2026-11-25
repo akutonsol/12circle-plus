@@ -110,6 +110,43 @@ void main() {
       expect(reported.map((f) => f.origin), ['CoachRelationshipService.cancelCoach.notify']);
     });
 
+    // A refusal written to be shown ("No active coaching…") that arrives after
+    // the switch is not shown to whoever is signed in by then.
+    final late = <String, (Future<Object?> Function(), String)>{
+      'cancelCoach (nothing to end)': (
+          () => svc.cancelCoach('coach-1', null, null), 'coach_client_relationships'),
+      'cancelCoach (not cancelled)': (
+          () => svc.cancelCoach('coach-1', null, null), 'cancel-subscription'),
+      'setGlobalPrice': (() => svc.setGlobalPrice(150), 'user_profiles'),
+    };
+    late.forEach((name, c) {
+      for (final switches in [true, false]) {
+        test('$name: ${switches ? 'a refusal that lands late is the account changing'
+            : 'control: the same account is told why'}', () async {
+          server.zeroRows = (s) => true;
+          server.answers['cancel-subscription'] = {'ok': false};
+          if (c.$2 == 'cancel-subscription') {
+            server.tables['subscriptions'] = [
+              {'id': 'sub-1', 'user_id': memberA, 'coach_id': 'coach-1'},
+            ];
+          }
+          Object? out;
+          if (switches) {
+            out = await switchDuring(c.$1, (s) => s.table == c.$2);
+          } else {
+            try {
+              await c.$1();
+            } catch (e) {
+              out = e;
+            }
+          }
+          expect(out, isA<StateError>());
+          expect((out! as StateError).message, switches ? accountMessage : isNot(accountMessage));
+          expect(server.writesBy(memberB), isEmpty);
+        });
+      }
+    });
+
     // ── sec N-3 / N-4 / N-5 ──
     test('sendInvite: a switch after the insert — no email goes out as B', () async {
       final out = await switchDuring(
