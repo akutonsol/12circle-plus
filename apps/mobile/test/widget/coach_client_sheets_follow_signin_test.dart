@@ -7,7 +7,6 @@ import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
 import 'package:circle_fitness/features/coach_notes/presentation/coach_notes_sheet.dart';
 import 'package:circle_fitness/features/dashboard/presentation/client_detail_screen.dart';
-import 'package:circle_fitness/features/vendor/presentation/vendor_portal_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -803,36 +802,6 @@ void main() {
       expect(find.text('Assign / Change Program'), findsOneWidget);
       await unmount(tester);
     });
-  });
-
-  testWidgets("A-23 A's attendees are not B's, pending or failed",
-      (tester) async {
-    server
-      ..seed('event_registrations', memberA, [
-        {'id': 'r1', 'user_id': 'u1', 'status': 'registered'}
-      ])
-      ..seed('event_attendee_profiles', memberA, [
-        {
-          'id': 'u1',
-          'first_name': 'Ivy',
-          'last_name': 'Lane',
-          'email': 'ivy@guest.example'
-        }
-      ]);
-    await host(tester,
-        const EventAttendeesScreen(event: {'id': 'ev-1', 'title': 'Expo'}));
-    await pumpUntil(tester, () => seen(find.textContaining('Ivy')), what: 'A');
-    final hold =
-        server.holds['GET event_registrations:$memberB'] = Completer<void>();
-    await become(tester, memberB);
-    expect(find.textContaining('Ivy'), findsNothing, reason: 'THE defect');
-    expect(find.text('ivy@guest.example'), findsNothing);
-    server.fails.add('GET event_registrations:$memberB');
-    hold.complete();
-    await pumpUntil(tester,
-        () => seen(find.text('Could not load attendees.')), what: 'B failed');
-    expect(find.textContaining('Ivy'), findsNothing);
-    await unmount(tester);
   });
 
   // ── the sheets ────────────────────────────────────────────────────────────

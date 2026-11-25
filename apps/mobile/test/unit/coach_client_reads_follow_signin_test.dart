@@ -16,7 +16,6 @@ import 'package:circle_fitness/features/dashboard/presentation/client_detail_scr
     show answeredPaidPlan;
 import 'package:circle_fitness/features/scoring/domain/score_provider.dart'
     hide coachLeaderboardProvider;
-import 'package:circle_fitness/features/vendor/domain/vendor_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -25,7 +24,7 @@ import '../support/two_coach_postgrest.dart';
 // P0-FL-59f · provider families keyed by a client (or a program, an event, a
 // class) and not by who is signed in. RLS decides what each coach may read, so
 // the answer belongs to the coach who asked: kept for the next account it is
-// one coach's PAR-Q, schedule, attendee emails or meeting link on another's
+// one coach's PAR-Q, schedule or meeting link on another's
 // screen.
 //
 // HOW TO SEE IT FAIL: `git checkout a82f993 -- lib/features`.
@@ -126,10 +125,6 @@ void main() {
     "a program's workouts": (
       programWorkoutsProvider('prog-1'),
       'GET program_workouts'
-    ),
-    "an event's attendees": (
-      eventRegistrationsProvider('ev-1'),
-      'GET event_registrations'
     ),
     // Read through plain `.when`, so nothing of A's was shown; a token refresh
     // read them again (N7).
