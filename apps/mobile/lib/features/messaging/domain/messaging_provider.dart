@@ -24,23 +24,17 @@ final conversationsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) a
   return ref.watch(messagingServiceProvider).getConversations();
 });
 
-/// One member's unread count, kept under that member's uid. A count of anyone
-/// else's is refused: the read answers for whoever is signed in when it is made.
+/// One member's unread count, kept under that member's uid. Not asked for while
+/// anyone else is signed in: the read answers for whoever is, when it is sent.
 final _unreadCountOf =
     FutureProvider.autoDispose.family<int, String?>((ref, uid) async {
   if (uid == null) return 0;
   ref.watch(tableTickerProvider('messages'));
   final service = ref.watch(messagingServiceProvider);
-  void requireMember() {
-    if (Supabase.instance.client.auth.currentUser?.id != uid) {
-      throw StateError('unread count not kept: the signed-in account changed');
-    }
+  if (Supabase.instance.client.auth.currentUser?.id != uid) {
+    throw StateError('unread count not read: the signed-in account changed');
   }
-
-  requireMember();
-  final count = await service.getUnreadCount();
-  requireMember();
-  return count;
+  return service.getUnreadCount();
 });
 
 /// The signed-in member's unread count. By uid (P0-FL-59c): as one provider it

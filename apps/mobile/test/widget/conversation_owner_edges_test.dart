@@ -292,20 +292,74 @@ void main() {
       expect(server.sent('GET', 'messages', memberA).length, greaterThan(reads));
     });
 
-    test('A->B between its two reads: the mixed answer is refused', () async {
-      newContainer().listen(unreadCountProvider, (_, __) {});
+    Future<void> watchIt(WidgetTester t) => t.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: Consumer(builder: (_, ref, __) {
+            ref.watch(unreadCountProvider);
+            return const SizedBox();
+          }),
+        ));
+
+    testWidgets('A->B->A with no frame, between its two reads: the second is not '
+        "asked as B, and B's number is not kept as A's", (t) async {
+      newContainer();
       final hold =
           server.holds['GET conversations:$memberA'] = Completer<void>();
+      await watchIt(t);
+      await settleReal(t);
+      await switchNoFrame(t, memberB);
+      hold.complete();
+      for (var i = 0; i < 5; i++) {
+        await t.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 5)));
+        await t.idle();
+      }
+      expect(server.log.where((a) => a.who == memberB), isEmpty,
+          reason: "THE defect: A's threads counted as B");
+      await switchNoFrame(t, memberA);
+      await settleReal(t);
+      expect(count().valueOrNull, isNot(1), reason: "B's number");
+      await closeApp(t);
+    });
+
+    testWidgets('a tick for A that lands after an unseen switch is not read as B '
+        'under A', (t) async {
+      final ticks = StreamController<int>.broadcast();
+      addTearDown(() => unawaited(ticks.close()));
+      svc = _Service();
+      addTearDown(() => unawaited(svc.stream.close()));
+      container = ProviderContainer(overrides: [
+        messagingServiceProvider.overrideWithValue(svc),
+        tableTickerProvider.overrideWith((ref, table) => ticks.stream),
+      ]);
+      addTearDown(container.dispose);
+      await watchIt(t);
+      ticks.add(0);
+      await settleReal(t);
+      expect(count().valueOrNull, 2, reason: 'premise');
+      await switchNoFrame(t, memberB);
+      ticks.add(1);
+      await t.idle();
+      await settleReal(t);
+      expect(count().valueOrNull, 1);
+      expect(server.sent('GET', 'conversations', memberB), hasLength(1),
+          reason: "only B's own");
+      await closeApp(t);
+    });
+
+    test('the inbox: A->B between its two reads, the names are not asked as B',
+        () async {
+      final hold =
+          server.holds['GET conversations:$memberA'] = Completer<void>();
+      final answer = MessagingService().getConversations();
+      final refused = expectLater(answer, throwsA(isA<StateError>()));
       await tick();
-      // B, unseen by the container: no microtask between.
       await signInAs(memberB);
       hold.complete();
-      await tick();
-      expect(count().valueOrNull, 1, reason: "B's own");
-      await signInAs(memberA);
-      server.holds.clear();
-      await tick();
-      expect(count().valueOrNull, 2);
+      await refused;
+      expect(server.log.where((a) => a.who == memberB), isEmpty);
+      expect(origins(), ['MessagingService.getConversations']);
     });
 
     test('CONTROLS: a token refresh reads nothing again; a failed refresh keeps '
@@ -472,6 +526,70 @@ void main() {
       await closeApp(t);
     });
 
+    Future<void> outAndBack(WidgetTester t) async {
+      await signOutNoFrame(t);
+      await settleReal(t);
+      await switchNoFrame(t, memberA);
+      await settleReal(t);
+    }
+
+    testWidgets('A->out->A during a refused row: cleaned up as A, said to nobody',
+        (t) async {
+      await open(t);
+      server.fails.add('POST messages:$memberA');
+      final hold = server.holds['POST messages:$memberA'] = Completer<void>();
+      await attach(t);
+      await pumpUntil(t, () => sentMessages().isNotEmpty, what: 'the row');
+      await outAndBack(t);
+      hold.complete();
+      await pumpUntil(t, () => server.sent('DELETE', 'storage').isNotEmpty,
+          what: 'the clean-up');
+      await settleReal(t);
+      expect(find.byType(SnackBar), findsNothing);
+      await closeApp(t);
+    });
+
+    testWidgets('A->out->A while an unreadable photo is picked: recorded, said '
+        'to nobody', (t) async {
+      await open(t);
+      final gate = Completer<Object?>();
+      picker.answer = (_) => gate.future;
+      await attach(t);
+      await outAndBack(t);
+      gate.complete(picker.vanishedPath);
+      await pumpUntil(t, () => origins().contains('chat.photo.read'),
+          what: 'the failed read');
+      await settleReal(t);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(uploads(), isEmpty);
+      await closeApp(t);
+    });
+
+    testWidgets('A->B with no frame during the upload: the refusal itself empties '
+        'the composer', (t) async {
+      await open(t);
+      await t.enterText(find.byType(TextField), 'private to A');
+      await t.pump();
+      final controller = field(t).controller!;
+      final hold = server.holds['POST storage:$memberA'] = Completer<void>();
+      await attach(t);
+      await pumpUntil(t, () => uploads().isNotEmpty, what: 'the upload');
+      await switchNoFrame(t, memberB);
+      hold.complete();
+      for (var i = 0; i < 20 && reported.length < 2; i++) {
+        await t.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 5)));
+        await t.idle();
+      }
+      expect(origins(), ['ChatScreen._sendPhoto', 'ChatScreen._sendPhoto.cleanup'],
+          reason: 'premise: refused, before any frame');
+      await t.idle();
+      expect(controller.text, isEmpty);
+      await settleReal(t);
+      expect(server.writesAs(memberB), isEmpty);
+      await closeApp(t);
+    });
+
     testWidgets("A's picker fails after A->B with no frame: recorded, B is told "
         'nothing', (t) async {
       await open(t);
@@ -515,11 +633,38 @@ void main() {
       await switchNoFrame(t, memberB);
       await settleReal(t);
       await switchNoFrame(t, memberA);
+      await settleReal(t);
       tap();
       await settleReal(t);
       expect(picker.calls, isEmpty);
+      expect(find.byType(SnackBar), findsNothing,
+          reason: 'not "not ready yet" either: it was dropped');
+      expect(origins(), ['ChatScreen._sendPhoto']);
       await closeApp(t);
     });
+  });
+
+  testWidgets("Try again built for A's failed thread, tapped after the drop: no "
+      'conversation is opened as B', (t) async {
+    tallView(t);
+    newContainer();
+    server.fails.add('GET messages:$memberA');
+    container.read(selectedConversationProvider.notifier).state = {...convOfA};
+    await t.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: const MaterialApp(home: ChatScreen()),
+    ));
+    await settleReal(t);
+    final again = t.widget<TextButton>(find.byType(TextButton)).onPressed!;
+    await switchNoFrame(t, memberB);
+    await settleReal(t);
+    server.log.clear();
+    again();
+    await settleReal(t);
+    expect(server.log, isEmpty,
+        reason: "THE defect: B's own coach thread looked up, or created");
+    expect(find.text(_closed), findsOneWidget);
+    await closeApp(t);
   });
 
   group('sending', () {

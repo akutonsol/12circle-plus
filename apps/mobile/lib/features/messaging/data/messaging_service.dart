@@ -47,6 +47,9 @@ class MessagingService {
           : c['participant_1'] as String
       ).toSet().toList();
 
+      if (!_stillSignedIn(userId)) {
+        throw StateError('inbox not read: the signed-in account changed');
+      }
       final profiles = await supabase
           .from('conversation_participant_profiles')
           .select('id, first_name, last_name, role, avatar_url')
@@ -301,6 +304,9 @@ class MessagingService {
           .or('participant_1.eq.$userId,participant_2.eq.$userId');
       if ((convs as List).isEmpty) return 0;
       final convIds = convs.map((c) => c['id']).toList();
+      if (!_stillSignedIn(userId)) {
+        throw StateError('unread count not read: the signed-in account changed');
+      }
 
       final data = await supabase
           .from('messages')

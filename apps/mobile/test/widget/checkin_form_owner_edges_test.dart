@@ -396,7 +396,18 @@ void main() {
       await t.tap(notes());
       await t.enterText(notes(), 'private to A');
       await t.pump(const Duration(seconds: 1));
+      final submit = submitTap(t)!;
       await switchNoFrame(t, memberB);
+      // Dropped by the tap, and B's week read, before any frame: the form is
+      // never unmounted, and the field would be the same one.
+      submit();
+      for (var i = 0; i < 8; i++) {
+        await t.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 5)));
+        await t.idle();
+      }
+      expect(server.sent('GET', 'weekly_checkins', memberB), isNotEmpty,
+          reason: 'premise');
       await settleReal(t);
       await t.tap(notes());
       await t.pump();
