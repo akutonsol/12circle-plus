@@ -194,7 +194,8 @@ void main() {
           GoRoute(
             path: '/client',
             builder: (_, __) =>
-                const ClientDetailScreen(clientId: _clientId, clientName: 'Jordan'),
+                const ClientDetailScreen(
+              clientId: _clientId, clientName: 'Jordan', owner: _uid),
           ),
         ],
       );

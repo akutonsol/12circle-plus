@@ -175,7 +175,8 @@ void main() {
 
   Future<void> page(WidgetTester tester) async {
     await host(tester,
-        const ClientDetailScreen(clientId: _client, clientName: 'Alma Stone'));
+        const ClientDetailScreen(
+            clientId: _client, clientName: 'Alma Stone', owner: memberA));
     await pumpUntil(tester,
         () => seen(find.text('4321')) && seen(find.text('06:45')) &&
             seen(find.text('HIGH RISK')) &&
@@ -270,7 +271,7 @@ void main() {
       await become(tester, memberB);
       Navigator.of(tester.element(find.byType(ClientDetailScreen))).push(
           MaterialPageRoute<void>(builder: (_) => const ClientDetailScreen(
-              clientId: _client, clientName: 'Alma Stone')));
+              clientId: _client, clientName: 'Alma Stone', owner: memberB)));
       await pumpUntil(tester,
           () => seen(find.text("Couldn't check this client's plan.")),
           what: "B's page and its failed plan check");

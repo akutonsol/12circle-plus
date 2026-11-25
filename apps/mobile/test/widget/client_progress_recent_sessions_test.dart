@@ -11,6 +11,8 @@ import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../support/two_member_postgrest.dart' show memberA, signInAs;
+
 // The coach's Progress tab lists RECENT SESSIONS from `clientDetailProvider`'s
 // `workout_logs`. That key is a `workout_sessions` read, which selects
 // `workout_title`, `completed_at` and `duration_seconds`. The row read
@@ -71,7 +73,8 @@ Future<void> _openProgressTab(
       GoRoute(
         path: '/client',
         builder: (_, __) =>
-            const ClientDetailScreen(clientId: _clientId, clientName: 'Jordan'),
+            const ClientDetailScreen(
+              clientId: _clientId, clientName: 'Jordan', owner: memberA),
       ),
     ],
   );
@@ -110,6 +113,8 @@ void main() {
       ),
       debug: false,
     );
+    // P0-FL-59f: the client page is drawn for the coach it was opened by only.
+    await signInAs(memberA);
   });
 
   testWidgets('a session shows its real title and its recorded duration',

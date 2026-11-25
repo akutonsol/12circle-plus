@@ -3,7 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../../core/realtime/realtime.dart';
-import '../../dashboard/domain/still_reading.dart' show ownedBy, readAsClientPageOwner;
+import '../../dashboard/domain/still_reading.dart' show ownedRead, readAsClientPageOwner;
 import '../data/coach_program_service.dart';
 import '../data/coach_relationship_service.dart';
 import '../data/score_service.dart';
@@ -27,7 +27,7 @@ final pendingRequestsProvider = FutureProvider<List<Map<String, dynamic>>>((ref)
   ref.watch(tableTickerProvider('coach_client_relationships')); // live: new requests
   final coachId = Supabase.instance.client.auth.currentUser?.id;
   if (coachId == null) return [];
-  return ownedBy(uid, await _relSvc.getPendingRequests(coachId));
+  return ownedRead(uid, () => _relSvc.getPendingRequests(coachId));
 });
 
 // ── Programs ─────────────────────────────────────────────────
@@ -35,8 +35,10 @@ final pendingRequestsProvider = FutureProvider<List<Map<String, dynamic>>>((ref)
 // the class guard in per_user_provider_scope_test.dart cannot see. Each watches
 // the user so a change of account recomputes it instead of serving the last one's.
 final myProgramsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
-  ref.watch(currentUserProvider.select((u) => u?.id)); // by id: a token refresh is the same coach
-  return _programSvc.getMyPrograms();
+  // By id: a token refresh is the same coach. Marked as theirs: it outlives its
+  // readers, and what a program write invalidates is re-read as a refresh.
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+  return ownedRead(uid, _programSvc.getMyPrograms);
 });
 
 final myAssignedProgramProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
@@ -132,21 +134,26 @@ final monthScoresProvider = FutureProvider<List<Map<String, dynamic>>>((ref) asy
 
 final sentInvitesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
-  ref.watch(currentUserProvider.select((u) => u?.id));
+  // P0-FL-59f: and marked as theirs, as the leaderboard is below. Invalidated
+  // while a change of account is unflushed, the read is AsyncData of the last
+  // coach's rows; their failure is carried the same way.
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
   final coachId = Supabase.instance.client.auth.currentUser?.id;
   if (coachId == null) return [];
-  final data = await Supabase.instance.client
-      .from('coach_invites')
-      .select()
-      .eq('coach_id', coachId)
-      .order('created_at', ascending: false)
-      .limit(50);
-  return List<Map<String, dynamic>>.from(data);
+  return ownedRead(uid, () async {
+    final data = await Supabase.instance.client
+        .from('coach_invites')
+        .select()
+        .eq('coach_id', coachId)
+        .order('created_at', ascending: false)
+        .limit(50);
+    return List<Map<String, dynamic>>.from(data);
+  });
 });
 
 final coachLeaderboardProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
-  ref.watch(currentUserProvider.select((u) => u?.id));
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
   // Live: ticks on the table it READS (P0-FL-47). It watched 'user_scores',
   // which only the award_points / apply_penalty RPCs write; a client's daily
   // score is the app's `daily_scores` upsert, so it never moved this tab.
@@ -155,7 +162,7 @@ final coachLeaderboardProvider = FutureProvider<List<Map<String, dynamic>>>((ref
   ref.watch(tableTickerProvider('daily_scores'));
   final coachId = Supabase.instance.client.auth.currentUser?.id;
   if (coachId == null) return [];
-  return _scoreSvc.getCoachLeaderboard(coachId);
+  return ownedRead(uid, () => _scoreSvc.getCoachLeaderboard(coachId));
 });
 
 // ── Client data (coach reads a specific client) ───────────────
@@ -176,36 +183,38 @@ final coachLeaderboardProvider = FutureProvider<List<Map<String, dynamic>>>((ref
 // re-read (and not a second logged assessment read). Keyed by the client alone
 // they left one coach's PAR-Q, injuries, photos and weights on the page for the
 // next account, with no `assessment_access_log` row naming it. Nor is it asked
-// for a page its reader never opened ([readAsClientPageOwner]).
+// for a page its reader never opened ([readAsClientPageOwner]), nor its later
+// steps as an account that signed in during the earlier ones.
 const clientDetailProfileColumns =
     'id, first_name, last_name, avatar_url, coaching_mode, created_at, onboarding_complete';
 
 final clientDetailProvider = FutureProvider.autoDispose.family<Map<String, dynamic>, String>((ref, clientId) async {
-  readAsClientPageOwner(ref, clientId);
+  final own = readAsClientPageOwner(ref, clientId);
   final db = Supabase.instance.client;
-  final profile = await db
+  final profile = own(await db
       .from('user_profiles')
       .select(clientDetailProfileColumns)
       .eq('id', clientId)
-      .maybeSingle();
+      .maybeSingle());
   if (profile == null) return {};
 
-  final photoRows = await db
+  final photoRows = own(await db
       .from('progress_photo_logs')
       .select()
       .eq('user_id', clientId)
       .order('logged_at', ascending: false)
-      .limit(6);
+      .limit(6));
   // Attach a short-lived signed URL for each stored photo so the coach view
   // can render them (bucket is private).
   final photos = <Map<String, dynamic>>[];
-  for (final row in (photoRows as List)) {
-    final m = Map<String, dynamic>.from(row as Map);
+  for (final row in photoRows) {
+    final m = Map<String, dynamic>.from(row);
     final path = m['storage_path'] as String?;
     if (path != null && path.isNotEmpty) {
       try {
         m['url'] = await db.storage.from('progress-photos').createSignedUrl(path, 3600);
       } catch (_) {}
+      own(null); // outside the try: a missing photo is skipped, this is not
     }
     photos.add(m);
   }
@@ -220,64 +229,65 @@ final clientDetailProvider = FutureProvider.autoDispose.family<Map<String, dynam
         onboardingPhotos[side] = await db.storage
             .from('progress-photos')
             .createSignedUrl('$clientId/$side.$ext', 3600);
-        break; // first existing extension wins
       } catch (_) {}
+      own(null);
+      if (onboardingPhotos.containsKey(side)) break; // first existing extension wins
     }
   }
 
-  final weights = await db
+  final weights = own(await db
       .from('weight_logs')
       .select()
       .eq('user_id', clientId)
       .order('logged_at', ascending: false)
-      .limit(10);
+      .limit(10));
 
-  final checkins = await db
+  final checkins = own(await db
       .from('weekly_checkins')
       .select()
       .eq('user_id', clientId)
       .order('week_start_date', ascending: false)
-      .limit(4);
+      .limit(4));
 
-  final assignment = await db
+  final assignment = own(await db
       .from('workout_program_assignments')
       .select('*, workout_programs(name, goal, duration_weeks)')
       .eq('client_id', clientId)
       .eq('status', 'active')
-      .maybeSingle();
+      .maybeSingle());
 
-  final nutrition = await db
+  final nutrition = own(await db
       .from('client_nutrition_plans')
       .select()
       .eq('client_id', clientId)
       .eq('is_active', true)
-      .maybeSingle();
+      .maybeSingle());
 
-  final habits = await db
+  final habits = own(await db
       .from('client_habits')
       .select()
       .eq('client_id', clientId)
-      .eq('is_active', true);
+      .eq('is_active', true));
 
   // `workout_sessions`, not `workout_logs`: the latter is owner-only by
   // 003:193 and returns 200 + [] to a coach, so `client_detail_screen.dart:933`
   // showed every client as having trained never. Coach-readable by
   // 100_rls_harden_client_data.sql; `completed` only, because the screen reads
   // `completed_at` and an unfinished session has none.
-  final workoutLogs = await db
+  final workoutLogs = own(await db
       .from('workout_sessions')
       .select('user_id, workout_title, completed_at, duration_seconds')
       .eq('user_id', clientId)
       .eq('status', 'completed')
       .order('completed_at', ascending: false)
-      .limit(20);
+      .limit(20));
 
-  final todayScore = await db
+  final todayScore = own(await db
       .from('daily_scores')
       .select()
       .eq('user_id', clientId)
       .eq('score_date', DateTime.now().toIso8601String().split('T')[0])
-      .maybeSingle();
+      .maybeSingle());
 
   return {
     ...profile,

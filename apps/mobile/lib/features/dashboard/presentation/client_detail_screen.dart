@@ -1,8 +1,9 @@
+import 'dart:async';
 import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthState, PostgrestException, Supabase;
 import '../../auth/domain/auth_provider.dart';
 import '../../coach/domain/coach_ecosystem_provider.dart';
 import '../../coach/presentation/coach_video_response_screen.dart';
@@ -107,11 +108,11 @@ List<Map<String, String>> _generateActions(Map<String, dynamic> d) {
 class ClientDetailScreen extends ConsumerStatefulWidget {
   final String clientId;
   final String clientName;
-  /// The coach whose list this was opened from; whoever is signed in when the
-  /// page is first built, if the opener does not say.
+  /// The coach whose list this was opened from. With none known (null) the page
+  /// is nobody's: it shows a way back and reads nothing, whoever is signed in.
   final String? owner;
   const ClientDetailScreen({super.key, required this.clientId,
-    required this.clientName, this.owner});
+    required this.clientName, required this.owner});
 
   @override
   ConsumerState<ClientDetailScreen> createState() => _ClientDetailScreenState();
@@ -124,21 +125,47 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
   /// P0-FL-59f: whose client this page shows. For anyone else (and once they
   /// sign out) it shows nothing and reads nothing; what was typed on it goes
   /// with its content. Back in as the same coach, the page is theirs again.
-  late final String? _owner;
+  late final String? _owner = widget.owner;
   late final OpenClientPages _pages;
   bool _gone = false;
+
+  /// What was last said on the page about the client, while it is up.
+  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _said;
+  ScaffoldMessengerState? _saidOn;
+
+  /// Says [text], which may be the client's, to this page's coach only: it is
+  /// drawn for nobody else, and goes with the page if the page goes first.
+  void _say(String text, Duration duration) {
+    final messenger = _saidOn = ScaffoldMessenger.of(context);
+    final said = _said = messenger.showSnackBar(SnackBar(
+      content: _OwnedText(text, owner: _owner),
+      behavior: SnackBarBehavior.floating, duration: duration));
+    said.closed.then((_) {
+      if (identical(_said, said)) _said = null;
+    });
+  }
 
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 4, vsync: this);
-    _owner = widget.owner ?? signedInUid();
     _pages = ref.read(openClientPagesProvider)..opened(widget.clientId, _owner);
   }
 
   @override
   void dispose() {
     _pages.closed(widget.clientId, _owner);
+    final messenger = _saidOn;
+    if (_said != null && messenger != null) {
+      // After the frame: a messenger cannot be changed while the tree is.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (messenger.mounted) {
+          messenger
+            ..clearSnackBars()
+            ..removeCurrentSnackBar();
+        }
+      });
+    }
     _tabs.dispose();
     super.dispose();
   }
@@ -164,13 +191,13 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
   Widget build(BuildContext context) {
     // Watched so that a change redraws; the auth client itself decides.
     if (hasAuthClient) ref.watch(currentUserProvider.select((u) => u?.id));
-    if (!stillSignedIn(_owner)) return _goneFor(context);
+    if (!isSignedIn(_owner)) return _goneFor(context);
     _gone = false;
-    final detailAsync = ref.watch(clientDetailProvider(widget.clientId));
+    final detailAsync = pageRead(ref.watch(clientDetailProvider(widget.clientId)));
     // P0-FL-37: the assessment is read separately, through the logged RPC, and
     // watched HERE so it is read once per page open whichever tab is showing.
     // Its failure fails only the assessment areas, not the page.
-    final assessment = ref.watch(clientAssessmentProvider(widget.clientId));
+    final assessment = pageRead(ref.watch(clientAssessmentProvider(widget.clientId)));
 
     return Scaffold(
       backgroundColor: _bg,
@@ -292,7 +319,7 @@ class _OverviewTab extends ConsumerWidget {
     // P0-FL-12: a check that has not answered (still loading, or failed) is
     // NOT "not subscribed" — [paidPlan] is null then, and the lock message is
     // kept for a check that answered no.
-    final paidAsync  = ref.watch(clientHasPaidPlanProvider(clientId));
+    final paidAsync  = pageRead(ref.watch(clientHasPaidPlanProvider(clientId)));
     final bool? paidPlan = answeredPaidPlan(paidAsync);
     final paidCheckFailed = paidPlan == null && paidAsync.hasError && !paidAsync.isLoading;
     // Consecutive failed checks, so a Try again that fails again reads
@@ -779,6 +806,41 @@ class _ClientTimeline extends StatelessWidget {
   return (price: v, error: null);
 }
 
+/// [text], drawn for [owner] only. It watches the account itself: it is up in a
+/// SnackBar, which outlives the page that said it.
+class _OwnedText extends StatefulWidget {
+  final String text;
+  final String? owner;
+  const _OwnedText(this.text, {required this.owner});
+
+  @override
+  State<_OwnedText> createState() => _OwnedTextState();
+}
+
+class _OwnedTextState extends State<_OwnedText> {
+  StreamSubscription<AuthState>? _auth;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!hasAuthClient) return;
+    _auth = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+      if (mounted) setState(() {});
+    }, onError: (_) {});
+  }
+
+  @override
+  void dispose() {
+    _auth?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => isSignedIn(widget.owner)
+      ? Text(widget.text)
+      : const SizedBox.shrink();
+}
+
 /// Opens the custom-price dialog without building the whole client screen,
 /// whose many providers a dialog test does not need.
 @visibleForTesting
@@ -919,7 +981,7 @@ class _ClientScheduleCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final schedAsync = ref.watch(clientScheduleProvider(clientId));
+    final schedAsync = pageRead(ref.watch(clientScheduleProvider(clientId)));
     final sched = schedAsync.valueOrNull;
     final unread = unreadNote(schedAsync, failed: "Couldn't load the schedule.");
     final dayKeys = (sched?['days'] as List?)?.map((d) => '$d').toList() ?? [];
@@ -1671,7 +1733,7 @@ class _ClientScoreCard extends ConsumerWidget {
   const _ClientScoreCard({required this.clientId});
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(clientScoreProvider(clientId));
+    final async = pageRead(ref.watch(clientScoreProvider(clientId)));
     final s = async.valueOrNull;
     // Not read yet, or not readable: no figure. `valueOrNull` made both read
     // "0 · 0 · Lvl 1 Bronze" — a client's real score shown as a beginner's.
@@ -1731,6 +1793,11 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
   bool _left(String what) =>
       stoppedFor(widget.owner, 'CoachActionCenter', what);
 
+  /// Said by the page, which outlives this tab.
+  void _say(String text, Duration duration) => context
+      .findAncestorStateOfType<_ClientDetailScreenState>()
+      ?._say(text, duration);
+
   String _key(Map<String, String> a) => a['text'] ?? '';
   String _text(Map<String, String> a) => _edited[_key(a)] ?? a['text'] ?? '';
 
@@ -1788,9 +1855,7 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
         break;
       default:
         // Nothing to save: acknowledging the recommendation IS the action.
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Marked done: ${_text(a)}'),
-          behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 2)));
+        _say('Marked done: ${_text(a)}', const Duration(seconds: 2));
         done = true;
     }
     if (!mounted || !done || _left('clear an approved item')) return;
@@ -1800,9 +1865,7 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
   void _dismiss(Map<String, String> a) {
     if (_left('dismiss')) return;
     setState(() => _cleared.add(_key(a)));
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('Dismissed: ${_text(a)}'),
-      behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 1)));
+    _say('Dismissed: ${_text(a)}', const Duration(seconds: 1));
   }
 
   /// P0-FL-59f: the dialog holds what was recommended about the client. It
@@ -2206,7 +2269,8 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final programsAsync = ref.watch(myProgramsProvider);
+    final programsAsync =
+        heldFor(_owner, ref.watch(myProgramsProvider), keepUnmarked: true);
     return Padding(
       padding: EdgeInsets.fromLTRB(20, 24, 20, MediaQuery.of(context).viewInsets.bottom + 24),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [

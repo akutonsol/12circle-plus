@@ -66,30 +66,51 @@ Future<List<T>> ownedRead<T>(
     String? uid, Future<List<T>> Function() read) async {
   try {
     return ownedBy(uid, await read());
-  } on Exception catch (e) {
-    if (uid != null) _failedFor[e] = uid;
+  } catch (e) {
+    // (An Expando takes objects only; nothing here throws a bare string.)
+    if (uid != null && (e is Exception || e is Error)) _failedFor[e] = uid;
     rethrow;
   }
 }
+
+String? _ownerOfFailure(Object? error) =>
+    error is Exception || error is Error ? _failedFor[error!] : null;
+
+/// Whether the failure [read] holds is that of an account that has left:
+/// nothing of it is the next one's to be told. One nobody marked is not.
+bool leftBehind(AsyncValue<Object?> read) =>
+    accountLeft(_ownerOfFailure(read.error));
 
 /// What [list] says to [uid], judged by whose rows and whose failure it holds
 /// and by nothing else: an AsyncLoading, AsyncData or AsyncError each may carry
 /// the previous account's. Another account's rows are dropped, the failure of
 /// [uid]'s own read is kept, and otherwise it is still being read.
-AsyncValue<List<T>> heldFor<T>(String? uid, AsyncValue<List<T>> list) {
+///
+/// [keepUnmarked]: rows and failures nobody marked stay as they came (a read
+/// replaced in a widget test); only those marked for another account go.
+AsyncValue<List<T>> heldFor<T>(String? uid, AsyncValue<List<T>> list,
+    {bool keepUnmarked = false}) {
   final error = list.error;
+  final failedFor = _ownerOfFailure(error);
   final myFailure = error != null &&
-      (!list.isLoading || uid == null || _failedFor[error] == uid);
+      (failedFor != null
+          ? failedFor == uid
+          : keepUnmarked || !list.isLoading || uid == null);
   final owner = ownerOfHeld(list);
   // An unmarked empty list still being re-read is nobody's answer.
   final mine = list.hasValue &&
-      (owner == uid || (owner == null && !list.isLoading));
+      (owner == uid ||
+          (owner == null && (keepUnmarked || !list.isLoading)) ||
+          (keepUnmarked && owner == unknownOwner));
   if (mine) {
     return error == null || myFailure ? list : AsyncData(list.requireValue);
   }
-  return myFailure
-      ? AsyncError(error, list.stackTrace ?? StackTrace.empty)
-      : AsyncLoading<List<T>>();
+  if (!myFailure) return AsyncLoading<List<T>>();
+  final failed = AsyncError<List<T>>(error, list.stackTrace ?? StackTrace.empty);
+  // Read again meanwhile: still the last word, and its retry is busy.
+  return list.isLoading
+      ? AsyncLoading<List<T>>().copyWithPrevious(failed)
+      : failed;
 }
 
 /// Whether [list] has nothing to say yet to [uid].
@@ -100,7 +121,9 @@ AsyncValue<List<T>> heldFor<T>(String? uid, AsyncValue<List<T>> list) {
 /// still reading.
 bool stillReading<T>(AsyncValue<List<T>> list, {String? uid}) {
   final owner = ownerOfHeld(list);
-  if (owner != null) return owner != uid && list is! AsyncError;
+  if (owner != null) {
+    return owner != uid && (list is! AsyncError || leftBehind(list));
+  }
   return list.isLoading && (list.valueOrNull?.isEmpty ?? true);
 }
 
@@ -138,6 +161,10 @@ bool stoppedFor(String? owner, String origin, String what) {
   return true;
 }
 
+/// Whether [owner] is a known account and the one signed in. A null [owner] is
+/// nobody, and a signed-out device is not theirs either.
+bool isSignedIn(String? owner) => owner != null && stillSignedIn(owner);
+
 /// The client pages open on this device, and whose each one is (P0-FL-59f).
 ///
 /// A page stops watching its client's reads when its coach leaves, but only in
@@ -147,8 +174,24 @@ bool stoppedFor(String? owner, String origin, String what) {
 class OpenClientPages {
   final _open = <String, List<String?>>{};
 
-  void opened(String clientId, String? owner) =>
-      (_open[clientId] ??= []).add(owner);
+  /// The reads refused: to whom, and how to ask again.
+  final _refused = <({String clientId, String? uid, void Function() again})>{};
+
+  void opened(String clientId, String? owner) {
+    (_open[clientId] ??= []).add(owner);
+    // What was refused to them before they had a page is no answer to it.
+    for (final r in _refused.toList()) {
+      if (r.clientId == clientId && r.uid == owner) r.again();
+    }
+  }
+
+  /// Remembers that [uid] was refused a read of [clientId]'s; calling what it
+  /// returns forgets it.
+  void Function() refused(String clientId, String? uid, void Function() again) {
+    final r = (clientId: clientId, uid: uid, again: again);
+    _refused.add(r);
+    return () => _refused.remove(r);
+  }
 
   void closed(String clientId, String? owner) {
     final owners = _open[clientId]?..remove(owner);
@@ -167,12 +210,25 @@ final openClientPagesProvider = Provider((_) => OpenClientPages());
 /// Watches the account asking for something of [clientId]'s, by id only: a
 /// refreshed token is the same coach and reads nothing again. Throws, instead
 /// of asking, for an account whose page this is not.
-void readAsClientPageOwner(Ref ref, String clientId) {
+///
+/// What it returns goes around EVERY await of a read of more than one step: it
+/// passes the answer on, or throws before the next step could go out as anyone
+/// but the account that asked.
+T Function<T>(T answer) readAsClientPageOwner(Ref ref, String clientId) {
   final uid = ref.watch(currentUserProvider.select((u) => u?.id));
-  if (!ref.read(openClientPagesProvider).admits(clientId, uid)) {
+  final pages = ref.read(openClientPagesProvider);
+  if (!pages.admits(clientId, uid)) {
+    ref.onDispose(pages.refused(clientId, uid, ref.invalidateSelf));
     throw const ClientPageLeft();
   }
+  return <T>(T answer) =>
+      accountLeft(uid) ? throw const ClientPageLeft() : answer;
 }
+
+/// What [read] says on a page: a refusal is not its failure. It was asked again
+/// as the page opened ([OpenClientPages.opened]), and is still being read.
+AsyncValue<T> pageRead<T>(AsyncValue<T> read) =>
+    read.error is ClientPageLeft ? AsyncLoading<T>() : read;
 
 /// Nothing was read: the open page about the client is another account's, and
 /// it shows nothing any more. Reaches no screen.

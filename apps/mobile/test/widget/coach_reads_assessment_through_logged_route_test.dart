@@ -266,7 +266,8 @@ Future<void> _pumpPage(WidgetTester t,
           .overrideWith((ref) async => const <Map<String, dynamic>>[]),
     ],
     child: const MaterialApp(
-      home: ClientDetailScreen(clientId: _clientId, clientName: 'Jordan'),
+      home: ClientDetailScreen(
+              clientId: _clientId, clientName: 'Jordan', owner: _uid),
     ),
   ));
   await _io(t);

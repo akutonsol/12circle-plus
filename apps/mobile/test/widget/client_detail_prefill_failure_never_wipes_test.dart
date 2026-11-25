@@ -213,7 +213,8 @@ Future<void> _pumpPage(WidgetTester t) async {
       GoRoute(
         path: '/client',
         builder: (_, __) =>
-            const ClientDetailScreen(clientId: _clientId, clientName: 'Jordan'),
+            const ClientDetailScreen(
+              clientId: _clientId, clientName: 'Jordan', owner: _uid),
       ),
     ],
   );

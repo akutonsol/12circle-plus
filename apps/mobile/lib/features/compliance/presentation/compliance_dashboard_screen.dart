@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/compliance_service.dart';
 import '../domain/compliance_provider.dart';
+import '../../auth/domain/auth_provider.dart';
+import '../../dashboard/domain/still_reading.dart';
 import '../../dashboard/presentation/client_detail_screen.dart';
 
 const _bg       = Color(0xFF030303);
@@ -34,7 +36,11 @@ class ComplianceDashboardScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final rosterAsync = ref.watch(complianceRosterProvider);
+    // P0-FL-59f: what is held counts only as the signed-in coach's own.
+    final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+    final rosterAsync = heldFor(uid, ref.watch(complianceRosterProvider));
+    // The coach these rows were read for, bound into the cards built here.
+    final owner = ownerOfHeld(rosterAsync);
 
     return Scaffold(
       backgroundColor: _bg,
@@ -74,7 +80,7 @@ class ComplianceDashboardScreen extends ConsumerWidget {
               children: [
                 _SummaryStrip(roster: roster),
                 const SizedBox(height: 16),
-                ...roster.map((c) => _ClientComplianceCard(summary: c)),
+                ...roster.map((c) => _ClientComplianceCard(summary: c, owner: owner)),
               ],
             ),
           );
@@ -130,7 +136,9 @@ class _SummaryStrip extends StatelessWidget {
 
 class _ClientComplianceCard extends StatelessWidget {
   final ComplianceSummary summary;
-  const _ClientComplianceCard({required this.summary});
+  /// The coach whose roster this card is on.
+  final String? owner;
+  const _ClientComplianceCard({required this.summary, required this.owner});
 
   @override
   Widget build(BuildContext context) {
@@ -139,11 +147,19 @@ class _ClientComplianceCard extends StatelessWidget {
 
     return InkWell(
       borderRadius: BorderRadius.circular(16),
-      onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-              builder: (_) => ClientDetailScreen(
-                  clientId: summary.clientId, clientName: summary.name))),
+      onTap: () {
+        if (stoppedFor(owner ?? unknownOwner, 'ComplianceDashboard.openClient',
+            'open client')) {
+          return;
+        }
+        Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => ClientDetailScreen(
+                    clientId: summary.clientId,
+                    clientName: summary.name,
+                    owner: owner)));
+      },
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(16),
