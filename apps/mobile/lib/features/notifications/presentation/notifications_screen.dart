@@ -28,13 +28,13 @@ class _C {
 /// not take it — to the member who asked, not to whoever signed in meanwhile
 /// (P0-FL-60c).
 Future<bool> _saySo(BuildContext context, String doWhat,
-    Future<bool> Function(NotificationsNotifier) change) async {
+    AsyncValueGetter<bool> change) async {
   final c = ProviderScope.containerOf(context, listen: false);
   final messenger = ScaffoldMessenger.maybeOf(context);
   String? uid() => Supabase.instance.client.auth.currentUser?.id;
   final owner = uid();
   final notifier = c.read(notificationsProvider.notifier);
-  final ok = await change(notifier);
+  final ok = await change();
   if (!ok && uid() == owner) {
     messenger?.showSnackBar(
         SnackBar(content: Text(couldntMessage(doWhat, notifier.lastError))));
@@ -111,7 +111,7 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
                   fontWeight: FontWeight.w700)),
               const Spacer(),
               GestureDetector(
-                onTap: () => _saySo(context, 'mark them read', (n) => n.markAllRead()),
+                onTap: () => _saySo(context, 'mark them read', ref.read(notificationsProvider.notifier).markAllRead),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                   decoration: BoxDecoration(
@@ -188,8 +188,8 @@ class _NotificationList extends ConsumerWidget {
           return Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: _NotificationCard(notification: n,
-              onTap: () => _saySo(context, 'mark that read', (x) => x.markRead(n.id)),
-              onDismiss: () => _saySo(context, 'delete that', (x) => x.delete(n.id))));
+              onTap: () => _saySo(context, 'mark that read', () => ref.read(notificationsProvider.notifier).markRead(n.id)),
+              onDismiss: () => _saySo(context, 'delete that', () => ref.read(notificationsProvider.notifier).delete(n.id))));
         },
       ),
     );

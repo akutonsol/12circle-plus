@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart' show AsyncCallback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 import '../../../core/observability/app_failure.dart';
@@ -8,21 +9,22 @@ import '../data/notification_model.dart';
 
 final _svc = NotificationService();
 
-/// Who is signed in, by id: a token refresh is the same member, and keeps
-/// their list and its live feed (P0-FL-60c).
-final _signedInUid = currentUserProvider.select((u) => u?.id);
+// All three follow who is signed in BY ID (P0-FL-60c): a token refresh is the
+// same member, and keeps their list and its live feed.
 
 final notificationsStreamProvider = StreamProvider<List<AppNotification>>((ref) {
-  ref.watch(_signedInUid);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   return _svc.streamNotifications();
 });
 
 final unreadCountProvider = FutureProvider<int>((ref) async {
-  ref.watch(_signedInUid);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   // Re-fetches whenever the stream fires (via invalidation from notifier)
   ref.watch(notificationsStreamProvider);
   return _svc.fetchUnreadCount();
 });
+
+typedef _ListEdit = List<AppNotification> Function(List<AppNotification>);
 
 class NotificationsNotifier extends StateNotifier<AsyncValue<List<AppNotification>>> {
   StreamSubscription? _sub;
@@ -82,10 +84,7 @@ class NotificationsNotifier extends StateNotifier<AsyncValue<List<AppNotificatio
   Object? lastError;
 
   Future<bool> _change(
-    String origin,
-    Future<void> Function() write,
-    List<AppNotification> Function(List<AppNotification>) apply,
-  ) async {
+      String origin, AsyncCallback write, _ListEdit apply) async {
     try {
       await write();
     } catch (e, st) {
@@ -123,7 +122,7 @@ final notificationsProvider =
       (ref) {
         // A new list for each account: the notifier holds one account's rows
         // and its stream, and outlived sign-out.
-        ref.watch(_signedInUid);
+        ref.watch(currentUserProvider.select((u) => u?.id));
         return NotificationsNotifier();
       },
     );
