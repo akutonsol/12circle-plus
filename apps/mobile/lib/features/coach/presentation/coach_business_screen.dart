@@ -954,7 +954,13 @@ class _CoachBusinessScreenState extends State<CoachBusinessScreen>
       ok = (res.data is Map) && res.data['sent'] == true;
     } catch (e, s) {
       // The invite is saved; only its email failed (said below).
-      reportError('CoachBusinessScreen._showInviteTeam.email', e, s);
+      // A refusal's `details` quote the mail provider (and maybe the address).
+      reportError(
+          'CoachBusinessScreen._showInviteTeam.email',
+          e is FunctionException
+              ? StateError('send-invite-email answered ${e.status}')
+              : e,
+          s);
       ok = false;
     }
     if (!_stillInvitingAs(uid)) return;

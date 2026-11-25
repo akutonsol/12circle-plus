@@ -72,8 +72,10 @@ void main() {
         final read = c.read(provider);
         expect(read.hasError, isTrue, reason: 'THE defect: $read');
         expect(isNetworkFailure(read.error), network);
-        // (The ticker's first value reads the streak twice, as before.)
-        expect(reported.map((f) => f.origin).toSet(), {origin});
+        expect(reported.map((f) => f.origin), [origin],
+            reason: 'one outage, recorded once');
+        final asked = server.calls.where((k) => k.contains(table));
+        if (!network) expect(asked, hasLength(1), reason: 'read once on mount');
       });
     }
 
@@ -120,6 +122,48 @@ void main() {
     expect(reads(), hasLength(before),
         reason: 'THE defect: the whole User was the key');
   });
+
+  test('the streak is still read again when a score changes', () async {
+    server.days[memberA] = 2;
+    final ticks = StreamController<int>();
+    addTearDown(ticks.close);
+    final c = ProviderContainer(overrides: [
+      tableTickerProvider.overrideWith((ref, t) => ticks.stream),
+    ]);
+    addTearDown(c.dispose);
+    c.listen(streakProvider, (_, __) {});
+    ticks.add(0);
+    await settle();
+    expect(server.calls, hasLength(1));
+    server.days[memberA] = 3;
+    for (final n in [1, 2]) {
+      ticks.add(n);
+      await settle();
+      expect(server.calls, hasLength(1 + n));
+    }
+    expect(c.read(streakProvider).requireValue, 3);
+  });
+
+  for (final (table, read) in <(String, FutureProvider<Object?>)>[
+    ('classes', upcomingClassesProvider),
+    ('events', upcomingEventsProvider),
+  ]) {
+    test('$table: read again for the next member, not for a token refresh',
+        () async {
+      final c = container();
+      c.listen(read, (_, __) {});
+      await settle();
+      final before = c.read(currentUserProvider);
+      await refreshSession();
+      await settle();
+      expect(c.read(currentUserProvider), isNot(before), reason: 'premise');
+      expect(server.calls, ['GET $table:$memberA']);
+      await signInAs(memberB);
+      await settle();
+      expect(server.calls, ['GET $table:$memberA', 'GET $table:$memberB'],
+          reason: "THE defect: B was left with A's answer");
+    });
+  }
 
   group('water', () {
     ProviderContainer fiveGlasses() {

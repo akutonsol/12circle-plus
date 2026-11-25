@@ -448,7 +448,7 @@ class _StreakCard extends ConsumerWidget {
     // P0-FL-60b · a failed read was "0 day streak"; it is said instead, and a
     // number already read for this member stays beside it.
     final read = ref.watch(memberStreakProvider);
-    final streak = read.streak;
+    final streak = read.value;
     return _GlassCard(
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1376,8 +1376,8 @@ class _ShakingBellState extends ConsumerState<_ShakingBell> with SingleTickerPro
 class _NotificationsPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final classesAsync = ref.watch(upcomingClassesProvider);
-    final eventsAsync  = ref.watch(upcomingEventsProvider);
+    final classesAsync = ref.watch(memberUpcomingClassesProvider);
+    final eventsAsync  = ref.watch(memberUpcomingEventsProvider);
     final bottom = MediaQuery.of(context).padding.bottom;
 
     return Container(
@@ -1466,21 +1466,21 @@ class _NotificationsPanel extends ConsumerWidget {
   /// said in its place; rows already read stay under it. Read and empty still
   /// shows nothing.
   static List<Widget> _upcomingSection(
-    AsyncValue<List<Map<String, dynamic>>> read, {
+    MemberRead<List<Map<String, dynamic>>> read, {
     required String what,
     required VoidCallback onRetry,
     required Widget loading,
     required Widget Function(List<Map<String, dynamic>> rows) rows,
   }) => [
-    if (read.hasError)
+    if (read.error != null)
       SectionLoadFailure(
-        what: what, error: read.error, busy: read.isLoading, onRetry: onRetry,
+        what: what, error: read.error, busy: read.busy, onRetry: onRetry,
         accent: _C.primary, textColor: _C.onSurface, mutedColor: _C.onSurfVar)
-    else if (read.isLoading && !read.hasValue)
+    else if (read.value == null)
       loading,
-    if (read.hasValue && read.requireValue.isNotEmpty) ...[
-      if (read.hasError) const SizedBox(height: 10),
-      rows(read.requireValue),
+    if (read.value case final kept? when kept.isNotEmpty) ...[
+      if (read.error != null) const SizedBox(height: 10),
+      rows(kept),
     ],
   ];
 

@@ -5,6 +5,8 @@ import 'package:circle_fitness/core/realtime/realtime.dart';
 import 'package:circle_fitness/features/activity/presentation/activity_screen.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/challenges/domain/challenge_provider.dart';
+import 'package:circle_fitness/features/classes/domain/class_provider.dart'
+    show refreshClassesProvider;
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
 import 'package:circle_fitness/features/coach/domain/coach_provider.dart';
 import 'package:circle_fitness/features/community/domain/community_provider.dart';
@@ -160,7 +162,8 @@ void main() {
         expect(find.text('Active'), findsNothing);
         expect(find.text(_streakFailed), findsOneWidget);
         expect(find.text(hint), findsOneWidget);
-        expect(reported.map((f) => f.origin).toSet(), {'streakProvider'});
+        expect(reported.map((f) => f.origin), ['streakProvider'],
+            reason: 'one outage, recorded once');
         nothingRaw();
 
         server.fails.clear();
@@ -433,6 +436,79 @@ void main() {
         await close(t);
       });
 
+      testWidgets("A's failure is not B's: B pending shows none; B's own rows "
+          'when they land', (t) async {
+        rows();
+        server.fails.addAll(['GET classes:$memberA', 'GET events:$memberA']);
+        await open(t);
+        expect(find.text(_classesFailed), findsOneWidget, reason: 'premise');
+        expect(find.text(_eventsFailed), findsOneWidget, reason: 'premise');
+        final gate = Completer<void>();
+        server.holds['GET classes:$memberB'] = gate;
+        server.holds['GET events:$memberB'] = gate;
+        await switchTo(t, memberB);
+        expect(find.text(_classesFailed), findsNothing,
+            reason: "THE defect: A's failure greeted B");
+        expect(find.text(_eventsFailed), findsNothing);
+        gate.complete();
+        await settle(t);
+        expect(find.text('Reformer'), findsOneWidget);
+        expect(find.text('Open Gym'), findsOneWidget);
+        await close(t);
+      });
+
+      testWidgets("A's rows are not B's: not while B's read is pending, not "
+          "after it failed", (t) async {
+        rows();
+        await open(t);
+        expect(find.text('Reformer'), findsOneWidget, reason: 'premise');
+        final gate = Completer<void>();
+        server.holds['GET classes:$memberB'] = gate;
+        server.holds['GET events:$memberB'] = gate;
+        server.fails.addAll(['GET classes:$memberB', 'GET events:$memberB']);
+        await switchTo(t, memberB);
+        expect(find.text('Reformer'), findsNothing, reason: "THE defect: A's");
+        expect(find.text('Open Gym'), findsNothing);
+        gate.complete();
+        await settle(t);
+        expect(find.text('Reformer'), findsNothing);
+        expect(find.text('Open Gym'), findsNothing);
+        expect(find.text(_classesFailed), findsOneWidget);
+        expect(find.text(_eventsFailed), findsOneWidget);
+        await close(t);
+      });
+
+      testWidgets('CONTROL: a class changed (a re-read for the same member): the '
+          'rows stay while it is in flight, and so does a failure, busy',
+          (t) async {
+        final h = t.ensureSemantics();
+        rows();
+        final c = await open(t);
+        Future<void> bump(Future<void> Function() inFlight) async {
+          final gate = server.holds['GET classes:$memberA'] = Completer<void>();
+          c.read(refreshClassesProvider.notifier).state++;
+          await settle(t);
+          await inFlight();
+          gate.complete();
+          await settle(t);
+        }
+
+        await bump(() async => expect(find.text('Reformer'), findsOneWidget));
+        server.fails.add('classes');
+        await bump(() async {});
+        expect(find.text(_classesFailed), findsOneWidget);
+        expect(find.text('Reformer'), findsOneWidget);
+        server.fails.clear();
+        await bump(() async {
+          expect(find.text(_classesFailed), findsOneWidget);
+          expect(find.bySemanticsLabel('Retrying'), findsOneWidget);
+        });
+        expect(find.text(_classesFailed), findsNothing);
+        expect(find.text('Reformer'), findsOneWidget);
+        h.dispose();
+        await close(t);
+      });
+
       testWidgets('NEGATIVE CONTROL: read and empty shows nothing, no failure',
           (t) async {
         await open(t);
@@ -470,7 +546,7 @@ void main() {
         testWidgets('both failures fit 320dp at ${s}x, not shrunk', (t) async {
           final seen = recordOverflows();
           server.fails.addAll(['classes', 'events']);
-          // Opened at 1x: Directory's header bar is not this package's.
+          // Opened at 1x: the rest of Directory's page is not this package's.
           await open(t, width: 320);
           t.platformDispatcher.textScaleFactorTestValue = s;
           await settle(t);

@@ -70,6 +70,23 @@ const _listModules = [
   _Module(title: 'Weekly Check-ins', route: '/daily-checkin', description: 'Reflect on your week and get coach feedback.',        icon: Icons.calendar_today_rounded, iconColor: Color(0xFFDDB7FF), iconBg: Color(0x33842BD2)),
 ];
 
+/// Text is scaled past 1.3× (as Activity's, P0-FL-58).
+bool _largeText(BuildContext context) =>
+    MediaQuery.textScalerOf(context).scale(12) > 12 * 1.3;
+
+/// How wide [text] is on one line, as it will be drawn (style and scale).
+double _lineWidth(BuildContext context, String text, TextStyle style) {
+  final p = TextPainter(
+    // bodyMedium: what a Scaffold's Text inherits.
+    text: TextSpan(text: text,
+      style: Theme.of(context).textTheme.bodyMedium?.merge(style) ?? style),
+    textDirection: TextDirection.ltr,
+    textScaler: MediaQuery.textScalerOf(context))..layout();
+  final w = p.width;
+  p.dispose();
+  return w;
+}
+
 // ── Directory Screen ──────────────────────────────────────────────────────────
 class DirectoryScreen extends ConsumerStatefulWidget {
   const DirectoryScreen({super.key});
@@ -83,6 +100,21 @@ class _DirectoryScreenState extends ConsumerState<DirectoryScreen> {
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light.copyWith(statusBarColor: Colors.transparent));
     final topPad = MediaQuery.of(context).padding.top;
     final userName = ref.watch(currentFirstNameProvider);
+    // P0-FL-60b · as Activity (P0-FL-58): the bar is 64px, between the buttons.
+    // A greeting that does not fit it on one line each moves to the top of the
+    // page, where it wraps. The buttons stay.
+    final helloStyle = TextStyle(color: _C.onSurfVar.withValues(alpha: 0.6),
+        fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 1.5);
+    const nameStyle = TextStyle(color: _C.onSurface, fontSize: 20, fontWeight: FontWeight.w700);
+    const barTaken = 20 + 40 + 12 + 8 + 44 + 4 + 44 + 20; // padding, buttons, gaps
+    final barRoom = MediaQuery.sizeOf(context).width - barTaken;
+    final greetingInBar = !_largeText(context) &&
+        _lineWidth(context, 'Good Morning', helloStyle) <= barRoom &&
+        _lineWidth(context, userName, nameStyle) <= barRoom;
+    final greeting = Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('Good Morning', style: helloStyle),
+      Text(userName, style: nameStyle),
+    ]);
 
     return Scaffold(
       backgroundColor: _C.bg,
@@ -93,6 +125,7 @@ class _DirectoryScreenState extends ConsumerState<DirectoryScreen> {
             SingleChildScrollView(
               padding: EdgeInsets.only(top: topPad + 64 + 16, left: 20, right: 20, bottom: 24),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                if (!greetingInBar) ...[greeting, const SizedBox(height: 16)],
                 _PageTitle(),
                 const SizedBox(height: 20),
                 _FeaturedCard(module: _featured),
@@ -147,13 +180,10 @@ class _DirectoryScreenState extends ConsumerState<DirectoryScreen> {
                               color: _C.surfContHigh,
                               child: const Icon(Icons.person_rounded, color: _C.primary, size: 20)))))),
                       const SizedBox(width: 12),
-                      Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text('Good Morning', style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.6), fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 1.5)),
-                        Text(userName, style: const TextStyle(color: _C.onSurface, fontSize: 20, fontWeight: FontWeight.w700)),
-                      ]),
-                      const Spacer(),
-                      _IconBtn(icon: Icons.chat_bubble_outline_rounded, onTap: () => context.go('/messages')),
-                      const SizedBox(width: 4), // the 44px target adds the rest
+                      Expanded(child: greetingInBar ? greeting : const SizedBox.shrink()),
+                      const SizedBox(width: 8),
+                      _IconBtn(label: 'Open messages', icon: Icons.chat_bubble_outline_rounded, onTap: () => context.go('/messages')),
+                      const SizedBox(width: 4), // the 44px targets add the rest
                       _BellBtn(),
                     ]),
                   ),
@@ -169,16 +199,26 @@ class _DirectoryScreenState extends ConsumerState<DirectoryScreen> {
 
 // ── Header helpers ────────────────────────────────────────────────────────────
 class _IconBtn extends StatelessWidget {
+  final String label;
   final IconData icon;
   final VoidCallback onTap;
-  const _IconBtn({required this.icon, required this.onTap});
+  const _IconBtn({required this.label, required this.icon, required this.onTap});
   @override
-  Widget build(BuildContext context) => GestureDetector(
+  Widget build(BuildContext context) => Semantics(
+    container: true,
+    button: true,
+    label: label,
     onTap: onTap,
-    child: Container(
+    excludeSemantics: true,
+    child: GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onTap: onTap,
+    child: ConstrainedBox(
+    constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+    child: Center(widthFactor: 1, heightFactor: 1, child: Container(
       width: 40, height: 40,
       decoration: BoxDecoration(shape: BoxShape.circle, color: const Color(0x08FFFFFF), border: Border.all(color: const Color(0x0DFFFFFF))),
-      child: Icon(icon, color: _C.onSurfVar, size: 20)));
+      child: Icon(icon, color: _C.onSurfVar, size: 20))))));
 }
 
 class _BellBtn extends StatefulWidget {
@@ -258,8 +298,8 @@ class _BellBtnState extends State<_BellBtn> with SingleTickerProviderStateMixin 
 class _DirectoryNotificationsPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final classesAsync = ref.watch(upcomingClassesProvider);
-    final eventsAsync  = ref.watch(upcomingEventsProvider);
+    final classesAsync = ref.watch(memberUpcomingClassesProvider);
+    final eventsAsync  = ref.watch(memberUpcomingEventsProvider);
     final bottom = MediaQuery.of(context).padding.bottom;
 
     return Container(
@@ -350,21 +390,21 @@ class _DirectoryNotificationsPanel extends ConsumerWidget {
   /// said in its place; rows already read stay under it. Read and empty still
   /// shows nothing.
   static List<Widget> _upcomingSection(
-    AsyncValue<List<Map<String, dynamic>>> read, {
+    MemberRead<List<Map<String, dynamic>>> read, {
     required String what,
     required VoidCallback onRetry,
     required Widget loading,
     required Widget Function(List<Map<String, dynamic>> rows) rows,
   }) => [
-    if (read.hasError)
+    if (read.error != null)
       SectionLoadFailure(
-        what: what, error: read.error, busy: read.isLoading, onRetry: onRetry,
+        what: what, error: read.error, busy: read.busy, onRetry: onRetry,
         accent: _C.primary, textColor: _C.onSurface, mutedColor: _C.onSurfVar)
-    else if (read.isLoading && !read.hasValue)
+    else if (read.value == null)
       loading,
-    if (read.hasValue && read.requireValue.isNotEmpty) ...[
-      if (read.hasError) const SizedBox(height: 10),
-      rows(read.requireValue),
+    if (read.value case final kept? when kept.isNotEmpty) ...[
+      if (read.error != null) const SizedBox(height: 10),
+      rows(kept),
     ],
   ];
 

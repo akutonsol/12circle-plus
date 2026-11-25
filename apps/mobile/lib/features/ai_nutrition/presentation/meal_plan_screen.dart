@@ -39,6 +39,10 @@ class _MealPlanScreenState extends ConsumerState<MealPlanScreen> {
     });
   }
 
+  /// P0-FL-60b · the notifier this screen was BUILT with: the targets on it are
+  /// that member's. Read again at the tap it can be the next member's already.
+  late MealPlanNotifier _plan;
+
   /// P0-FL-60b · bumped when the account changes.
   int _epoch = 0;
 
@@ -59,7 +63,7 @@ class _MealPlanScreenState extends ConsumerState<MealPlanScreen> {
   Future<void> _generatePlan() async {
     final epoch = _epoch;
     setState(() => _isLoading = true);
-    await ref.read(mealPlanNotifierProvider.notifier).generateMealPlan(
+    await _plan.generateMealPlan(
       calories: _calories,
       protein: _protein,
       carbs: _carbs,
@@ -77,9 +81,9 @@ class _MealPlanScreenState extends ConsumerState<MealPlanScreen> {
     ref.listen(mealPlanNotifierProvider.notifier, (was, now) {
       if (!identical(was, now)) _forget();
     });
+    _plan = ref.watch(mealPlanNotifierProvider.notifier);
     final outcome = mealPlanOutcome(ref.watch(mealPlanNotifierProvider));
-    final rebuildError =
-        ref.watch(mealPlanNotifierProvider.notifier).rebuildError;
+    final rebuildError = _plan.rebuildError;
     final goals    = ref.watch(nutritionGoalsProvider);
     goals.whenData(_loadGoalsOnce);
 

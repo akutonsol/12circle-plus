@@ -27,14 +27,17 @@ class _GroceryListScreenState extends ConsumerState<GroceryListScreen> {
   /// P0-FL-60b · bumped when the account changes.
   int _epoch = 0;
 
+  /// P0-FL-60b · what this screen was BUILT with: one member's notifier, and
+  /// that member's plan (see `_OneMember`).
+  late GroceryListNotifier _list;
+  String? _mealPlan;
+
   Future<void> _generateList() async {
     final epoch = _epoch;
-    final mealPlan = ref.read(mealPlanNotifierProvider).content;
+    final mealPlan = _mealPlan;
     if (mealPlan == null) return;
     setState(() => _isLoading = true);
-    await ref
-        .read(groceryListNotifierProvider.notifier)
-        .generateGroceryList(mealPlan);
+    await _list.generateGroceryList(mealPlan);
     if (mounted && epoch == _epoch) setState(() => _isLoading = false);
   }
 
@@ -49,10 +52,11 @@ class _GroceryListScreenState extends ConsumerState<GroceryListScreen> {
       });
     });
     final list = ref.watch(groceryListNotifierProvider);
-    final rebuildError =
-        ref.watch(groceryListNotifierProvider.notifier).rebuildError;
+    _list = ref.watch(groceryListNotifierProvider.notifier);
+    _mealPlan = ref.watch(mealPlanNotifierProvider).content;
+    final rebuildError = _list.rebuildError;
     final outcome = groceryOutcome(
-      mealPlan: ref.watch(mealPlanNotifierProvider).content,
+      mealPlan: _mealPlan,
       rawList: list.content,
       listFailed: list.failed,
     );

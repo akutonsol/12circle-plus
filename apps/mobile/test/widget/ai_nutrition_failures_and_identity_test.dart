@@ -18,7 +18,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
+import 'package:supabase_flutter/supabase_flutter.dart'
+    show AuthChangeEvent, Supabase;
 
 import '../support/two_member_postgrest.dart';
 
@@ -169,6 +170,34 @@ void main() {
   }
 
   Finder failedLoad(String what) => find.text("Couldn't load $what");
+
+  /// The switch (or sign-out, or [same]: a new session for A) is delivered on
+  /// the real auth stream and NO frame runs: a hidden tab, or the moment
+  /// before the first frame on return. Answers the events that arrived.
+  Future<List<AuthChangeEvent>> hearNoFrame(WidgetTester t,
+      {String? to, bool same = false}) async {
+    final heard = <AuthChangeEvent>[];
+    await t.runAsync(() async {
+      final auth = Supabase.instance.client.auth;
+      final sub = auth.onAuthStateChange.skip(1).listen((s) => heard.add(s.event));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      if (same) {
+        await refreshSession();
+      } else if (to == null) {
+        await signOut();
+      } else {
+        await signInAs(to);
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await sub.cancel();
+    });
+    expect(heard, isNotEmpty, reason: 'premise: the event arrived');
+    return heard;
+  }
+
+  /// Anything the last tap sent leaves (still no frame).
+  Future<void> noFrame(WidgetTester t) => t.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)));
 
   // ── chat ──────────────────────────────────────────────────────────────────
   group('chat', () {
@@ -366,6 +395,256 @@ void main() {
     });
   });
 
+  // ── chat, round 2 ─────────────────────────────────────────────────────────
+  group('chat, no frame since the switch', () {
+    String draft(WidgetTester t) =>
+        t.widget<TextField>(find.byType(TextField)).controller!.text;
+
+    Future<void> ask(WidgetTester t, String text) async {
+      await t.enterText(find.byType(TextField), text);
+      await t.tap(find.byIcon(Icons.send));
+      await settle(t);
+    }
+
+    for (final to in [memberB, null]) {
+      for (final how in ['Send', 'Enter']) {
+        testWidgets(
+            "A's draft, ${to == null ? 'signed out' : 'B signed in'}, $how: "
+            'nothing goes out, recorded, cleared', (t) async {
+          final c = await show(t, const AiNutritionScreen());
+          await ask(t, 'I am diabetic');
+          await t.enterText(find.byType(TextField), 'my weight is 92 kg');
+          final asA = c.read(aiNutritionNotifierProvider.notifier);
+          final n = ai.sent.length;
+          await hearNoFrame(t, to: to);
+          expect(draft(t), 'my weight is 92 kg', reason: 'premise: no frame');
+          if (how == 'Send') {
+            await t.tap(find.byIcon(Icons.send));
+          } else {
+            t
+                .widget<TextField>(find.byType(TextField))
+                .onSubmitted!(draft(t));
+          }
+          await noFrame(t);
+          expect(draft(t), isEmpty);
+          expect(asA.mounted, isTrue, reason: 'premise: no frame');
+          expect(asA.state.map((m) => m.content),
+              isNot(contains('I am diabetic')),
+              reason: "A's turns are dropped before any frame");
+          await settle(t);
+          expect(ai.sent, hasLength(n),
+              reason: "THE defect: A's words went out under B's login");
+          expect(origins(), ['aiNutrition.identity']);
+          expect(find.textContaining('92 kg'), findsNothing);
+          expect(find.text('I am diabetic'), findsNothing);
+          expect(find.text('Thinking...'), findsNothing);
+          expect(find.byType(SnackBar), findsNothing);
+          if (to != null) {
+            ai.body = {'text': 'for B'};
+            await ask(t, 'Hello');
+            expect(find.text('for B'), findsOneWidget);
+            expect(ai.sent.last.who, memberB);
+            expect(jsonEncode(ai.sent.last.body), isNot(contains('92 kg')));
+          }
+          await close(t);
+        });
+      }
+    }
+
+    testWidgets('a quick prompt: refused and recorded, not sent from the chat '
+        'A was shown', (t) async {
+      await show(t, const AiNutritionScreen());
+      await hearNoFrame(t, to: memberB);
+      await t.tap(find.text('Plan my week'));
+      await settle(t);
+      expect(ai.sent, isEmpty, reason: 'THE defect: sent as B');
+      expect(origins(), ['aiNutrition.identity']);
+      await close(t);
+    });
+
+    testWidgets('Send it again: refused and recorded', (t) async {
+      ai.status = 503;
+      final c = await show(t, const AiNutritionScreen());
+      await ask(t, 'I am diabetic');
+      reported.clear();
+      final asA = c.read(aiNutritionNotifierProvider.notifier);
+      final n = ai.sent.length;
+      await hearNoFrame(t, to: memberB);
+      await t.tap(find.text('Send it again'));
+      await noFrame(t);
+      expect(asA.state, hasLength(1));
+      await settle(t);
+      expect(ai.sent, hasLength(n));
+      expect(origins(), ['aiNutrition.identity'],
+          reason: "the retry was asked of B's chat instead of A's");
+      expect(find.text('Thinking...'), findsNothing);
+      await close(t);
+    });
+
+    testWidgets('POSITIVE CONTROL: the same member\'s new session, no frame: '
+        'the draft is sent as theirs', (t) async {
+      await show(t, const AiNutritionScreen());
+      await ask(t, 'What now?');
+      await t.enterText(find.byType(TextField), 'and then?');
+      expect(await hearNoFrame(t, same: true),
+          contains(AuthChangeEvent.tokenRefreshed));
+      await t.tap(find.byIcon(Icons.send));
+      await settle(t);
+      expect(ai.sent, hasLength(2));
+      expect(ai.sent.last.who, memberA);
+      expect(ai.sent.last.body['message'], 'and then?');
+      expect(find.text('reply'), findsNWidgets(2));
+      expect(reported, isEmpty);
+      await close(t);
+    });
+
+    testWidgets('a quick prompt while it is thinking sends nothing; after the '
+        'answer it does', (t) async {
+      await show(t, const AiNutritionScreen());
+      final gate = ai.gate = Completer<void>();
+      await ask(t, 'What now?');
+      expect(find.text('Thinking...'), findsOneWidget, reason: 'premise');
+      await t.tap(find.text('Plan my week'));
+      await settle(t);
+      expect(ai.sent, hasLength(1), reason: 'THE defect: a second request');
+      gate.complete();
+      ai.gate = null;
+      await settle(t);
+      await t.tap(find.text('Plan my week'));
+      await settle(t);
+      expect(ai.sent.last.body['message'], 'Plan my week');
+      await close(t);
+    });
+  });
+
+  // ── an answer for a member who left, before any frame ─────────────────────
+  //
+  // The notifier is still mounted here (Riverpod rebuilds it in a frame, and a
+  // hidden tab has none): only the raw uid says whose the answer is.
+  for (final (name, screen, origin) in <(String, Widget, String)>[
+    ('chat', const AiNutritionScreen(), 'aiNutrition.chat.send'),
+    ('meal plan', const MealPlanScreen(), 'aiNutrition.mealPlan.build'),
+    ('grocery list', const GroceryListScreen(), 'aiNutrition.groceryList.build'),
+  ]) {
+    group('$name, the notifier still mounted', () {
+      late bool Function() alive;
+      late String Function() held;
+      late Future<void> Function() go;
+
+      /// A's screen, with a first answer ('Mon: oats' / the list) kept.
+      Future<void> withContent(WidgetTester t) async {
+        final c = await show(t, screen);
+        final chat = c.read(aiNutritionNotifierProvider.notifier);
+        final plan = c.read(mealPlanNotifierProvider.notifier);
+        final list = c.read(groceryListNotifierProvider.notifier);
+        String text(dynamic s) => 'content ${s.content}, failed ${s.failed}';
+        Future<void> build() => plan.generateMealPlan(
+            calories: 1, protein: 1, carbs: 1, fat: 1,
+            restrictions: const [], days: 1);
+        switch (name) {
+          case 'chat':
+            alive = () => chat.mounted;
+            held = () => chat.state.skip(1).map((m) => m.content).join('|');
+            go = () => chat.sendMessage('I am diabetic');
+          case 'meal plan':
+            alive = () => plan.mounted;
+            held = () => text(plan.state);
+            go = build;
+          case _:
+            alive = () => list.mounted;
+            held = () => text(list.state);
+            go = () => list.generateGroceryList('Mon: oats');
+        }
+        ai.body = {'text': 'Mon: oats'};
+        await t.runAsync(() async {
+          if (name == 'grocery list') await build();
+          ai.body = {'text': _list};
+          await go();
+        });
+        await settle(t);
+        expect(held(), contains('Spinach'), reason: 'premise: kept for A');
+        reported.clear();
+      }
+
+      final nothing = name == 'chat' ? '' : 'content null, failed false';
+
+      for (final fails in [false, true]) {
+        Future<void> late_(WidgetTester t, Future<void> Function() event) async {
+          ai
+            ..status = fails ? 500 : 200
+            ..body = {'text': 'DAIRY:\n- Milk\n'};
+          await t.runAsync(() async {
+            // Made here: one made on the fake clock completes only in a pump.
+            final gate = ai.gate = Completer<void>();
+            final flight = go();
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+            await event();
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+            gate.complete();
+            await flight;
+          });
+          ai
+            ..gate = null
+            ..status = 200;
+          expect(alive(), isTrue, reason: 'premise: no frame has run');
+        }
+
+        final what = fails ? 'failure' : 'answer';
+        for (final to in [memberB, null]) {
+          testWidgets(
+              "A's $what after ${to == null ? 'sign-out' : 'B signed in'}, no "
+              'frame: kept for nobody, and what was A\'s is dropped', (t) async {
+            await withContent(t);
+            await late_(t, () => to == null ? signOut() : signInAs(to));
+            expect(held(), nothing,
+                reason: 'before any frame, not left to the rebuild');
+            expect(origins(), fails ? [origin] : isEmpty);
+            await settle(t);
+            expect(find.textContaining('Milk'), findsNothing);
+            expect(find.textContaining('Spinach'), findsNothing);
+            expect(find.textContaining("Couldn't"), findsNothing);
+            await close(t);
+          });
+        }
+
+        testWidgets("CONTROL: the same member's new session: their $what is "
+            'theirs', (t) async {
+          await withContent(t);
+          await late_(t, refreshSession);
+          await settle(t);
+          expect(held(), contains(name == 'chat' || fails ? 'Spinach' : 'Milk'));
+          if (!fails) expect(held(), contains('Milk'));
+          if (fails) expect(find.textContaining("Couldn't"), findsOneWidget);
+          expect(origins(), fails ? [origin] : isEmpty);
+          await close(t);
+        });
+      }
+
+      testWidgets('a send once the client says B: refused, recorded, and A\'s '
+          'content dropped before any frame', (t) async {
+        await withContent(t);
+        final n = ai.sent.length;
+        await t.runAsync(() async {
+          final switched = signInAs(memberB);
+          while (Supabase.instance.client.auth.currentUser?.id == memberA) {
+            await null;
+          }
+          unawaited(go());
+          await switched;
+        });
+        expect(alive(), isTrue, reason: 'premise');
+        expect(held(), nothing);
+        expect(ai.sent, hasLength(n),
+            reason: "A's request went out under B's login");
+        expect(origins(), ['aiNutrition.identity']);
+        await settle(t);
+        expect(find.textContaining('Spinach'), findsNothing);
+        expect(find.byType(SnackBar), findsNothing);
+        await close(t);
+      });
+    });
+  }
+
   // ── meal plan ─────────────────────────────────────────────────────────────
   group('meal plan', () {
     Future<void> tap(WidgetTester t, String label) async {
@@ -514,11 +793,96 @@ void main() {
     testWidgets('sign-out then the same member back: an empty form and no plan',
         (t) async {
       await built(t);
+      await tap(t, 'Vegan');
+      await tap(t, '3 days');
       await switchTo(t, null);
       expect(find.text('Mon: oats'), findsNothing);
       await switchTo(t, memberA);
       expect(find.text('Mon: oats'), findsNothing);
       expect(find.text('2600 kcal'), findsOneWidget);
+      await tap(t, 'Generate Meal Plan');
+      final asked = ai.sent.last.body['message'] as String;
+      expect(asked, contains('2600 kcal'));
+      expect(asked, contains('restrictions: None'),
+          reason: 'THE defect: the form outlived the sign-out');
+      expect(asked, contains('7-day'));
+      await close(t);
+    });
+
+    testWidgets("B signs in, no frame, Generate: nothing goes out, recorded; "
+        "then B's own build is one request with its spinner", (t) async {
+      final c = await built(t);
+      await tap(t, 'Vegan');
+      final asA = c.read(mealPlanNotifierProvider.notifier);
+      final n = ai.sent.length;
+      await hearNoFrame(t, to: memberB);
+      expect(find.text('2600 kcal'), findsOneWidget, reason: 'premise: no frame');
+      await t.tap(find.text('Generate Meal Plan'));
+      await noFrame(t);
+      expect(asA.state.content, isNull);
+      await settle(t);
+      expect(ai.sent, hasLength(n),
+          reason: "THE defect: a build nobody chose, under B's login");
+      expect(origins(), ['aiNutrition.identity']);
+      expect(find.text('Generating your meal plan...'), findsNothing);
+      expect(find.text('Mon: oats'), findsNothing);
+      expect(find.text('1500 kcal'), findsOneWidget);
+
+      final gate = ai.gate = Completer<void>();
+      ai.body = {'text': 'B: rice'};
+      await tap(t, 'Generate Meal Plan');
+      expect(find.text('Generating your meal plan...'), findsOneWidget);
+      await t.tap(find.text('Generating your meal plan...'));
+      await settle(t);
+      expect(ai.sent, hasLength(n + 1));
+      expect(ai.sent.last.who, memberB);
+      expect(ai.sent.last.body['message'], contains('restrictions: None'));
+      gate.complete();
+      await settle(t);
+      expect(find.text('B: rice'), findsOneWidget);
+      await close(t);
+    });
+
+    testWidgets("POSITIVE CONTROL: the same member's new session, no frame, "
+        'Generate: built with their own targets', (t) async {
+      await built(t);
+      await tap(t, 'Vegan');
+      expect(await hearNoFrame(t, same: true),
+          contains(AuthChangeEvent.tokenRefreshed));
+      ai.body = {'text': 'Mon: eggs'};
+      await t.tap(find.text('Generate Meal Plan'));
+      await settle(t);
+      expect(find.text('Mon: eggs'), findsOneWidget);
+      expect(ai.sent.last.who, memberA);
+      expect(ai.sent.last.body['message'], contains('2600 kcal'));
+      expect(ai.sent.last.body['message'], contains('restrictions: Vegan'));
+      expect(reported, isEmpty);
+      await close(t);
+    });
+
+    testWidgets("A's plan lands while B's build is in flight: B's spinner stays "
+        'and B has one request', (t) async {
+      await show(t, const MealPlanScreen());
+      ai.body = {'text': 'Mon: oats'};
+      final a = ai.gate = Completer<void>();
+      await tap(t, 'Generate Meal Plan');
+      await switchTo(t, memberB);
+      ai.body = {'text': 'B: rice'};
+      final b = ai.gate = Completer<void>();
+      await tap(t, 'Generate Meal Plan');
+      expect(find.text('Generating your meal plan...'), findsOneWidget);
+      a.complete();
+      await settle(t);
+      expect(find.text('Generating your meal plan...'), findsOneWidget,
+          reason: "A's answer ended B's wait");
+      expect(find.text('Mon: oats'), findsNothing);
+      await t.tap(find.text('Generating your meal plan...'));
+      await settle(t);
+      expect(ai.sent.where((s) => s.who == memberB), hasLength(1));
+      b.complete();
+      await settle(t);
+      expect(find.text('B: rice'), findsOneWidget);
+      expect(find.text('Generating your meal plan...'), findsNothing);
       await close(t);
     });
   });
@@ -652,6 +1016,131 @@ void main() {
       await settle(t);
       expect(ai.sent, hasLength(n), reason: "A's plan went out as B");
       expect(origins(), ['aiNutrition.identity']);
+      await close(t);
+    });
+
+    testWidgets("B signs in, no frame, Rebuild: A's plan goes nowhere, recorded",
+        (t) async {
+      final c = await built(t);
+      final asA = c.read(groceryListNotifierProvider.notifier);
+      final n = ai.sent.length;
+      await hearNoFrame(t, to: memberB);
+      await t.tap(find.text(groceryRebuildLabel));
+      await noFrame(t);
+      expect(asA.state.content, isNull);
+      await settle(t);
+      expect(ai.sent, hasLength(n));
+      expect(origins(), ['aiNutrition.identity'],
+          reason: 'it was dropped without a word');
+      expect(find.text('No meal plan yet'), findsOneWidget);
+      await close(t);
+    });
+
+    testWidgets("POSITIVE CONTROL: the same member's new session, no frame, "
+        'Rebuild: rebuilt', (t) async {
+      await built(t);
+      expect(await hearNoFrame(t, same: true),
+          contains(AuthChangeEvent.tokenRefreshed));
+      ai.body = {'text': 'DAIRY:\n- Milk\n'};
+      await t.tap(find.text(groceryRebuildLabel));
+      await settle(t);
+      expect(find.textContaining('Milk'), findsOneWidget);
+      expect(ai.sent.last.who, memberA);
+      expect(ai.sent.last.body['message'], contains('Mon: oats'));
+      expect(reported, isEmpty);
+      await close(t);
+    });
+
+    testWidgets("A's list lands while B's build is in flight: B's spinner stays "
+        'and B has one request', (t) async {
+      final c = await ready(t);
+      ai.body = {'text': _list};
+      final a = ai.gate = Completer<void>();
+      await t.tap(find.text('Generate Grocery List'));
+      await settle(t);
+      await switchTo(t, memberB);
+      ai
+        ..gate = null
+        ..body = {'text': 'B: rice'};
+      await t.runAsync(() => c
+          .read(mealPlanNotifierProvider.notifier)
+          .generateMealPlan(calories: 1, protein: 1, carbs: 1, fat: 1,
+              restrictions: const [], days: 1));
+      await settle(t);
+      ai.body = {'text': 'DAIRY:\n- Milk\n'};
+      final b = ai.gate = Completer<void>();
+      await t.tap(find.text('Generate Grocery List'));
+      await settle(t);
+      expect(find.text('Generating...'), findsOneWidget, reason: 'premise');
+      a.complete();
+      await settle(t);
+      expect(find.text('Generating...'), findsOneWidget,
+          reason: "A's answer ended B's wait");
+      expect(find.textContaining('Spinach'), findsNothing);
+      await t.tap(find.text('Generating...'));
+      await settle(t);
+      expect(
+          ai.sent.where((s) =>
+              s.who == memberB &&
+              '${s.body['message']}'.contains('grocery list')),
+          hasLength(1));
+      b.complete();
+      await settle(t);
+      expect(find.textContaining('Milk'), findsOneWidget);
+      await close(t);
+    });
+
+    testWidgets('the failed-rebuild Try again is busy while it builds: one '
+        'request', (t) async {
+      final h = t.ensureSemantics();
+      await built(t);
+      ai.status = 500;
+      await t.tap(find.text(groceryRebuildLabel));
+      await settle(t);
+      final n = ai.sent.length;
+      ai
+        ..status = 200
+        ..gate = Completer<void>();
+      await t.tap(find.text('Try again'));
+      await settle(t);
+      expect(find.bySemanticsLabel('Retrying'), findsOneWidget);
+      await t.tap(find.bySemanticsLabel('Retrying'));
+      await settle(t);
+      expect(ai.sent, hasLength(n + 1));
+      ai.gate!.complete();
+      await settle(t);
+      expect(failedLoad('a new list'), findsNothing);
+      h.dispose();
+      await close(t);
+    });
+
+    testWidgets('an unreadable FIRST list is a failure, recorded; it is not a '
+        'list to keep when the retry fails too', (t) async {
+      final c = await ready(t);
+      ai.body = {'text': 'Sorry!'};
+      await t.tap(find.text('Generate Grocery List'));
+      await settle(t);
+      expect(find.text(groceryFailedTitle), findsOneWidget);
+      expect(find.textContaining('Sorry'), findsNothing);
+      expect(origins(), ['aiNutrition.groceryList.build']);
+
+      ai.status = 500;
+      await t.tap(find.text(groceryTryAgainLabel));
+      await settle(t);
+      expect(find.text(groceryFailedTitle), findsOneWidget);
+      expect(failedLoad('a new list'), findsNothing);
+      expect(c.read(groceryListNotifierProvider).failed, isTrue,
+          reason: 'what could not be read was kept as "the list below"');
+      expect(c.read(groceryListNotifierProvider).content, isNull);
+      expect(c.read(groceryListNotifierProvider.notifier).rebuildError, isNull);
+
+      ai
+        ..status = 200
+        ..body = {'text': _list};
+      await t.tap(find.text(groceryTryAgainLabel));
+      await settle(t);
+      expect(find.textContaining('Spinach'), findsOneWidget);
+      expect(failedLoad('a new list'), findsNothing);
       await close(t);
     });
   });

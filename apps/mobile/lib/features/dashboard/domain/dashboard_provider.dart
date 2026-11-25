@@ -31,7 +31,10 @@ final streakProvider = FutureProvider<int>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
   final uid = ref.watch(currentUserProvider.select((u) => u?.id));
   // Live on `daily_scores` (037's publication): see todayScoreProvider.
-  ref.watch(tableTickerProvider('daily_scores'));
+  // Not on its first value (0): that read everything a second time on mount,
+  // and one outage was recorded twice.
+  ref.watch(tableTickerProvider('daily_scores')
+      .select((tick) => tick.asData?.value ?? 0));
   if (uid == null) return 0;
   try {
     final rows = await Supabase.instance.client
@@ -63,44 +66,51 @@ final streakProvider = FutureProvider<int>((ref) async {
   }
 });
 
-/// P0-FL-60b · [streakProvider], for the member signed in NOW. Riverpod keeps
-/// the previous member's value (and error) while the next one's read is in
-/// flight or after it failed; neither is shown here. A failed refresh for the
-/// same member keeps their number, beside the error.
-typedef MemberStreak = ({int? streak, Object? error, bool busy});
+/// P0-FL-60b · a read of this file's, for the member signed in NOW. Riverpod
+/// keeps the previous member's value (and error) while the next one's read is
+/// in flight or after it failed; neither is shown here. A failed refresh for
+/// the same member keeps their value, beside the error.
+typedef MemberRead<T> = ({T? value, Object? error, bool busy});
 
-/// Whose answer [streakProvider] last gave, and whose the last number was.
-class _StreakOwner {
+/// Whose answer a read last gave, and whose the last value was. Outlives the
+/// provider that keeps it up to date (it is what that provider remembers from
+/// one answer to the next); the uid beside each field is what makes reading it
+/// safe for anybody else.
+class _ReadOwner<T extends Object> {
   bool settled = false;
   String? settledFor;
-  int? streak;
-  String? streakOf;
+  T? value;
+  String? valueOf;
 }
 
-final _streakOwnerProvider = Provider<_StreakOwner>((ref) => _StreakOwner());
-
-final memberStreakProvider = Provider<MemberStreak>((ref) {
-  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
-  final read = ref.watch(streakProvider);
-  final owner = ref.watch(_streakOwnerProvider);
-  if (!read.isLoading) {
-    owner
-      ..settled = true
-      ..settledFor = uid;
-    if (!read.hasError) {
+Provider<MemberRead<T>> _forMember<T extends Object>(
+    FutureProvider<T> provider) {
+  final ownerProvider = Provider<_ReadOwner<T>>((ref) => _ReadOwner<T>());
+  return Provider<MemberRead<T>>((ref) {
+    final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+    final read = ref.watch(provider);
+    final owner = ref.watch(ownerProvider);
+    if (!read.isLoading) {
       owner
-        ..streak = read.requireValue
-        ..streakOf = uid;
+        ..settled = true
+        ..settledFor = uid;
+      if (!read.hasError) {
+        owner
+          ..value = read.requireValue
+          ..valueOf = uid;
+      }
     }
-  }
-  return (
-    streak: owner.streakOf == uid ? owner.streak : null,
-    error: owner.settled && owner.settledFor == uid && read.hasError
-        ? read.error
-        : null,
-    busy: read.isLoading,
-  );
-});
+    return (
+      value: owner.valueOf == uid ? owner.value : null,
+      error: owner.settled && owner.settledFor == uid && read.hasError
+          ? read.error
+          : null,
+      busy: read.isLoading,
+    );
+  });
+}
+
+final memberStreakProvider = _forMember(streakProvider);
 
 // ── Upcoming Classes (next 5 from Supabase) ───────────────────────────────────
 //
@@ -113,6 +123,9 @@ final upcomingClassesProvider = FutureProvider<List<Map<String, dynamic>>>((ref)
   // already follows). Nothing re-read this, so the Directory's and Activity's
   // Upcoming kept the old five until the app restarted.
   ref.watch(refreshClassesProvider);
+  // P0-FL-60b · read for whoever is signed in: another member's failure (or
+  // rows) is not theirs. Shown through [memberUpcomingClassesProvider].
+  ref.watch(currentUserProvider.select((u) => u?.id));
   try {
     final now = DateTime.now().toUtc().toIso8601String();
     final rows = await Supabase.instance.client
@@ -129,8 +142,11 @@ final upcomingClassesProvider = FutureProvider<List<Map<String, dynamic>>>((ref)
   }
 });
 
+final memberUpcomingClassesProvider = _forMember(upcomingClassesProvider);
+
 // ── Upcoming Events (next 5 from Supabase) ────────────────────────────────────
 final upcomingEventsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  ref.watch(currentUserProvider.select((u) => u?.id)); // as classes above
   try {
     final now = DateTime.now().toUtc().toIso8601String();
     final rows = await Supabase.instance.client
@@ -145,6 +161,8 @@ final upcomingEventsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
     rethrow;
   }
 });
+
+final memberUpcomingEventsProvider = _forMember(upcomingEventsProvider);
 
 // ── Motivational quotes (rotates daily) ──────────────────────────────────────
 const _quotes = [

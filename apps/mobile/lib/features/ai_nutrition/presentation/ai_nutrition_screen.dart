@@ -77,13 +77,11 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
     if (message.trim().isEmpty && image == null) return;
     _messageController.clear();
     // The notifier draws a failed turn (with "Send it again") and records it.
-    await _whileThinking(() => ref
-        .read(aiNutritionNotifierProvider.notifier)
-        .sendMessage(message, image: image));
+    final chat = _chat;
+    await _whileThinking(() => chat.sendMessage(message, image: image));
   }
 
-  Future<void> _retryTurn() => _whileThinking(
-      () => ref.read(aiNutritionNotifierProvider.notifier).retryLastTurn());
+  Future<void> _retryTurn() => _whileThinking(_chat.retryLastTurn);
 
   Future<void> _whileThinking(Future<void> Function() turn) async {
     final epoch = _epoch;
@@ -93,6 +91,12 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
     setState(() => _isLoading = false);
     _scrollToBottom();
   }
+
+  /// P0-FL-60b · the chat this screen was BUILT with. Read again at the tap it
+  /// is the next member's whenever their sign-in came first and no frame has
+  /// run since — and the words in the composer are still the last member's.
+  /// This one refuses instead (see `_OneMember`).
+  late AiNutritionNotifier _chat;
 
   /// P0-FL-60b · bumped when the account changes: what an earlier one started
   /// no longer touches this screen.
@@ -213,9 +217,16 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
       if (!mounted) return;
       setState(() => _isListening = true);
       final epoch = _epoch;
+      // Whose words they are, before and after the screen hears of a switch.
+      final auth = Supabase.instance.client.auth;
+      final uid = auth.currentUser?.id;
       await _speech.listen(
         onResult: (result) {
           if (!mounted || epoch != _epoch) return; // another member's composer
+          if (auth.currentUser?.id != uid) {
+            unawaited(_speech.cancel()); // and stops hearing them
+            return;
+          }
           _messageController.text = result.recognizedWords;
           _messageController.selection = TextSelection.fromPosition(
             TextPosition(offset: _messageController.text.length));
@@ -237,6 +248,7 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
     ref.listen(aiNutritionNotifierProvider.notifier, (was, now) {
       if (!identical(was, now)) _forget();
     });
+    _chat = ref.watch(aiNutritionNotifierProvider.notifier);
     final messages = ref.watch(aiNutritionNotifierProvider);
 
     return Scaffold(
@@ -345,7 +357,7 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
             itemCount: _quickPrompts.length,
             separatorBuilder: (_, __) => const SizedBox(width: 8),
             itemBuilder: (_, i) => GestureDetector(
-              onTap: () => _sendMessage(_quickPrompts[i]),
+              onTap: _isLoading ? null : () => _sendMessage(_quickPrompts[i]),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
@@ -353,7 +365,9 @@ class _AiNutritionScreenState extends ConsumerState<AiNutritionScreen> {
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(color: AppColors.purple.withValues(alpha: 0.3))),
                 child: Text(_quickPrompts[i],
-                  style: const TextStyle(color: AppColors.purple, fontSize: 12)))))),
+                  style: TextStyle(
+                    color: _isLoading ? AppColors.textTertiary : AppColors.purple,
+                    fontSize: 12)))))),
 
         const SizedBox(height: 8),
 
