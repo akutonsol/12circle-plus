@@ -481,6 +481,24 @@ void main() {
       await unmount(tester, realtime: true);
     });
 
+    testWidgets("'Clear all' on A's sheet, fired after B signed in and before "
+        "any frame, clears nobody's", (tester) async {
+      notes();
+      await show(tester, realNotifications: true);
+      await openBell(tester);
+      final clear = tester
+          .widget<TextButton>(find.widgetWithText(TextButton, 'Clear all'))
+          .onPressed!;
+      await tester.runAsync(() => signInAs(memberB));
+      clear();
+      await frames(tester);
+      expect(server.writesTo('notifications'), isEmpty,
+          reason: "THE defect: B's notifications were deleted from A's sheet");
+      expect(reported.map((f) => f.origin),
+          contains('CoachNotificationsSheet.clearAll'));
+      await unmount(tester, realtime: true);
+    });
+
     testWidgets("A's failed read is not 'couldn't check' for B while B's is out",
         (tester) async {
       notes();
