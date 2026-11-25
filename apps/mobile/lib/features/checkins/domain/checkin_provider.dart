@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/domain/auth_provider.dart';
@@ -8,12 +10,14 @@ final weeklyCheckinServiceProvider =
     Provider<WeeklyCheckinService>((ref) => WeeklyCheckinService());
 
 final weeklyCheckinsProvider = FutureProvider<List<WeeklyCheckin>>((ref) async {
-  ref.watch(currentUserProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
+  ref.watch(checkinUidProvider);
   return ref.watch(weeklyCheckinServiceProvider).getWeeklyCheckins();
 });
 
 final currentWeekCheckinProvider = FutureProvider<WeeklyCheckin>((ref) async {
-  ref.watch(currentUserProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
+  ref.watch(checkinUidProvider);
   return ref.watch(weeklyCheckinServiceProvider).getCurrentWeekCheckin();
 });
 
@@ -21,26 +25,45 @@ final currentWeekCheckinProvider = FutureProvider<WeeklyCheckin>((ref) async {
 /// by. The uid and not the whole `User`, which a token refresh or a profile
 /// edit replaces for the same member (P0-FL-59c).
 ///
-/// Null, too, where Supabase was never started (a screen test with every read
-/// replaced): nobody is signed in there. `Supabase.instance` says so by
-/// assertion, and nothing else is caught.
-final checkinUidProvider = Provider<String?>((ref) {
-  try {
-    return ref.watch(currentUserProvider.select((u) => u?.id));
-  } on AssertionError {
-    return null;
-  }
-});
+/// WATCH THIS, not `currentUserProvider.select(...)`, in a provider: a select is
+/// not flushed with a provider's own dependencies, so a read invalidated after
+/// an account change but before the next frame counts as a refresh by the same
+/// member (riverpod 2.6.1) and hands the last one's value over as data.
+final checkinUidProvider = Provider<String?>(
+    (ref) => ref.watch(currentUserProvider.select((u) => u?.id)));
 
 /// Who is signed in at this instant, for a guard before a write. A provider
 /// learns of a switch a moment later, and not at all in a hidden tab, where no
 /// frame runs.
-String? checkinUidNow() {
-  try {
-    return Supabase.instance.client.auth.currentUser?.id;
-  } on AssertionError {
-    return null;
-  }
+String? checkinUidNow() => Supabase.instance.client.auth.currentUser?.id;
+
+/// Rows, and the account that read them. Riverpod keeps a provider's last value
+/// through a re-read and through a failure, whoever asked for it, so whose rows
+/// they are is carried with them (P0-FL-59c).
+class OwnedRows<T> extends UnmodifiableListView<T> {
+  OwnedRows(super.source, this.owner);
+  final String? owner;
+}
+
+/// [read]'s rows, tagged with the account signed in when the read was made.
+Future<List<T>> ownedRead<T>(Future<List<T>> Function() read) async {
+  final owner = checkinUidNow();
+  return OwnedRows(await read(), owner);
+}
+
+/// [state], with the rows it holds only if they were read by [uid]'s account —
+/// in any state: loading, loaded or failed. Rows that carry no owner were put
+/// there by a test; [uid] is not asked for them.
+AsyncValue<List<T>> heldFor<T>(
+    AsyncValue<List<T>> state, String? Function() uid) {
+  if (!state.hasValue) return state;
+  final rows = state.requireValue;
+  if (rows is! OwnedRows<T> || rows.owner == uid()) return state;
+  return switch (state) {
+    AsyncError(:final error, :final stackTrace) =>
+      AsyncError<List<T>>(error, stackTrace),
+    _ => AsyncLoading<List<T>>(),
+  };
 }
 
 /// The check-in the client opened. Cleared when the signed-in account changes:
@@ -57,11 +80,13 @@ final selectedCheckinProvider = StateProvider<WeeklyCheckin?>((ref) {
 /// arrives while it is open is re-read by `refreshForNotification`.
 ///
 /// Read again when another coach signs in (P0-FL-59c): nothing re-read it, so
-/// they were shown the last coach's clients. Signed out has no queue.
+/// they were shown the last coach's clients. Signed out has no queue. The rows
+/// carry the coach who read them ([OwnedRows]).
 final coachSubmittedCheckinsProvider =
     FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
   if (ref.watch(checkinUidProvider) == null) return const [];
-  return ref.watch(weeklyCheckinServiceProvider).getSubmittedCheckinsForCoach();
+  final service = ref.watch(weeklyCheckinServiceProvider);
+  return ownedRead(service.getSubmittedCheckinsForCoach);
 });
 
 /// Auto-disposed with the queue: PD7 is that every way into Check-ins opens

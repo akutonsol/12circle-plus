@@ -8,6 +8,7 @@ import '../domain/checkin_columns.dart';
 import '../domain/checkin_provider.dart';
 import '../domain/coach_review_queue.dart' as q;
 import '../../auth/domain/auth_provider.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 class CoachCheckinReviewScreen extends ConsumerStatefulWidget {
   const CoachCheckinReviewScreen({super.key});
@@ -32,8 +33,8 @@ class _CoachCheckinReviewScreenState
   /// on the screen of the account that arrived.
   int _epoch = 0;
 
-  /// The check-in last on screen, kept through a failed re-read of the same
-  /// coach's queue so the reply being written does not lose it.
+  /// The check-in last on screen, kept while the same coach's queue is re-read
+  /// and when that fails, so the reply being written does not lose it.
   Map<String, dynamic>? _open;
 
   bool _holds(int epoch) => epoch == _epoch && checkinUidNow() == _owner;
@@ -45,6 +46,10 @@ class _CoachCheckinReviewScreenState
     _owner = checkinUidNow();
     _messageCtrl.clear();
     _recCtrl.clear();
+    // What it said to the coach who left is not said to the one who arrived.
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..removeCurrentSnackBar();
     setState(() {
       _recommendations.clear();
       _open = null;
@@ -68,13 +73,19 @@ class _CoachCheckinReviewScreenState
     });
   }
 
-  Future<void> _submit(Map<String, dynamic> checkin) async {
-    final epoch = _epoch;
-    if (!_holds(epoch)) {
-      reportError('CoachCheckinReviewScreen._submit',
-          StateError('feedback not sent: the signed-in account changed'),
-          StackTrace.current);
-      _drop();
+  /// Whether an action built at [epoch] may be taken. If not, it belonged to the
+  /// coach who left: recorded, and nothing is said.
+  bool _mayAct(int epoch, String origin, String what) {
+    if (_holds(epoch)) return true;
+    reportError(origin, StateError('$what: the signed-in account changed'),
+        StackTrace.current);
+    if (epoch == _epoch) _drop();
+    return false;
+  }
+
+  /// [epoch] is the one the button was built at: the coach it is sent as.
+  Future<void> _submit(Map<String, dynamic> checkin, int epoch) async {
+    if (!_mayAct(epoch, 'CoachCheckinReviewScreen._submit', 'feedback not sent')) {
       return;
     }
     if (_messageCtrl.text.trim().isEmpty) {
@@ -147,26 +158,28 @@ class _CoachCheckinReviewScreenState
   /// and those are different facts with different consequences — a coach whose
   /// queue failed silently loses `Send and open next` and is never told why.
   List<Map<String, dynamic>> _queue() =>
-      _loaded(ref.read(coachSubmittedCheckinsProvider));
+      _loaded(ref.read(coachSubmittedCheckinsProvider), checkinUidNow);
 
-  /// The queue as last loaded, kept while it is being re-read — after a send,
-  /// or when a `weekly_checkins` notification says one more arrived (C8) — so
-  /// the screen does not drop to a spinner under a coach writing a reply. A
-  /// failed read is still not a queue: see `_queue()`.
+  /// The queue as [uid]'s coach last read it, kept while it is being re-read —
+  /// after a send, or when a `weekly_checkins` notification says one more
+  /// arrived (C8) — so the screen does not drop to a spinner under a coach
+  /// writing a reply, and kept when that re-read fails, which the screen says. A
+  /// queue that was never read is still not a queue: see `_queue()`.
   ///
-  /// `AsyncData` ONLY (P0-FL-59c). Riverpod keeps it through a re-read of the
-  /// same coach's queue, but turns it into an `AsyncLoading` that still holds
-  /// the old rows when the uid the queue is keyed by changes: those rows are
-  /// another coach's clients, with their names, emails and notes.
+  /// By the owner the rows carry, NEVER by the kind of state (P0-FL-59c):
+  /// Riverpod keeps the last coach's rows in an `AsyncLoading` and an
+  /// `AsyncError` too, and those are their clients, with names and notes.
   static List<Map<String, dynamic>> _loaded(
-          AsyncValue<List<Map<String, dynamic>>> state) =>
-      switch (state) {
-        AsyncData(:final value) => value,
-        _ => const <Map<String, dynamic>>[],
-      };
+      AsyncValue<List<Map<String, dynamic>>> state, String? Function() uid) {
+    final mine = heldFor(state, uid);
+    return mine.hasValue ? mine.requireValue : const [];
+  }
 
   /// Advance without sending — FIT-033's declared `Next`.
-  void _openNext(Map<String, dynamic> checkin) {
+  void _openNext(Map<String, dynamic> checkin, int epoch) {
+    if (!_mayAct(epoch, 'CoachCheckinReviewScreen._openNext', 'next not opened')) {
+      return;
+    }
     final next = q.nextInQueue(_queue(), checkin['id'] as String?);
     if (next == null) return;
     _messageCtrl.clear();
@@ -183,11 +196,19 @@ class _CoachCheckinReviewScreenState
     ref.listen(checkinUidProvider, (_, next) {
       if (next != _owner) _drop();
     });
+    final epoch = _epoch;
     // Watched, not read — see `_queue()`. The three states are kept apart:
     // a queue that FAILED must not read as a queue that is empty.
     final queueState = ref.watch(coachSubmittedCheckinsProvider);
-    final queue = _loaded(queueState);
+    final queue = _loaded(queueState, () => ref.watch(checkinUidProvider));
     final queueFailed = queueState is AsyncError;
+    final queueFailure = SectionLoadFailure(
+      what: 'your review queue',
+      error: queueState.error,
+      busy: queueState.isLoading,
+      onRetry: () => ref.invalidate(coachSubmittedCheckinsProvider),
+      accent: AppColors.warning,
+    );
     // PD7: every way into this screen (the Check-ins nav item, "Needs you
     // today", the directory tile) arrives with nothing selected, so it said
     // "No check-in selected" and no check-in could ever be opened. With nothing
@@ -195,7 +216,8 @@ class _CoachCheckinReviewScreenState
     // (`getSubmittedCheckinsForCoach`), and Next / Send and open next page on.
     final checkin = ref.watch(selectedCoachCheckinProvider) ??
         (queue.isNotEmpty ? queue.first : null) ??
-        (queueFailed && ref.watch(checkinUidProvider) == _owner ? _open : null);
+        // `_drop` empties `_open`, so it is this coach's.
+        (queueFailed || queueState.isLoading ? _open : null);
     _open = checkin;
 
     if (checkin == null) {
@@ -216,8 +238,8 @@ class _CoachCheckinReviewScreenState
             AsyncLoading() => const CircularProgressIndicator(),
             // Not "nothing selected": the coach is about to conclude they have
             // nothing to review, when the truth is that we could not tell.
-            AsyncError() => const Text("Couldn't load your review queue",
-                style: TextStyle(color: AppColors.warning)),
+            AsyncError() =>
+              Padding(padding: const EdgeInsets.all(20), child: queueFailure),
             _ => const Text("No check-in selected",
                 style: TextStyle(color: AppColors.textSecondary)),
           },
@@ -252,7 +274,7 @@ class _CoachCheckinReviewScreenState
           if (q.nextInQueue(queue, checkin['id'] as String?) != null)
             NamedIconButton(
               label: 'Next',
-              onTap: () => _openNext(checkin),
+              onTap: () => _openNext(checkin, epoch),
               child: const Icon(Icons.arrow_forward, color: AppColors.white),
             ),
         ],
@@ -316,6 +338,8 @@ class _CoachCheckinReviewScreenState
                   ),
               ],
             ),
+            // The header's few words are not announced and offer no way back.
+            if (queueFailed) queueFailure,
             const SizedBox(height: 20),
 
             // FIT-033's four stats. Only three are produced: `Sessions 4/4` is
@@ -405,6 +429,9 @@ class _CoachCheckinReviewScreenState
             Container(
               decoration: AppStyles.premiumCardDecoration,
               child: TextField(
+                // A new field after a drop: undo in the old one would bring the
+                // last coach's words back.
+                key: ValueKey('reply-$epoch'),
                 controller: _messageCtrl,
                 maxLines: 4,
                 style: const TextStyle(color: AppColors.white, fontSize: 14),
@@ -429,6 +456,7 @@ class _CoachCheckinReviewScreenState
                   child: Container(
                     decoration: AppStyles.premiumCardDecoration,
                     child: TextField(
+                      key: ValueKey('recommendation-$epoch'),
                       controller: _recCtrl,
                       style: const TextStyle(color: AppColors.white, fontSize: 13),
                       decoration: InputDecoration(
@@ -579,9 +607,9 @@ class _CoachCheckinReviewScreenState
                   label: label,
                   enabled: !_saving,
                   excludeSemantics: true,
-                  onTap: _saving ? null : () => _submit(checkin),
+                  onTap: _saving ? null : () => _submit(checkin, epoch),
                   child: ElevatedButton(
-                    onPressed: _saving ? null : () => _submit(checkin),
+                    onPressed: _saving ? null : () => _submit(checkin, epoch),
                     child: _saving
                         ? const SizedBox(
                             width: 22,

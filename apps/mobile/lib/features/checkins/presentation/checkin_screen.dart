@@ -98,6 +98,10 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
   /// to load was told they had no upcoming sessions and should book one.
   bool _callsFailed = false;
 
+  /// Nobody is signed in: whether there are sessions is not known, which is not
+  /// the same as having none.
+  bool _signedOut = false;
+
   @override
   void initState() {
     super.initState();
@@ -134,9 +138,20 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
     // An answer for someone who has left is not shown, and the read is made
     // again for whoever is here.
     bool left() => Supabase.instance.client.auth.currentUser?.id != uid;
-    if (uid == null) { setState(() => _loading = false); return; }
+    if (uid == null) {
+      setState(() { _loading = false; _signedOut = true; });
+      return;
+    }
     try {
-      if (mounted) setState(() => _callsFailed = false);
+      // Loading again, on a retry too: with neither, the answer still to come
+      // read as "No upcoming sessions".
+      if (mounted) {
+        setState(() {
+          _callsFailed = false;
+          _signedOut = false;
+          _loading = true;
+        });
+      }
       final now = DateTime.now();
       final rows = await Supabase.instance.client
           .from('coaching_calls')
@@ -352,6 +367,9 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
                       ),
                     ]),
                   )
+                else if (_signedOut)
+                  const Text("You're signed out — sign in again to see your sessions.",
+                    style: TextStyle(color: _C.onSurfaceVar, fontSize: 13))
                 else if (_appointments.isEmpty)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),

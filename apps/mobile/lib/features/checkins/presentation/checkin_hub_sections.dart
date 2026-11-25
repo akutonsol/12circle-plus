@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/observability/app_failure.dart';
-import '../../auth/domain/auth_provider.dart';
 import '../data/models/checkin_model.dart';
 import '../data/weekly_checkin_service.dart';
 import '../domain/checkin_hub.dart';
@@ -19,10 +18,21 @@ import '../domain/checkin_provider.dart';
 /// the app, and the coach's reply lands on a row this already held: a client who
 /// had looked at their history saw "Awaiting reply" over an answered week until
 /// the app restarted. The reply's notification (`checkin`) re-reads it too.
+///
+/// By the uid only, and the rows carry who read them ([OwnedRows]): riverpod
+/// keeps the last member's weeks here through the next one's read (P0-FL-59c).
 final checkinHistoryProvider =
     FutureProvider.autoDispose<List<WeeklyCheckin>>((ref) async {
-  ref.watch(currentUserProvider);
-  return WeeklyCheckinService().getWeeklyCheckins(limit: checkinHistoryLimit);
+  ref.watch(checkinUidProvider);
+  return ownedRead(() async {
+    final uid = checkinUidNow();
+    final weeks = await WeeklyCheckinService()
+        .getWeeklyCheckins(limit: checkinHistoryLimit);
+    return [
+      for (final w in weeks)
+        if (isCheckinOf(w, () => uid)) w
+    ];
+  });
 });
 
 /// FIT-023 · the check-in hub's two declared controls and its history.
@@ -40,7 +50,12 @@ class CheckinHubSections extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final historyAsync = ref.watch(checkinHistoryProvider);
-    final history = historyFrom(historyAsync);
+    final mine = heldFor(historyAsync, () => ref.watch(checkinUidProvider));
+    final history = historyFrom(mine);
+    // A failed refresh keeps this member's weeks under the failure it states.
+    final weeks = history.state == CheckinHistoryState.failed && mine.hasValue
+        ? mine.requireValue.take(checkinHistoryLimit).toList()
+        : history.weeks;
     // P0-FL-2 follow-up (U1): Riverpod's `when`/state mapping keeps the error
     // on screen while a retry is in flight, so the in-flight read is read off
     // the provider itself — `historyFrom` maps by type and cannot see it.
@@ -152,9 +167,8 @@ class CheckinHubSections extends ConsumerWidget {
         // FIT-023 declares no empty copy, so the screen states nothing and
         // leaves "Start check-in" above as the way forward. Writing a sentence
         // here would be OD-8.
-        const SizedBox.shrink()
-      else
-        for (final week in history.weeks)
+        const SizedBox.shrink(),
+      for (final week in weeks)
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
             child: Semantics(
@@ -168,6 +182,17 @@ class CheckinHubSections extends ConsumerWidget {
                 // Select the week first: `/checkin-detail` used to be a stub,
                 // so this row navigated into a dead end of my own making.
                 onTap: () {
+                  // The row is its member's, not whoever taps it: in a hidden
+                  // tab it outlives the switch, and the selection would be
+                  // stored under the one who arrived.
+                  if (!isCheckinOf(week, checkinUidNow)) {
+                    reportError(
+                        'CheckinHubSections.open',
+                        StateError(
+                            'check-in not opened: the signed-in account changed'),
+                        StackTrace.current);
+                    return;
+                  }
                   ref.read(selectedCheckinProvider.notifier).state = week;
                   context.go('/checkin-detail');
                 },

@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import 'widgets/checkin_pickers.dart';
 import '../data/weekly_checkin_service.dart';
-import '../domain/checkin_hub.dart';
+import '../domain/checkin_hub.dart' show checkinSubmitLabel;
 import '../domain/checkin_provider.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coach/domain/coach_ecosystem_provider.dart'
     show todayScoreProvider, weekScoresProvider;
 import '../../scoring/domain/score_provider.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import 'checkin_hub_sections.dart' show checkinHistoryProvider;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -53,6 +54,13 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
   CheckinKnown _alreadyDone = CheckinKnown.notDone;
   int?   _streak        = 0;
 
+  /// The week is being read, so nothing may be submitted over it.
+  bool _reading = true;
+
+  /// This member's week has been read, or has failed to be: until then
+  /// [_alreadyDone] is not an answer, and the form is not offered on it.
+  bool _answered = false;
+
   static const _moodEmojis  = ['😞', '😐', '😊', '😄', '🤩'];
   static const _moodLabels  = ['Rough', 'Meh', 'Good', 'Great', 'Amazing'];
 
@@ -72,6 +80,10 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
     _epoch++;
     _owner = checkinUidNow();
     _notesCtrl.clear();
+    // What it said to the member who left is not said to the one who arrived.
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..removeCurrentSnackBar();
     setState(() {
       _mood = 3;
       _energy = 3;
@@ -82,6 +94,7 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
       _saving = false;
       _alreadyDone = CheckinKnown.notDone;
       _streak = 0;
+      _answered = false;
     });
     _load();
   }
@@ -99,29 +112,42 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
 
   Future<void> _load() async {
     final epoch = _epoch;
+    if (!_reading) setState(() => _reading = true);
     final done = await _weekly.weekStatus();
     // Each read answers for whoever is signed in when it is made: one member's
     // week must not be shown beside another's streak.
     if (!_holds(epoch)) return _dropIfLeft(epoch);
+    if (!mounted) return;
+    setState(() {
+      _alreadyDone = done;
+      _reading     = false;
+      _answered    = true;
+    });
     final streak = await _weekly.getCheckinStreak();
     if (!_holds(epoch)) return _dropIfLeft(epoch);
-    if (mounted) setState(() {
-      _alreadyDone = done;
-      _streak      = streak;
-    });
+    if (mounted) setState(() => _streak = streak);
   }
+
+  /// Try again, as the member the button was built for.
+  void _retry(int epoch) => _holds(epoch) ? _load() : _dropIfLeft(epoch);
 
   @override
   void dispose() { _notesCtrl.dispose(); super.dispose(); }
 
+  /// Saves as the member the button was built for ([builtAt]), or not at all.
+  void _submitAs(int builtAt) {
+    if (_holds(builtAt)) {
+      _submit();
+      return;
+    }
+    reportError('DailyCheckinScreen._submit',
+        StateError('check-in not saved: the signed-in account changed'),
+        StackTrace.current);
+    _dropIfLeft(builtAt);
+  }
+
   Future<void> _submit() async {
     final epoch = _epoch;
-    if (!_holds(epoch)) {
-      reportError('DailyCheckinScreen._submit',
-          StateError('check-in not saved: the signed-in account changed'),
-          StackTrace.current);
-      return _dropIfLeft(epoch);
-    }
     setState(() => _saving = true);
     // Writes to `weekly_checkins`, which exists. `workedOut` and
     // `hitWaterGoal` are not passed because that table has no column for them
@@ -134,6 +160,7 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
         mood: _mood, energy: _energy, stress: _stress,
         sleepHoursAvg: _sleep, notes: _notesCtrl.text.trim(),
         expectedUid: _owner,
+        stillHolds: () => _holds(epoch),
       );
     } on StateError catch (e) {
       // PD8: the coach reviewed this week while the form was open. Nothing was
@@ -168,6 +195,7 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
 
   void _showSuccess(bool needsAttention) {
     final owner = _owner;
+    final mood = _mood;
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -188,7 +216,7 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
                 border: Border.all(color: _brand.withValues(alpha: 0.5)),
                 boxShadow: [BoxShadow(
                   color: _brand.withValues(alpha: 0.4), blurRadius: 24)]),
-              child: Center(child: Text(_moodEmojis[_mood - 1],
+              child: Center(child: Text(_moodEmojis[mood - 1],
                 style: const TextStyle(fontSize: 38)))),
             const SizedBox(height: 20),
             const Text('Weekly Check-In Complete!',
@@ -231,6 +259,7 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
     ref.listen(checkinUidProvider, (_, next) {
       if (next != _owner) _drop();
     });
+    final epoch = _epoch;
     final top = MediaQuery.of(context).padding.top;
     final now = DateTime.now();
     final weekStart = now.subtract(Duration(days: now.weekday - 1));
@@ -260,15 +289,21 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
           child: Column(children: [
             _buildHeader(top),
             Expanded(
-              child: mayShowAlreadyDone(_alreadyDone)
+              child: !_answered
+                // Not the form: it reads as "not done", which is not known yet.
+                ? Center(child: Semantics(
+                    label: 'Loading your check-in',
+                    child: const CircularProgressIndicator(color: _brand)))
+                : mayShowAlreadyDone(_alreadyDone)
                 ? _AlreadyDone(onGoHome: () => context.go('/home'))
                 : !mayOfferCheckinForm(_alreadyDone)
                 // CON-01. The read failed, so whether this week already has a
                 // check-in is unknown — and the form is how a duplicate gets
-                // written. `Could not load check-ins` is the copy this
-                // feature's own domain file carries for exactly this, noting
-                // the repository renders it in fifteen places.
-                ? _CheckinUnknown(onRetry: _load)
+                // written.
+                ? _CheckinUnknown(
+                    error: _weekly.weekStatusError,
+                    busy: _reading,
+                    onRetry: () => _retry(epoch))
                 : SingleChildScrollView(
                     padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
                     child: Column(
@@ -328,7 +363,11 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
                         const SizedBox(height: 24),
                         _sectionLabel('Notes for Coach'),
                         const SizedBox(height: 12),
-                        _NotesField(controller: _notesCtrl),
+                        _NotesField(
+                          // A new field after a drop: undo in the old one
+                          // would bring the last member's notes back.
+                          key: ValueKey('notes-$epoch'),
+                          controller: _notesCtrl),
                         const SizedBox(height: 32),
                         // FIT-004 draws "Send to Nadia" — the client's coach,
                         // by name. Real data, so nothing is invented; and the
@@ -339,7 +378,7 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
                           label: checkinSubmitLabel(ref.watch(assignedCoachProvider)),
                           icon: Icons.check_circle_outline,
                           loading: _saving,
-                          onTap: _saving ? null : _submit),
+                          onTap: _saving || _reading ? null : () => _submitAs(epoch)),
                         const SizedBox(height: 16),
                         // FIT-004's other two declared controls. Both go to the
                         // screens this app already keeps that content on — no
@@ -576,7 +615,7 @@ class _GoalToggle extends StatelessWidget {
 // ── Notes Field ───────────────────────────────────────────────────────────────
 class _NotesField extends StatelessWidget {
   final TextEditingController controller;
-  const _NotesField({required this.controller});
+  const _NotesField({super.key, required this.controller});
 
   @override
   Widget build(BuildContext context) => Container(
@@ -725,32 +764,23 @@ class _CheckinLink extends StatelessWidget {
 /// CON-01 · the week's check-in state could not be read.
 ///
 /// Not an empty form: the form is how a duplicate weekly check-in gets
-/// written. Copy comes from `checkin_hub.dart`, which already carries this
-/// repository's `Could not load [noun]` pattern.
+/// written.
 class _CheckinUnknown extends StatelessWidget {
+  final Object? error;
+  final bool busy;
   final VoidCallback onRetry;
-  const _CheckinUnknown({required this.onRetry});
+  const _CheckinUnknown({
+    required this.error, required this.busy, required this.onRetry});
 
   @override
-  Widget build(BuildContext context) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.cloud_off_rounded, color: _muted, size: 40),
-            const SizedBox(height: 14),
-            const Text(checkinHistoryFailure,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    color: _white, fontSize: 16, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: onRetry,
-                child: const Text('Try again'),
-              ),
-            ),
-          ]),
+  Widget build(BuildContext context) => SingleChildScrollView(
+        padding: const EdgeInsets.all(32),
+        child: SectionLoadFailure(
+          what: "this week's check-in",
+          error: error,
+          busy: busy,
+          onRetry: onRetry,
+          detail: 'Checking in is paused until it loads.',
         ),
       );
 }

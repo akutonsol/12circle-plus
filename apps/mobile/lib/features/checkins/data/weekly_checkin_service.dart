@@ -5,8 +5,13 @@ import '../../coach/data/score_service.dart';
 import '../../scoring/data/score_engine.dart';
 import '../../../core/observability/app_failure.dart';
 import '../domain/checkin_columns.dart';
+import '../domain/checkin_hub.dart';
 import '../domain/nutrition_compliance.dart';
 import '../domain/checkin_known.dart';
+
+/// Whether the screen a save was started on still holds it. A typedef, not an
+/// inline function type: ERR-G1 reads a parameter list up to the first `)`.
+typedef StillHolds = bool Function();
 
 class WeeklyCheckinService {
   final _supabase = Supabase.instance.client;
@@ -38,7 +43,7 @@ class WeeklyCheckinService {
         .order('week_start_date', ascending: false)
         .limit(limit);
     return (data as List)
-        .map((row) => _fromRow(row as Map<String, dynamic>))
+        .map((row) => _fromRow(row as Map<String, dynamic>, userId))
         .toList();
   }
 
@@ -55,8 +60,12 @@ class WeeklyCheckinService {
             .eq('user_id', userId)
             .eq('week_start_date', info.weekStart.toIso8601String().split('T')[0])
             .maybeSingle();
-        if (data != null) return _fromRow(data);
-      } catch (_) {}
+        if (data != null) return _fromRow(data, userId);
+      } catch (e, st) {
+        // Not a `pending` week: that is the answer "you have not checked in".
+        reportError('WeeklyCheckinService.getCurrentWeekCheckin', e, st);
+        rethrow;
+      }
     }
 
     return WeeklyCheckin(
@@ -71,16 +80,20 @@ class WeeklyCheckinService {
 
   /// Whether this week already has a submitted check-in — **honestly**.
   ///
-  /// CON-01 (live). `getCurrentWeekCheckin()` above swallows with
-  /// `catch (_) {}` and then returns a `pending` row, so a failed read is
-  /// indistinguishable from "you have not checked in this week". The screen
-  /// branches on exactly that and opens the form, which is how a duplicate
-  /// gets written — the same defect the daily path had.
+  /// CON-01 (live). `getCurrentWeekCheckin()` above used to swallow a failure
+  /// and return a `pending` row, so a failed read was indistinguishable from
+  /// "you have not checked in this week". The screen branches on exactly that
+  /// and opens the form, which is how a duplicate gets written — the same
+  /// defect the daily path had.
   ///
   /// `upsert(onConflict: 'user_id,week_start_date')` means a duplicate submit
   /// overwrites rather than doubling the row, so this is not data corruption.
   /// It is still the user being told something untrue about their own week.
+  ///
+  /// A failure is recorded, answers [CheckinKnown.unknown], and is left in
+  /// [weekStatusError] for the screen's next step.
   Future<CheckinKnown> weekStatus() async {
+    weekStatusError = null;
     final userId = _supabase.auth.currentUser?.id;
     // Signed out is an answer, not a failure.
     if (userId == null) return CheckinKnown.notDone;
@@ -97,10 +110,15 @@ class WeeklyCheckinService {
       return const {'submitted', 'reviewed'}.contains(data['status'])
           ? CheckinKnown.done
           : CheckinKnown.notDone;
-    } catch (_) {
+    } catch (e, st) {
+      reportError('WeeklyCheckinService.weekStatus', e, st);
+      weekStatusError = e;
       return CheckinKnown.unknown;
     }
   }
+
+  /// Why the last [weekStatus] answered `unknown`, or null when it did not.
+  Object? weekStatusError;
 
   /// Nutrition adherence for the check-in week, or null when it cannot be told.
   /// A failure here must never block the check-in itself, so it is reported and
@@ -115,6 +133,7 @@ class WeeklyCheckinService {
           .maybeSingle();
       final target = (plan?['calories_target'] as num?);
       if (target == null) return null;
+      if (!_stillSignedIn(userId)) return null; // the caller refuses the save
       final weekEnd = DateTime(weekStart.year, weekStart.month, weekStart.day + 7);
       final rows = await _supabase
           .from('nutrition_logs')
@@ -147,6 +166,11 @@ class WeeklyCheckinService {
   /// filled in by). With another account signed in nothing is written: the
   /// upsert would replace THAT member's week. Without it, the member is whoever
   /// is signed in when this is called.
+  ///
+  /// [stillHolds] is asked with it, before every read and before the write: a
+  /// form that has been dropped (its member left) does not save even if the same
+  /// member is back by then. Each read answers for whoever is signed in when it
+  /// is sent, so one sent as somebody else would say there is no reviewed week.
   Future<bool> submitWeeklyCheckin({
     required int mood,
     required int energy,
@@ -154,10 +178,12 @@ class WeeklyCheckinService {
     required double sleepHoursAvg,
     String? notes,
     String? expectedUid,
+    StillHolds? stillHolds,
   }) async {
     final userId = expectedUid ?? _supabase.auth.currentUser?.id;
     if (userId == null) return false;
-    if (!_stillSignedIn(userId)) return _refuseSubmit();
+    bool holds() => _stillSignedIn(userId) && (stillHolds?.call() ?? true);
+    if (!holds()) return _refuseSubmit();
 
     final now = DateTime.now();
     final info = _weekInfo(now);
@@ -165,10 +191,11 @@ class WeeklyCheckinService {
       mood: mood, energy: energy, stress: stress, sleepHoursAvg: sleepHoursAvg);
     final compliance = await _derivedCompliance(userId, info.weekStart, now);
     final weekStart = info.weekStart.toIso8601String().split('T')[0];
-    final (:reviewed, :coachId) = await _weekBeforeWrite(userId, weekStart);
-    // Before the PD8 check too: these reads may have been answered as the
-    // account that arrived meanwhile, and say nothing about this member's week.
-    if (!_stillSignedIn(userId)) return _refuseSubmit();
+    if (!holds()) return _refuseSubmit();
+    final (:reviewed, :coachId) = await _weekBeforeWrite(userId, weekStart, holds);
+    // Before the PD8 check too: the account that arrived meanwhile is not told
+    // about this member's week.
+    if (!holds()) return _refuseSubmit();
     // PD8: a reviewed week cannot be resubmitted. The form can still be open
     // from before the review landed; writing it would overwrite the answers the
     // coach replied to and put the week back in the queue as `submitted`.
@@ -248,7 +275,7 @@ class WeeklyCheckinService {
   /// A failed lookup answers (reviewed: false, coachId: null), which leaves the
   /// save as it was before this existed, so it never blocks the check-in.
   Future<({bool reviewed, String? coachId})> _weekBeforeWrite(
-      String userId, String weekStart) async {
+      String userId, String weekStart, StillHolds holds) async {
     try {
       final existing = await _supabase
           .from('weekly_checkins')
@@ -259,6 +286,7 @@ class WeeklyCheckinService {
       if (existing != null) {
         return (reviewed: existing['status'] == 'reviewed', coachId: null);
       }
+      if (!holds()) return (reviewed: false, coachId: null); // the caller refuses
       final rows = await _supabase
           .from('coach_client_relationships')
           .select('coach_id')
@@ -329,6 +357,7 @@ class WeeklyCheckinService {
   /// Coach-side: fetch all clients' submitted weekly checkins awaiting review,
   /// joined with basic client profile info.
   Future<List<Map<String, dynamic>>> getSubmittedCheckinsForCoach() async {
+    final coachId = _supabase.auth.currentUser?.id;
     try {
       final data = await _supabase
           .from('weekly_checkins')
@@ -337,6 +366,8 @@ class WeeklyCheckinService {
           .order('submitted_at', ascending: true);
       return List<Map<String, dynamic>>.from(data);
     } catch (e) {
+      // Asked as another account by now: its rows are not this coach's queue.
+      if (_supabase.auth.currentUser?.id != coachId) rethrow;
       // Fallback if the FK relationship name differs: fetch without join
       try {
         final data = await _supabase
@@ -394,7 +425,8 @@ class WeeklyCheckinService {
     }
   }
 
-  WeeklyCheckin _fromRow(Map<String, dynamic> row) {
+  /// [memberId] is who the read asked for, where the row does not say.
+  WeeklyCheckin _fromRow(Map<String, dynamic> row, String memberId) {
     final statusStr = row['status'] as String? ?? 'pending';
     final status = CheckinStatus.values.firstWhere(
       (s) => s.name == statusStr,
@@ -437,7 +469,8 @@ class WeeklyCheckinService {
       responses.add(CheckinResponse(questionId: 'notes', answer: row['notes']));
     }
 
-    return WeeklyCheckin(
+    return MemberCheckin(
+      memberId: row['user_id'] as String? ?? memberId,
       id: row['id'] as String,
       weekNumber: row['week_number'] as int,
       weekStartDate: DateTime.parse(row['week_start_date']),
