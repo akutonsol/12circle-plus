@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'widgets/checkin_pickers.dart';
 import '../data/weekly_checkin_service.dart';
 import '../domain/checkin_hub.dart';
+import '../domain/checkin_provider.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coach/domain/coach_ecosystem_provider.dart'
     show todayScoreProvider, weekScoresProvider;
@@ -54,6 +56,41 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
   static const _moodEmojis  = ['😞', '😐', '😊', '😄', '🤩'];
   static const _moodLabels  = ['Rough', 'Meh', 'Good', 'Great', 'Amazing'];
 
+  /// P0-FL-59c · the member these answers belong to. Nothing is saved as anyone
+  /// else: the save replaces the signed-in member's whole week.
+  String? _owner = checkinUidNow();
+
+  /// Raised when the form is dropped, so an answer still on its way to it is
+  /// discarded — even if the same member has signed in again by then.
+  int _epoch = 0;
+
+  bool _holds(int epoch) => epoch == _epoch && checkinUidNow() == _owner;
+
+  /// Empties the form the last account filled in and reads the new one's week.
+  /// Says nothing: the one who arrived is told nothing about it.
+  void _drop() {
+    _epoch++;
+    _owner = checkinUidNow();
+    _notesCtrl.clear();
+    setState(() {
+      _mood = 3;
+      _energy = 3;
+      _stress = 2;
+      _sleep = 7.0;
+      _workedOut = false;
+      _hitWaterGoal = false;
+      _saving = false;
+      _alreadyDone = CheckinKnown.notDone;
+      _streak = 0;
+    });
+    _load();
+  }
+
+  /// [_drop], unless it has already happened.
+  void _dropIfLeft(int epoch) {
+    if (mounted && epoch == _epoch) _drop();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -61,8 +98,13 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
   }
 
   Future<void> _load() async {
+    final epoch = _epoch;
     final done = await _weekly.weekStatus();
+    // Each read answers for whoever is signed in when it is made: one member's
+    // week must not be shown beside another's streak.
+    if (!_holds(epoch)) return _dropIfLeft(epoch);
     final streak = await _weekly.getCheckinStreak();
+    if (!_holds(epoch)) return _dropIfLeft(epoch);
     if (mounted) setState(() {
       _alreadyDone = done;
       _streak      = streak;
@@ -73,6 +115,13 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
   void dispose() { _notesCtrl.dispose(); super.dispose(); }
 
   Future<void> _submit() async {
+    final epoch = _epoch;
+    if (!_holds(epoch)) {
+      reportError('DailyCheckinScreen._submit',
+          StateError('check-in not saved: the signed-in account changed'),
+          StackTrace.current);
+      return _dropIfLeft(epoch);
+    }
     setState(() => _saving = true);
     // Writes to `weekly_checkins`, which exists. `workedOut` and
     // `hitWaterGoal` are not passed because that table has no column for them
@@ -84,18 +133,22 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
       ok = await _weekly.submitWeeklyCheckin(
         mood: _mood, energy: _energy, stress: _stress,
         sleepHoursAvg: _sleep, notes: _notesCtrl.text.trim(),
+        expectedUid: _owner,
       );
     } on StateError catch (e) {
       // PD8: the coach reviewed this week while the form was open. Nothing was
       // written, and trying again cannot succeed, so say so and show the week
       // as the done week it now is.
       if (!mounted) return;
+      if (!_holds(epoch)) return _dropIfLeft(epoch);
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
       await _load();
       return;
     }
     if (!mounted) return;
+    // Its outcome is the member's who left, and so is the dialog that says it.
+    if (!_holds(epoch)) return _dropIfLeft(epoch);
     setState(() => _saving = false);
     if (!mounted) return;
     if (ok) {
@@ -114,10 +167,13 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
   }
 
   void _showSuccess(bool needsAttention) {
+    final owner = _owner;
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => Dialog(
+      // It shows this member's mood, and whether their coach was told about
+      // their levels: it goes when they do (P0-FL-59c).
+      builder: (_) => _OwnersDialog(owner: owner, child: Dialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
         child: Padding(
@@ -166,12 +222,15 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
                 label: 'Back to Home',
                 icon: Icons.home_outlined,
                 onTap: () { Navigator.pop(context); context.go('/home'); })),
-          ]))));
+          ])))));
   }
 
   // ── Build ───────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    ref.listen(checkinUidProvider, (_, next) {
+      if (next != _owner) _drop();
+    });
     final top = MediaQuery.of(context).padding.top;
     final now = DateTime.now();
     final weekStart = now.subtract(Duration(days: now.weekday - 1));
@@ -365,6 +424,23 @@ class _WeeklyCheckinState extends ConsumerState<DailyCheckinScreen> {
   String _monthAbbr(int m) => const [
     '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m];
+}
+
+/// Shows [child] only to [owner], and closes itself for anyone else.
+class _OwnersDialog extends ConsumerWidget {
+  final String? owner;
+  final Widget child;
+  const _OwnersDialog({required this.owner, required this.child});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (ref.watch(checkinUidProvider) == owner) return child;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final route = context.mounted ? ModalRoute.of(context) : null;
+      if (route != null && route.isActive) route.navigator?.removeRoute(route);
+    });
+    return const SizedBox.shrink();
+  }
 }
 
 // ── Week Card ─────────────────────────────────────────────────────────────────

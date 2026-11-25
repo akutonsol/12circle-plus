@@ -138,15 +138,26 @@ class WeeklyCheckinService {
     }
   }
 
+  /// P0-FL-59c · whether [userId] is still the signed-in account; asked before
+  /// every step that follows an await, because the step would run as whoever
+  /// is signed in by then.
+  bool _stillSignedIn(String userId) => _supabase.auth.currentUser?.id == userId;
+
+  /// [expectedUid] is the member the answers belong to (the one the form was
+  /// filled in by). With another account signed in nothing is written: the
+  /// upsert would replace THAT member's week. Without it, the member is whoever
+  /// is signed in when this is called.
   Future<bool> submitWeeklyCheckin({
     required int mood,
     required int energy,
     required int stress,
     required double sleepHoursAvg,
     String? notes,
+    String? expectedUid,
   }) async {
-    final userId = _supabase.auth.currentUser?.id;
+    final userId = expectedUid ?? _supabase.auth.currentUser?.id;
     if (userId == null) return false;
+    if (!_stillSignedIn(userId)) return _refuseSubmit();
 
     final now = DateTime.now();
     final info = _weekInfo(now);
@@ -155,6 +166,9 @@ class WeeklyCheckinService {
     final compliance = await _derivedCompliance(userId, info.weekStart, now);
     final weekStart = info.weekStart.toIso8601String().split('T')[0];
     final (:reviewed, :coachId) = await _weekBeforeWrite(userId, weekStart);
+    // Before the PD8 check too: these reads may have been answered as the
+    // account that arrived meanwhile, and say nothing about this member's week.
+    if (!_stillSignedIn(userId)) return _refuseSubmit();
     // PD8: a reviewed week cannot be resubmitted. The form can still be open
     // from before the review landed; writing it would overwrite the answers the
     // coach replied to and put the week back in the queue as `submitted`.
@@ -196,17 +210,30 @@ class WeeklyCheckinService {
     // Award 12 Circle Score check-in points (SCR-004) — idempotent. After the
     // save, and outside its try: the check-in is written whether or not these
     // land, and reporting it as unsaved invited a resubmission of a saved row.
+    // Both award whoever is signed in, so each asks first (P0-FL-59c).
     try {
+      if (!_stillSignedIn(userId)) {
+        throw StateError('points not awarded: the signed-in account changed');
+      }
       await ScoreService().addCheckinPoints();
     } catch (e) {
       reportError('WeeklyCheckinService.submitWeeklyCheckin.dailyPoints', e);
     }
     try {
+      if (!_stillSignedIn(userId)) {
+        throw StateError('points not awarded: the signed-in account changed');
+      }
       await ScoreEngine().weeklyCheckin(weekStart);
     } catch (e) {
       reportError('WeeklyCheckinService.submitWeeklyCheckin.weeklyPoints', e);
     }
     return true;
+  }
+
+  bool _refuseSubmit() {
+    reportError('WeeklyCheckinService.submitWeeklyCheckin',
+        StateError('check-in not saved: the signed-in account changed'));
+    return false;
   }
 
   /// What the save needs to know about this week's existing row, read once:
@@ -332,6 +359,7 @@ class WeeklyCheckinService {
     required List<String> recommendations,
     required String coachName,
   }) async {
+    final coachId = _supabase.auth.currentUser?.id;
     try {
       final updated = await _supabase.from('weekly_checkins').update({
         'status': 'reviewed',
@@ -346,7 +374,12 @@ class WeeklyCheckinService {
       if (updated == null) return false;
       // Notify the client that their coach responded (CHK-003).
       final clientId = updated['user_id'] as String?;
-      if (clientId != null) {
+      if (clientId != null && _supabase.auth.currentUser?.id != coachId) {
+        // Saved as the coach who wrote it. The notification would go out as the
+        // account that arrived meanwhile (P0-FL-59c).
+        reportError('WeeklyCheckinService.submitCoachFeedback.notify',
+            StateError('client not notified: the signed-in account changed'));
+      } else if (clientId != null) {
         await NotificationService().notifyUser(
           recipientId: clientId,
           type: 'checkin',
@@ -355,7 +388,8 @@ class WeeklyCheckinService {
         );
       }
       return true;
-    } catch (e) {
+    } catch (e, st) {
+      reportError('WeeklyCheckinService.submitCoachFeedback', e, st);
       return false;
     }
   }

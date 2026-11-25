@@ -12,6 +12,7 @@ import '../../../core/widgets/named_icon_button.dart';
 import '../data/chat_media_path.dart';
 import '../data/messaging_service.dart';
 import '../domain/messaging_provider.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../../scoring/data/score_engine.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
 
@@ -29,6 +30,7 @@ const _sendFailedOtherMessage =
     'If it keeps happening, contact support.';
 const _notReadyMessage =
     "This conversation isn't ready yet — try again in a moment.";
+const _noConversationMessage = 'Open a conversation from Messages.';
 
 /// F-28 · the chat header's subtitle.
 ///
@@ -76,6 +78,60 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// false about their own conversation.
   bool _loadFailed = false;
 
+  /// P0-FL-59c · who this conversation was opened as. Everything above belongs
+  /// to them, and nothing is sent, marked read or awarded as anyone else: the
+  /// server accepts a message from any signed-in account into any conversation.
+  String? _owner = _signedInUid;
+
+  /// Raised when the conversation is dropped, so an answer still on its way to
+  /// it is discarded — even if the same member has signed in again by then.
+  int _epoch = 0;
+
+  /// The conversation was dropped (its owner left): no thread is open, which is
+  /// neither an empty thread nor a failed one.
+  bool _closed = false;
+
+  static String? get _signedInUid =>
+      Supabase.instance.client.auth.currentUser?.id;
+
+  /// Still the conversation that was open at [epoch], for the member it was
+  /// opened as. Asks the auth client, not a provider: a provider learns of a
+  /// switch a moment later, and not at all in a hidden tab.
+  bool _holds(int epoch) => epoch == _epoch && _signedInUid == _owner;
+
+  /// Drops everything the last account had open. Says nothing: the one who
+  /// arrived is told nothing about it.
+  void _drop() {
+    _epoch++;
+    _owner = _signedInUid;
+    _sub?.cancel();
+    _sub = null;
+    _msgCtrl.clear();
+    _signedUrls.clear();
+    setState(() {
+      _closed = true;
+      _conversationId = null;
+      _participantName = '';
+      _participantRole = null;
+      _messages = const [];
+      _photoFailure = '';
+      _loadFailed = false;
+      _loading = false;
+      _sending = false;
+    });
+  }
+
+  void _dropIfLeft() {
+    if (mounted && _signedInUid != _owner) _drop();
+  }
+
+  /// A step that belonged to the account that left: not taken, and recorded.
+  void _refuse(String origin, String what) {
+    reportError(origin, StateError('$what: the signed-in account changed'),
+        StackTrace.current);
+    _dropIfLeft();
+  }
+
   // chat-media is a PRIVATE bucket (migration 130 / DEC-3A-10): a message row
   // stores the object path, and display signs it here, once per path, so a
   // list rebuild does not re-sign every image. TTL matches progress_screen.
@@ -96,6 +152,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _init() async {
+    final epoch = _epoch;
+    if (!_holds(epoch)) {
+      _dropIfLeft();
+      return;
+    }
     // Read the conversation context set by the caller before navigating here
     final conv = ref.read(selectedConversationProvider);
 
@@ -120,6 +181,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       convId = (pid != null && pid.isNotEmpty)
           ? await _service.getOrCreateConversationWith(pid)
           : await _service.getOrCreateClientCoachConversation();
+      if (!_holds(epoch)) {
+        _dropIfLeft();
+        return;
+      }
     }
 
     if (convId != null && mounted) {
@@ -130,6 +195,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       } catch (e, st) {
         // Not an empty thread: the screen's failure state, with its retry.
         reportError('ChatScreen._init.getMessages', e, st);
+        if (!_holds(epoch)) {
+          _dropIfLeft();
+          return;
+        }
         if (mounted) {
           setState(() {
             _messages = const [];
@@ -137,6 +206,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             _loading = false;
           });
         }
+        return;
+      }
+      if (!_holds(epoch)) {
+        _refuse('ChatScreen._init.markAsRead', 'messages not marked read');
         return;
       }
       if (mounted) {
@@ -153,7 +226,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         });
       }
       await _service.markAsRead(convId);
+      if (!mounted || !_holds(epoch)) {
+        _dropIfLeft();
+        return;
+      }
       _sub = _service.messagesStream(convId).listen((msgs) {
+        if (!_holds(epoch)) {
+          _dropIfLeft();
+          return;
+        }
         if (mounted) setState(() => _messages = msgs);
         _scrollToBottom();
       });
@@ -201,8 +282,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Future<void> _send() async {
     final text = _msgCtrl.text.trim();
     if (text.isEmpty || _sending) return;
+    final epoch = _epoch;
+    final owner = _owner;
+    if (!_holds(epoch)) {
+      // Typed by the account that left, with their conversation still open.
+      _refuse('ChatScreen._send', 'message not sent');
+      return;
+    }
     final conversationId = _conversationId;
     if (conversationId == null) {
+      if (_closed) {
+        _showSendFailure(_noConversationMessage);
+        return;
+      }
       // Still resolving, or none could be found. Nothing can be sent yet. This used
       // to clear the input and drop the text without a word.
       _showSendFailure(_notReadyMessage);
@@ -210,7 +302,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
     _msgCtrl.clear();
     setState(() => _hasText = false);
-    final userId = Supabase.instance.client.auth.currentUser?.id ?? 'me';
+    final userId = owner ?? 'me';
     // Optimistic update
     final optimistic = {
       'id': DateTime.now().millisecondsSinceEpoch.toString(),
@@ -227,6 +319,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         content: text,
         onNotSent: (e) => sendError = e);
     if (ok) {
+      if (_signedInUid != owner) {
+        // The points would go to whoever is signed in now.
+        _refuse('ChatScreen._send.award', 'points not awarded');
+        return;
+      }
       ScoreEngine().messageCoach(); // +5, once/day (server dedup)
       return;
     }
@@ -235,6 +332,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // awarded for a message nobody received.
     reportError('ChatScreen._send', StateError('message was not sent'));
     if (!mounted) return;
+    if (!_holds(epoch)) {
+      // Their text is not handed to the account that arrived, nor the notice.
+      _dropIfLeft();
+      return;
+    }
     setState(() =>
         _messages = _messages.where((m) => m['id'] != optimistic['id']).toList());
     // Give the text back, unless the coach has already started something else.
@@ -273,12 +375,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final uid = auth.currentUser?.id;
     bool sameMember() => auth.currentUser?.id == uid;
     // Attach used to do nothing in these two states, without a word.
-    if (conversationId == null) {
-      _showSendFailure(_notReadyMessage);
-      return;
-    }
     if (uid == null) {
       _showSendFailure("You're signed out — sign in again to send a photo.");
+      _dropIfLeft();
+      return;
+    }
+    if (uid != _owner) {
+      _refuse('ChatScreen._sendPhoto', 'photo not sent');
+      return;
+    }
+    if (conversationId == null) {
+      _showSendFailure(_closed ? _noConversationMessage : _notReadyMessage);
       return;
     }
     _pickingPhoto = true;
@@ -302,6 +409,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
     // Null is the person cancelling: nothing is sent and nothing is said.
     if (picked == null || !mounted) return;
+    final epoch = _epoch;
     setState(() => _sending = true);
     final storage = Supabase.instance.client.storage.from(ChatMediaPath.bucket);
     String? uploadedPath;
@@ -360,7 +468,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         _showPhotoFailure();
       }
     } finally {
-      if (mounted) setState(() => _sending = false);
+      // After a drop the composer is no longer this send's.
+      if (mounted && epoch == _epoch) setState(() => _sending = false);
     }
   }
 
@@ -423,6 +532,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // The uid only: a token refresh or a profile edit is the same member, and
+    // must not take their draft.
+    ref.listen(currentUserProvider.select((u) => u?.id), (_, next) {
+      if (next != _owner) _drop();
+    });
     return Scaffold(
       backgroundColor: _bg,
       body: SafeArea(child: Column(children: [
@@ -459,7 +573,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   border: Border.all(color: _brand.withValues(alpha: 0.4), width: 1.5)),
                 alignment: Alignment.center,
                 child: Text(
-                  _participantName.isNotEmpty ? _participantName[0].toUpperCase() : '?',
+                  _participantName.isNotEmpty ? _participantName[0].toUpperCase()
+                      : _closed ? '' : '?',
                   style: const TextStyle(color: _brand, fontSize: 16, fontWeight: FontWeight.w800))),
               // F-28: a green presence dot sat here, beside a hardcoded
               // "Online now". Nothing in this repository tracks presence, so
@@ -471,7 +586,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             Expanded(child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(_participantName,
+                Text(_closed ? 'Messages' : _participantName,
                   style: const TextStyle(color: _white, fontSize: 15, fontWeight: FontWeight.w700)),
                 // FIT-026's header reads "Nadia Rahman / Your coach" — the
                 // RELATIONSHIP, not a presence claim.
@@ -515,6 +630,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     ),
                   ]),
                 ))
+            : _closed
+              ? Center(child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: Text(_noConversationMessage,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: _muted.withValues(alpha: 0.8), fontSize: 14))))
             : _messages.isEmpty
               ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
                   Icon(Icons.chat_bubble_outline, color: _brand.withValues(alpha: 0.3), size: 48),
@@ -579,7 +700,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   textInputAction: TextInputAction.send,
                   onSubmitted: (_) => _send(),
                   decoration: InputDecoration(
-                    hintText: 'Message $_participantName...',
+                    hintText: _closed ? 'Message...' : 'Message $_participantName...',
                     hintStyle: TextStyle(color: _muted.withValues(alpha: 0.35), fontSize: 13),
                     border: InputBorder.none,
                     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),

@@ -13,6 +13,11 @@ typedef SendFailureHandler = void Function(Object error);
 class MessagingService {
   final supabase = Supabase.instance.client;
 
+  /// P0-FL-59c · every write below takes the signed-in uid synchronously, when
+  /// it is called, and asks this again before each further step: after an await
+  /// someone else may be signed in, and the step would run as them.
+  bool _stillSignedIn(String userId) => supabase.auth.currentUser?.id == userId;
+
   // ── Conversations ─────────────────────────────────────────────────────────
   // Table schema: id, participant_1, participant_2, last_message, last_message_at
 
@@ -90,6 +95,11 @@ class MessagingService {
           .maybeSingle();
       final coachId = rel?['coach_id'] as String?;
       if (coachId == null) return null; // no accepted coach yet
+      if (!_stillSignedIn(userId)) {
+        // The RPC takes its caller from the session, and checks no relationship:
+        // it would open a thread between the NEW account and this coach.
+        throw StateError('conversation not opened: the signed-in account changed');
+      }
       return getOrCreateConversationWith(coachId);
     } catch (e) {
       reportError('MessagingService.getOrCreateClientCoachConversation', e);
@@ -111,7 +121,11 @@ class MessagingService {
     final userId = supabase.auth.currentUser?.id;
     if (userId == null) return null;
     try {
-      return await _getOrCreateConversation(otherUserId);
+      final id = await _getOrCreateConversation(otherUserId);
+      if (!_stillSignedIn(userId)) {
+        throw StateError('conversation not handed over: the signed-in account changed');
+      }
+      return id;
     } catch (e) {
       reportError('MessagingService.getOrCreateConversationWith', e);
       return null;
@@ -129,7 +143,11 @@ class MessagingService {
     final coachId = supabase.auth.currentUser?.id;
     if (coachId == null) return null;
     try {
-      return await _getOrCreateConversation(clientId);
+      final id = await _getOrCreateConversation(clientId);
+      if (!_stillSignedIn(coachId)) {
+        throw StateError('conversation not handed over: the signed-in account changed');
+      }
+      return id;
     } catch (e) {
       reportError('MessagingService.getOrCreateCoachClientConversation', e);
       return null;
@@ -205,6 +223,16 @@ class MessagingService {
     // Recipient notification is handled server-side by the
     // trg_notify_on_message DB trigger (MSG-003) — no Dart-side insert here,
     // otherwise the recipient would get two notifications per message.
+    if (!_stillSignedIn(userId)) {
+      // The message is saved as its sender; the preview would go out as the
+      // account that arrived meanwhile.
+      reportError(
+        'MessagingService.sendMessage.preview',
+        StateError('conversation preview not updated: the signed-in account changed'),
+        StackTrace.current,
+      );
+      return true;
+    }
     try {
       final updated = await supabase.from('conversations').update({
         'last_message': content,

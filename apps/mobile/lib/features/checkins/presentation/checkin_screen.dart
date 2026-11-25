@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../shared/widgets/app_scaffold.dart';
 import '../domain/checkin_hub.dart';
+import '../domain/checkin_provider.dart';
 import 'checkin_hub_sections.dart';
 
 class _C {
@@ -115,8 +117,23 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
     _hasDot = List.filled(7, false);
   }
 
+  /// P0-FL-59c · another account signed in: the sessions, the coach they are
+  /// with and the days they fall on were the last one's.
+  void _dropAndReload() {
+    setState(() {
+      _appointments = [];
+      _hasDot = List.filled(7, false);
+      _callsFailed = false;
+      _loading = true;
+    });
+    _loadCalls();
+  }
+
   Future<void> _loadCalls() async {
     final uid = Supabase.instance.client.auth.currentUser?.id;
+    // An answer for someone who has left is not shown, and the read is made
+    // again for whoever is here.
+    bool left() => Supabase.instance.client.auth.currentUser?.id != uid;
     if (uid == null) { setState(() => _loading = false); return; }
     try {
       if (mounted) setState(() => _callsFailed = false);
@@ -147,13 +164,16 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
       final now2 = DateTime.now();
       final monday = now2.subtract(Duration(days: now2.weekday - 1));
       if (!mounted) return;
+      if (left()) return _dropAndReload();
       setState(() {
         _appointments = appts;
         _hasDot = List.generate(7, (i) =>
             dotDates.contains(monday.add(Duration(days: i)).day));
         _loading = false;
       });
-    } catch (_) {
+    } catch (e, st) {
+      reportError('CheckinScreen._loadCalls', e, st);
+      if (mounted && left()) return _dropAndReload();
       if (mounted) setState(() { _loading = false; _callsFailed = true; });
     }
   }
@@ -166,6 +186,7 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(checkinUidProvider, (_, __) => _dropAndReload());
     return AppScaffold(
       body: Stack(
         children: [

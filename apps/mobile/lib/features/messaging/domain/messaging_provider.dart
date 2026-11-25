@@ -20,4 +20,11 @@ final unreadCountProvider = FutureProvider<int>((ref) async {
 
 // Holds the currently selected conversation context for ChatScreen.
 // Set before navigating to /chat so the screen knows who it's talking to.
-final selectedConversationProvider = StateProvider<Map<String, dynamic>?>((ref) => null);
+//
+// Keyed by the signed-in uid (P0-FL-59c): it outlived a switch, so the next
+// account's /chat opened the last one's conversation. The uid only, so a token
+// refresh does not drop the member's own selection.
+final selectedConversationProvider = StateProvider<Map<String, dynamic>?>((ref) {
+  ref.watch(currentUserProvider.select((u) => u?.id));
+  return null;
+});

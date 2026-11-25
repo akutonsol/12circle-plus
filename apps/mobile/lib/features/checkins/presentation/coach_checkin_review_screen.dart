@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/named_icon_button.dart';
 import '../domain/checkin_columns.dart';
@@ -23,6 +24,34 @@ class _CoachCheckinReviewScreenState
   final List<String> _recommendations = [];
   bool _saving = false;
 
+  /// P0-FL-59c · the coach this reply is being written by. The drafts above and
+  /// [_open] are theirs; nothing is sent as anyone else.
+  String? _owner = checkinUidNow();
+
+  /// Raised when the drafts are dropped, so a send still in flight does not act
+  /// on the screen of the account that arrived.
+  int _epoch = 0;
+
+  /// The check-in last on screen, kept through a failed re-read of the same
+  /// coach's queue so the reply being written does not lose it.
+  Map<String, dynamic>? _open;
+
+  bool _holds(int epoch) => epoch == _epoch && checkinUidNow() == _owner;
+
+  /// Drops everything the last coach had on this screen. Says nothing: the one
+  /// who arrived is told nothing about it.
+  void _drop() {
+    _epoch++;
+    _owner = checkinUidNow();
+    _messageCtrl.clear();
+    _recCtrl.clear();
+    setState(() {
+      _recommendations.clear();
+      _open = null;
+      _saving = false;
+    });
+  }
+
   @override
   void dispose() {
     _messageCtrl.dispose();
@@ -40,6 +69,14 @@ class _CoachCheckinReviewScreenState
   }
 
   Future<void> _submit(Map<String, dynamic> checkin) async {
+    final epoch = _epoch;
+    if (!_holds(epoch)) {
+      reportError('CoachCheckinReviewScreen._submit',
+          StateError('feedback not sent: the signed-in account changed'),
+          StackTrace.current);
+      _drop();
+      return;
+    }
     if (_messageCtrl.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please write a feedback message.')),
@@ -56,6 +93,12 @@ class _CoachCheckinReviewScreenState
       coachName: coachName,
     );
     if (!mounted) return;
+    if (!_holds(epoch)) {
+      // Sent by the coach who left: neither its outcome nor the next in their
+      // queue belongs to the one who arrived.
+      if (epoch == _epoch) _drop();
+      return;
+    }
     setState(() => _saving = false);
 
     if (!mounted) return;
@@ -110,11 +153,15 @@ class _CoachCheckinReviewScreenState
   /// or when a `weekly_checkins` notification says one more arrived (C8) — so
   /// the screen does not drop to a spinner under a coach writing a reply. A
   /// failed read is still not a queue: see `_queue()`.
+  ///
+  /// `AsyncData` ONLY (P0-FL-59c). Riverpod keeps it through a re-read of the
+  /// same coach's queue, but turns it into an `AsyncLoading` that still holds
+  /// the old rows when the uid the queue is keyed by changes: those rows are
+  /// another coach's clients, with their names, emails and notes.
   static List<Map<String, dynamic>> _loaded(
           AsyncValue<List<Map<String, dynamic>>> state) =>
       switch (state) {
-        AsyncError() => const <Map<String, dynamic>>[],
-        AsyncValue(hasValue: true, :final value?) => value,
+        AsyncData(:final value) => value,
         _ => const <Map<String, dynamic>>[],
       };
 
@@ -133,6 +180,9 @@ class _CoachCheckinReviewScreenState
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(checkinUidProvider, (_, next) {
+      if (next != _owner) _drop();
+    });
     // Watched, not read — see `_queue()`. The three states are kept apart:
     // a queue that FAILED must not read as a queue that is empty.
     final queueState = ref.watch(coachSubmittedCheckinsProvider);
@@ -144,7 +194,9 @@ class _CoachCheckinReviewScreenState
     // selected, open the oldest submitted one: the queue is read oldest first
     // (`getSubmittedCheckinsForCoach`), and Next / Send and open next page on.
     final checkin = ref.watch(selectedCoachCheckinProvider) ??
-        (queue.isNotEmpty ? queue.first : null);
+        (queue.isNotEmpty ? queue.first : null) ??
+        (queueFailed && ref.watch(checkinUidProvider) == _owner ? _open : null);
+    _open = checkin;
 
     if (checkin == null) {
       return Scaffold(
