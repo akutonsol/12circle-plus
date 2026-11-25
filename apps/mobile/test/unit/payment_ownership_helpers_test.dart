@@ -180,6 +180,46 @@ void main() {
 
   });
 
+  group('OwnedDialog', () {
+    Future<void> ask(WidgetTester t, {required String? owner}) async {
+      await t.pumpWidget(const ProviderScope(
+          child: MaterialApp(home: Scaffold(body: Text('page')))));
+      unawaited(showDialog<bool>(
+          context: t.element(find.text('page')),
+          builder: (_) => OwnedDialog(
+              owner: owner, child: const AlertDialog(title: Text("A's")))));
+      await t.pump();
+    }
+
+    testWidgets('put up for an account already gone: not drawn in its first '
+        'frame, and taken away', (t) async {
+      await t.runAsync(() => signInAs(_b));
+      await ask(t, owner: _a);
+      expect(find.text("A's"), findsNothing);
+      for (var i = 0; i < 6; i++) {
+        await t.pump(const Duration(milliseconds: 100));
+      }
+      expect(find.byType(OwnedDialog), findsNothing, reason: 'its barrier too');
+      expect(find.text('page'), findsOneWidget);
+    });
+
+    testWidgets('under another route, it still goes with its account', (t) async {
+      await t.runAsync(() => signInAs(_a));
+      await ask(t, owner: _a);
+      await t.pump(const Duration(seconds: 1));
+      expect(find.text("A's"), findsOneWidget, reason: 'control: drawn for A');
+      unawaited(showDialog<void>(
+          context: t.element(find.text("A's")),
+          builder: (_) => const AlertDialog(title: Text('on top'))));
+      await t.pump(const Duration(seconds: 1));
+      await t.runAsync(() => signInAs(_b));
+      await t.pump();
+      await t.pump(const Duration(seconds: 1));
+      expect(find.byType(OwnedDialog, skipOffstage: false), findsNothing);
+      expect(find.text('on top'), findsOneWidget);
+    });
+  });
+
   group('what a failure says about the outcome', () {
     for (final (e, refused) in <(Object, bool)>[
       (const FunctionException(status: 400), true),

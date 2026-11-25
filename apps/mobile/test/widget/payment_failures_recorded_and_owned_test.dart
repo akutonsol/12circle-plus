@@ -414,6 +414,10 @@ void main() {
     }
   }
 
+  // By name, so this file also compiles against the code before the fix.
+  final ownedDialog = find.byWidgetPredicate(
+      (w) => w.runtimeType.toString() == 'OwnedDialog');
+
   ProviderContainer container(WidgetTester t) =>
       ProviderScope.containerOf(t.element(find.byType(MaterialApp)));
 
@@ -576,6 +580,7 @@ void main() {
       await signIn(t, _b);
       await settle(t);
       expect(find.text('Switch to Free?'), findsNothing);
+      expect(ownedDialog, findsNothing, reason: 'its barrier too');
       expect(server.count('cancel-subscription'), 0);
       expect(find.byType(SnackBar), findsNothing);
     });
@@ -1206,6 +1211,7 @@ void main() {
       await signIn(t, _b);
       await settle(t);
       expect(find.text('Switch to Free?'), findsNothing);
+      expect(ownedDialog, findsNothing, reason: 'its barrier too');
       expect(server.count('cancel-subscription'), 0);
     });
 
@@ -1236,6 +1242,7 @@ void main() {
       await signIn(t, _b);
       await settle(t);
       expect(find.text('Stop working with Anna Coach?'), findsNothing);
+      expect(ownedDialog, findsNothing, reason: 'its barrier too');
       expect(server.writes, isEmpty);
       expect(server.count('cancel-subscription'), 0);
     });
@@ -1335,6 +1342,7 @@ void main() {
       await t.runAsync(() => signInAs(_b)); // no pump
       await t.tap(find.text('Stop'));
       await t.pump();
+      expect(ownedDialog, findsNothing, reason: 'not even put up');
       await t.pump(const Duration(milliseconds: 300));
       final drawn = seen(find.text('Stop working with Anna Coach?'));
       if (drawn) {
@@ -1359,6 +1367,7 @@ void main() {
       await t.runAsync(() => signInAs(_b)); // no pump
       await t.tap(find.textContaining('Cancel').first);
       await t.pump();
+      expect(ownedDialog, findsNothing, reason: 'not even put up');
       await t.pump(const Duration(milliseconds: 300));
       if (seen(find.text('Switch to Free'))) {
         await t.tap(find.text('Switch to Free'));
@@ -1588,10 +1597,6 @@ void main() {
           "B's failure");
     });
   });
-
-  // By name, so this file also compiles against the code before the fix.
-  final ownedDialog = find.byWidgetPredicate(
-      (w) => w.runtimeType.toString() == 'OwnedDialog');
 
   group('R3 an action belongs to the account it was built for (items 2, 3)', () {
     const rel = {'coach_id': 'c-1', 'status': 'active'};
