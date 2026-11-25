@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -40,8 +42,51 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
   bool _notified = false;
   double _progress = 0;
 
+  /// P0-FL-59d · the coach this page was opened by: the client named on it,
+  /// the video and the note are theirs. It stayed up over a switch on this
+  /// device and Send sent them as the next coach.
+  late final String? _owner = _uid;
+  /// Somebody else (or nobody) is signed in: nothing of [_owner]'s is shown.
+  bool _hidden = false;
+  StreamSubscription<AuthState>? _authSub;
+
+  String? get _uid => _db.auth.currentUser?.id;
+
   @override
-  void dispose() { _noteCtrl.dispose(); super.dispose(); }
+  void initState() {
+    super.initState();
+    _hidden = _owner == null;
+    // Same coach (a token refresh, the stream's replay) changes nothing.
+    _authSub = _db.auth.onAuthStateChange.listen((_) => _followAccount(),
+        onError: (Object e, StackTrace s) =>
+            reportError('CoachVideoResponseScreen.onAuthStateChange', e, s));
+  }
+
+  void _followAccount() {
+    final hidden = _owner == null || _uid != _owner;
+    if (!mounted || hidden == _hidden) return;
+    setState(() {
+      _hidden = hidden;
+      _videoFile = null;
+      _noteCtrl.clear();
+      _uploading = false;
+      _done = false;
+    });
+    ScaffoldMessenger.of(context)..clearSnackBars()..removeCurrentSnackBar();
+  }
+
+  /// True when [_owner] is no longer signed in: recorded, the page is cleared,
+  /// and the caller sends nothing.
+  bool _accountChanged(String what) {
+    if (_owner != null && _uid == _owner) return false;
+    reportError('CoachVideoResponseScreen._send',
+        StateError('$what: the signed-in account changed'));
+    _followAccount();
+    return true;
+  }
+
+  @override
+  void dispose() { _authSub?.cancel(); _noteCtrl.dispose(); super.dispose(); }
 
   // P0-FL-58 · a failed record / pick was said but never recorded, and not in
   // the shared voice. Cancelling (null) is legitimate: nothing is said or
@@ -57,10 +102,12 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
       final video = await ImagePicker().pickVideo(
         source: source,
         maxDuration: source == ImageSource.camera ? const Duration(minutes: 5) : null);
-      if (video != null && mounted) setState(() => _videoFile = video);
+      if (video != null && mounted && _uid == _owner && !_hidden) {
+        setState(() => _videoFile = video);
+      }
     } catch (e, st) {
       reportError('CoachVideoResponseScreen.$method', e, st);
-      _err(_chooseFailure(source, e));
+      if (_uid == _owner) _err(_chooseFailure(source, e));
     } finally {
       _choosing = false;
     }
@@ -93,20 +140,26 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
   }
 
   Future<void> _send() async {
+    if (_accountChanged('Sending a response')) return;
     if (_videoFile == null && _noteCtrl.text.trim().isEmpty) return;
+    final uid = _owner;
+    // What was typed when Send was tapped (a switch clears the field).
+    final note = _noteCtrl.text.trim();
     setState(() { _uploading = true; _progress = 0; });
 
     try {
-      final uid = _db.auth.currentUser?.id;
       String? videoUrl;
 
       if (_videoFile != null) {
+        final file = _videoFile!;
         // Read bytes + uploadBinary so it works on web AND mobile (no dart:io).
-        final ext = _videoFile!.name.contains('.') ? _videoFile!.name.split('.').last.toLowerCase() : 'mp4';
+        final ext = file.name.contains('.') ? file.name.split('.').last.toLowerCase() : 'mp4';
         final mime = ext == 'mov' ? 'video/quicktime' : ext == 'webm' ? 'video/webm' : 'video/mp4';
-        final bytes = await _videoFile!.readAsBytes();
+        final bytes = await file.readAsBytes();
         final path = 'coach-videos/$uid/${widget.clientId}/${DateTime.now().millisecondsSinceEpoch}.$ext';
         if (!mounted) return;
+        // Before the upload: no orphan is stored for a response never sent.
+        if (_accountChanged('Uploading a response')) return;
         setState(() => _progress = 0.3);
         await _db.storage.from('coach-media').uploadBinary(path, bytes,
           fileOptions: FileOptions(contentType: mime, upsert: true));
@@ -127,6 +180,7 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
         videoUrl = path;
         if (!mounted) return;
         setState(() => _progress = 0.7);
+        if (_accountChanged('Sending a response')) return;
       }
 
       await _db.from('coach_video_responses').insert({
@@ -134,13 +188,14 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
         'client_id': widget.clientId,
         'checkin_id': widget.checkinId,
         'video_url': videoUrl,
-        'notes': _noteCtrl.text.trim().isEmpty ? null : _noteCtrl.text.trim(),
+        'notes': note.isEmpty ? null : note,
         'created_at': DateTime.now().toUtc().toIso8601String(),
       });
 
       // P0-FL-53b · best-effort, and reported: the response above is saved.
       // A failed notification thrown from here read as "Failed to send", and
       // sending again saved the response twice.
+      if (_accountChanged('New-video notification')) return;
       var notified = false;
       try {
         await _db.from('notifications').insert({
@@ -155,7 +210,7 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
         reportError('CoachVideoResponseScreen._send.notify', e, st);
       }
 
-      if (!mounted) return;
+      if (!mounted || _uid != uid) return;
       setState(() {
         _progress = 1.0; _done = true; _uploading = false; _notified = notified;
       });
@@ -164,7 +219,7 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
       // table, column and constraint text; a coach does not need it and
       // should not be shown it. P0-FL-53b · recorded, and said in the one voice.
       reportError('CoachVideoResponseScreen._send', e, st);
-      if (!mounted) return;
+      if (!mounted || _uid != uid) return;
       setState(() => _uploading = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Semantics(liveRegion: true,
@@ -205,10 +260,11 @@ class _CoachVideoResponseScreenState extends State<CoachVideoResponseScreen> {
           onPressed: () => Navigator.pop(context)),
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Video Response', style: TextStyle(color: _wht, fontSize: 17, fontWeight: FontWeight.w700)),
-          Text('To ${widget.clientName}', style: const TextStyle(color: _mut, fontSize: 12)),
+          if (!_hidden) Text('To ${widget.clientName}', style: const TextStyle(color: _mut, fontSize: 12)),
         ]),
       ),
-      body: _done ? _DoneView(clientName: widget.clientName, notified: _notified, onDone: () => Navigator.pop(context))
+      body: _hidden ? const SizedBox.shrink()
+          : _done ? _DoneView(clientName: widget.clientName, notified: _notified, onDone: () => Navigator.pop(context))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(20),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

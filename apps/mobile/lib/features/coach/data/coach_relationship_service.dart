@@ -56,6 +56,14 @@ class CoachRelationshipService {
     return id;
   }
 
+  /// P0-FL-59d · [owner] is still the signed-in account. Otherwise throws, and
+  /// the caller sends nothing (the message names nobody).
+  void _requireAccount(String what, String owner) {
+    if (_db.auth.currentUser?.id != owner) {
+      throw StateError('$what: the signed-in account changed');
+    }
+  }
+
   /// A request answer that matched no row is not an answer (QAX-ERR-02): RLS
   /// filters out a relationship that is not this coach's, or one already
   /// answered, without an error — and the screen said "Client accepted!".
@@ -182,8 +190,15 @@ class CoachRelationshipService {
   ///
   /// Throws if a cancellation fails, if no active relationship was ended, or
   /// if no one is signed in; nothing is then changed locally.
-  Future<CoachingEnd> cancelCoach(String coachId, String? reason, String? customReason) async {
+  ///
+  /// P0-FL-59d · [expectedUid] is the client who was asked (whoever was signed
+  /// in when the dialog opened): for anyone else nothing is sent. Every later
+  /// step re-checks the client it started for, so a switch between two steps
+  /// never ends the next account's coaching or subscription.
+  Future<CoachingEnd> cancelCoach(String coachId, String? reason, String? customReason,
+      {String? expectedUid}) async {
     final clientId = _requireSignedIn();
+    _requireAccount('Ending coaching', expectedUid ?? clientId);
     final paid = await _db
         .from('subscriptions')
         .select('id, current_period_end')
@@ -194,6 +209,7 @@ class CoachRelationshipService {
     if ((paid as List).isNotEmpty) {
       DateTime? endsAt;
       for (final s in paid) {
+        _requireAccount('Ending coaching', clientId);
         final res = await _db.functions
             .invoke('cancel-subscription', body: {'subscriptionId': s['id']});
         final d = res.data;
@@ -205,6 +221,7 @@ class CoachRelationshipService {
       }
       return CoachingEnd.at((endsAt ?? DateTime.now()).toLocal());
     }
+    _requireAccount('Ending coaching', clientId);
     final ended = await _db.from('coach_client_relationships').update({
       'status': 'cancelled',
       'cancelled_by': 'client',
@@ -222,12 +239,14 @@ class CoachRelationshipService {
     // Best-effort, and reported: the change above is saved, and a failed
     // notification thrown from here read as a failed save (N3).
     try {
+      _requireAccount('Coaching-ended notification', clientId);
       final me = await _db
           .from('user_profiles')
           .select('first_name, last_name')
           .eq('id', clientId)
           .maybeSingle();
       final name = '${me?['first_name'] ?? ''} ${me?['last_name'] ?? ''}'.trim();
+      _requireAccount('Coaching-ended notification', clientId);
       await _db.from('notifications').insert({
         'recipient_id': coachId,
         'type': 'coaching_ended',
@@ -248,8 +267,12 @@ class CoachRelationshipService {
   /// Throws if no one is signed in or the update changed no row (P0-FL-3):
   /// both returned normally and the sheet said "Pricing updated." for a price
   /// that was never saved.
-  Future<void> setGlobalPrice(double price) async {
+  ///
+  /// P0-FL-59d · [expectedUid] is the coach whose price the form was opened
+  /// on: for anyone else nothing is sent.
+  Future<void> setGlobalPrice(double price, {String? expectedUid}) async {
     final coachId = _requireSignedIn();
+    _requireAccount('Coaching price', expectedUid ?? coachId);
     final rows = await _db
         .from('user_profiles')
         .update({'pricing_monthly': price})

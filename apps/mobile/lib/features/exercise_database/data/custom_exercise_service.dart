@@ -17,6 +17,24 @@ class CustomExerciseService {
   /// Last error from a create/upload, surfaced to the UI for diagnostics.
   Object? lastError;
 
+  /// P0-FL-59d · the last failure this service recorded itself, so a caller
+  /// that records what is left in [lastError] does not record it a second time.
+  Object? recordedError;
+
+  /// Leaves [e] in [lastError] and records it, once.
+  void _failed(String origin, Object e, [StackTrace? st]) {
+    lastError = recordedError = e;
+    reportError('CustomExerciseService.$origin', e, st);
+  }
+
+  /// P0-FL-59d · true when [owner] is no longer the signed-in account: that is
+  /// recorded and the caller sends nothing.
+  bool _accountChanged(String origin, String owner) {
+    if (_uid == owner) return false;
+    _failed(origin, StateError('$origin: the signed-in account changed'));
+    return true;
+  }
+
   /// "Barbell Squat" -> "barbell-squat".
   static String slugify(String s) => s
       .toLowerCase()
@@ -179,6 +197,8 @@ class CustomExerciseService {
             .eq('coach_id', uid)
             .eq('slug', slug)
             .maybeSingle();
+        // P0-FL-59d · the row is written as the coach who saved it, or not.
+        if (_accountChanged('createExercise', uid)) return null;
         if (existing != null) {
           final eid = existing['id'] as String;
           // P0-FL-57a · .select() so an RLS-filtered update (0 rows, no error)
@@ -189,8 +209,7 @@ class CustomExerciseService {
               .eq('id', eid)
               .select('id');
           if ((res as List).isEmpty) {
-            lastError = "You don't have permission to edit this exercise";
-            reportError('CustomExerciseService.createExercise', lastError!);
+            _failed('createExercise', "You don't have permission to edit this exercise");
             return null;
           }
           return eid;
@@ -199,8 +218,7 @@ class CustomExerciseService {
       final row = await _db.from('custom_exercises').insert(data).select().single();
       return row['id'] as String;
     } catch (e, st) {
-      lastError = e;
-      reportError('CustomExerciseService.createExercise', e, st);
+      _failed('createExercise', e, st);
       return null;
     }
   }
@@ -723,11 +741,17 @@ class CustomExerciseService {
   /// the upsert failed or wrote no row (an RLS-filtered update returns no
   /// error and no row). It caught the error without recording it, and the
   /// sheet closed as if the coaching were saved.
+  ///
+  /// P0-FL-59d · [expectedUid] is the coach whose sheet this was typed in: for
+  /// anyone else nothing is sent (their own overlay would be replaced).
   Future<bool> upsertCoachOverlay(String exerciseId,
-      {String? note, List<String>? focus, String? videoRef}) async {
+      {String? note, List<String>? focus, String? videoRef, String? expectedUid}) async {
     lastError = null; // never report an earlier call's error
     try {
       final uid = _db.auth.currentUser?.id;
+      if (expectedUid != null && _accountChanged('upsertCoachOverlay', expectedUid)) {
+        return false;
+      }
       if (uid == null) {
         lastError = 'No coaching was saved';
         reportError('CustomExerciseService.upsertCoachOverlay', lastError!);
@@ -772,10 +796,16 @@ class CustomExerciseService {
   /// P0-FL-53a · false (with [lastError] set and the failure recorded) when
   /// the insert failed or returned no row; the caller ignored the result and
   /// carried on as if the pack were saved.
-  Future<bool> createCoachingPack(String name, List<String> cues) async {
+  ///
+  /// P0-FL-59d · for anyone but [expectedUid] nothing is sent.
+  Future<bool> createCoachingPack(String name, List<String> cues,
+      {String? expectedUid}) async {
     lastError = null; // never report an earlier call's error
     try {
       final uid = _db.auth.currentUser?.id;
+      if (expectedUid != null && _accountChanged('createCoachingPack', expectedUid)) {
+        return false;
+      }
       if (uid == null || name.trim().isEmpty) {
         lastError = 'No cue pack was saved';
         reportError('CustomExerciseService.createCoachingPack', lastError!);
@@ -834,17 +864,26 @@ class CustomExerciseService {
   ///
   /// Both readers normalise either form via `coachVoiceSigningPath`, so legacy
   /// rows keep working and no migration is required to land this.
-  Future<String?> uploadCoachVoice(String exerciseId, Uint8List bytes, {String ext = 'm4a'}) async {
+  ///
+  /// P0-FL-59d · for anyone but [expectedUid] nothing is sent.
+  Future<String?> uploadCoachVoice(String exerciseId, Uint8List bytes,
+      {String ext = 'm4a', String? expectedUid}) async {
+    lastError = null; // never report an earlier call's error
     try {
       final uid = _db.auth.currentUser?.id;
-      if (uid == null) return null;
+      if (expectedUid != null && _accountChanged('uploadCoachVoice', expectedUid)) {
+        return null;
+      }
+      if (uid == null) {
+        _failed('uploadCoachVoice', 'No voice note was sent');
+        return null;
+      }
       final path = 'voice/$uid/$exerciseId-${DateTime.now().millisecondsSinceEpoch}.$ext';
       await _db.storage.from('coach-media').uploadBinary(path, bytes,
           fileOptions: const FileOptions(contentType: 'audio/mp4', upsert: true));
       return path;
     } catch (e, st) {
-      lastError = e;
-      reportError('CustomExerciseService.uploadCoachVoice', e, st);
+      _failed('uploadCoachVoice', e, st);
       return null;
     }
   }
@@ -887,31 +926,46 @@ class CustomExerciseService {
 
   Future<String?> signedCoachVoiceUrl(String stored) async {
     final path = coachVoiceSigningPath(stored);
+    lastError = null; // never report an earlier call's error
     if (path == null) return null;
     try {
       return await _db.storage.from('coach-media').createSignedUrl(path, 3600);
     } catch (e, st) {
-      lastError = e;
-      reportError('CustomExerciseService.signedCoachVoiceUrl', e, st);
+      _failed('signedCoachVoiceUrl', e, st);
       return null;
     }
   }
 
   /// Attach/replace the coach's voice note on their overlay (with expiry).
-  Future<bool> setCoachVoice(String exerciseId, String url, int durationMs, DateTime? expiresAt) async {
+  ///
+  /// P0-FL-59d · for anyone but [expectedUid] — the coach whose recording was
+  /// uploaded — nothing is sent. False (with [lastError] set and the failure
+  /// recorded) when signed out or no row was written, too.
+  Future<bool> setCoachVoice(String exerciseId, String url, int durationMs, DateTime? expiresAt,
+      {String? expectedUid}) async {
+    lastError = null; // never report an earlier call's error
     try {
       final uid = _db.auth.currentUser?.id;
-      if (uid == null) return false;
-      await _db.from('coach_exercise_media').upsert({
+      if (expectedUid != null && _accountChanged('setCoachVoice', expectedUid)) {
+        return false;
+      }
+      if (uid == null) {
+        _failed('setCoachVoice', 'No voice note was sent');
+        return false;
+      }
+      final res = await _db.from('coach_exercise_media').upsert({
         'coach_id': uid, 'exercise_id': exerciseId,
         'voice_url': url, 'voice_duration_ms': durationMs,
         'voice_expires_at': expiresAt?.toIso8601String(),
         'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }, onConflict: 'coach_id,exercise_id');
+      }, onConflict: 'coach_id,exercise_id').select('exercise_id');
+      if ((res as List).isEmpty) {
+        _failed('setCoachVoice', 'No voice note was sent');
+        return false;
+      }
       return true;
     } catch (e, st) {
-      lastError = e;
-      reportError('CustomExerciseService.setCoachVoice', e, st);
+      _failed('setCoachVoice', e, st);
       return false;
     }
   }
@@ -961,10 +1015,16 @@ class CustomExerciseService {
   /// P0-FL-53a · false (with [lastError] set and the failure recorded) when
   /// the removal or the row update failed, or the update matched no row while
   /// there was a row to clear. No row at all is nothing to clear (true).
-  Future<bool> clearCoachVoice(String exerciseId) async {
+  ///
+  /// P0-FL-59d · for anyone but [expectedUid] nothing is sent; every later
+  /// step re-checks the coach it started for.
+  Future<bool> clearCoachVoice(String exerciseId, {String? expectedUid}) async {
     lastError = null; // never report an earlier call's error
     try {
       final uid = _db.auth.currentUser?.id;
+      if (expectedUid != null && _accountChanged('clearCoachVoice', expectedUid)) {
+        return false;
+      }
       if (uid == null) {
         lastError = 'No voice note was removed';
         reportError('CustomExerciseService.clearCoachVoice', lastError!);
@@ -989,6 +1049,7 @@ class CustomExerciseService {
       // normalisation the render path uses, which is the point: one stored
       // value, one resolver.
       final path = coachVoiceSigningPath(row?['voice_url'] as String?);
+      if (_accountChanged('clearCoachVoice', uid)) return false;
       if (path != null) {
         // Deliberately NOT swallowed: if the recording cannot be removed, the
         // app must not report the note as deleted.
@@ -1005,6 +1066,7 @@ class CustomExerciseService {
       }
 
       if (row == null) return true; // no overlay row: nothing to clear
+      if (_accountChanged('clearCoachVoice', uid)) return false;
       final res = await _db.from('coach_exercise_media').update({
         'voice_url': null, 'voice_duration_ms': null, 'voice_expires_at': null,
       }).eq('coach_id', uid).eq('exercise_id', exerciseId).select('exercise_id');
@@ -1073,14 +1135,12 @@ class CustomExerciseService {
       // .select() so an RLS-filtered update (0 rows, no error) is detectable.
       final res = await _db.from('custom_exercises').update(updates).eq('id', id).select('id');
       if ((res as List).isEmpty) {
-        lastError = "You don't have permission to edit this exercise";
-        reportError('CustomExerciseService.updateExercise', lastError!);
+        _failed('updateExercise', "You don't have permission to edit this exercise");
         return false;
       }
       return true;
     } catch (e, st) {
-      lastError = e;
-      reportError('CustomExerciseService.updateExercise', e, st);
+      _failed('updateExercise', e, st);
       return false;
     }
   }

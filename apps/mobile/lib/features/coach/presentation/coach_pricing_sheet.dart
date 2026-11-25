@@ -40,10 +40,35 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
   /// the spinner stop.
   String? _error;
 
+  /// P0-FL-59d · the coach whose price this is. It stayed open over a switch
+  /// on this device, and Save wrote the price one coach had loaded (or typed)
+  /// onto the next coach.
+  String? _owner;
+  StreamSubscription<AuthState>? _authSub;
+
+  String? get _uid => Supabase.instance.client.auth.currentUser?.id;
+
   @override
   void initState() {
     super.initState();
     _load();
+    // Same coach (a token refresh, the stream's replay) changes nothing.
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
+        (_) => _followAccount(),
+        onError: (Object e, StackTrace s) =>
+            reportError('CoachPricingSheet.onAuthStateChange', e, s));
+  }
+
+  /// The sheet goes, with what was typed, with the coach it was opened for.
+  void _followAccount() {
+    if (!mounted || _uid == _owner) return;
+    if (_owner == null) {
+      _retry(); // opened signed out: nobody's price was shown
+      return;
+    }
+    _price.clear();
+    final route = ModalRoute.of(context);
+    if (route != null && route.isActive) route.navigator?.removeRoute(route);
   }
 
   /// Why the opening read did not produce the coach's current price. While
@@ -77,7 +102,8 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
   }
 
   Future<void> _load() async {
-    final uid = Supabase.instance.client.auth.currentUser?.id;
+    final uid = _uid;
+    _owner = uid;
     if (uid == null) {
       setState(() {
         _signedOut = true;
@@ -93,12 +119,12 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
           .maybeSingle();
       // Closed while reading: the field is disposed, and writing to it was
       // recorded as a failed read.
-      if (!mounted) return;
+      if (!mounted || _uid != uid) return;
       final p = (row?['pricing_monthly'] as num?)?.toDouble();
       if (p != null && p > 0) _price.text = p.toStringAsFixed(0);
     } catch (e, s) {
       reportError('CoachPricingSheet._load', e, s);
-      if (!mounted) return;
+      if (!mounted || _uid != uid) return;
       setState(() {
         _loadError = isNetworkFailure(e) ? _checkConnection : _tryLater;
         _loading = false;
@@ -110,11 +136,19 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
 
   @override
   void dispose() {
+    _authSub?.cancel();
     _price.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
+    final owner = _owner;
+    if (owner == null || _uid != owner) {
+      reportError('CoachPricingSheet._save',
+          StateError('Coaching price: the signed-in account changed'));
+      _followAccount();
+      return;
+    }
     final value = double.tryParse(_price.text.trim());
     if (value == null || value <= 0) {
       // Same rule as before (whether $0 is valid is undecided) — but say it.
@@ -126,7 +160,7 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
       _error = null;
     });
     try {
-      await CoachRelationshipService().setGlobalPrice(value);
+      await CoachRelationshipService().setGlobalPrice(value, expectedUid: owner);
     } catch (e, s) {
       reportError('CoachPricingSheet._save', e, s); // P0-FL-56b: was unrecorded
       // A failed or 0-row save said "Pricing updated." or, thrown, left the
@@ -136,7 +170,7 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
       // Like _load: the connection hint only for a failure to reach the
       // server; any other failure gets the try-later step — never the
       // server's own text.
-      if (!mounted) return;
+      if (!mounted || _uid != owner) return;
       setState(() {
         _saving = false;
         _error = e is StateError
@@ -147,7 +181,7 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
       });
       return;
     }
-    if (!mounted) return;
+    if (!mounted || _uid != owner) return;
     setState(() => _saving = false);
     Navigator.pop(context);
     ScaffoldMessenger.of(context).showSnackBar(

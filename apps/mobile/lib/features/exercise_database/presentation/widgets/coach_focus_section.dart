@@ -3,8 +3,12 @@
 // video by link). The client sees their coach's overlay above the official
 // content — turning a certified library entry into that coach's teaching.
 // Text is the highest-adoption path and ships now; voice recording is next.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthState, Supabase;
+import '../../../../core/observability/app_failure.dart';
 import '../../data/custom_exercise_service.dart';
 import '../../../auth/domain/auth_provider.dart';
 import '../../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
@@ -301,6 +305,17 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
   }
 
   Future<void> _openEditor() async {
+    // P0-FL-59d · the coach this editor is opened by. The section follows the
+    // signed-in coach; the sheet over it did not, and Save replaced the next
+    // coach's overlay with what the last one had typed.
+    final owner = _loadedKey?.split('|').first;
+    bool mine() =>
+        owner != null && Supabase.instance.client.auth.currentUser?.id == owner;
+    if (!mine()) {
+      reportError('CoachFocusSection._openEditor',
+          StateError('Coaching editor: the signed-in account changed'));
+      return;
+    }
     final focusCtl = TextEditingController(text: _focusOf(_overlay).join('\n'));
     final noteCtl = TextEditingController(text: _overlay?['note']?.toString() ?? '');
     final videoCtl = TextEditingController(text: _overlay?['video_ref']?.toString() ?? '');
@@ -326,7 +341,9 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
     var sheetRetrying = false;
     Future<void> rereadSheet() async {
       try {
-        sheetOverlay = await _svc.getCoachOverlay(widget.exerciseId);
+        final fresh = await _svc.getCoachOverlay(widget.exerciseId);
+        if (!mine()) return;
+        sheetOverlay = fresh;
         sheetReadError = null;
       } catch (e) {
         sheetReadError = e;
@@ -344,7 +361,22 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
     String? voiceClearError;
     var expiry = 'never';
     var saving = false;
-    if (!mounted) return;
+    if (!mounted || !mine()) return;
+    // The sheet and the pack-name dialog over it go with their coach, silently.
+    Route<dynamic>? sheetRoute;
+    Route<dynamic>? packDialog;
+    StreamSubscription<AuthState>? authSub;
+    void closeUnlessMine() {
+      if (mine()) return;
+      authSub?.cancel();
+      for (final r in [packDialog, sheetRoute]) {
+        if (r != null && r.isActive) r.navigator?.removeRoute(r);
+      }
+    }
+    authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
+        (_) => closeUnlessMine(),
+        onError: (Object e, StackTrace s) =>
+            reportError('CoachFocusSection.onAuthStateChange', e, s));
     DateTime? expiryDate() => switch (expiry) {
       'today' => DateTime.now().add(const Duration(hours: 18)),
       'week' => DateTime.now().add(const Duration(days: 7)),
@@ -354,10 +386,13 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
       context: context, isScrollControlled: true, backgroundColor: _panel,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (ctx) => StatefulBuilder(builder: (ctx, setSheet) {
+        sheetRoute = ModalRoute.of(ctx);
         Future<void> saveAsPack() async {
           if (savingPack) return;
           final nameCtl = packNameCtl;
-          final name = await showDialog<String>(context: ctx, builder: (dctx) => AlertDialog(
+          final name = await showDialog<String>(context: ctx, builder: (dctx) {
+            packDialog = ModalRoute.of(dctx);
+            return AlertDialog(
             backgroundColor: _panel2,
             title: const Text('Save cue pack', style: TextStyle(color: _text, fontSize: 16)),
             content: _named('Pack name', TextField(controller: nameCtl, autofocus: true,
@@ -368,11 +403,15 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
               TextButton(onPressed: () => Navigator.pop(dctx, nameCtl.text.trim()),
                 child: const Text('Save', style: TextStyle(color: _brand, fontWeight: FontWeight.w800))),
             ],
-          ));
+          );
+          });
+          packDialog = null;
+          if (!ctx.mounted) return;
           final cues = focusCtl.text.split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
           if (name != null && name.isNotEmpty && cues.isNotEmpty) {
             setSheet(() { savingPack = true; packSaveError = null; });
-            final ok = await _svc.createCoachingPack(name, cues);
+            final ok = await _svc.createCoachingPack(name, cues, expectedUid: owner);
+            if (!mine()) return closeUnlessMine();
             if (!ok) {
               savingPack = false;
               packSaveError = couldntMessage('save your cue pack', _svc.lastError);
@@ -518,7 +557,9 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                     icon: const Icon(Icons.delete_outline_rounded, color: _muted, size: 20),
                     onPressed: () async {
                       voiceClearError = null;
-                      final cleared = await _svc.clearCoachVoice(widget.exerciseId);
+                      final cleared = await _svc.clearCoachVoice(widget.exerciseId,
+                          expectedUid: owner);
+                      if (!mine()) return closeUnlessMine();
                       if (!cleared) {
                         voiceClearError = couldntMessage('remove your voice note', _svc.lastError);
                       }
@@ -559,12 +600,19 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
             SizedBox(width: double.infinity, child: FilledButton(
               style: FilledButton.styleFrom(backgroundColor: _brand, padding: const EdgeInsets.symmetric(vertical: 14)),
               onPressed: saving ? null : () async {
+                if (!mine()) {
+                  reportError('CoachFocusSection._openEditor',
+                      StateError('Saving coaching: the signed-in account changed'));
+                  return closeUnlessMine();
+                }
                 setSheet(() { saving = true; saveError = null; });
                 final focus = focusCtl.text.split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
                 final ok = await _svc.upsertCoachOverlay(widget.exerciseId,
                     note: noteCtl.text.trim().isEmpty ? null : noteCtl.text.trim(),
                     focus: focus,
-                    videoRef: videoCtl.text.trim().isEmpty ? null : videoCtl.text.trim());
+                    videoRef: videoCtl.text.trim().isEmpty ? null : videoCtl.text.trim(),
+                    expectedUid: owner);
+                if (!mine()) return closeUnlessMine();
                 if (!ok) {
                   // Keep the sheet and what was typed; say it (recorded).
                   saving = false;
@@ -580,6 +628,6 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
           ]),
         ));
       }),
-    );
+    ).whenComplete(() => authSub?.cancel());
   }
 }
