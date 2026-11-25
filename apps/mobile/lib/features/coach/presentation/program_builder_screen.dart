@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 import '../../../core/observability/app_failure.dart';
+import '../../auth/domain/auth_provider.dart';
+import '../../dashboard/domain/still_reading.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../domain/coach_ecosystem_provider.dart';
 
 const _bg     = Color(0xFF030303);
@@ -46,25 +49,80 @@ const _deleteBlockedMessage =
 typedef _Write = Future<void> Function();
 typedef _FailedMessage = String Function(Object error);
 
-/// Runs one of the builder's writes. A failure is reported and the coach is told,
+/// Runs one of the builder's writes, as [owner] or not at all: the coach whose
+/// screen it was started from (P0-FL-59f). What came of it is said, and acted
+/// on, for them only. A failure is reported and the coach is told,
 /// where it used to escape as an unhandled error and say nothing. [messenger] is
 /// read before the write's first await, so the message still shows if the coach
-/// has left the screen. Returns whether the write succeeded.
+/// has left the screen. Returns whether the write succeeded, and they are still
+/// signed in.
 Future<bool> _write(
+  String? owner,
   ScaffoldMessengerState messenger,
   String origin,
   _Write write,
   _FailedMessage failedMessage,
 ) async {
+  if (stoppedFor(owner, origin, 'write')) return false;
   try {
     await write();
-    return true;
   } catch (e, s) {
     reportError(origin, e, s);
-    messenger.showSnackBar(SnackBar(content: Text(failedMessage(e))));
+    if (!stillSignedIn(owner)) return false;
+    messenger.showSnackBar(
+        SnackBar(content: OwnedText(failedMessage(e), owner: owner)));
     return false;
   }
+  return !stoppedFor(owner, origin, 'report the write');
 }
+
+/// The signed-in coach's id, watched: what a switch leaves a read holding need
+/// not be a change of that read's, so the screens here follow the id itself.
+String? _watchedUid(WidgetRef ref) => hasAuthClient
+    ? ref.watch(currentUserProvider.select((u) => u?.id))
+    : null;
+
+/// [list], as one coach's screen draws it: what they hold is kept through a
+/// refresh that fails, and it is said. [builder] gets their rows.
+Widget _listBody(
+  AsyncValue<List<Map<String, dynamic>>> list, {
+  required String what,
+  required VoidCallback onRetry,
+  required Widget Function(List<Map<String, dynamic>> rows) builder,
+}) {
+  if (!list.hasValue && !list.hasError) {
+    return const Center(child: CircularProgressIndicator(color: _brand));
+  }
+  final failure = !list.hasError
+      ? null
+      : Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: SectionLoadFailure(
+            what: what,
+            error: list.error,
+            busy: list.isLoading,
+            onRetry: onRetry,
+            accent: _accent,
+            textColor: _white,
+            mutedColor: _muted,
+            detail: list.hasValue ? 'What is shown below may be out of date.' : null,
+          ));
+  if (!list.hasValue) {
+    return Center(child: SingleChildScrollView(child: failure));
+  }
+  final rows = builder(list.requireValue);
+  if (failure == null) return rows;
+  // It scrolls inside its own share, so large text cannot push the list off.
+  return Column(children: [
+    Flexible(child: SingleChildScrollView(child: failure)),
+    Expanded(flex: 3, child: rows),
+  ]);
+}
+
+/// A menu entry, drawn for [owner] only; the menu closes when they leave.
+PopupMenuItem<String> _menuItem(String? owner, String value, Text label) =>
+    PopupMenuItem(
+        value: value, child: OpenedByAccount(owner: owner, child: label));
 
 // ════════════════════════════════════════════════════════════════════════════
 // Program Library — coach's reusable programs + create new (Module 31 entry)
@@ -74,7 +132,10 @@ class ProgramLibraryScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final programsAsync = ref.watch(myProgramsProvider);
+    final uid = _watchedUid(ref);
+    final programs = heldFor(uid, ref.watch(myProgramsProvider));
+    // P0-FL-59f: the coach whose programs these are, captured as they are built.
+    final owner = boundTo(ownerOfHeld(programs));
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
@@ -88,16 +149,13 @@ class ProgramLibraryScreen extends ConsumerWidget {
         backgroundColor: _brand,
         icon: const Icon(Icons.add, color: _white),
         label: const Text('New Program', style: TextStyle(color: _white)),
-        onPressed: () => _createProgram(context, ref),
+        onPressed: () => _createProgram(context, ref, boundTo(uid)),
       ),
-      body: programsAsync.when(
-        loading: () =>
-            const Center(child: CircularProgressIndicator(color: _brand)),
-        error: (e, _) => Center(
-            child: Text('Could not load programs.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: _muted))),
-        data: (programs) {
+      body: _listBody(
+        programs,
+        what: 'your programs',
+        onRetry: () => ref.invalidate(myProgramsProvider),
+        builder: (programs) {
           if (programs.isEmpty) {
             return const Center(
               child: Padding(
@@ -118,7 +176,7 @@ class ProgramLibraryScreen extends ConsumerWidget {
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
               itemCount: programs.length,
               itemBuilder: (_, i) =>
-                  _ProgramCard(program: programs[i]),
+                  _ProgramCard(program: programs[i], owner: owner),
             ),
           );
         },
@@ -126,7 +184,10 @@ class ProgramLibraryScreen extends ConsumerWidget {
     );
   }
 
-  Future<void> _createProgram(BuildContext context, WidgetRef ref) async {
+  Future<void> _createProgram(
+      BuildContext context, WidgetRef ref, String? owner) async {
+    const origin = 'ProgramLibrary._createProgram';
+    if (stoppedFor(owner, origin, 'open the form')) return;
     // Read before the awaits: the coach can leave while the insert is in flight,
     // and a disposed widget's `ref` throws.
     final container = ProviderScope.containerOf(context);
@@ -135,11 +196,12 @@ class ProgramLibraryScreen extends ConsumerWidget {
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => const _ProgramMetaSheet(),
+      builder: (_) =>
+          OpenedByAccount(owner: owner, child: const _ProgramMetaSheet()),
     );
     if (created == null) return;
     late Map<String, dynamic> program;
-    final saved = await _write(messenger, 'ProgramLibrary._createProgram', () async {
+    final saved = await _write(owner, messenger, origin, () async {
       program =
           await ref.read(coachProgramServiceProvider).createProgram(created);
     }, (_) => _createFailedMessage);
@@ -149,14 +211,16 @@ class ProgramLibraryScreen extends ConsumerWidget {
       Navigator.push(
           context,
           MaterialPageRoute(
-              builder: (_) => ProgramBuilderScreen(program: program)));
+              builder: (_) =>
+                  ProgramBuilderScreen(program: program, owner: owner)));
     }
   }
 }
 
 class _ProgramCard extends ConsumerWidget {
   final Map<String, dynamic> program;
-  const _ProgramCard({required this.program});
+  final String? owner;
+  const _ProgramCard({required this.program, required this.owner});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -166,10 +230,16 @@ class _ProgramCard extends ConsumerWidget {
         : 0;
     return InkWell(
       borderRadius: BorderRadius.circular(16),
-      onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-              builder: (_) => ProgramBuilderScreen(program: program))),
+      onTap: () {
+        if (stoppedFor(owner, 'ProgramLibrary.openProgram', 'open program')) {
+          return;
+        }
+        Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) =>
+                    ProgramBuilderScreen(program: program, owner: owner)));
+      },
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(16),
@@ -221,12 +291,28 @@ class _ProgramCard extends ConsumerWidget {
 // ════════════════════════════════════════════════════════════════════════════
 class ProgramBuilderScreen extends ConsumerWidget {
   final Map<String, dynamic> program;
-  const ProgramBuilderScreen({super.key, required this.program});
+
+  /// The coach it was opened by (P0-FL-59f). For anyone else it is a way back
+  /// and nothing more, and it reads nothing.
+  final String? owner;
+  const ProgramBuilderScreen(
+      {super.key, required this.program, required this.owner});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    _watchedUid(ref); // so that a change redraws; the auth client decides
+    if (!stillSignedIn(owner)) {
+      return Scaffold(
+        backgroundColor: _bg,
+        appBar: AppBar(
+            backgroundColor: _bg,
+            elevation: 0,
+            iconTheme: const IconThemeData(color: _white)),
+      );
+    }
     final programId = program['id'] as String;
-    final workoutsAsync = ref.watch(programWorkoutsProvider(programId));
+    final workouts =
+        heldFor(owner, ref.watch(programWorkoutsProvider(programId)));
     final weeks = (program['duration_weeks'] as int?) ?? 12;
 
     return Scaffold(
@@ -246,11 +332,14 @@ class ProgramBuilderScreen extends ConsumerWidget {
                 // As in `_createProgram`: read before the awaits.
                 final container = ProviderScope.containerOf(context);
                 final messenger = ScaffoldMessenger.of(context);
+                const origin = 'ProgramBuilder._deleteProgram';
+                if (stoppedFor(owner, origin, 'ask')) return;
                 final ok = await _confirmDelete(context);
                 if (ok != true) return;
                 final deleted = await _write(
+                  owner,
                   messenger,
-                  'ProgramBuilder._deleteProgram',
+                  origin,
                   () => ref
                       .read(coachProgramServiceProvider)
                       .deleteProgram(programId),
@@ -263,10 +352,11 @@ class ProgramBuilderScreen extends ConsumerWidget {
                 if (context.mounted) Navigator.pop(context);
               }
             },
-            itemBuilder: (_) => const [
-              PopupMenuItem(
-                  value: 'delete',
-                  child: Text('Delete program',
+            itemBuilder: (_) => [
+              _menuItem(
+                  owner,
+                  'delete',
+                  const Text('Delete program',
                       style: TextStyle(color: Color(0xFFFFB4AB)))),
             ],
           ),
@@ -278,14 +368,11 @@ class ProgramBuilderScreen extends ConsumerWidget {
         label: const Text('Add Workout', style: TextStyle(color: _white)),
         onPressed: () => _addWorkout(context, ref, programId, weeks),
       ),
-      body: workoutsAsync.when(
-        loading: () =>
-            const Center(child: CircularProgressIndicator(color: _brand)),
-        error: (e, _) => Center(
-            child: Text('Could not load workouts.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: _muted))),
-        data: (workouts) {
+      body: _listBody(
+        workouts,
+        what: "this program's workouts",
+        onRetry: () => ref.invalidate(programWorkoutsProvider(programId)),
+        builder: (workouts) {
           if (workouts.isEmpty) {
             return const Center(
               child: Padding(
@@ -322,6 +409,7 @@ class ProgramBuilderScreen extends ConsumerWidget {
                       workout: w,
                       programId: programId,
                       weeks: weeks,
+                      owner: owner,
                     )),
               ],
             ],
@@ -333,18 +421,23 @@ class ProgramBuilderScreen extends ConsumerWidget {
 
   Future<void> _addWorkout(BuildContext context, WidgetRef ref,
       String programId, int weeks) async {
+    const origin = 'ProgramBuilder._addWorkout';
+    if (stoppedFor(owner, origin, 'open the form')) return;
     final container = ProviderScope.containerOf(context, listen: false);
     final messenger = ScaffoldMessenger.of(context);
     final result = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => _WorkoutEditorSheet(maxWeeks: weeks),
+      builder: (_) => OpenedByAccount(
+          owner: owner,
+          child: _WorkoutEditorSheet(maxWeeks: weeks, owner: owner)),
     );
     if (result == null) return;
     final saved = await _write(
+      owner,
       messenger,
-      'ProgramBuilder._addWorkout',
+      origin,
       () => ref
           .read(coachProgramServiceProvider)
           .addWorkoutToProgram(programId, result),
@@ -355,7 +448,7 @@ class ProgramBuilderScreen extends ConsumerWidget {
 
   Future<bool?> _confirmDelete(BuildContext context) => showDialog<bool>(
         context: context,
-        builder: (dialogContext) => AlertDialog(
+        builder: (dialogContext) => OpenedByAccount(owner: owner, child: AlertDialog(
           backgroundColor: _card,
           title: const Text('Delete program?',
               style: TextStyle(color: _white)),
@@ -372,7 +465,7 @@ class ProgramBuilderScreen extends ConsumerWidget {
                 child: const Text('Delete',
                     style: TextStyle(color: Color(0xFFFFB4AB)))),
           ],
-        ),
+        )),
       );
 }
 
@@ -380,8 +473,12 @@ class _WorkoutCard extends ConsumerWidget {
   final Map<String, dynamic> workout;
   final String programId;
   final int weeks;
+  final String? owner;
   const _WorkoutCard(
-      {required this.workout, required this.programId, required this.weeks});
+      {required this.workout,
+      required this.programId,
+      required this.weeks,
+      required this.owner});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -426,17 +523,22 @@ class _WorkoutCard extends ConsumerWidget {
                       ProviderScope.containerOf(context, listen: false);
                   final messenger = ScaffoldMessenger.of(context);
                   if (v == 'edit') {
+                    const origin = 'ProgramBuilder._editWorkout';
+                    if (stoppedFor(owner, origin, 'open the form')) return;
                     final res = await showModalBottomSheet<Map<String, dynamic>>(
                       context: context,
                       backgroundColor: Colors.transparent,
                       isScrollControlled: true,
-                      builder: (_) => _WorkoutEditorSheet(
-                          maxWeeks: weeks, existing: workout),
+                      builder: (_) => OpenedByAccount(
+                          owner: owner,
+                          child: _WorkoutEditorSheet(
+                              maxWeeks: weeks, existing: workout, owner: owner)),
                     );
                     if (res != null) {
                       final saved = await _write(
+                        owner,
                         messenger,
-                        'ProgramBuilder._editWorkout',
+                        origin,
                         () => svc.updateWorkout(workout['id'] as String, res),
                         (_) => _workoutSaveFailedMessage,
                       );
@@ -444,6 +546,7 @@ class _WorkoutCard extends ConsumerWidget {
                     }
                   } else if (v == 'delete') {
                     final deleted = await _write(
+                      owner,
                       messenger,
                       'ProgramBuilder._deleteWorkout',
                       () => svc.deleteWorkout(workout['id'] as String),
@@ -452,13 +555,13 @@ class _WorkoutCard extends ConsumerWidget {
                     if (deleted) _refreshProgramDays(container, programId);
                   }
                 },
-                itemBuilder: (_) => const [
-                  PopupMenuItem(
-                      value: 'edit',
-                      child: Text('Edit', style: TextStyle(color: _white))),
-                  PopupMenuItem(
-                      value: 'delete',
-                      child: Text('Delete',
+                itemBuilder: (_) => [
+                  _menuItem(owner, 'edit',
+                      const Text('Edit', style: TextStyle(color: _white))),
+                  _menuItem(
+                      owner,
+                      'delete',
+                      const Text('Delete',
                           style: TextStyle(color: Color(0xFFFFB4AB)))),
                 ],
               ),
@@ -584,7 +687,9 @@ class _ProgramMetaSheetState extends State<_ProgramMetaSheet> {
 class _WorkoutEditorSheet extends StatefulWidget {
   final int maxWeeks;
   final Map<String, dynamic>? existing;
-  const _WorkoutEditorSheet({required this.maxWeeks, this.existing});
+  final String? owner;
+  const _WorkoutEditorSheet(
+      {required this.maxWeeks, this.existing, required this.owner});
   @override
   State<_WorkoutEditorSheet> createState() => _WorkoutEditorSheetState();
 }
@@ -736,11 +841,16 @@ class _WorkoutEditorSheetState extends State<_WorkoutEditorSheet> {
   }
 
   Future<void> _addExercise() async {
+    const origin = 'WorkoutEditorSheet._addExercise';
+    if (stoppedFor(widget.owner, origin, 'open the form')) return;
     final ex = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (_) => const _ExerciseDialog(),
+      builder: (_) =>
+          OpenedByAccount(owner: widget.owner, child: const _ExerciseDialog()),
     );
-    if (ex != null) setState(() => _exercises.add(ex));
+    if (!mounted || ex == null) return;
+    if (stoppedFor(widget.owner, origin, 'add exercise')) return;
+    setState(() => _exercises.add(ex));
   }
 }
 

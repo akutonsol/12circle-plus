@@ -5,6 +5,7 @@ import 'package:circle_fitness/features/coach/data/coach_program_service.dart';
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
 import 'package:circle_fitness/features/coach/domain/package_provider.dart';
 import 'package:circle_fitness/features/coach/presentation/program_builder_screen.dart';
+import 'package:circle_fitness/features/dashboard/domain/still_reading.dart';
 import 'package:circle_fitness/features/dashboard/presentation/client_detail_screen.dart';
 import 'package:circle_fitness/features/scoring/domain/score_provider.dart';
 import 'package:flutter/material.dart';
@@ -200,9 +201,11 @@ Future<GoRouter> _pump(WidgetTester t, _FakeSvc svc) async {
   await t.pumpWidget(ProviderScope(
     overrides: [
       coachProgramServiceProvider.overrideWithValue(svc),
-      myProgramsProvider.overrideWith((ref) => svc.getMyPrograms()),
-      programWorkoutsProvider
-          .overrideWith((ref, programId) => svc.getProgramWorkouts(programId)),
+      // Marked as the signed-in coach's, as the providers mark what they read.
+      myProgramsProvider
+          .overrideWith((ref) => ownedRead(memberA, svc.getMyPrograms)),
+      programWorkoutsProvider.overrideWith((ref, programId) =>
+          ownedRead(memberA, () => svc.getProgramWorkouts(programId))),
       clientDetailProvider(_clientId).overrideWith((ref) async => {
             'id': _clientId,
             'first_name': 'Jordan',

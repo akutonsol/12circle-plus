@@ -49,8 +49,9 @@ final myAssignedProgramProvider = FutureProvider<Map<String, dynamic>?>((ref) as
 // Workouts inside a single program — drives the Program Builder (Module 31).
 final programWorkoutsProvider =
     FutureProvider.family<List<Map<String, dynamic>>, String>((ref, programId) async {
-  ref.watch(currentUserProvider.select((u) => u?.id)); // P0-FL-59f: RLS answers for them
-  return _programSvc.getProgramWorkouts(programId);
+  // P0-FL-59f: RLS answers for them, and the answer is marked as theirs.
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+  return ownedRead(uid, () => _programSvc.getProgramWorkouts(programId));
 });
 
 final todaysWorkoutProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
