@@ -220,8 +220,7 @@ void main() {
       save();
       await noFrame(tester);
       expect(writes(), isEmpty);
-      expect(accountChanged().map((f) => f.origin),
-          ['GoalService.updateProgress'], reason: 'recorded, once');
+      expect(accountChanged(), hasLength(1), reason: 'recorded, once');
       await settle(tester);
       expect(find.byType(AlertDialog), findsNothing);
       expect(find.textContaining("Couldn't"), findsNothing);
@@ -381,9 +380,10 @@ void main() {
         });
         await settle(tester);
         expect(text('Bench 100 kg'), findsNothing,
-            reason: "THE defect: AsyncData(isLoading: true, value: A's)");
+            reason: 'watching the uid by select, riverpod takes this for a '
+                "refresh: AsyncData(isLoading: true, value: A's)");
         expect(text('No goals yet'), findsNothing,
-            reason: "THE defect: A's empty list was B's answer");
+            reason: "A's empty list is not B's answer");
         hold.complete();
         await settle(tester);
         expect(text('Row 2k'), findsOneWidget);

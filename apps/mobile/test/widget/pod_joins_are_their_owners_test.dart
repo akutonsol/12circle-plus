@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
+import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/community/presentation/pods/pods_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -29,6 +30,7 @@ Map<String, Object?> _pod(String id, String name) => {
 void main() {
   final server = OwnedRowsPostgrest();
   final reported = <AppFailure>[];
+  late ProviderContainer c;
 
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
@@ -49,8 +51,12 @@ void main() {
     reported.clear();
     setFailureSink(reported.add);
     await signInAs(memberA);
+    c = ProviderContainer();
   });
-  tearDown(resetFailureSink);
+  tearDown(() {
+    c.dispose();
+    resetFailureSink();
+  });
 
   Finder text(String s) => find.text(s);
   String? signedIn() => Supabase.instance.client.auth.currentUser?.id;
@@ -84,8 +90,8 @@ void main() {
       ..devicePixelRatio = 1
       ..physicalSize = const Size(1000, 2600);
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(const ProviderScope(
-        child: MaterialApp(home: PodsScreen())));
+    await tester.pumpWidget(UncontrolledProviderScope(
+        container: c, child: const MaterialApp(home: PodsScreen())));
     await settle(tester);
   }
 
@@ -215,7 +221,11 @@ void main() {
       if (!bRead) server.holds['GET $_pods:$memberB'] = Completer<void>();
       await tester.runAsync(() => signInAs(memberB));
       await noFrame(tester);
+      // Any read flushes the provider fd5d076 followed the account through: the
+      // screen's owner is B, and what A's button checks is B against B.
       if (bRead) {
+        expect(c.read(currentUserProvider)?.id, memberB);
+        await noFrame(tester);
         expect(server.asked('GET $_pods:$memberB'), isTrue, reason: 'premise');
       }
       join();
