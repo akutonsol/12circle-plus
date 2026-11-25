@@ -52,6 +52,10 @@ class MemberSwitchServer extends TwoMemberPostgrest {
   /// Storage objects whose signing answers 500.
   final unsignable = <String>{};
 
+  /// Uploads by this member wait for [uploadGate] (their paths are not known).
+  String? holdUploadsOf;
+  Completer<void>? uploadGate;
+
   @override
   void reset() {
     super.reset();
@@ -60,6 +64,8 @@ class MemberSwitchServer extends TwoMemberPostgrest {
     zeroRows.clear();
     objects.clear();
     unsignable.clear();
+    holdUploadsOf = null;
+    uploadGate = null;
   }
 
   Iterable<SeenRequest> writes([String? target]) => seen.where((r) =>
@@ -96,6 +102,9 @@ class MemberSwitchServer extends TwoMemberPostgrest {
         storage ? _storage(r) : _rest(r, request);
     final hold = holds[r.key];
     if (hold != null) await hold.future;
+    if (r.target.startsWith('progress-photos/') && r.who == holdUploadsOf) {
+      await uploadGate?.future;
+    }
     if (fails.contains(r.key)) {
       return _send(
           {'message': 'refused SECRET', 'code': 'XX000'}, 500, request);

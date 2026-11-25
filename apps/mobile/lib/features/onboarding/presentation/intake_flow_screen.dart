@@ -595,6 +595,8 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
   /// built a program from answers the database never received. Neither should run over
   /// a failed save.
   Future<void> _finish() async {
+    // As for a save: what is in memory is not known to be this member's.
+    if (_loading || _resumeError != null) return;
     // Someone else is signed in: not their answers, so nothing is sent.
     if (_signedIn != null && !_stillOwner(_owner, 'intake')) return;
     if (_signedIn != _owner) _followAccount(); // signed out meanwhile
@@ -742,6 +744,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     }
     void next() { if (live()) _next(); }
     void back() { if (live()) _back(); }
+    void finish() { if (live()) _finish(); }
 
     return Scaffold(
       backgroundColor: _bg,
@@ -967,7 +970,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
                 onBack: back,
               ),
               // 25 — Final
-              _Step11Page(data: _data, saving: _saving, onEnter: _finish),
+              _Step11Page(data: _data, saving: _saving, onEnter: finish),
             ],
           ),
 
@@ -996,7 +999,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
                       const SizedBox(height: 12),
                       Row(mainAxisAlignment: MainAxisAlignment.end, children: [
                         TextButton(
-                          onPressed: _saving ? null : _finish,
+                          onPressed: _saving ? null : finish,
                           child: Text(_saving ? 'Saving…' : 'Retry',
                               style: const TextStyle(
                                   color: Color(0xFFF07A8C),
