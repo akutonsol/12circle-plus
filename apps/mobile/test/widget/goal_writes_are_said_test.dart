@@ -223,6 +223,34 @@ void main() {
     });
   });
 
+  for (final (item, method) in [
+    ('Update progress', 'PATCH'),
+    ('Mark achieved', 'PATCH'),
+    ('Delete', 'DELETE'),
+  ]) {
+    testWidgets('"$item" in flight when the providers go with the account',
+        (tester) async {
+      final hold = server.holds['$method goals:$memberA'] = Completer<void>();
+      await show(tester);
+      if (item == 'Update progress') {
+        await openUpdate(tester, '95');
+        await tap(tester, 'Save');
+      } else {
+        await choose(tester, item);
+        await settle(tester);
+      }
+      expect(writes(), hasLength(1), reason: 'premise');
+      await tester.runAsync(() => signInAs(memberB));
+      await tester.pumpWidget(const SizedBox()); // the app root is rebuilt…
+      c.dispose(); // …with a new container
+      hold.complete();
+      await settle(tester);
+      expect(tester.takeException(), isNull);
+      expect(origins().where((o) => o.startsWith('GoalsScreen')), isEmpty);
+      await done(tester);
+    });
+  }
+
   group('mark achieved / delete', () {
     for (final (item, method) in [('Mark achieved', 'PATCH'), ('Delete', 'DELETE')]) {
       testWidgets('"$item" that changed no row is a failure', (tester) async {

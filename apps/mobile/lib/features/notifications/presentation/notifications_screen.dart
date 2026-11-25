@@ -2,10 +2,10 @@ import 'package:flutter/foundation.dart' show AsyncValueGetter;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 import '../data/notification_model.dart';
 import '../domain/notification_provider.dart';
 import '../domain/notification_groups.dart';
-import '../../auth/domain/auth_provider.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../../../core/widgets/named_icon_button.dart';
 
@@ -31,11 +31,11 @@ Future<bool> _saySo(BuildContext context, String doWhat,
     Future<bool> Function(NotificationsNotifier) change) async {
   final c = ProviderScope.containerOf(context, listen: false);
   final messenger = ScaffoldMessenger.maybeOf(context);
-  final uid = currentUserProvider.select((u) => u?.id);
-  final owner = c.read(uid);
+  String? uid() => Supabase.instance.client.auth.currentUser?.id;
+  final owner = uid();
   final notifier = c.read(notificationsProvider.notifier);
   final ok = await change(notifier);
-  if (!ok && c.read(uid) == owner) {
+  if (!ok && uid() == owner) {
     messenger?.showSnackBar(
         SnackBar(content: Text(couldntMessage(doWhat, notifier.lastError))));
   }

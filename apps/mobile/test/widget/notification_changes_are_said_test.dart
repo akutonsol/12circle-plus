@@ -254,6 +254,22 @@ void main() {
       await done(tester);
     });
 
+    testWidgets('a change in flight when the providers go with the account',
+        (tester) async {
+      final hold = server.holds['PATCH $_t:$memberA'] = Completer<void>();
+      server.fails.add('PATCH $_t:$memberA');
+      await show(tester);
+      await tester.tap(text('For A one'));
+      await settle(tester);
+      await tester.runAsync(() => signInAs(memberB));
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() async => c.dispose());
+      hold.complete();
+      await settle(tester);
+      expect(tester.takeException(), isNull);
+      await done(tester);
+    });
+
     testWidgets("A's controls with B already signed in send nothing",
         (tester) async {
       await show(tester);

@@ -17,6 +17,16 @@ const goalActionFailedMessage =
 /// The signed-in account, by id: a token refresh is the same member.
 final _goalsUid = currentUserProvider.select((u) => u?.id);
 
+/// Whether [owner] is still signed in, asked after a write came back. False
+/// too when the app's providers went with the account in the meantime.
+bool _stillFor(ProviderContainer c, String? owner) {
+  try {
+    return c.read(_goalsUid) == owner;
+  } on StateError {
+    return false; // the container is disposed
+  }
+}
+
 /// A failure said where the member is typing; announced when it appears.
 Widget _saidHere(String message) => Semantics(
       liveRegion: true,
@@ -173,11 +183,11 @@ class _GoalCard extends ConsumerWidget {
                   } else if (v == 'delete') {
                     await c.read(goalServiceProvider).deleteGoal(goal.id);
                   }
-                  c.invalidate(myGoalsProvider);
+                  if (_stillFor(c, owner)) c.invalidate(myGoalsProvider);
                 } catch (e, s) {
                   reportError('GoalsScreen.$v', e, s);
                   // Not to whoever signed in meanwhile.
-                  if (c.read(_goalsUid) != owner) return;
+                  if (!_stillFor(c, owner)) return;
                   messenger?.showSnackBar(SnackBar(
                       content: Text(couldntMessage('update your goal', e))));
                 }
@@ -284,7 +294,7 @@ class _UpdateProgressDialogState extends ConsumerState<_UpdateProgressDialog> {
       error = e; // recorded by the service
     }
     // Not to whoever signed in meanwhile.
-    if (c.read(_goalsUid) != owner) return;
+    if (!_stillFor(c, owner)) return;
     c.invalidate(myGoalsProvider);
     if (saved) {
       if (mounted) Navigator.pop(context);
@@ -468,7 +478,7 @@ class _AddGoalSheetState extends ConsumerState<_AddGoalSheet> {
       error = e; // recorded by the service
     }
     // Not to whoever signed in meanwhile.
-    if (c.read(_goalsUid) != _owner) return;
+    if (!_stillFor(c, _owner)) return;
     if (saved) {
       c.invalidate(myGoalsProvider);
       if (mounted) Navigator.pop(context);
