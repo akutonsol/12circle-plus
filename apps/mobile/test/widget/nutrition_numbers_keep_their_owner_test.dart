@@ -12,8 +12,8 @@
 //
 // HOW TO SEE IT FAIL: put back e0736a6's nutrition_provider, nutrition_screen,
 // meals_dashboard_screen and action_item_provider + action_center_screen (they
-// share `readForMember`). Only the controls marked "(old too)" and "A signed
-// out" pass there.
+// share `readForMember`). Only the controls marked "(old too)", "A signed out"
+// and "A's failure is not B's" pass there.
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
