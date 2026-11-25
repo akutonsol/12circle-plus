@@ -51,8 +51,13 @@ final coachLeaderboardProvider =
 });
 
 /// A specific client's score (for coach analytics).
-final clientScoreProvider =
-    FutureProvider.family<Map<String, dynamic>?, String>((ref, clientId) async {
+///
+/// P0-FL-59f: read for the signed-in coach, and not kept after the client page
+/// that shows it: its card reads the held value, so one kept from the previous
+/// coach was this one's until (and unless) their own read answered.
+final clientScoreProvider = FutureProvider.autoDispose
+    .family<Map<String, dynamic>?, String>((ref, clientId) async {
+  ref.watch(currentUserProvider.select((u) => u?.id));
   ref.watch(scoreRefreshProvider);
   ref.watch(tableTickerProvider('user_scores'));
   return ref.watch(scoreEngineProvider).clientScore(clientId);

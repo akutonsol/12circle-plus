@@ -15,14 +15,17 @@ final myActionItemsProvider =
   return ref.watch(actionItemServiceProvider).getMyActionItems();
 });
 
-/// Coach view: a given client's action items.
+/// Coach view: a given client's action items — those RLS shows the signed-in
+/// coach, so it follows who that is (P0-FL-59f).
 final clientActionItemsProvider =
     FutureProvider.family<List<ActionItem>, String>((ref, clientId) async {
+  ref.watch(currentUserProvider.select((u) => u?.id));
   return ref.watch(actionItemServiceProvider).getClientActionItems(clientId);
 });
 
 /// Completion stats for a client (coach dashboard).
 final actionCompletionProvider = FutureProvider.family<
     ({int assigned, int completed, double rate}), String>((ref, clientId) async {
+  ref.watch(currentUserProvider.select((u) => u?.id));
   return ref.watch(actionItemServiceProvider).completionStats(clientId);
 });

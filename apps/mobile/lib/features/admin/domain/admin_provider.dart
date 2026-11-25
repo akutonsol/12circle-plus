@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/config/app_env.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../data/admin_metrics_service.dart';
 import '../data/admin_trust_service.dart';
@@ -101,8 +102,27 @@ final adminWearableConnectionsProvider =
     FutureProvider<AdminWearableConnections?>((ref) async =>
         ref.watch(adminMetricsServiceProvider).getWearableConnections());
 
+/// Whose search text the two search boxes hold (P0-FL-59f), by id only: a
+/// refreshed token is the same admin and keeps what they typed.
+///
+/// With no auth client to ask — never in the running app; a widget test pumps
+/// these pages with every read replaced — nobody owns the text.
+final _searchOwnerProvider = Provider<String?>((ref) {
+  try {
+    return ref.watch(currentUserProvider.select((u) => u?.id));
+  } catch (e, st) {
+    reportError('adminSearchOwner', e, st);
+    return null;
+  }
+});
+
 /// The People search box's current text. Empty means no filter — NOT "match nothing".
-final adminUserSearchProvider = StateProvider<String>((_) => '');
+/// Starts empty for each admin: the text is the previous one's search
+/// (P0-FL-59f), and names a person they were looking for.
+final adminUserSearchProvider = StateProvider<String>((ref) {
+  ref.watch(_searchOwnerProvider);
+  return '';
+});
 
 final adminUserDirectoryProvider =
     FutureProvider<List<AdminUserDirectoryEntry>?>((ref) async =>
@@ -153,7 +173,11 @@ final adminCanUpdateEventsProvider = FutureProvider<bool>(
 /// which the approved screen words as "No events in this range." The distinction is the
 /// three-state rule: an unauthorized read must not render as "no events".
 /// The Events search box's current text. Empty means no filter.
-final adminEventSearchProvider = StateProvider<String>((_) => '');
+/// Starts empty for each admin, like [adminUserSearchProvider].
+final adminEventSearchProvider = StateProvider<String>((ref) {
+  ref.watch(_searchOwnerProvider);
+  return '';
+});
 
 final adminEventDirectoryProvider = FutureProvider<List<AdminEventRow>?>(
     (ref) async => ref.watch(adminMetricsServiceProvider).eventDirectory(

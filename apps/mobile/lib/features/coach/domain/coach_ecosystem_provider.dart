@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../../core/realtime/realtime.dart';
+import '../../dashboard/domain/still_reading.dart' show ownedBy;
 import '../data/coach_program_service.dart';
 import '../data/coach_relationship_service.dart';
 import '../data/score_service.dart';
@@ -20,11 +21,13 @@ final myRelationshipProvider = FutureProvider<Map<String, dynamic>?>((ref) async
 
 final pendingRequestsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
-  ref.watch(currentUserProvider);
+  // P0-FL-59f: by id only (a token refresh is the same coach), and marked as
+  // theirs: the tab label keeps the last answer through a reload.
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
   ref.watch(tableTickerProvider('coach_client_relationships')); // live: new requests
   final coachId = Supabase.instance.client.auth.currentUser?.id;
   if (coachId == null) return [];
-  return _relSvc.getPendingRequests(coachId);
+  return ownedBy(uid, await _relSvc.getPendingRequests(coachId));
 });
 
 // ── Programs ─────────────────────────────────────────────────
@@ -44,6 +47,7 @@ final myAssignedProgramProvider = FutureProvider<Map<String, dynamic>?>((ref) as
 // Workouts inside a single program — drives the Program Builder (Module 31).
 final programWorkoutsProvider =
     FutureProvider.family<List<Map<String, dynamic>>, String>((ref, programId) async {
+  ref.watch(currentUserProvider.select((u) => u?.id)); // P0-FL-59f: RLS answers for them
   return _programSvc.getProgramWorkouts(programId);
 });
 
@@ -166,10 +170,17 @@ final coachLeaderboardProvider = FutureProvider<List<Map<String, dynamic>>>((ref
 // [clientAssessmentProvider], whose RPC logs the read before it returns.
 // Names stay here: the page header, notes and video sheets need them even when
 // the assessment read fails, and a coach already sees them on the roster.
+//
+// P0-FL-59f: what comes back is what RLS lets the SIGNED-IN coach read, so every
+// read below follows who that is — by id only, so a token refresh is not a
+// re-read (and not a second logged assessment read). Keyed by the client alone
+// they left one coach's PAR-Q, injuries, photos and weights on the page for the
+// next account, with no `assessment_access_log` row naming it.
 const clientDetailProfileColumns =
     'id, first_name, last_name, avatar_url, coaching_mode, created_at, onboarding_complete';
 
 final clientDetailProvider = FutureProvider.autoDispose.family<Map<String, dynamic>, String>((ref, clientId) async {
+  ref.watch(currentUserProvider.select((u) => u?.id));
   final db = Supabase.instance.client;
   final profile = await db
       .from('user_profiles')
@@ -314,13 +325,15 @@ class ClientAssessment {
 /// which writes an `assessment_access_log` row before it returns — so every
 /// time a coach opens this, it is on the record (SEC-PHI-AUDIT).
 ///
-/// Once per page open: autoDispose, and nothing here watches a ticker, so
-/// rebuilds and re-reads of [clientDetailProvider] do not log extra reads.
+/// Once per page open and coach: autoDispose, and nothing here watches a
+/// ticker, so rebuilds and re-reads of [clientDetailProvider] do not log extra
+/// reads.
 ///
 /// A network or server failure is an ERROR (the page shows "Couldn't load"),
 /// never an empty assessment: an empty one would read as no PAR-Q flags.
 final clientAssessmentProvider = FutureProvider.autoDispose
     .family<ClientAssessment, String>((ref, clientId) async {
+  ref.watch(currentUserProvider.select((u) => u?.id));
   final dynamic res;
   try {
     res = await Supabase.instance.client
@@ -358,5 +371,6 @@ final scoreServiceProvider = Provider((_) => _scoreSvc);
 /// Coaches can only assign work (programs/nutrition/habits/etc.) once true.
 final clientHasPaidPlanProvider =
     FutureProvider.autoDispose.family<bool, String>((ref, clientId) async {
+  ref.watch(currentUserProvider.select((u) => u?.id));
   return _programSvc.clientHasPaidPlan(clientId);
 });

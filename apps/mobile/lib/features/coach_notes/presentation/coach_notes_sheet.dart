@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../dashboard/domain/still_reading.dart';
 import '../data/coach_note_service.dart';
 import '../domain/coach_note_provider.dart';
 
@@ -15,7 +17,8 @@ Future<void> showCoachNotesSheet(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => _NotesSheet(clientId: clientId, clientName: clientName),
+    builder: (_) => OpenedByAccount(
+        child: _NotesSheet(clientId: clientId, clientName: clientName)),
   );
 }
 
@@ -31,6 +34,10 @@ class _NotesSheetState extends ConsumerState<_NotesSheet> {
   final _ctrl = TextEditingController();
   String _tag = 'general';
   bool _saving = false;
+
+  /// P0-FL-59f: whose notes these are. Written and deleted as them, or not at
+  /// all; the sheet closes when they leave ([OpenedByAccount]).
+  final String? _owner = signedInUid();
 
   static const _tags = [
     ('general', '📝'),
@@ -51,8 +58,12 @@ class _NotesSheetState extends ConsumerState<_NotesSheet> {
     setState(() => _saving = true);
     final saved = await ref
         .read(coachNoteServiceProvider)
-        .addNote(widget.clientId, _ctrl.text.trim(), tag: _tag);
+        .addNote(widget.clientId, _ctrl.text.trim(), owner: _owner, tag: _tag);
     if (!mounted) return;
+    if (!stillSignedIn(_owner)) {
+      _ctrl.clear();
+      return;
+    }
     setState(() => _saving = false);
     if (!saved) {
       // Keep what the coach typed: clearing it on a failed save lost the note
@@ -127,17 +138,22 @@ class _NotesSheetState extends ConsumerState<_NotesSheet> {
                         // closed); save and read already report (#78).
                         onDelete: () async {
                           final messenger = ScaffoldMessenger.of(context);
+                          if (!stillSignedIn(_owner)) {
+                            reportError('CoachNotesSheet.delete', StateError(
+                                'delete note: the signed-in account changed'));
+                            return;
+                          }
                           try {
                             await ref
                                 .read(coachNoteServiceProvider)
                                 .deleteNote(notes[i].id);
                           } catch (_) {
-                            if (!mounted) return;
+                            if (!mounted || !stillSignedIn(_owner)) return;
                             messenger.showSnackBar(const SnackBar(
                                 content: Text("Couldn't delete the note — try again.")));
                             return;
                           }
-                          if (!mounted) return;
+                          if (!mounted || !stillSignedIn(_owner)) return;
                           ref.invalidate(clientNotesProvider(widget.clientId));
                         }),
                   ),

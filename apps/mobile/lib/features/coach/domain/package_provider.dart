@@ -42,6 +42,8 @@ final myScheduleProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
 /// Coach view: a specific client's training schedule.
 final clientScheduleProvider =
     FutureProvider.autoDispose.family<Map<String, dynamic>?, String>((ref, clientId) async {
+  // P0-FL-59f: RLS answers for the signed-in coach (by id: see clientDetailProvider).
+  ref.watch(currentUserProvider.select((u) => u?.id));
   final svc = ref.watch(packageServiceProvider);
   return _recorded('clientScheduleProvider', () => svc.getClientSchedule(clientId));
 });

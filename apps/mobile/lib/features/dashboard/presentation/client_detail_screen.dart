@@ -16,6 +16,7 @@ import '../../coach/domain/program_readiness.dart';
 import '../../workout/data/program_schedule.dart' show programWeekLabel;
 import '../domain/workout_streak.dart';
 import '../../workout/domain/workout_day.dart';
+import '../domain/still_reading.dart';
 const _bg    = Color(0xFF030303);
 const _card  = Color(0xFF0E0B16);
 const _brd   = Color(0xFF1A1020);
@@ -254,9 +255,13 @@ class _OverviewTab extends ConsumerWidget {
     // NOT "not subscribed" — [paidPlan] is null then, and the lock message is
     // kept for a check that answered no.
     final paidAsync  = ref.watch(clientHasPaidPlanProvider(clientId));
-    final bool? paidPlan = paidAsync.hasValue && !paidAsync.hasError
-        ? paidAsync.requireValue
-        : null;
+    // P0-FL-59f: the check watches nothing but the signed-in id, so an
+    // AsyncLoading that holds an answer holds the PREVIOUS coach's. (A retry or
+    // refresh by the same coach stays AsyncData while it re-reads.)
+    final bool? paidPlan =
+        paidAsync is! AsyncLoading && paidAsync.hasValue && !paidAsync.hasError
+            ? paidAsync.requireValue
+            : null;
     final paidCheckFailed = paidPlan == null && paidAsync.hasError && !paidAsync.isLoading;
     // Consecutive failed checks, so a Try again that fails again reads
     // differently from the first failure instead of looking like nothing happened.
@@ -504,7 +509,7 @@ class _OverviewTab extends ConsumerWidget {
       context: context, backgroundColor: _card,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (_) => sheet);
+      builder: (_) => OpenedByAccount(child: sheet));
   }
 
   Widget _chip(String label, Color color) => Container(
@@ -753,9 +758,12 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
   // coach saw nothing. [saving] disables Save while the write is in flight.
   String? error;
   var saving = false;
+  // P0-FL-59f: typed by this coach, saved as them or not at all; the dialog
+  // closes when the account changes.
+  final owner = signedInUid();
   showDialog(
     context: context,
-    builder: (dctx) => StatefulBuilder(builder: (_, setDialogState) => AlertDialog(
+    builder: (dctx) => OpenedByAccount(child: StatefulBuilder(builder: (sctx, setDialogState) => AlertDialog(
       backgroundColor: _card,
       title: const Text('Custom Price', style: TextStyle(color: _wht, fontWeight: FontWeight.w800)),
       content: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -789,6 +797,12 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
         ),
         TextButton(
           onPressed: saving ? null : () async {
+            if (!stillSignedIn(owner)) {
+              reportError('ClientDetail.customPrice',
+                  StateError('set client price: the signed-in account changed'));
+              ctrl.clear();
+              return;
+            }
             final parsed = parseCustomPrice(ctrl.text);
             if (parsed.error != null) {
               setDialogState(() => error = parsed.error);
@@ -809,7 +823,7 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
               // claim nothing changed. Connection wording only for a failure
               // that IS the connection (P0-FL-11): a server answer (a
               // PostgrestException) said "check your connection" too.
-              if (!dctx.mounted) return;
+              if (!sctx.mounted || !stillSignedIn(owner)) return;
               setDialogState(() {
                 saving = false;
                 error = e is StateError
@@ -821,7 +835,7 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
               });
               return;
             }
-            if (!dctx.mounted) return;
+            if (!sctx.mounted || !dctx.mounted || !stillSignedIn(owner)) return;
             Navigator.pop(dctx);
             ScaffoldMessenger.of(dctx).showSnackBar(SnackBar(
                 content: Text(value == null
@@ -836,7 +850,7 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
               : const Text('Save', style: TextStyle(color: _pri, fontWeight: FontWeight.w700)),
         ),
       ],
-    )),
+    ))),
   );
 }
 
@@ -1678,7 +1692,7 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
     final saved = await showModalBottomSheet<bool>(
       context: context, backgroundColor: _card, isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (_) => sheet);
+      builder: (_) => OpenedByAccount(child: sheet));
     return saved ?? false;
   }
 
@@ -2121,6 +2135,10 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
   String? _selectedProgramId;
   bool _saving = false;
 
+  /// P0-FL-59f: whose sheet this is. Saved as them, or not at all; the sheet
+  /// itself closes when they leave ([OpenedByAccount]). Same for the two below.
+  final String? _owner = signedInUid();
+
   @override
   Widget build(BuildContext context) {
     final programsAsync = ref.watch(myProgramsProvider);
@@ -2192,10 +2210,17 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
     // Read before the await: the coach can dismiss the sheet while the write is in
     // flight, and a disposed State's `ref` throws.
     final container = ProviderScope.containerOf(context);
+    if (!stillSignedIn(_owner)) {
+      reportError('AssignProgramSheet._assign',
+          StateError('assign program: the signed-in account changed'));
+      setState(() => _selectedProgramId = null);
+      return;
+    }
     setState(() => _saving = true);
     try {
       await ref.read(coachProgramServiceProvider)
           .assignProgram(_selectedProgramId!, widget.clientId);
+      if (!stillSignedIn(_owner)) return;
       // The page behind the sheet reads the assignment through these two, and
       // neither refreshes itself: the Assigned Program card kept naming the
       // program this one had just replaced.
@@ -2205,7 +2230,7 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
       // Same defect class as the nutrition save: this had no handler, so a
       // failure left the sheet spinning and the coach told nothing.
       reportError('AssignProgramSheet._assign', e, s);
-      if (!mounted) return;
+      if (!mounted || !stillSignedIn(_owner)) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text("Couldn't assign the program — check your connection and try again.")));
@@ -2236,6 +2261,7 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
   final _water= TextEditingController();
   final _notes= TextEditingController();
   bool _saving = false;
+  final String? _owner = signedInUid();
   // P0-FL-12: Save stays off until the current plan has been READ. The prefill
   // had no error handler: a failed read left the form blank, and Save then
   // wrote the coach's blanks over the client's existing plan. A read that
@@ -2261,7 +2287,7 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       p = await ref.read(coachProgramServiceProvider).getClientNutritionPlan(widget.clientId);
     } catch (e, s) {
       reportError('AssignNutritionSheet._loadCurrentPlan', e, s);
-      if (mounted) {
+      if (mounted && stillSignedIn(_owner)) {
         setState(() {
           _loadError = e;
           _loadFailures++;
@@ -2269,7 +2295,7 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       }
       return;
     }
-    if (!mounted) return;
+    if (!mounted || !stillSignedIn(_owner)) return;
     setState(() {
       _loaded = true;
       _loadFailures = 0;
@@ -2380,6 +2406,13 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
     final carb = int.tryParse(_carb.text);
     final fat  = int.tryParse(_fat.text);
     if (cal == null || pro == null || carb == null || fat == null) return;
+    if (!stillSignedIn(_owner)) {
+      reportError('AssignNutritionSheet._save',
+          StateError('save nutrition plan: the signed-in account changed'));
+      for (final c in [_cal, _pro, _carb, _fat, _water, _notes]) { c.clear(); }
+      setState(() => _loaded = false);
+      return;
+    }
     // Read before the await: the sheet can be dismissed while the write is in flight,
     // and a disposed State's `ref` throws.
     final container = ProviderScope.containerOf(context);
@@ -2390,6 +2423,7 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
         calories: cal, protein: pro, carbs: carb, fat: fat,
         waterOz: int.tryParse(_water.text),
         notes: _notes.text.isEmpty ? null : _notes.text);
+      if (!stillSignedIn(_owner)) return;
       // The page behind the sheet reads the plan through this and does not refresh
       // itself: it kept saying "No nutrition plan assigned yet".
       container.invalidate(clientDetailProvider(widget.clientId));
@@ -2399,7 +2433,7 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       // the relationship is no longer active, e.g. the client cancelled while this
       // sheet was open — that case gets its own plain sentence.
       reportError('AssignNutritionSheet._save', e, s);
-      if (!mounted) return;
+      if (!mounted || !stillSignedIn(_owner)) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
           _isNotAuthorized(e)
@@ -2445,6 +2479,7 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
   final Set<int> _selected = {};
   final Map<int, TextEditingController> _vals = {};
   bool _saving = false;
+  final String? _owner = signedInUid();
   // P0-FL-12: assignHabits switches OFF every active habit before inserting the
   // selection, so a selection that was never pre-filled (failed read, no error
   // handler) wiped the client's habits on Save. Save stays off until the read
@@ -2472,7 +2507,7 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
       rows = await ref.read(coachProgramServiceProvider).getClientHabits(widget.clientId);
     } catch (e, s) {
       reportError('AssignHabitsSheet._loadCurrentHabits', e, s);
-      if (mounted) {
+      if (mounted && stillSignedIn(_owner)) {
         setState(() {
           _loadError = e;
           _loadFailures++;
@@ -2480,7 +2515,7 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
       }
       return;
     }
-    if (!mounted) return;
+    if (!mounted || !stillSignedIn(_owner)) return;
     setState(() {
       _loaded = true;
       _loadFailures = 0;
@@ -2593,6 +2628,15 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
   Future<void> _save() async {
     // Never send a selection that was not pre-filled from the server (P0-FL-12).
     if (!_loaded) return;
+    if (!stillSignedIn(_owner)) {
+      reportError('AssignHabitsSheet._save',
+          StateError('assign habits: the signed-in account changed'));
+      setState(() {
+        _selected.clear();
+        _loaded = false;
+      });
+      return;
+    }
     // Read before the await, as in the nutrition sheet.
     final container = ProviderScope.containerOf(context);
     setState(() => _saving = true);
@@ -2606,11 +2650,12 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
     }).toList();
     try {
       await ref.read(coachProgramServiceProvider).assignHabits(widget.clientId, habits);
+      if (!stillSignedIn(_owner)) return;
       // The page lists the client's habits from this and does not refresh itself.
       container.invalidate(clientDetailProvider(widget.clientId));
     } catch (e, s) {
       reportError('AssignHabitsSheet._save', e, s);
-      if (!mounted) return;
+      if (!mounted || !stillSignedIn(_owner)) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
           isNetworkFailure(e)

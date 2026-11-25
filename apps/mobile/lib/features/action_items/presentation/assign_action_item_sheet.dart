@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../dashboard/domain/still_reading.dart';
 import '../domain/action_item_provider.dart';
 
 /// Coach: assign an action item to a client. Returns true if assigned.
@@ -10,7 +12,8 @@ Future<bool> showAssignActionItemSheet(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => _AssignSheet(clientId: clientId, ref: ref),
+    builder: (_) =>
+        OpenedByAccount(child: _AssignSheet(clientId: clientId, ref: ref)),
   );
   return result ?? false;
 }
@@ -30,6 +33,10 @@ class _AssignSheetState extends State<_AssignSheet> {
   String _category = 'daily';
   DateTime? _due;
   bool _saving = false;
+
+  /// P0-FL-59f: whose draft this is. Assigned as them, or not at all; the
+  /// sheet closes when they leave ([OpenedByAccount]).
+  final String? _owner = signedInUid();
 
   static const _categories = [
     ('daily', '📋 Daily'),
@@ -58,6 +65,13 @@ class _AssignSheetState extends State<_AssignSheet> {
 
   Future<void> _save() async {
     if (_title.text.trim().isEmpty) return;
+    if (!stillSignedIn(_owner)) {
+      reportError('AssignActionItemSheet._save',
+          StateError('assign action item: the signed-in account changed'));
+      _title.clear();
+      _desc.clear();
+      return;
+    }
     setState(() => _saving = true);
     final ok = await widget.ref.read(actionItemServiceProvider).assignActionItem(
           clientId: widget.clientId,
@@ -67,7 +81,7 @@ class _AssignSheetState extends State<_AssignSheet> {
           dueDate: _due, // points are awarded automatically by the scoring engine
 
         );
-    if (!mounted) return;
+    if (!mounted || !stillSignedIn(_owner)) return;
     if (ok) {
       widget.ref.invalidate(clientActionItemsProvider(widget.clientId));
       widget.ref.invalidate(actionCompletionProvider(widget.clientId));

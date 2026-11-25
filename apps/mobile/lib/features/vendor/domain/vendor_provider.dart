@@ -20,7 +20,10 @@ final myEventsProvider =
   return ref.watch(vendorServiceProvider).getMyEvents();
 });
 
+/// Attendee names and emails, as RLS shows them to the signed-in vendor: read
+/// again for whoever signs in next (P0-FL-59f).
 final eventRegistrationsProvider =
     FutureProvider.family<List<Map<String, dynamic>>, String>((ref, eventId) async {
+  ref.watch(currentUserProvider.select((u) => u?.id));
   return ref.watch(vendorServiceProvider).getRegistrations(eventId);
 });

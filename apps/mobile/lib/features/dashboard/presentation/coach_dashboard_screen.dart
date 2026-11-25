@@ -22,6 +22,7 @@ import '../../checkins/domain/checkin_columns.dart';
 import '../domain/checked_in_week.dart';
 import '../domain/still_reading.dart';
 import '../domain/session_as_log.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 const _bg      = Color(0xFF030303);
 const _card    = Color(0xFF0E0B16);
@@ -54,7 +55,8 @@ const _notifMaxRetry = Duration(minutes: 1);
 /// and `ref.invalidate` (the sheet's Try again) opens a fresh one at once.
 final coachNotificationsProvider = StreamProvider<List<Map<String, dynamic>>>((ref) {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
-  ref.watch(currentUserProvider);
+  // P0-FL-59f: by id only, and the rows are marked as theirs.
+  final owner = ref.watch(currentUserProvider.select((u) => u?.id));
   final uid = _supabase.auth.currentUser?.id;
   if (uid == null) return Stream.value([]);
   return reopenWhenDone(
@@ -63,7 +65,7 @@ final coachNotificationsProvider = StreamProvider<List<Map<String, dynamic>>>((r
         .stream(primaryKey: ['id'])
         .eq('recipient_id', uid)
         .order('created_at', ascending: false)
-        .map((rows) => List<Map<String, dynamic>>.from(rows)),
+        .map((rows) => ownedBy(owner, List<Map<String, dynamic>>.from(rows))),
     origin: 'coachNotificationsProvider',
   );
 });
@@ -120,11 +122,19 @@ Stream<T> reopenWhenDone<T>(
 
 /// Unread notifications for the bell. `null` = unknown: the read failed, and
 /// a failure must not be shown as "0 unread" (P0-FL-14). While the first read
-/// is still in flight the bell shows no count, as it always has.
+/// is still in flight the bell shows no count, as it always has — and so it is
+/// while the rows held are another coach's (P0-FL-59f). `is AsyncError`, not
+/// `hasError`: the loading state a sign-in switch leaves carries the previous
+/// coach's error, which is not this one's.
 final unreadNotificationCountProvider = Provider<int?>((ref) {
   final async = ref.watch(coachNotificationsProvider);
-  if (async.hasError) return null;
+  if (async is AsyncError) return null;
   if (!async.hasValue) return 0;
+  final owner = ownerOfHeld(async);
+  if (owner != null &&
+      owner != ref.watch(currentUserProvider.select((u) => u?.id))) {
+    return 0;
+  }
   return async.requireValue.where((n) => n['read'] == false).length;
 });
 
@@ -135,7 +145,9 @@ final unreadNotificationCountProvider = Provider<int?>((ref) {
 // answer and must stay distinguishable from the read having failed.
 final coachClientsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
-  ref.watch(currentUserProvider);
+  // P0-FL-59f: by id only, and the rows are marked as theirs (here and in the
+  // two weekly reads below).
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
   // Live: re-fetch when a relationship changes (new client, status flip).
   ref.watch(tableTickerProvider('coach_client_relationships'));
   {
@@ -148,7 +160,7 @@ final coachClientsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) as
         .eq('coach_id', coachId)
         .eq('status', 'active');
     final clientIds = (rels as List).map((r) => r['client_id'] as String).toList();
-    if (clientIds.isEmpty) return [];
+    if (clientIds.isEmpty) return ownedBy(uid, []);
     // Every field the dashboard reads from a roster row, fetched. The select
     // named six columns while the risk counts read `risk_level`, the retention
     // figure `created_at` and the program figures `coaching_mode` and
@@ -171,10 +183,10 @@ final coachClientsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) as
         a['client_id'] as String:
             ((a['workout_programs'] as Map?)?['name'] as String?) ?? 'Program',
     };
-    return [
+    return ownedBy(uid, [
       for (final c in List<Map<String, dynamic>>.from(data))
         {...c, 'program_name': programOf[c['id']]},
-    ];
+    ]);
   }
 });
 
@@ -201,7 +213,7 @@ Widget _riskPill(String label, Color color) => Container(
 final coachAiSignalsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: the RPC answers for `auth.uid()`; recompute for whoever is
   // signed in now, not the coach whose clients' risk this last showed.
-  ref.watch(currentUserProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   ref.watch(tableTickerProvider('coach_client_relationships'));
   final data = await _supabase.rpc('coach_client_ai_signals');
   return List<Map<String, dynamic>>.from(data as List);
@@ -209,10 +221,10 @@ final coachAiSignalsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
 
 final clientCheckinsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
-  ref.watch(currentUserProvider);
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
   {
     final ids = await _coachClientIds();
-    if (ids.isEmpty) return []; // no clients → no data (was showing ALL platform check-ins)
+    if (ids.isEmpty) return ownedBy(uid, []); // no clients → no data (was showing ALL platform check-ins)
     // PD-B01: there is no daily check-in. This read `checkins`, which has never
     // existed, so the coach's check-in panel was permanently empty. It now reads
     // the table the member screen actually writes: check-ins SUBMITTED THIS
@@ -228,7 +240,7 @@ final clientCheckinsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
         .inFilter('status', kCheckedInStatuses)
         .gte('week_start_date', weekStart.toIso8601String().split('T')[0])
         .order('submitted_at', ascending: false);
-    return List<Map<String, dynamic>>.from(data);
+    return ownedBy(uid, List<Map<String, dynamic>>.from(data));
   }
 });
 
@@ -267,10 +279,10 @@ final clientCheckinsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
 ///     coach surface as it landed, with nobody deciding.
 final clientWorkoutLogsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
-  ref.watch(currentUserProvider);
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
   {
     final ids = await _coachClientIds();
-    if (ids.isEmpty) return []; // no clients → no data (was showing ALL platform workouts)
+    if (ids.isEmpty) return ownedBy(uid, []); // no clients → no data (was showing ALL platform workouts)
     final now = DateTime.now();
     final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
     final start = DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day);
@@ -285,10 +297,10 @@ final clientWorkoutLogsProvider = FutureProvider<List<Map<String, dynamic>>>((re
         .order('completed_at', ascending: false);
     // `duration_seconds` here; `duration_minutes` on the old table. Converted
     // at the boundary so the four call sites below are untouched.
-    return [
+    return ownedBy(uid, [
       for (final row in data as List)
         sessionAsWorkoutLog(Map<String, dynamic>.from(row as Map))
-    ];
+    ]);
   }
 });
 
@@ -332,18 +344,42 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
     // arriving as an empty list told them it had vanished. `.valueOrNull` is
     // kept — these are the reads EC-G8 already counts — but a failure is now
     // tracked alongside it so the screen can tell the two apart.
-    final clientsFailed  = clients is AsyncError;
-    final checkinsFailed = checkins is AsyncError;
-    final workoutsFailed = workouts is AsyncError;
+    //
+    // P0-FL-59f: held rows count only when they were read for the coach signed
+    // in NOW — Riverpod keeps the previous coach's through a switch, its wait
+    // and its failure. This coach's own rows are kept through a re-read that
+    // fails, with a line saying they may be out of date. The id is watched only
+    // when there is a marked list to check against it (as
+    // [confirmedCurrentProfileProvider] does): with none there is nothing to
+    // confirm, and the reads themselves already follow the account.
+    final heldOwner =
+        ownerOfHeld(clients) ?? ownerOfHeld(checkins) ?? ownerOfHeld(workouts);
+    final uid = heldOwner == null
+        ? null
+        : ref.watch(currentUserProvider.select((u) => u?.id));
+    bool mine(AsyncValue<List<Map<String, dynamic>>> v) {
+      final owner = ownerOfHeld(v);
+      return owner != null && owner == uid;
+    }
+    bool othersRows(AsyncValue<List<Map<String, dynamic>>> v) =>
+        ownerOfHeld(v) != null && !mine(v);
+    final clientsFailed  = clients is AsyncError && !mine(clients);
+    final checkinsFailed = checkins is AsyncError && !mine(checkins);
+    final workoutsFailed = workouts is AsyncError && !mine(workouts);
     final failed = clientsFailed || checkinsFailed || workoutsFailed;
-    final clientList    = clients is AsyncError ? const <Map<String, dynamic>>[] : (clients.valueOrNull  ?? []);
-    final checkinList   = checkins is AsyncError ? const <Map<String, dynamic>>[] : (checkins.valueOrNull ?? []);
-    final workoutList   = workouts is AsyncError ? const <Map<String, dynamic>>[] : (workouts.valueOrNull ?? []);
+    final clientList    = clientsFailed  || othersRows(clients)  ? const <Map<String, dynamic>>[] : (clients.valueOrNull  ?? []);
+    final checkinList   = checkinsFailed || othersRows(checkins) ? const <Map<String, dynamic>>[] : (checkins.valueOrNull ?? []);
+    final workoutList   = workoutsFailed || othersRows(workouts) ? const <Map<String, dynamic>>[] : (workouts.valueOrNull ?? []);
     // D4: nor may a read still in flight. Until each list arrives, its tab and
     // its count say so instead of "none".
-    final clientsReading  = stillReading(clients);
-    final checkinsReading = stillReading(checkins);
-    final workoutsReading = stillReading(workouts);
+    final clientsReading  = stillReading(clients, uid: uid);
+    final checkinsReading = stillReading(checkins, uid: uid);
+    final workoutsReading = stillReading(workouts, uid: uid);
+    // A re-read that failed over rows still shown.
+    final stale = [
+      for (final v in [clients, checkins, workouts])
+        if (v is AsyncError && mine(v)) v,
+    ];
     // Nor a failed one: a count over the empty stand-in is not a count.
     final clientsUnknown  = clientsReading  || clientsFailed;
     final checkinsUnknown = checkinsReading || checkinsFailed;
@@ -509,8 +545,11 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                 // label says it could not load; loading claims no count. A
                 // reload (accept/decline, a live change) keeps the last count
                 // rather than flickering the dot off.
+                // P0-FL-59f: kept for the coach it was read for only — a held
+                // dot, or a held failure, is not the next coach's.
                 ref.watch(pendingRequestsProvider).when(
-                  skipLoadingOnReload: true,
+                  skipLoadingOnReload:
+                      _isOwnAnswer(ref.watch(pendingRequestsProvider)),
                   data: (r) => r.isNotEmpty
                       ? Tab(child: Semantics(
                           label: "Requests — new",
@@ -565,6 +604,28 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
               color: _brand),
           ])),
 
+        // Scrolls inside its own share, so at large text it cannot push the
+        // tabs off a small screen.
+        if (stale.isNotEmpty)
+          ConstrainedBox(
+            constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * 0.3),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: SectionLoadFailure(
+                what: 'the latest client activity',
+                error: stale.first.error,
+                busy: stale.any((v) => v.isLoading),
+                onRetry: () {
+                  ref.invalidate(coachClientsProvider);
+                  ref.invalidate(clientCheckinsProvider);
+                  ref.invalidate(clientWorkoutLogsProvider);
+                },
+                accent: _primary,
+                textColor: _white,
+                mutedColor: _muted,
+                detail: 'What is shown below may be out of date.'))),
+
         // ── Tab views ──
         Expanded(
           child: TabBarView(
@@ -580,6 +641,15 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
               _buildLeaderboardTab(),
             ])),
       ])));
+  }
+
+  /// Whether what [v] holds was read for the coach signed in now. Rows nobody
+  /// marked have nobody to disagree with. Call from build: it watches the id.
+  bool _isOwnAnswer(AsyncValue<List<Map<String, dynamic>>> v) {
+    if (!v.hasValue) return false;
+    final owner = ownerOfHeld(v);
+    return owner == null ||
+        owner == ref.watch(currentUserProvider.select((u) => u?.id));
   }
 
   void _showNotificationsSheet(BuildContext context) {
@@ -1031,6 +1101,17 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                       final clientId  = client['id'] as String;
                       final clientFn  = client['first_name'] as String? ?? '';
                       final clientLn  = client['last_name'] as String? ?? '';
+                      // P0-FL-59f: the coach whose roster this row is on. The
+                      // conversation is opened as them, or not at all.
+                      final owner =
+                          ownerOfHeld(ref.read(coachClientsProvider)) ?? signedInUid();
+                      bool left() {
+                        if (stillSignedIn(owner)) return false;
+                        reportError('CoachDashboard.message', StateError(
+                            'open conversation: the signed-in account changed'));
+                        return true;
+                      }
+                      if (left()) return;
                       final convId = await MessagingService()
                           .getOrCreateCoachClientConversation(clientId);
                       // `mounted`, not `context.mounted`: this closure captures
@@ -1038,7 +1119,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                       // State's own liveness. The two are equivalent here —
                       // State.mounted is State.context.mounted — so this is the
                       // idiomatic spelling, not a suppression.
-                      if (!mounted) return;
+                      if (!mounted || left()) return;
                       ref.read(selectedConversationProvider.notifier).state = {
                         'id': convId,
                         'participant': {
@@ -1313,52 +1394,61 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
   // no refresh, the request still showing as pending. The service now refuses
   // an answer that changed nothing, so the copy is the truth either way, and
   // the list is re-read so it shows what the server holds.
+  //
+  // P0-FL-59f: what came of it is said only to the coach whose list it was on.
   Future<void> _approveRequest(String relId, String clientId) async {
+    final owner = ownerOfHeld(ref.read(pendingRequestsProvider));
     try {
       await ref.read(coachRelServiceProvider).approveRequest(relId, clientId);
     } catch (e, s) {
       reportError('CoachDashboard._approveRequest', e, s);
-      ref.invalidate(pendingRequestsProvider);
-      if (mounted) {
+      if (mounted && !accountLeft(owner)) {
+        ref.invalidate(pendingRequestsProvider);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
             e is StateError ? e.message
                 : "Couldn't accept the request — check your connection and try again.")));
       }
       return;
     }
+    if (!mounted || accountLeft(owner)) return;
     ref.invalidate(pendingRequestsProvider);
     ref.invalidate(coachClientsProvider);
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Client accepted!'), backgroundColor: _brand));
   }
 
   Future<void> _declineRequest(String relId, String clientId) async {
+    final owner = ownerOfHeld(ref.read(pendingRequestsProvider));
     try {
       await ref.read(coachRelServiceProvider).declineRequest(relId, clientId);
     } catch (e, s) {
       reportError('CoachDashboard._declineRequest', e, s);
-      ref.invalidate(pendingRequestsProvider);
-      if (mounted) {
+      if (mounted && !accountLeft(owner)) {
+        ref.invalidate(pendingRequestsProvider);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
             e is StateError ? e.message
                 : "Couldn't decline the request — check your connection and try again.")));
       }
       return;
     }
+    if (!mounted || accountLeft(owner)) return;
     ref.invalidate(pendingRequestsProvider);
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Request declined'), backgroundColor: Color(0xFF333333)));
   }
 
   void _showInviteSheet(BuildContext context) {
     final emailCtrl = TextEditingController();
     bool sending = false;
+    // P0-FL-59f: the invite is this coach's — typed by them, sent as them, or
+    // not sent. The sheet closes when the account changes.
+    final owner = signedInUid();
     showModalBottomSheet(
       context: context,
       backgroundColor: _card,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (ctx) => StatefulBuilder(builder: (ctx, setSt) => Padding(
+      builder: (_) => OpenedByAccount(child: StatefulBuilder(builder: (ctx, setSt) => Padding(
         padding: EdgeInsets.fromLTRB(20, 24, 20, MediaQuery.of(ctx).viewInsets.bottom + 24),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Invite a Client', style: TextStyle(color: _white, fontSize: 18, fontWeight: FontWeight.w700)),
@@ -1381,8 +1471,14 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
           SizedBox(width: double.infinity, child: ElevatedButton(
             onPressed: sending ? null : () async {
               if (emailCtrl.text.isEmpty) return;
+              if (!stillSignedIn(owner)) {
+                reportError('CoachDashboard.sendInvite',
+                    StateError('send invite: the signed-in account changed'));
+                emailCtrl.clear();
+                return;
+              }
               setSt(() => sending = true);
-              final coachId = _supabase.auth.currentUser?.id ?? '';
+              final coachId = owner ?? '';
               final messenger = ScaffoldMessenger.of(context);
               try {
                 await ref.read(coachRelServiceProvider).sendInvite(coachId, emailCtrl.text.trim());
@@ -1390,11 +1486,13 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                 // Said "Invite sent!" over a failed email, and a failed insert
                 // escaped the button with the spinner still turning.
                 reportError('CoachDashboard.sendInvite', e);
+                if (!stillSignedIn(owner)) return;
                 if (ctx.mounted) setSt(() => sending = false);
                 messenger.showSnackBar(const SnackBar(
                     content: Text("Couldn't send the invite — check your connection and try again.")));
                 return;
               }
+              if (!stillSignedIn(owner)) return;
               ref.invalidate(sentInvitesProvider);
               if (ctx.mounted) {
                 Navigator.pop(ctx);
@@ -1411,7 +1509,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
               : const Text('Send Invite', style: TextStyle(fontWeight: FontWeight.w700)),
           )),
         ]),
-      )),
+      ))),
     );
   }
 
@@ -2003,6 +2101,25 @@ class _NotificationsSheetState extends ConsumerState<_NotificationsSheet> {
   /// failure: drawn neutral, and NOT cleared by the refresh it announces.
   bool _failureIsInfo = false;
 
+  /// The coach whose notifications this sheet showed first (P0-FL-59f). It is
+  /// theirs: nothing is written from it as anyone else, and it closes when the
+  /// account changes. Null until marked rows have arrived.
+  String? _owner;
+  bool _closing = false;
+
+  void _closeForOwner() {
+    if (_closing) return;
+    _closing = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final route = ModalRoute.of(context);
+      if (route == null || !route.isActive || route.isFirst) return;
+      Navigator.of(context)
+        ..popUntil((r) => r == route)
+        ..pop();
+    });
+  }
+
   /// Runs one write. True only when the server confirmed it; otherwise the
   /// failure is reported and said here, and the list keeps showing what is
   /// stored (nothing was changed locally). [onNoRow], when given, is said
@@ -2010,9 +2127,15 @@ class _NotificationsSheetState extends ConsumerState<_NotificationsSheet> {
   Future<bool> _run(String key, String origin, String what,
       _SheetWrite write, {String? onNoRow}) async {
     if (_busy.contains(key)) return false;
+    if (accountLeft(_owner)) {
+      reportError('CoachNotificationsSheet.$origin',
+          StateError('$what: the signed-in account changed'));
+      return false;
+    }
     setState(() => _busy.add(key));
     try {
       await write();
+      if (accountLeft(_owner)) return false;
       if (mounted) setState(() { _busy.remove(key); _failure = null; });
       return true;
     } catch (e, st) {
@@ -2020,7 +2143,7 @@ class _NotificationsSheetState extends ConsumerState<_NotificationsSheet> {
       // changed nothing.
       reportError('CoachNotificationsSheet.$origin', e, st);
       final noRow = onNoRow != null && e is _NoRowChanged;
-      if (mounted) {
+      if (mounted && !accountLeft(_owner)) {
         setState(() {
           _busy.remove(key);
           _failureIsInfo = noRow;
@@ -2112,8 +2235,20 @@ class _NotificationsSheetState extends ConsumerState<_NotificationsSheet> {
       }
     });
     final async = ref.watch(coachNotificationsProvider);
-    final failed = async.hasError;
-    final loaded = !failed && async.hasValue;
+    // P0-FL-59f: rows read for another coach are not this sheet's to show, and
+    // the sheet of a coach who left closes. `is AsyncError`: see the bell.
+    final rowsOwner = ownerOfHeld(async);
+    final uid = rowsOwner == null && _owner == null
+        ? null
+        : ref.watch(currentUserProvider.select((u) => u?.id));
+    if (rowsOwner != null && rowsOwner == uid) _owner ??= rowsOwner;
+    if (_owner != null && _owner != uid) {
+      _closeForOwner();
+      return const SizedBox.shrink();
+    }
+    final failed = async is AsyncError;
+    final loaded =
+        !failed && async.hasValue && (rowsOwner == null || rowsOwner == uid);
     final notifs = loaded
         ? async.requireValue.where((n) => !_deleted.contains(n['id'])).toList()
         : const <Map<String, dynamic>>[];
