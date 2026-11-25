@@ -235,6 +235,24 @@ void main() {
     }
   });
 
+  test('a page with no known owner registers nothing: it admits and refuses '
+      'nobody', () async {
+    final pages = c.read(openClientPagesProvider)..opened(_client, null);
+    for (final uid in [memberA, memberB, null]) {
+      expect(pages.admits(_client, uid), isTrue, reason: '$uid');
+    }
+    // Beside a page of A's it lets nobody in either.
+    pages.opened(_client, memberA);
+    expect(pages.admits(_client, null), isFalse,
+        reason: 'THE defect: a signed-out read was let in by it');
+    expect(pages.admits(_client, memberB), isFalse);
+    pages.closed(_client, null);
+    expect(pages.admits(_client, memberA), isTrue);
+    expect(pages.admits(_client, memberB), isFalse);
+    pages.closed(_client, memberA);
+    expect(pages.admits(_client, memberB), isTrue);
+  });
+
   // SEC7: the page's read is many steps; each asks whose it still is.
   group('the client page read of many steps', () {
     const steps = [

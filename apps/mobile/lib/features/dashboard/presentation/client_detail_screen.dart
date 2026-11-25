@@ -123,17 +123,40 @@ class ClientDetailScreen extends ConsumerStatefulWidget {
 class _Said {
   _Said(this.messenger);
   final ScaffoldMessengerState messenger;
-  bool _up = false, _unwanted = false, over = false;
-
-  void shown() {
-    _up = true;
-    if (_unwanted) close();
-  }
+  bool up = false, unwanted = false, over = false;
 
   void close() {
-    _unwanted = true;
-    if (_up && !over && messenger.mounted) messenger.removeCurrentSnackBar();
+    unwanted = true;
+    if (!up || over || !messenger.mounted) return;
+    over = true;
+    messenger.removeCurrentSnackBar();
   }
+}
+
+/// The content of [said]: built when it comes up, and not before.
+class _SaidText extends StatefulWidget {
+  final _Said said;
+  final Widget child;
+  const _SaidText(this.said, {required this.child});
+
+  @override
+  State<_SaidText> createState() => _SaidTextState();
+}
+
+class _SaidTextState extends State<_SaidText> {
+  @override
+  void initState() {
+    super.initState();
+    widget.said.up = true;
+    if (widget.said.unwanted) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => widget.said.close());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      widget.said.unwanted ? const SizedBox.shrink() : widget.child;
 }
 
 class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
@@ -156,7 +179,7 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
     final said = _Said(ScaffoldMessenger.of(context));
     _said.add(said);
     said.messenger.showSnackBar(SnackBar(
-      content: OwnedText(text, owner: _owner), onVisible: said.shown,
+      content: _SaidText(said, child: OwnedText(text, owner: _owner)),
       behavior: SnackBarBehavior.floating, duration: duration))
       .closed.then((_) => _said.remove(said..over = true));
   }

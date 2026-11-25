@@ -303,6 +303,7 @@ class ProgramBuilderScreen extends ConsumerWidget {
     _watchedUid(ref); // so that a change redraws; the auth client decides
     if (!stillSignedIn(owner)) {
       return Scaffold(
+        key: const ValueKey('gone'), // no part of the other animates out in it
         backgroundColor: _bg,
         appBar: AppBar(
             backgroundColor: _bg,

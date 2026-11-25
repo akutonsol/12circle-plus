@@ -555,6 +555,59 @@ void main() {
       await unmount(tester);
     });
 
+    // Round 5: the page takes down its own messages and nobody else's.
+    for (final how in ['A leaves the page', 'B signs in', 'A signs out']) {
+      testWidgets("$how: a message queued behind the page's is still said, and "
+          "none of the page's is", (tester) async {
+        await dismissed(tester);
+        // A second of the page's, queued; then another screen's.
+        await tester.tap(find.widgetWithText(TextButton, 'Dismiss').first);
+        await tester.pump();
+        ScaffoldMessenger.of(tester.element(find.byType(ClientDetailScreen)))
+            .showSnackBar(const SnackBar(
+                content: Text("Couldn't save — another screen's")));
+        final other = find.textContaining("another screen's");
+        expect(other, findsNothing, reason: 'premise: queued');
+        if (how == 'A leaves the page') {
+          tester.state<NavigatorState>(find.byType(Navigator).first).popUntil(
+              (r) => r.isFirst);
+          await pumpUntil(tester, () => !seen(find.byType(ClientDetailScreen)),
+              what: 'the page is gone', step: const Duration(milliseconds: 16));
+        } else {
+          await tester.runAsync(
+              () => how == 'B signs in' ? signInAs(memberB) : signOut());
+        }
+        await tester.pump();
+        for (var i = 0; i < 20 && !seen(other); i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(said(), findsNothing, reason: "the page's own (frame $i)");
+        }
+        expect(other, findsOneWidget,
+            reason: "THE defect: another screen's message was dropped with it");
+        await frames(tester, 10);
+        expect(other, findsOneWidget, reason: 'for its own time');
+        expect(tester.takeException(), isNull);
+        await unmount(tester);
+      });
+    }
+
+    testWidgets("A's 'Program assigned!' is not in the next frame for B",
+        (tester) async {
+      await page(tester);
+      await tester.tap(find.text('Assign / Change Program').last);
+      await pumpUntil(tester, () => seen(find.text('Plan of A')), what: 'A');
+      await frames(tester);
+      await tester.tap(find.text('Plan of A'));
+      await frames(tester, 2);
+      await tester.tap(find.text('Assign Program'));
+      await pumpUntil(tester, () => seen(find.text('Program assigned!')),
+          what: 'said to A');
+      await tester.runAsync(() => signInAs(memberB));
+      await tester.pump();
+      expect(find.text('Program assigned!'), findsNothing);
+      await unmount(tester);
+    });
+
     testWidgets("control: a message of another page's is not taken down with a "
         'page that said nothing', (tester) async {
       await dismissed(tester);
