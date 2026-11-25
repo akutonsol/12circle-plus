@@ -105,6 +105,9 @@ void main() {
     await b;
     await settleReal(t);
     expect(server.writesBy(memberB), isEmpty);
+    // (The tap came before or after the account really changed: a save as A,
+    // or one refusal, recorded.)
+    expect(changed().length + server.writesBy(memberA).length, 1);
     expect(sheet, findsNothing);
     expect(find.textContaining("Couldn't"), findsNothing);
     await unmountAll(t);

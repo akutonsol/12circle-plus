@@ -334,7 +334,6 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
         if ((m['voice_url']?.toString() ?? '').isNotEmpty) ...[
           const SizedBox(height: 12),
           CoachVoicePlayer(
-            key: ValueKey('$_loadedKey ${m['voice_url']}'),
             url: m['voice_url'].toString(),
             durationMs: (m['voice_duration_ms'] as num?)?.toInt(),
             coachName: editable ? null : coachName),
@@ -592,7 +591,6 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
               Padding(padding: const EdgeInsets.only(bottom: 8),
                 child: Row(children: [
                   Expanded(child: CoachVoicePlayer(
-                    key: ValueKey(sheetOverlay!['voice_url']),
                     url: sheetOverlay!['voice_url'].toString(),
                     durationMs: (sheetOverlay?['voice_duration_ms'] as num?)?.toInt())),
                   IconButton(tooltip: 'Remove your voice note',

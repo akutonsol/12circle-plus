@@ -220,7 +220,9 @@ void main() {
       await unmountAll(t);
     });
 
-    testWidgets("A's stop that fails late does not remove what B is recording",
+    // (A control: `record` runs one call at a time, so with it A's late stop
+    // cannot meet B's file. The local copy of the path is for one that does.)
+    testWidgets("control: A's stop that fails late does not remove what B is recording",
         (t) async {
       await recorder(t);
       var g = await hold(t);
@@ -563,7 +565,8 @@ void main() {
 
     /// What is announced: the button's value ('' = nothing).
     String state(WidgetTester t) => t
-        .getSemantics(find.bySemanticsLabel(RegExp('^Listen to Coach Ana: ')))
+        .getSemantics(find.descendant(
+            of: control, matching: find.byType(GestureDetector)).first)
         .getSemanticsData()
         .value;
 
