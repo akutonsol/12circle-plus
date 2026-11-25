@@ -57,6 +57,41 @@ String? ownerOfHeld<T>(AsyncValue<List<T>> list) {
   return signedInUid() == null ? null : unknownOwner;
 }
 
+/// Whose read failed, beside the error as [ownedBy] is beside the rows.
+final _failedFor = Expando<String>('the account whose read failed');
+
+/// [read], its rows marked as [uid]'s ([ownedBy]) and so is its failure:
+/// Riverpod carries both into the next account's read.
+Future<List<T>> ownedRead<T>(
+    String? uid, Future<List<T>> Function() read) async {
+  try {
+    return ownedBy(uid, await read());
+  } on Exception catch (e) {
+    if (uid != null) _failedFor[e] = uid;
+    rethrow;
+  }
+}
+
+/// What [list] says to [uid], judged by whose rows and whose failure it holds
+/// and by nothing else: an AsyncLoading, AsyncData or AsyncError each may carry
+/// the previous account's. Another account's rows are dropped, the failure of
+/// [uid]'s own read is kept, and otherwise it is still being read.
+AsyncValue<List<T>> heldFor<T>(String? uid, AsyncValue<List<T>> list) {
+  final error = list.error;
+  final myFailure = error != null &&
+      (!list.isLoading || uid == null || _failedFor[error] == uid);
+  final owner = ownerOfHeld(list);
+  // An unmarked empty list still being re-read is nobody's answer.
+  final mine = list.hasValue &&
+      (owner == uid || (owner == null && !list.isLoading));
+  if (mine) {
+    return error == null || myFailure ? list : AsyncData(list.requireValue);
+  }
+  return myFailure
+      ? AsyncError(error, list.stackTrace ?? StackTrace.empty)
+      : AsyncLoading<List<T>>();
+}
+
 /// Whether [list] has nothing to say yet to [uid].
 ///
 /// Rows marked for [uid] are an answer, empty or not, and a re-read of them

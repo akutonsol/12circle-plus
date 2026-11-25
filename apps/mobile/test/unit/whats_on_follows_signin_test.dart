@@ -203,6 +203,105 @@ void main() {
     }
   });
 
+  // Round 3: the guard at 956c12e asked who last SETTLED, not whose rows.
+  for (final (source, theirs) in [
+    ('classes', 'Booked'),
+    ('challenges', 'Joined'),
+  ]) {
+    void reread() {
+      c.read(refreshClassesProvider.notifier).state++;
+      c.invalidate(liveChallengesProvider);
+    }
+
+    test("SEC1/SEC6 $source: B failed, then B's own re-read is out: the "
+        "failure stays, none of A's rows", () async {
+      server.fails.add('GET $source:$memberB');
+      await becomes(memberB);
+      await until(settled, 'B failed');
+      server.fails.clear();
+      final hold = server.holds['GET $source:$memberB'] = Completer<void>();
+      reread();
+      await pumpEventQueue();
+      expect(actions(), isNot(contains(theirs)),
+          reason: "THE defect: A's rows were B's after one Try again");
+      expect(now().hasValue && now().requireValue.failed.length == 1, isTrue,
+          reason: "B's own failure stays until B's read answers");
+      hold.complete();
+      await until(() => settled() && now().requireValue.failed.isEmpty, 'B');
+      expect(actions(), isNot(contains(theirs)));
+    });
+
+    test('SEC2 $source: B failed, then a token refresh', () async {
+      server.fails.add('GET $source:$memberB');
+      await becomes(memberB);
+      await until(settled, 'B failed');
+      server.holds['GET $source:$memberB'] = Completer<void>();
+      final user = c.read(currentUserProvider);
+      await refreshSession();
+      await until(() => c.read(currentUserProvider) != user, 'a new User');
+      await pumpEventQueue();
+      expect(actions(), isNot(contains(theirs)));
+    });
+
+    test('$source invalidated as the account changes, before anything is '
+        "flushed: an AsyncData of A's is not B's", () async {
+      server.holds['GET $source:$memberB'] = Completer<void>();
+      final seen = <String?>{};
+      c.listen(whatsOnProvider, (_, __) => seen.addAll(actions()));
+      c.listen(currentUserProvider, (_, u) {
+        if (u?.id != memberB) return;
+        c
+          ..invalidate(liveClassesFromDbProvider)
+          ..invalidate(liveChallengesProvider);
+      });
+      await becomes(memberB);
+      expect(actions(), isNot(contains(theirs)));
+      expect(seen, isNot(contains(theirs)));
+    });
+  }
+
+  test('SEC3: B settled and closed the list, A settled elsewhere, B is back',
+      () async {
+    c.dispose();
+    c = ProviderContainer(overrides: [
+      tableTickerProvider.overrideWith((ref, t) => Stream.value(0)),
+    ]);
+    c.listen(currentUserProvider, (_, __) {});
+    await becomes(memberB);
+    final screen = c.listen(whatsOnProvider, (_, __) {});
+    await until(settled, 'B');
+    screen.close();
+    await becomes(memberA);
+    c.listen(liveChallengesProvider, (_, __) {});
+    c.listen(liveClassesFromDbProvider, (_, __) {});
+    await until(
+        () =>
+            c.read(liveChallengesProvider) is AsyncData &&
+            !c.read(liveChallengesProvider).isLoading &&
+            c.read(liveClassesFromDbProvider) is AsyncData &&
+            !c.read(liveClassesFromDbProvider).isLoading,
+        'A elsewhere');
+    server.holds['GET challenges:$memberB'] = Completer<void>();
+    server.holds['GET classes:$memberB'] = Completer<void>();
+    await becomes(memberB);
+    c.listen(whatsOnProvider, (_, __) {});
+    await pumpEventQueue();
+    expect(actions(), isNot(contains('Joined')));
+    expect(actions(), isNot(contains('Booked')));
+  });
+
+  test("control: the member's own failed refresh, then a good one", () async {
+    server.fails.addAll(['GET classes:$memberA', 'GET challenges:$memberA']);
+    c.read(refreshClassesProvider.notifier).state++;
+    c.invalidate(liveChallengesProvider);
+    await until(() => settled() && now().requireValue.failed.length == 2, 'f');
+    server.fails.clear();
+    c.read(refreshClassesProvider.notifier).state++;
+    c.invalidate(liveChallengesProvider);
+    await until(() => settled() && now().requireValue.failed.isEmpty, 'ok');
+    expect(actions(), containsAll(['Booked', 'Joined']));
+  });
+
   test('control: a refreshed token holds the list, and re-reads no classes',
       () async {
     final before = server.count('GET classes:$memberA');

@@ -3,7 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../auth/domain/auth_provider.dart';
 import '../../challenges/domain/challenge_provider.dart';
-import '../../dashboard/domain/still_reading.dart' show hasAuthClient, ownerOfHeld;
+import '../../dashboard/domain/still_reading.dart' show hasAuthClient, heldFor;
 import 'class_provider.dart';
 import 'whats_on.dart';
 
@@ -54,38 +54,17 @@ final whatsOnSegmentProvider = StateProvider<int>((ref) => 0);
 ///
 /// ── AND NOBODY ELSE'S ANSWER COUNTS (P0-FL-59f, A-25) ──────────────────────
 /// Riverpod also keeps the PREVIOUS MEMBER's answer, and their failure, through
-/// a sign-in switch: "Booked" and "Joined" are theirs. While a source re-reads,
-/// what it holds counts only when it last settled for the member signed in now
-/// — by id, so a token refresh or a live re-read still holds the list steady.
+/// a sign-in switch: "Booked" and "Joined" are theirs. So each personal source
+/// is judged by whose rows and whose failure it holds ([heldFor]) — by id, so a
+/// token refresh or a live re-read still holds the list steady.
 final whatsOnProvider = Provider<AsyncValue<WhatsOn>>((ref) {
   final uid = hasAuthClient
       ? ref.watch(currentUserProvider.select((u) => u?.id))
       : null;
-  final settledFor = ref.read(_settledForProvider);
-  AsyncValue<T> own<T>(Object source, AsyncValue<T> v) {
-    if (!v.isLoading) {
-      settledFor[source] = uid;
-      return v;
-    }
-    return settledFor.containsKey(source) && settledFor[source] == uid
-        ? v
-        : AsyncLoading<T>();
-  }
-
-  var classes =
-      own(liveClassesFromDbProvider, ref.watch(liveClassesFromDbProvider));
-  // The class rows also carry whose they are.
-  final owner = ownerOfHeld(classes);
-  if (owner != null && owner != uid && !classes.hasError) {
-    classes = const AsyncLoading();
-  }
   return combineWhatsOn(
-    classes: classes,
+    classes: heldFor(uid, ref.watch(liveClassesFromDbProvider)),
     // The same for everybody signed in.
     events: ref.watch(whatsOnEventsProvider),
-    challenges: own(liveChallengesProvider, ref.watch(liveChallengesProvider)),
+    challenges: heldFor(uid, ref.watch(liveChallengesProvider)),
   );
 });
-
-/// Which member each personal source last settled for, an answer or a failure.
-final _settledForProvider = Provider((_) => <Object, String?>{});

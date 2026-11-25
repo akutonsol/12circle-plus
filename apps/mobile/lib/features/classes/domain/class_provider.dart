@@ -1,6 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../auth/domain/auth_provider.dart';
-import '../../dashboard/domain/still_reading.dart' show ownedBy, ownerOfHeld;
+import '../../dashboard/domain/still_reading.dart' show ownedRead, ownerOfHeld;
 import '../data/class_service.dart';
 import '../data/live_class_service.dart';
 import '../data/models/class_model.dart';
@@ -26,11 +26,12 @@ final liveClassesFromDbProvider = FutureProvider<List<FitnessClass>>((ref) async
   final uid = ref.watch(currentUserProvider.select((u) => u?.id));
   ref.watch(refreshClassesProvider);
   final svc = ref.watch(liveClassServiceProvider);
-  final live = await svc.getUpcomingClasses();
   // Real classes only — no fake/sample fallback (avoids showing demo coaches
   // like "Coach Sarah" in production). Empty DB → empty list → empty state.
-  return ownedBy(
-      uid, live.where((c) => c.status != ClassStatus.completed).toList());
+  return ownedRead(uid, () async {
+    final live = await svc.getUpcomingClasses();
+    return live.where((c) => c.status != ClassStatus.completed).toList();
+  });
 });
 
 /// The classes held for the signed-in member. Riverpod keeps the previous

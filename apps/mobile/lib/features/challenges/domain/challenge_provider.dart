@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../dashboard/domain/still_reading.dart' show ownedRead;
 import '../data/challenge_service.dart';
 import '../data/live_challenge_service.dart';
 import '../data/models/challenge_model.dart';
@@ -23,9 +24,10 @@ final selectedChallengeTabProvider = StateProvider<int>((ref) => 0);
 
 // ── Live challenges from Supabase ─────────────────────────────────────────────
 final liveChallengesProvider = FutureProvider<List<Challenge>>((ref) async {
-  ref.watch(currentUserProvider);
+  // By id, and marked as theirs: progress and "joined" are this member's.
+  final uid = ref.watch(_signedInUid);
   final svc = ref.watch(liveChallengeServiceProvider);
-  return svc.getActiveChallenges();
+  return ownedRead(uid, svc.getActiveChallenges);
 });
 
 class ChallengeNotifier extends StateNotifier<List<Challenge>> {
