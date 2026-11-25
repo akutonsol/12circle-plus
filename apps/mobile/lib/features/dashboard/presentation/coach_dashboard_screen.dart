@@ -683,6 +683,13 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
         owner == ref.watch(currentUserProvider.select((u) => u?.id));
   }
 
+  /// The signed-in coach's id, watched: the state a switch leaves a read in may
+  /// not be a change of that read's, so the tab that judges its rows by the id
+  /// follows the id. Call from build.
+  String? _watchedUid() => hasAuthClient
+      ? ref.watch(currentUserProvider.select((u) => u?.id))
+      : null;
+
   void _showNotificationsSheet(BuildContext context) {
     showModalBottomSheet(
       context: context,
@@ -1200,7 +1207,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
   Widget _buildRequestsTab() {
     // P0-FL-59f: the rows and the failure of another coach are not this one's,
     // whatever state holds them.
-    final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+    final uid = _watchedUid();
     final requestsAsync =
         heldFor(uid, ref.watch(pendingRequestsProvider), keepUnmarked: true);
     final invitesAsync =
@@ -1567,7 +1574,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
   }[g] ?? g;
 
   Widget _buildLeaderboardTab() {
-    final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+    final uid = _watchedUid();
     final leaderAsync =
         heldFor(uid, ref.watch(coachLeaderboardProvider), keepUnmarked: true);
     // P0-FL-5: a failed read used to print the raw exception under "Error
