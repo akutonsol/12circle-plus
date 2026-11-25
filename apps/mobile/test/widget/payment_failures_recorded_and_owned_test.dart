@@ -438,6 +438,16 @@ void main() {
       expect(recordedAccountChange(), isTrue);
     });
 
+
+    testWidgets("no-frame: A's plan card tapped after B signed in sends nothing", (t) async {
+      await openAsA(t);
+      server.answers['client_plan:$_b'] = (200, 'self_guided');
+      server.answers['update-subscription:$_b'] = (200, {'ok': true});
+      await t.runAsync(() => signInAs(_b)); // no pump
+      await t.tap(find.text('Upgrade to AI-Guided'));
+      await settle(t);
+      expect(server.count('update-subscription', _b), 0);
+    });
     testWidgets("A's busy plan card is not busy for B", (t) async {
       await openAsA(t);
       server.answers['client_plan:$_b'] = (200, 'free');
@@ -708,6 +718,29 @@ void main() {
       await until(t, () => enabled(t, startsWith: 'Choose').isNotEmpty, 'plans');
     }
 
+
+    testWidgets("no-frame: A's plan re-read before B's account arrived is not B's", (t) async {
+      await openAsA(t, tier: 'growth');
+      expect(find.text('Current'), findsOneWidget);
+      server.answers['coach_plan_tier:$_b'] = (500, {'message': 'down'});
+      final c = ProviderScope.containerOf(t.element(find.byType(CoachPlanScreen)), listen: false);
+      await t.runAsync(() => signInAs(_b)); // no pump
+      c.invalidate(coachPlanTierProvider);
+      await settle(t);
+      expect(find.text('Current'), findsNothing);
+      expect(find.textContaining('from the last time'), findsNothing);
+    });
+
+    testWidgets("no-frame: A's coach plan card tapped after B signed in sends nothing", (t) async {
+      await openAsA(t, tier: null);
+      server.answers['coach_plan_tier:$_b'] = (200, 'growth');
+      server.answers['create-checkout:$_b'] = (200, {'url': 'https://stripe/b'});
+      await t.runAsync(() => signInAs(_b)); // no pump
+      await t.tap(find.text('Choose Starter'));
+      await settle(t);
+      expect(server.count('create-checkout', _b), 0);
+      expect(recordedAccountChange(), isTrue);
+    });
     testWidgets('an unread tier is not "no plan": nothing is for sale, it is '
         'said, and Try again re-reads', (t) async {
       server.answers['coach_plan_tier:$_a'] = _down;
@@ -1194,6 +1227,48 @@ void main() {
       expect(recordedAccountChange(), isTrue);
     });
 
+
+    testWidgets("no-frame: A's coach row tapped after B signed in draws no dialog", (t) async {
+      shareCoach();
+      await openAsA(t);
+      await until(t, () => seen(find.text('Stop')), "A's coach");
+      server.answers['public_profiles:$_b'] = (200, [{'id': 'c-2', 'first_name': 'Bob', 'last_name': 'Other'}]);
+      server.answers['coach_client_relationships:$_b'] = (200, [rel]);
+      await t.runAsync(() => signInAs(_b)); // no pump
+      await t.tap(find.text('Stop'));
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 300));
+      final drawn = seen(find.text('Stop working with Anna Coach?'));
+      if (drawn) {
+        await t.tap(find.text('Yes, stop'));
+        await settle(t);
+      }
+      expect(drawn, isFalse);
+      expect(recordedAccountChange(), isTrue);
+    });
+    testWidgets("no-frame: A's stop dialog confirmed after B signed in writes nothing", (t) async {
+      shareCoach();
+      await openAsA(t);
+      await tapStop(t);
+      await t.runAsync(() => signInAs(_b)); // no pump
+      await t.tap(find.text('Yes, stop'));
+      await settle(t);
+      expect(server.writes, isEmpty);
+      expect(recordedAccountChange(), isTrue);
+    });
+    testWidgets("no-frame: A's plan row cancelled after B signed in sends nothing", (t) async {
+      await openAsA(t);
+      await t.runAsync(() => signInAs(_b)); // no pump
+      await t.tap(find.textContaining('Cancel').first);
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 300));
+      if (seen(find.text('Switch to Free'))) {
+        await t.tap(find.text('Switch to Free'));
+        await settle(t);
+      }
+      expect(server.count('cancel-subscription', _b), 0);
+      expect(recordedAccountChange(), isTrue);
+    });
     testWidgets('control: the same account ending coaching is told the outcome',
         (t) async {
       shareCoach();

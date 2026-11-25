@@ -28,6 +28,20 @@ String _kindLabel(String? kind, String? tier) => switch (kind) {
       _ => kind ?? 'Subscription',
     };
 
+final _ownedMyCoachesProvider = ownedReadProvider(myCoachesProvider);
+
+/// This account's list, its failure (kept, busy, through a retry), or loading —
+/// never another account's of either (P0-FL-60a).
+Widget _ownedWhen<T>(OwnedRead<T> read,
+        {required Widget Function() loading,
+        required Widget Function() error,
+        required Widget Function(T value) data}) =>
+    read.error != null
+        ? error()
+        : read.hasValue
+            ? data(read.value as T)
+            : loading();
+
 class ManageSubscriptionScreen extends ConsumerStatefulWidget {
   const ManageSubscriptionScreen({super.key});
   @override
@@ -43,16 +57,18 @@ class _ManageSubscriptionScreenState
 
   /// Cancels the platform membership (all active membership rows) → Free.
   Future<void> _cancelPlan(
-      BuildContext context, WidgetRef ref, List<Map<String, dynamic>> memberships) async {
+      BuildContext context, WidgetRef ref, String? owner,
+      List<Map<String, dynamic>> memberships) async {
     final messenger = ScaffoldMessenger.of(context);
     // P0-FL-60a: these are this account's rows; nothing is cancelled, and
-    // nothing said, once it is gone.
-    final owner = signedInUid();
+    // nothing said, once it is gone. [owner] is who the row was drawn for.
     bool gone() =>
         ownerGone(owner, 'ManageSubscriptionScreen', 'switch to Free');
+    if (gone()) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (dctx) => OwnedDialog(
+          owner: owner,
           child: AlertDialog(
         backgroundColor: _card,
         title: const Text('Switch to Free?',
@@ -92,19 +108,22 @@ class _ManageSubscriptionScreenState
   }
 
   Future<void> _confirmStopCoach(
-      BuildContext context, WidgetRef ref, Map<String, dynamic> rel) async {
+      BuildContext context, WidgetRef ref, String? owner,
+      Map<String, dynamic> rel) async {
     final messenger = ScaffoldMessenger.of(context);
     final coach = rel['coach'] as Map<String, dynamic>? ?? {};
     final coachName =
         '${coach['first_name'] ?? ''} ${coach['last_name'] ?? ''}'.trim();
     // P0-FL-60a: cancelCoach ends the coaching of WHOEVER is signed in — with
-    // the same coach, the next account's. Only for the account that was asked.
-    final owner = signedInUid();
+    // the same coach, the next account's. Only for the account that was asked:
+    // [owner] is who the row was drawn for.
     bool gone() =>
         ownerGone(owner, 'ManageSubscriptionScreen', 'stop coaching');
+    if (gone()) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (dctx) => OwnedDialog(
+          owner: owner,
           child: AlertDialog(
         backgroundColor: _card,
         title: Text('Stop working with ${coachName.isEmpty ? 'this coach' : coachName}?',
@@ -188,7 +207,7 @@ class _ManageSubscriptionScreenState
     });
   }
 
-  Widget _subsFailure(AsyncValue<List<Map<String, dynamic>>> subsAsync) =>
+  Widget _subsFailure(OwnedRead<List<Map<String, dynamic>>> subsAsync) =>
       SectionLoadFailure(
         what: 'your subscriptions',
         error: subsAsync.error,
@@ -199,7 +218,7 @@ class _ManageSubscriptionScreenState
         onRetry: () => ref.invalidate(mySubscriptionsProvider),
       );
 
-  Widget _coachesFailure(AsyncValue<List<Map<String, dynamic>>> coachesAsync) =>
+  Widget _coachesFailure(OwnedRead<List<Map<String, dynamic>>> coachesAsync) =>
       SectionLoadFailure(
         what: 'your coaches',
         error: coachesAsync.error,
@@ -212,12 +231,13 @@ class _ManageSubscriptionScreenState
 
   @override
   Widget build(BuildContext context) {
+    final account = ref.watch(paymentAccountProvider);
     final planRead = ref.watch(ownedClientPlanProvider);
     ref.listen<String?>(paymentAccountProvider, (_, __) {
       if (_portalLoading) setState(() => _portalLoading = false);
     });
-    final subsAsync = ref.watch(mySubscriptionsProvider);
-    final coachesAsync = ref.watch(myCoachesProvider);
+    final subsAsync = ref.watch(ownedMySubscriptionsProvider);
+    final coachesAsync = ref.watch(_ownedMyCoachesProvider);
     // P0-FL-40: these reads propagate their failures; record each once, when
     // it settles (not again on every rebuild).
     _reportSettledFailure(mySubscriptionsProvider,
@@ -306,19 +326,18 @@ class _ManageSubscriptionScreenState
             const SizedBox(height: 16),
 
             // Your plan — ONLY the platform membership (coaches show below).
-            subsAsync.when(
+            _ownedWhen(
+              subsAsync,
               // P0-FL-40: a retry of a failed read takes this arm — keep the
               // failure card (busy), not a spinner that hides what happened.
-              loading: () => subsAsync.hasError
-                  ? _subsFailure(subsAsync)
-                  : const Padding(
+              loading: () => const Padding(
                       padding: EdgeInsets.symmetric(vertical: 24),
                       child: Center(child: CircularProgressIndicator(
                           color: _brand,
                           semanticsLabel: 'Loading your subscriptions'))),
               // P0-FL-40: a failed read rendered nothing — exactly what a
               // member with no membership sees. Say it failed.
-              error: (_, __) => _subsFailure(subsAsync),
+              error: () => _subsFailure(subsAsync),
               data: (subs) {
                 final memberships = subs
                     .where((s) => ['self_guided', 'ai_guided'].contains(s['kind']) &&
@@ -340,7 +359,7 @@ class _ManageSubscriptionScreenState
                     _tierRank(b['kind'] as String?) - _tierRank(a['kind'] as String?));
                 return _SubRow(
                   sub: memberships.first,
-                  onCancel: () => _cancelPlan(context, ref, memberships),
+                  onCancel: () => _cancelPlan(context, ref, account, memberships),
                 );
               },
             ),
@@ -362,20 +381,19 @@ class _ManageSubscriptionScreenState
               ],
             ),
             const SizedBox(height: 8),
-            coachesAsync.when(
+            _ownedWhen(
+                  coachesAsync,
                   // P0-FL-40: loading was blank and a failure was blank — the
                   // member saw "no coaches" either way. Loading is a neutral
                   // placeholder; a failure says so, with Try again (kept,
                   // busy, while the retry is in flight).
-                  loading: () => coachesAsync.hasError
-                      ? _coachesFailure(coachesAsync)
-                      : const Padding(
+                  loading: () => const Padding(
                           padding: EdgeInsets.symmetric(vertical: 12),
                           child: Center(child: SizedBox(width: 20, height: 20,
                             child: CircularProgressIndicator(
                                 color: _brand, strokeWidth: 2,
                                 semanticsLabel: 'Loading your coaches')))),
-                  error: (_, __) => _coachesFailure(coachesAsync),
+                  error: () => _coachesFailure(coachesAsync),
                   data: (coaches) => coaches.isEmpty
                       ? const Padding(
                           padding: EdgeInsets.only(bottom: 8),
@@ -387,7 +405,7 @@ class _ManageSubscriptionScreenState
                           children: coaches
                               .map((c) => _CoachRow(
                                     rel: c,
-                                    onStop: () => _confirmStopCoach(context, ref, c),
+                                    onStop: () => _confirmStopCoach(context, ref, account, c),
                                   ))
                               .toList(),
                         ),

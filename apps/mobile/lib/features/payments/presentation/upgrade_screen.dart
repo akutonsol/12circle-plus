@@ -113,6 +113,7 @@ class UpgradeScreen extends ConsumerWidget {
             // that tapped it (P0-FL-60a).
             ..._plans.map((p) => _PlanCard(
                   key: ValueKey((account, p.plan)),
+                  account: account,
                   plan: p,
                   isCurrent: current != null && p.plan == current,
                   current: current,
@@ -125,12 +126,15 @@ class UpgradeScreen extends ConsumerWidget {
 }
 
 class _PlanCard extends ConsumerStatefulWidget {
+  /// The account this card was built for (P0-FL-60a).
+  final String? account;
   final _Plan plan;
   final bool isCurrent;
   /// Null while the plan is unknown: every action is disabled.
   final ClientPlan? current;
   const _PlanCard(
       {super.key,
+      required this.account,
       required this.plan,
       required this.isCurrent,
       required this.current});
@@ -152,8 +156,10 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
     final p = widget.plan;
     // P0-FL-60a (W26): every step below is this account's. When it is gone
     // nothing more is sent, opened or said — it is not the next one's action.
-    final owner = signedInUid();
+    // The owner is who the card was drawn for, not who is signed in at the tap.
+    final owner = widget.account;
     bool gone(String what) => ownerGone(owner, 'UpgradeScreen', what);
+    if (gone('plan card')) return;
     // Capture ancestors up front so we never touch a defunct context after an
     // await (embedded checkout can navigate this screen away mid-flow).
     final messenger = ScaffoldMessenger.of(context);
@@ -214,7 +220,11 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
     // and skipping this sent them to buy a SECOND membership.
     if (mounted) setState(() => _loading = true);
     final result = await paymentSvc.changeMembership(p.kind!);
-    if (gone('plan change')) return;
+    if (gone('plan change')) {
+      // After A -> B -> A the same card survives: not stuck on its spinner.
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
     if (result == 'changed') {
       if (mounted) setState(() => _loading = false);
       _refresh();
@@ -254,15 +264,17 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
     if (!mounted) return;
     // launchCheckout reports its own failure (one message, the server's reason
     // when it refused a duplicate).
-    await launchCheckout(context, ref, kind: p.kind!);
+    await launchCheckout(context, ref, kind: p.kind!, owner: owner);
     if (!mounted) return; // embedded checkout navigated away; success screen refreshes
     setState(() => _loading = false);
+    if (signedInUid() != owner) return;
     _refresh();
   }
 
   Future<bool?> _confirmDowngradeToFree() => showDialog<bool>(
         context: context,
         builder: (dctx) => OwnedDialog(
+            owner: widget.account,
             child: AlertDialog(
           backgroundColor: _card,
           title: const Text('Switch to Free?',

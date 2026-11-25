@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/observability/app_failure.dart';
 import '../data/payment_service.dart'
-    show CheckoutRefused, signedInUid;
+    show CheckoutRefused, ownerGone, signedInUid;
 import '../domain/payment_provider.dart';
 
 /// What a client is told when a checkout could not be started for a reason
@@ -27,8 +27,11 @@ Future<bool> launchCheckout(
   String? coachId,
   String? eventId,
   String? tier,
+  required String? owner,
 }) async {
-  final owner = signedInUid();
+  // [owner] is the account the card was built for (P0-FL-60a, B-3): another
+  // one signed in means this tap is not theirs. Nothing is sent or said.
+  if (ownerGone(owner, 'launchCheckout', 'checkout')) return false;
   String problem;
   try {
     final ok = await ref.read(paymentServiceProvider).startCheckout(
@@ -55,14 +58,16 @@ Future<bool> launchCheckout(
 /// that account is no longer the one signed in, and never draws for another
 /// (P0-FL-60a). The caller's check after the dialog still decides the action.
 class OwnedDialog extends ConsumerStatefulWidget {
-  const OwnedDialog({super.key, required this.child});
+  const OwnedDialog({super.key, required this.owner, required this.child});
+  /// The account the dialog was opened for.
+  final String? owner;
   final Widget child;
   @override
   ConsumerState<OwnedDialog> createState() => _OwnedDialogState();
 }
 
 class _OwnedDialogState extends ConsumerState<OwnedDialog> {
-  late final String? _owner = ref.read(paymentAccountProvider);
+  String? get _owner => widget.owner;
 
   @override
   Widget build(BuildContext context) {
@@ -71,7 +76,7 @@ class _OwnedDialogState extends ConsumerState<OwnedDialog> {
       final route = ModalRoute.of(context);
       if (route != null && route.isCurrent) Navigator.of(context).pop();
     });
-    return ref.watch(paymentAccountProvider) == _owner
+    return ref.watch(paymentAccountProvider) == _owner && signedInUid() == _owner
         ? widget.child
         : const SizedBox.shrink();
   }

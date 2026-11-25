@@ -53,14 +53,17 @@ class OwnedReadNotifier<T> extends Notifier<OwnedRead<T>> {
   OwnedRead<T> build() {
     final account = ref.watch(paymentAccountProvider);
     final now = ref.watch(_source);
+    // Only a SETTLED answer is tagged. An AsyncData that is loading holds an
+    // earlier answer — and after an invalidate before an account change was
+    // flushed (no frame) that is the previous account's, so it keeps the tag
+    // it already has and is never re-tagged.
     if (now is AsyncData<T>) {
-      // Never held from another account: an account change re-reads, and that
-      // is AsyncLoading (or AsyncError after it) until this account's answer.
-      _value = (owner: account, value: now.value);
       _failure = null;
       _recorded = false;
-      return OwnedRead(
-          hasValue: true, value: now.value, isLoading: now.isLoading);
+      if (!now.isLoading) {
+        _value = (owner: account, value: now.value);
+        return OwnedRead(hasValue: true, value: now.value);
+      }
     }
     if (now is AsyncError<T>) {
       final error = now.error;
@@ -109,6 +112,7 @@ final ownedBalanceProvider = ownedReadProvider(coachBalanceProvider,
     origin: 'CoachPaymentsScreen.balance');
 // The service records these two.
 final ownedCoachPlanTierProvider = ownedReadProvider(coachPlanTierProvider);
+final ownedMySubscriptionsProvider = ownedReadProvider(mySubscriptionsProvider);
 final ownedMembershipTierProvider = ownedReadProvider(membershipTierProvider);
 
 final paymentServiceProvider = Provider<PaymentService>((ref) => PaymentService());

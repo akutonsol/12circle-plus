@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
+import '../data/payment_service.dart' show ownerGone, signedInUid;
 import '../domain/payment_provider.dart';
 import 'checkout_launcher.dart';
 import 'upgrade_screen.dart' show PlanLoadingRow;
@@ -88,6 +89,7 @@ class CoachPlanScreen extends ConsumerWidget {
             ],
             ..._coachPlans.map((p) => _CoachPlanCard(
                   key: ValueKey((account, p.tier)),
+                  account: account,
                   plan: p,
                   isCurrent: read.hasValue && current == p.tier,
                   canChoose: canChoose,
@@ -100,11 +102,14 @@ class CoachPlanScreen extends ConsumerWidget {
 }
 
 class _CoachPlanCard extends ConsumerStatefulWidget {
+  /// The account this card was built for (P0-FL-60a).
+  final String? account;
   final _CoachPlan plan;
   final bool isCurrent;
   final bool canChoose;
   const _CoachPlanCard(
       {super.key,
+      required this.account,
       required this.plan,
       required this.isCurrent,
       required this.canChoose});
@@ -116,13 +121,17 @@ class _CoachPlanCardState extends ConsumerState<_CoachPlanCard> {
   bool _loading = false;
 
   Future<void> _subscribe() async {
+    final owner = widget.account;
+    if (ownerGone(owner, 'CoachPlanScreen', 'choose a plan')) return;
     setState(() => _loading = true);
     // launchCheckout reports its own failure -- including "you already have a
     // coach plan", which a second checkout would have billed twice.
-    await launchCheckout(context, ref, kind: 'coach_plan', tier: widget.plan.tier);
+    await launchCheckout(context, ref, kind: 'coach_plan', tier: widget.plan.tier, owner: owner);
     // Left, or another account signed in (the card is keyed by account).
     if (!mounted) return;
     setState(() => _loading = false);
+    // Another account's read is not this action's to refresh.
+    if (signedInUid() != owner) return;
     ref.invalidate(coachPlanTierProvider);
   }
 
