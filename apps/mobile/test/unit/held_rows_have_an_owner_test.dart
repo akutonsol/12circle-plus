@@ -120,8 +120,6 @@ void main() {
         expect(leftBehind(v), isTrue);
         expect(stillReading(v, uid: memberB), isTrue);
         expect(heldFor(memberB, v), isA<AsyncLoading<_Rows>>());
-        expect(heldFor(memberB, v, keepUnmarked: true),
-            isA<AsyncLoading<_Rows>>());
       }
     });
 
@@ -149,11 +147,10 @@ void main() {
       expect(stillReading(v, uid: memberA), isFalse);
     });
 
-    test('a failure nobody marked is kept only when that is asked for, and a '
-        'bare string cannot be marked', () async {
-      final v = held('offline', loading: true);
-      expect(heldFor(memberA, v).hasError, isFalse);
-      expect(heldFor(memberA, v, keepUnmarked: true).error, 'offline');
+    test('a failure nobody marked is kept only once settled, and a bare string '
+        'cannot be marked', () async {
+      expect(heldFor(memberA, held('offline', loading: true)).hasError, isFalse);
+      expect(heldFor(memberA, held('offline', loading: false)).error, 'offline');
       expect(await failureOf(memberA, 'offline'), 'offline');
     });
   });

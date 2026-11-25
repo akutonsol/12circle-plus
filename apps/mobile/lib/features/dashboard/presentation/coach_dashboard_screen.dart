@@ -67,7 +67,10 @@ final coachNotificationsProvider = StreamProvider<List<Map<String, dynamic>>>((r
         .order('created_at', ascending: false)
         .map((rows) => ownedBy(owner, List<Map<String, dynamic>>.from(rows))),
     origin: 'coachNotificationsProvider',
-  );
+  ).handleError((Object e, StackTrace st) {
+    markFailure(owner, e); // whose failure it is, as the rows say whose they are
+    Error.throwWithStackTrace(e, st);
+  });
 });
 
 /// [open]'s stream, opened again each time it ends: after [first], doubling
@@ -123,18 +126,16 @@ Stream<T> reopenWhenDone<T>(
 /// Unread notifications for the bell. `null` = unknown: the read failed, and
 /// a failure must not be shown as "0 unread" (P0-FL-14). While the first read
 /// is still in flight the bell shows no count, as it always has — and so it is
-/// while the rows held are another coach's (P0-FL-59f). `is AsyncError`, not
-/// `hasError`: the loading state a sign-in switch leaves carries the previous
-/// coach's error, which is not this one's.
+/// while the rows, or the failure, held are another coach's (P0-FL-59f): which
+/// state holds them does not say whose they are.
 final unreadNotificationCountProvider = Provider<int?>((ref) {
-  final async = ref.watch(coachNotificationsProvider);
-  if (async is AsyncError) return null;
+  final async = heldFor(
+      hasAuthClient
+          ? ref.watch(currentUserProvider.select((u) => u?.id))
+          : null,
+      ref.watch(coachNotificationsProvider));
+  if (async.hasError) return null;
   if (!async.hasValue) return 0;
-  final owner = ownerOfHeld(async);
-  if (owner != null &&
-      owner != ref.watch(currentUserProvider.select((u) => u?.id))) {
-    return 0;
-  }
   return async.requireValue.where((n) => n['read'] == false).length;
 });
 
@@ -571,10 +572,10 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                 // reload (accept/decline, a live change) keeps the last count
                 // rather than flickering the dot off.
                 // P0-FL-59f: kept for the coach it was read for only — a held
-                // dot, or a held failure, is not the next coach's.
-                ref.watch(pendingRequestsProvider).when(
-                  skipLoadingOnReload:
-                      _isOwnAnswer(ref.watch(pendingRequestsProvider)),
+                // dot, or a held failure, is not the next coach's, whatever
+                // state holds it.
+                heldFor(_watchedUid(), ref.watch(pendingRequestsProvider)).when(
+                  skipLoadingOnReload: true,
                   data: (r) => r.isNotEmpty
                       ? Tab(child: Semantics(
                           label: "Requests — new",
@@ -672,15 +673,6 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
               _buildLeaderboardTab(),
             ])),
       ])));
-  }
-
-  /// Whether what [v] holds was read for the coach signed in now. Rows nobody
-  /// marked have nobody to disagree with. Call from build: it watches the id.
-  bool _isOwnAnswer(AsyncValue<List<Map<String, dynamic>>> v) {
-    if (!v.hasValue) return false;
-    final owner = ownerOfHeld(v);
-    return owner == null ||
-        owner == ref.watch(currentUserProvider.select((u) => u?.id));
   }
 
   /// The signed-in coach's id, watched: the state a switch leaves a read in may
@@ -1208,10 +1200,8 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
     // P0-FL-59f: the rows and the failure of another coach are not this one's,
     // whatever state holds them.
     final uid = _watchedUid();
-    final requestsAsync =
-        heldFor(uid, ref.watch(pendingRequestsProvider), keepUnmarked: true);
-    final invitesAsync =
-        heldFor(uid, ref.watch(sentInvitesProvider), keepUnmarked: true);
+    final requestsAsync = heldFor(uid, ref.watch(pendingRequestsProvider));
+    final invitesAsync = heldFor(uid, ref.watch(sentInvitesProvider));
     // P0-FL-2: a failed requests read used to replace the whole tab with the
     // raw exception string — no retry, and the Invite button gone with it. It
     // now keeps the tab's frame (Invite stays reachable) and states the
@@ -1494,7 +1484,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
     // P0-FL-59f: the invite is the coach's whose button it was — opened and
     // typed by them, sent as them, or not sent. The sheet closes when the
     // account changes.
-    if (stoppedFor(owner, 'CoachDashboard.openInvite', 'open invite')) return;
+    if (stoppedFor(boundTo(owner), 'CoachDashboard.openInvite', 'open invite')) return;
     final emailCtrl = TextEditingController();
     bool sending = false;
     showModalBottomSheet(
@@ -1575,8 +1565,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
 
   Widget _buildLeaderboardTab() {
     final uid = _watchedUid();
-    final leaderAsync =
-        heldFor(uid, ref.watch(coachLeaderboardProvider), keepUnmarked: true);
+    final leaderAsync = heldFor(uid, ref.watch(coachLeaderboardProvider));
     // P0-FL-5: a failed read used to print the raw exception under "Error
     // loading leaderboard", with no way to read it again. The exception is
     // recorded once when the read settles into a failure; the screen says it
@@ -2293,21 +2282,19 @@ class _NotificationsSheetState extends ConsumerState<_NotificationsSheet> {
         setState(() => _failure = null);
       }
     });
-    final async = ref.watch(coachNotificationsProvider);
-    // P0-FL-59f: rows read for another coach are not this sheet's to show, and
-    // the sheet of a coach who left closes. `is AsyncError`: see the bell.
-    final rowsOwner = ownerOfHeld(async);
-    final uid = rowsOwner == null && _owner == null
-        ? null
-        : ref.watch(currentUserProvider.select((u) => u?.id));
-    if (rowsOwner != null && rowsOwner == uid) _owner ??= rowsOwner;
+    // P0-FL-59f: rows, or a failure, of another coach's read are not this
+    // sheet's to show, and the sheet of a coach who left closes.
+    final uid = hasAuthClient
+        ? ref.watch(currentUserProvider.select((u) => u?.id))
+        : null;
+    final async = heldFor(uid, ref.watch(coachNotificationsProvider));
+    _owner ??= ownerOfHeld(async);
     if (_owner != null && _owner != uid) {
       _closeForOwner();
       return const SizedBox.shrink();
     }
-    final failed = async is AsyncError;
-    final loaded =
-        !failed && async.hasValue && (rowsOwner == null || rowsOwner == uid);
+    final failed = async.hasError;
+    final loaded = !failed && async.hasValue;
     final notifs = loaded
         ? async.requireValue.where((n) => !_deleted.contains(n['id'])).toList()
         : const <Map<String, dynamic>>[];

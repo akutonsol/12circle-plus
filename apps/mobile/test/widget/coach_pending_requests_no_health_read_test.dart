@@ -5,6 +5,7 @@ import 'package:circle_fitness/features/checkins/domain/checkin_provider.dart';
 import 'package:circle_fitness/features/coach/data/coach_relationship_service.dart';
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
 import 'package:circle_fitness/features/dashboard/domain/coach_triage_provider.dart';
+import 'package:circle_fitness/features/dashboard/domain/still_reading.dart';
 import 'package:circle_fitness/features/dashboard/presentation/coach_dashboard_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -208,7 +209,8 @@ void main() {
         currentUserDisplayNameProvider.overrideWithValue('Coach'),
         // The REAL service against the policy-applying fake.
         pendingRequestsProvider.overrideWith(
-            (ref) => CoachRelationshipService().getPendingRequests(_coach)),
+            (ref) => ownedRead(_coach,
+                () => CoachRelationshipService().getPendingRequests(_coach))),
         sentInvitesProvider.overrideWith((ref) async => const []),
         coachSubmittedCheckinsProvider.overrideWith((ref) async => const []),
         coachLeaderboardProvider.overrideWith((ref) async => const []),

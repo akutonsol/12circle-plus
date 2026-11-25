@@ -8,6 +8,7 @@ import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.da
 import 'package:circle_fitness/features/coach/domain/coach_provider.dart';
 import 'package:circle_fitness/features/coach/presentation/coach_business_screen.dart';
 import 'package:circle_fitness/features/dashboard/domain/coach_triage_provider.dart';
+import 'package:circle_fitness/features/dashboard/domain/still_reading.dart';
 import 'package:circle_fitness/features/dashboard/presentation/coach_dashboard_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -242,7 +243,8 @@ void main() {
           coachSubmittedCheckinsProvider.overrideWith((ref) async => const []),
           // The REAL service against the fake.
           coachLeaderboardProvider.overrideWith(
-              (ref) => ScoreService().getCoachLeaderboard(_uid)),
+              (ref) => ownedRead(
+                  _uid, () => ScoreService().getCoachLeaderboard(_uid))),
           coachTriageSignalsProvider.overrideWith((ref) async => const []),
         ],
         child: const MaterialApp(home: CoachDashboardScreen()),

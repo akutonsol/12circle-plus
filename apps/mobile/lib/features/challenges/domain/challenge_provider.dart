@@ -105,7 +105,7 @@ final challengeNotifierProvider = StateNotifierProvider<ChallengeNotifier, List<
   // still unflushed is AsyncData of the last member's.
   ref.listen<AsyncValue<List<Challenge>>>(
     liveChallengesProvider,
-    (_, next) => heldFor(uid, next, keepUnmarked: true)
+    (_, next) => heldFor(uid, next)
         .whenData(notifier.initialize),
     fireImmediately: true,
   );

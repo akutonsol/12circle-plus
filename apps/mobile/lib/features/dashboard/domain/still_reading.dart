@@ -67,9 +67,17 @@ Future<List<T>> ownedRead<T>(
   try {
     return ownedBy(uid, await read());
   } catch (e) {
-    // (An Expando takes objects only; nothing here throws a bare string.)
-    if (uid != null && (e is Exception || e is Error)) _failedFor[e] = uid;
+    markFailure(uid, e);
     rethrow;
+  }
+}
+
+/// Marks [error] as the failure of a read of [uid]'s, as [ownedRead] does (for
+/// a stream, whose errors are no read's to throw).
+void markFailure(String? uid, Object error) {
+  // (An Expando takes objects only; nothing here throws a bare string.)
+  if (uid != null && (error is Exception || error is Error)) {
+    _failedFor[error] = uid;
   }
 }
 
@@ -85,23 +93,17 @@ bool leftBehind(AsyncValue<Object?> read) =>
 /// and by nothing else: an AsyncLoading, AsyncData or AsyncError each may carry
 /// the previous account's. Another account's rows are dropped, the failure of
 /// [uid]'s own read is kept, and otherwise it is still being read.
-///
-/// [keepUnmarked]: rows and failures nobody marked stay as they came (a read
-/// replaced in a widget test); only those marked for another account go.
-AsyncValue<List<T>> heldFor<T>(String? uid, AsyncValue<List<T>> list,
-    {bool keepUnmarked = false}) {
+AsyncValue<List<T>> heldFor<T>(String? uid, AsyncValue<List<T>> list) {
   final error = list.error;
   final failedFor = _ownerOfFailure(error);
   final myFailure = error != null &&
       (failedFor != null
           ? failedFor == uid
-          : keepUnmarked || !list.isLoading || uid == null);
+          : !list.isLoading || uid == null);
   final owner = ownerOfHeld(list);
   // An unmarked empty list still being re-read is nobody's answer.
   final mine = list.hasValue &&
-      (owner == uid ||
-          (owner == null && (keepUnmarked || !list.isLoading)) ||
-          (keepUnmarked && owner == unknownOwner));
+      (owner == uid || (owner == null && !list.isLoading));
   if (mine) {
     return error == null || myFailure ? list : AsyncData(list.requireValue);
   }
@@ -153,6 +155,10 @@ bool stillSignedIn(String? owner) => signedInUid() == owner;
 /// Whether [owner] was known and is no longer the account signed in.
 bool accountLeft(String? owner) => owner != null && !stillSignedIn(owner);
 
+/// The account an action on screen is bound to: an [owner] nobody knows is
+/// nobody, neither whoever is signed in nor a signed-out device.
+String? boundTo(String? owner) => hasAuthClient ? owner ?? unknownOwner : owner;
+
 /// Whether [owner] is no longer the account signed in — and then it is recorded
 /// that [what] stopped there. Ask before every write and every message.
 bool stoppedFor(String? owner, String origin, String what) {
@@ -172,12 +178,15 @@ bool isSignedIn(String? owner) => owner != null && stillSignedIn(owner);
 /// build: the next account would ask for a client whose page it never opened,
 /// and for the assessment that is a logged read. So the reads ask [admits].
 class OpenClientPages {
-  final _open = <String, List<String?>>{};
+  final _open = <String, List<String>>{};
 
   /// The reads refused: to whom, and how to ask again.
   final _refused = <({String clientId, String? uid, void Function() again})>{};
 
+  /// A page with no known [owner] is nobody's and reads nothing: it registers
+  /// nothing, and so admits and refuses nobody.
   void opened(String clientId, String? owner) {
+    if (owner == null) return;
     (_open[clientId] ??= []).add(owner);
     // What was refused to them before they had a page is no answer to it.
     for (final r in _refused.toList()) {
@@ -299,4 +308,39 @@ class _OpenedByAccountState extends State<OpenedByAccount> {
   @override
   Widget build(BuildContext context) =>
       _left ? const SizedBox.shrink() : widget.child;
+}
+
+/// [text], drawn for [owner] only. It watches the account itself: it is up in a
+/// SnackBar, which outlives the page that said it.
+class OwnedText extends StatefulWidget {
+  final String text;
+  final String? owner;
+  const OwnedText(this.text, {super.key, required this.owner});
+
+  @override
+  State<OwnedText> createState() => _OwnedTextState();
+}
+
+class _OwnedTextState extends State<OwnedText> {
+  StreamSubscription<AuthState>? _auth;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!hasAuthClient) return;
+    _auth = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+      if (mounted) setState(() {});
+    }, onError: (_) {});
+  }
+
+  @override
+  void dispose() {
+    _auth?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => stillSignedIn(widget.owner)
+      ? Text(widget.text)
+      : const SizedBox.shrink();
 }

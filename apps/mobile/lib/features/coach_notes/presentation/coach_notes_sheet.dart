@@ -85,8 +85,7 @@ class _NotesSheetState extends ConsumerState<_NotesSheet> {
   @override
   Widget build(BuildContext context) {
     final notesAsync = heldFor(
-        _owner, ref.watch(clientNotesProvider(widget.clientId)),
-        keepUnmarked: true);
+        _owner, ref.watch(clientNotesProvider(widget.clientId)));
     return Container(
       height: MediaQuery.of(context).size.height * 0.8,
       padding: EdgeInsets.only(

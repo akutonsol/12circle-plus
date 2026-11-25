@@ -3,7 +3,7 @@ import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:supabase_flutter/supabase_flutter.dart' show AuthState, PostgrestException, Supabase;
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 import '../../auth/domain/auth_provider.dart';
 import '../../coach/domain/coach_ecosystem_provider.dart';
 import '../../coach/presentation/coach_video_response_screen.dart';
@@ -118,6 +118,24 @@ class ClientDetailScreen extends ConsumerStatefulWidget {
   ConsumerState<ClientDetailScreen> createState() => _ClientDetailScreenState();
 }
 
+/// A SnackBar of the client page's, which takes down itself and no other: the
+/// one up is taken down at once, one still queued as soon as it comes up.
+class _Said {
+  _Said(this.messenger);
+  final ScaffoldMessengerState messenger;
+  bool _up = false, _unwanted = false, over = false;
+
+  void shown() {
+    _up = true;
+    if (_unwanted) close();
+  }
+
+  void close() {
+    _unwanted = true;
+    if (_up && !over && messenger.mounted) messenger.removeCurrentSnackBar();
+  }
+}
+
 class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabs;
@@ -129,19 +147,29 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
   late final OpenClientPages _pages;
   bool _gone = false;
 
-  /// What was last said on the page about the client, while it is up.
-  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _said;
-  ScaffoldMessengerState? _saidOn;
+  /// What was said on the page about the client and has not closed yet.
+  final _said = <_Said>{};
 
   /// Says [text], which may be the client's, to this page's coach only: it is
   /// drawn for nobody else, and goes with the page if the page goes first.
   void _say(String text, Duration duration) {
-    final messenger = _saidOn = ScaffoldMessenger.of(context);
-    final said = _said = messenger.showSnackBar(SnackBar(
-      content: _OwnedText(text, owner: _owner),
-      behavior: SnackBarBehavior.floating, duration: duration));
-    said.closed.then((_) {
-      if (identical(_said, said)) _said = null;
+    final said = _Said(ScaffoldMessenger.of(context));
+    _said.add(said);
+    said.messenger.showSnackBar(SnackBar(
+      content: OwnedText(text, owner: _owner), onVisible: said.shown,
+      behavior: SnackBarBehavior.floating, duration: duration))
+      .closed.then((_) => _said.remove(said..over = true));
+  }
+
+  /// Takes down what this page said and nothing else that is queued. After the
+  /// frame: a messenger cannot be changed while the tree is.
+  void _unsay() {
+    final said = {..._said};
+    if (said.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      for (final s in said) {
+        s.close();
+      }
     });
   }
 
@@ -155,17 +183,7 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
   @override
   void dispose() {
     _pages.closed(widget.clientId, _owner);
-    final messenger = _saidOn;
-    if (_said != null && messenger != null) {
-      // After the frame: a messenger cannot be changed while the tree is.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (messenger.mounted) {
-          messenger
-            ..clearSnackBars()
-            ..removeCurrentSnackBar();
-        }
-      });
-    }
+    _unsay();
     _tabs.dispose();
     super.dispose();
   }
@@ -174,13 +192,7 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
   Widget _goneFor(BuildContext context) {
     if (!_gone) {
       _gone = true;
-      // What was last said on it ("Marked done: …") goes too.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        ScaffoldMessenger.maybeOf(context)
-          ?..clearSnackBars()
-          ..removeCurrentSnackBar();
-      });
+      _unsay(); // what was said on it ("Marked done: …") goes too
     }
     return Scaffold(
       backgroundColor: _bg,
@@ -806,41 +818,6 @@ class _ClientTimeline extends StatelessWidget {
   return (price: v, error: null);
 }
 
-/// [text], drawn for [owner] only. It watches the account itself: it is up in a
-/// SnackBar, which outlives the page that said it.
-class _OwnedText extends StatefulWidget {
-  final String text;
-  final String? owner;
-  const _OwnedText(this.text, {required this.owner});
-
-  @override
-  State<_OwnedText> createState() => _OwnedTextState();
-}
-
-class _OwnedTextState extends State<_OwnedText> {
-  StreamSubscription<AuthState>? _auth;
-
-  @override
-  void initState() {
-    super.initState();
-    if (!hasAuthClient) return;
-    _auth = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
-      if (mounted) setState(() {});
-    }, onError: (_) {});
-  }
-
-  @override
-  void dispose() {
-    _auth?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => isSignedIn(widget.owner)
-      ? Text(widget.text)
-      : const SizedBox.shrink();
-}
-
 /// Opens the custom-price dialog without building the whole client screen,
 /// whose many providers a dialog test does not need.
 @visibleForTesting
@@ -936,9 +913,10 @@ void _showCustomPriceDialog(BuildContext context, String clientId, String? owner
             if (!sctx.mounted || !dctx.mounted) return;
             Navigator.pop(dctx);
             ScaffoldMessenger.of(dctx).showSnackBar(SnackBar(
-                content: Text(value == null
+                content: OwnedText(value == null
                     ? 'Custom price cleared — using your standard rate.'
-                    : 'Custom price set to \$${value.toStringAsFixed(0)}/mo.')));
+                    : 'Custom price set to \$${value.toStringAsFixed(0)}/mo.',
+                    owner: owner)));
           },
           child: saving
               ? Semantics(
@@ -1826,15 +1804,17 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
     // An unanswered check is not "not subscribed" (P0-FL-12).
     if (opensService && widget.paidPlan == null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(widget.paidCheckFailed
+        content: OwnedText(widget.paidCheckFailed
             ? "Couldn't check this client's plan. Use Try again in Coaching services."
-            : "Still checking this client's plan — try again in a moment."),
+            : "Still checking this client's plan — try again in a moment.",
+            owner: widget.owner),
         behavior: SnackBarBehavior.floating));
       return;
     }
     if (opensService && widget.paidPlan == false) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Locked — the client must subscribe to one of your plans first.'),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: OwnedText('Locked — the client must subscribe to one of your plans first.',
+            owner: widget.owner),
         behavior: SnackBarBehavior.floating));
       return;
     }
@@ -2270,7 +2250,7 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
   @override
   Widget build(BuildContext context) {
     final programsAsync =
-        heldFor(_owner, ref.watch(myProgramsProvider), keepUnmarked: true);
+        heldFor(_owner, ref.watch(myProgramsProvider));
     return Padding(
       padding: EdgeInsets.fromLTRB(20, 24, 20, MediaQuery.of(context).viewInsets.bottom + 24),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -2359,14 +2339,15 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
       reportError('AssignProgramSheet._assign', e, s);
       if (!mounted || !stillSignedIn(_owner)) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("Couldn't assign the program — check your connection and try again.")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: OwnedText("Couldn't assign the program — check your connection and try again.",
+              owner: _owner)));
       return;
     }
     if (mounted) {
       Navigator.pop(context, true); // saved: the Action Center may clear the item
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Program assigned!'), backgroundColor: _brand));
+        SnackBar(content: OwnedText('Program assigned!', owner: _owner), backgroundColor: _brand));
     }
   }
 }
@@ -2560,19 +2541,19 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
       reportError('AssignNutritionSheet._save', e, s);
       if (!mounted || !stillSignedIn(_owner)) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: OwnedText(
           _isNotAuthorized(e)
               ? "This client isn't active with you any more, so the plan wasn't saved."
               : isNetworkFailure(e)
                   ? "Couldn't save the plan — check your connection and try again."
                   : "Couldn't save the plan. Try again, and if it keeps happening, "
-                      'contact support.')));
+                      'contact support.', owner: _owner)));
       return;
     }
     if (mounted) {
       Navigator.pop(context, true); // saved: the Action Center may clear the item
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Nutrition plan saved!'), backgroundColor: _brand));
+        SnackBar(content: OwnedText('Nutrition plan saved!', owner: _owner), backgroundColor: _brand));
     }
   }
 }
@@ -2780,17 +2761,17 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
       reportError('AssignHabitsSheet._save', e, s);
       if (!mounted || !stillSignedIn(_owner)) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: OwnedText(
           isNetworkFailure(e)
               ? "Couldn't assign habits — check your connection and try again."
               : "Couldn't assign habits. Try again, and if it keeps happening, "
-                  'contact support.')));
+                  'contact support.', owner: _owner)));
       return;
     }
     if (mounted) {
       Navigator.pop(context, true); // saved: the Action Center may clear the item
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Habits assigned!'), backgroundColor: _brand));
+        SnackBar(content: OwnedText('Habits assigned!', owner: _owner), backgroundColor: _brand));
     }
   }
 }
