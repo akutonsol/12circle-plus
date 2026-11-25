@@ -183,7 +183,9 @@ void main() {
 
   /// [realNotifications]: the real live stream (over the fake socket).
   Future<void> show(WidgetTester tester,
-      {bool realNotifications = false, List<Override> more = const []}) async {
+      {bool realNotifications = false,
+      bool realLeaderboard = false,
+      List<Override> more = const []}) async {
     tester.view
       ..devicePixelRatio = 1
       ..physicalSize = const Size(1200, 3000);
@@ -196,7 +198,8 @@ void main() {
       if (!realNotifications)
         coachNotificationsProvider.overrideWith((ref) => Stream.value(const [])),
       coachSubmittedCheckinsProvider.overrideWith((ref) async => const []),
-      coachLeaderboardProvider.overrideWith((ref) async => const []),
+      if (!realLeaderboard)
+        coachLeaderboardProvider.overrideWith((ref) async => const []),
       coachTriageSignalsProvider.overrideWith((ref) async => const []),
       ...more,
     ]);
@@ -785,6 +788,41 @@ void main() {
         await unmount(tester);
       });
 
+      // m5: signed out, a null owner IS who is signed in (nobody). Built so:
+      // the rows were read for nobody and nobody is signed in at the tap.
+      testWidgets('$label on a row built with nobody signed in, tapped with '
+          'nobody signed in: nothing is sent, and it is recorded',
+          (tester) async {
+        await pending(tester, more: [
+          pendingRequestsProvider.overrideWith((ref) async => [
+                {
+                  'id': 'rel-x',
+                  'client_id': 'cl-p',
+                  'profile': <String, dynamic>{},
+                },
+              ]),
+        ]);
+        await become(tester, null);
+        await frames(tester);
+        await pumpUntil(tester, () => seen(find.text(label)), what: label);
+        expect(ownerOfHeld(c.read(pendingRequestsProvider)), isNull,
+            reason: 'premise: the owner is null, not unknown');
+        reported.clear();
+        final tap = tapOf(tester);
+        tap();
+        await frames(tester);
+        expect(server.writes, isEmpty,
+            reason: 'THE defect: an answer nobody gave was sent');
+        expect(reported.map((f) => f.origin), contains(origin));
+        // ... nor by whoever signs in before that tap.
+        await tester.runAsync(() => signInAs(memberB));
+        tap();
+        await frames(tester);
+        expect(server.writes, isEmpty);
+        expect(find.byType(SnackBar), findsNothing);
+        await unmount(tester);
+      });
+
       testWidgets('$label in flight when B signs in, then done: nothing is '
           'said to B, no list of B is re-read for it', (tester) async {
         await pending(tester);
@@ -865,6 +903,182 @@ void main() {
         await unmount(tester);
       });
     }
+  });
+
+  // A read invalidated while the switch is not flushed is, to Riverpod, a
+  // REFRESH: AsyncData (or AsyncError) of A's, on its way to being B's.
+  group('invalidated before the switch is flushed', () {
+    final today = DateTime.now().toIso8601String().split('T')[0];
+    void seedAll() {
+      for (final (who, id, rel, email) in [
+        (memberA, 'cl-a', 'Petra', 'prospect.a@client.example'),
+        (memberB, 'cl-b', 'Boris', 'prospect.b@client.example'),
+      ]) {
+        server
+          ..seed('coach_client_relationships', who, [
+            {'client_id': id, 'status': 'active'},
+            {'client_id': 'p-$id', 'id': 'rel-$who', 'status': 'pending'},
+          ])
+          ..seed('public_profiles', who, [
+            {'id': 'p-$id', 'first_name': rel, 'last_name': 'Quill'}
+          ])
+          ..seed('coach_invites', who, [
+            {'id': 'i-$who', 'coach_id': who, 'invitee_email': email}
+          ])
+          ..seed('daily_scores', who, [
+            {
+              'user_id': id,
+              'total_score': who == memberA ? 77 : 66,
+              'score_date': today,
+            }
+          ]);
+      }
+    }
+
+    // name → (tab, what is A's, what is B's, the read, its retry, its failure)
+    final tabs = {
+      'requests': (
+        'Requests ●',
+        'Petra Quill',
+        'Boris Quill',
+        pendingRequestsProvider as ProviderOrFamily,
+        'GET public_profiles',
+        "Couldn't load requests",
+      ),
+      'sent invites': (
+        'Requests ●',
+        'prospect.a@client.example',
+        'prospect.b@client.example',
+        sentInvitesProvider as ProviderOrFamily,
+        'GET coach_invites',
+        "Couldn't load sent invites",
+      ),
+      'leaderboard': (
+        'Leaderboard',
+        '77 pts',
+        '66 pts',
+        coachLeaderboardProvider as ProviderOrFamily,
+        'GET daily_scores',
+        "Couldn't load the leaderboard",
+      ),
+    };
+
+    for (final e in tabs.entries) {
+      final (tab, theirs, bs, provider, request, failure) = e.value;
+
+      Future<void> ready(WidgetTester tester) async {
+        seedAll();
+        await show(tester, realLeaderboard: true);
+        await openTab(tester, tab);
+        await pumpUntil(tester, () => seen(find.text(theirs)), what: "A's");
+        await frames(tester);
+      }
+
+      testWidgets("${e.key}: A's are not B's while B's read is out; then B's "
+          'own', (tester) async {
+        await ready(tester);
+        final hold = server.holds['$request:$memberB'] = Completer<void>();
+        await tester.runAsync(() => signInAs(memberB));
+        c.invalidate(provider);
+        for (var i = 0; i < 8; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(find.text(theirs), findsNothing,
+              reason: "THE defect: A's ${e.key} were drawn as B's (frame $i)");
+        }
+        hold.complete();
+        await pumpUntil(tester, () => seen(find.text(bs)), what: "B's own");
+        expect(find.text(theirs), findsNothing);
+        await unmount(tester);
+      });
+
+      testWidgets("${e.key}: A's failure, its Try again tapped after B signed "
+          "in and before any frame, is not B's", (tester) async {
+        await ready(tester);
+        server.fails.add('$request:$memberA');
+        c.invalidate(provider);
+        await pumpUntil(tester, () => seen(find.text(failure)), what: 'failed');
+        await frames(tester);
+        final retry = tester
+            .widget<TextButton>(find
+                .ancestor(
+                    of: find.textContaining('Try again').last,
+                    matching: find.byWidgetPredicate((w) => w is TextButton))
+                .first)
+            .onPressed!;
+        server.holds['$request:$memberB'] = Completer<void>();
+        await tester.runAsync(() => signInAs(memberB));
+        retry();
+        for (var i = 0; i < 8; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(find.text(failure), findsNothing,
+              reason: "THE defect: A's failure was said to B (frame $i)");
+          expect(find.text(theirs), findsNothing);
+        }
+        server.holds['$request:$memberB']!.complete();
+        await pumpUntil(tester, () => seen(find.text(bs)), what: "B's own");
+        await unmount(tester);
+      });
+
+      testWidgets("control, ${e.key}: A's own refresh, as their token is "
+          'refreshed, flickers nothing; a failed one is said, and its retry is '
+          'busy', (tester) async {
+        await ready(tester);
+        final hold = server.holds['$request:$memberA'] = Completer<void>();
+        final before = c.read(currentUserProvider);
+        await tester.runAsync(refreshSession);
+        c.invalidate(provider);
+        expect(c.read(currentUserProvider), isNot(before),
+            reason: 'the event arrived');
+        await frames(tester);
+        expect(find.text(theirs), findsOneWidget);
+        server.fails.add('$request:$memberA');
+        hold.complete();
+        await pumpUntil(tester, () => seen(find.text(failure)), what: 'said');
+        server.fails.clear();
+        final again = server.holds['$request:$memberA'] = Completer<void>();
+        c.invalidate(provider);
+        await frames(tester);
+        expect(find.text(failure), findsOneWidget,
+            reason: 'kept, busy, while it is read again');
+        expect(find.byType(CircularProgressIndicator), findsWidgets);
+        again.complete();
+        await pumpUntil(tester, () => seen(find.text(theirs)), what: 'read');
+        await unmount(tester);
+      });
+    }
+
+    testWidgets("the roster: A's failed first read is not B's failure",
+        (tester) async {
+      await show(tester);
+      server.fails.add('$_rels:$memberA');
+      for (final p in [
+        coachClientsProvider,
+        clientCheckinsProvider,
+        clientWorkoutLogsProvider,
+      ]) {
+        c.invalidate(p);
+      }
+      await frames(tester, 10);
+      server.holds['$_rels:$memberB'] = Completer<void>();
+      await tester.runAsync(() => signInAs(memberB));
+      for (final p in [
+        coachClientsProvider,
+        clientCheckinsProvider,
+        clientWorkoutLogsProvider,
+      ]) {
+        c.invalidate(p);
+      }
+      for (var i = 0; i < 8; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(alma(), findsNothing);
+        expect(find.textContaining('Could not load your clients'), findsNothing,
+            reason: "THE defect: A's failure was said to B (frame $i)");
+        expect(find.textContaining('may be out of date'), findsNothing);
+      }
+      server.holds['$_rels:$memberB']!.complete();
+      await pumpUntil(tester, () => seen(boris()), what: "B's own");
+      await unmount(tester);
+    });
   });
 
   group('A-07 notifications', () {
@@ -1126,6 +1340,34 @@ void main() {
       expect(find.byType(SnackBar), findsNothing);
       await unmount(tester);
     });
+
+    for (final next in [memberB, null]) {
+      testWidgets(
+          "A's Invite button, tapped after ${next == null ? 'A signed out' : 'B signed in'} "
+          'and before any frame: no sheet, and it is recorded',
+          (tester) async {
+        await show(tester);
+        await openTab(tester, 'Requests');
+        final tap = tester
+            .widget<GestureDetector>(find
+                .ancestor(
+                    of: find.text('Invite Client by Email'),
+                    matching: find.byType(GestureDetector))
+                .first)
+            .onTap!;
+        await tester
+            .runAsync(() => next == null ? signOut() : signInAs(next));
+        tap();
+        for (var i = 0; i < 8; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(find.text('Send Invite'), findsNothing,
+              reason: "THE defect: A's button opened it for whoever came next");
+        }
+        expect(reported.map((f) => f.origin),
+            contains('CoachDashboard.openInvite'));
+        await unmount(tester);
+      });
+    }
 
     testWidgets("A signs out: the sheet closes, nothing is sent",
         (tester) async {

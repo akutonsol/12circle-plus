@@ -242,6 +242,7 @@ void main() {
       nothingOfThePage();
       expect(server.calls.where((k) => k.contains('get_client_assessment')),
           isEmpty);
+      nothingAskedAs(memberB);
       await unmount(tester);
     });
 
@@ -281,6 +282,42 @@ void main() {
       expect(find.text('4321'), findsNothing);
       await unmount(tester);
     });
+
+    for (final frameFirst in [true, false]) {
+      testWidgets("SEC5b B's own page about the client pushed as B signs in, "
+          "A's page undrawn since${frameFirst ? ' but one frame' : ''}: B reads "
+          'it, and is not left on a refusal', (tester) async {
+        await page(tester);
+        for (final table in ['user_profiles', 'subscriptions']) {
+          server.seed(table, memberB, server.data[table]![memberA]!);
+        }
+        final bs = server.holds['GET user_profiles:$memberB'] =
+            Completer<void>();
+        await tester.runAsync(() => signInAs(memberB));
+        if (frameFirst) await tester.pump();
+        Navigator.of(tester.element(find.byType(ClientDetailScreen))).push(
+            MaterialPageRoute<void>(builder: (_) => const ClientDetailScreen(
+                clientId: _client, clientName: 'Alma Stone', owner: memberB)));
+        for (var i = 0; i < 8; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(find.text('HIGH RISK'), findsNothing);
+          expect(find.text('4321'), findsNothing);
+          expect(find.text('06:45'), findsNothing);
+          expect(find.text('Could not load this client'), findsNothing,
+              reason: "a refusal from before B's page is not B's failure");
+        }
+        bs.complete();
+        await pumpUntil(tester,
+            () => seen(find.text('Assign / Change Program')),
+            what: "B's own page (THE defect: a refusal it could not retry)");
+        await frames(tester);
+        expect(find.text('Could not load this client'), findsNothing);
+        expect(server.count('$_rpc:$memberB'), 1);
+        expect(server.count('$_rpc:$memberA'), 0);
+        expect(find.text('HIGH RISK'), findsNothing);
+        await unmount(tester);
+      });
+    }
 
     testWidgets('control: the same coach signing back in has their page again',
         (tester) async {
@@ -446,6 +483,184 @@ void main() {
       await frames(tester, 10);
       expect(find.text('Edit Action'), findsNothing);
       expect(find.text('EDITED BY A'), findsOneWidget);
+      await unmount(tester);
+    });
+  });
+
+  group('what the Action Center said (R5)', () {
+    Finder said() => find.textContaining('Dismissed: ');
+
+    /// The page pushed over a first one, as a coach opens it, and one of its
+    /// recommendations dismissed.
+    Future<void> dismissed(WidgetTester tester) async {
+      await host(tester, launcher());
+      Navigator.of(tester.element(find.text('THE PAGE'))).push(
+          MaterialPageRoute<void>(builder: (_) => const ClientDetailScreen(
+              clientId: _client, clientName: 'Alma Stone', owner: memberA)));
+      await pumpUntil(tester, () => seen(find.text('HIGH RISK')), what: 'A');
+      await frames(tester);
+      await tester.tap(find.widgetWithText(TextButton, 'Dismiss').first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(said(), findsOneWidget, reason: 'premise');
+    }
+
+    for (final next in [memberB, null]) {
+      final who = next == null ? 'A signs out' : 'B signs in';
+      testWidgets('$who: it is not in the next frame', (tester) async {
+        await dismissed(tester);
+        await tester.runAsync(() => next == null ? signOut() : signInAs(next));
+        await tester.pump();
+        expect(said(), findsNothing,
+            reason: "THE defect: A's client's recommendation was left up");
+        await frames(tester);
+        expect(find.byType(SnackBar), findsNothing);
+        await unmount(tester);
+      });
+
+      testWidgets('A leaves the page and $who while it closes: not in the next '
+          'frame', (tester) async {
+        await dismissed(tester);
+        Navigator.of(tester.element(find.byType(ClientDetailScreen))).pop();
+        await tester.pump();
+        await tester.runAsync(() => next == null ? signOut() : signInAs(next));
+        await tester.pump();
+        expect(said(), findsNothing);
+        await unmount(tester);
+      });
+    }
+
+    testWidgets('A leaves the page: it goes with it', (tester) async {
+      await dismissed(tester);
+      tester.state<NavigatorState>(find.byType(Navigator).first).popUntil(
+          (r) => r.isFirst);
+      await pumpUntil(tester, () => !seen(find.byType(ClientDetailScreen)),
+          what: 'the page is gone', step: const Duration(milliseconds: 16));
+      await tester.pump();
+      expect(said(), findsNothing,
+          reason: "THE defect: it outlived A's page");
+      expect(tester.takeException(), isNull);
+      await unmount(tester);
+    });
+
+    testWidgets('control: a token event that fires keeps it up for its time',
+        (tester) async {
+      await dismissed(tester);
+      final before = c.read(currentUserProvider);
+      await tester.runAsync(refreshSession);
+      await pumpUntil(tester, () => c.read(currentUserProvider) != before,
+          what: 'the same coach as a new User');
+      expect(said(), findsOneWidget);
+      await frames(tester, 20);
+      expect(said(), findsNothing, reason: 'its second is over');
+      await unmount(tester);
+    });
+
+    testWidgets("control: a message of another page's is not taken down with a "
+        'page that said nothing', (tester) async {
+      await dismissed(tester);
+      await frames(tester, 20);
+      ScaffoldMessenger.of(tester.element(find.byType(ClientDetailScreen)))
+          .showSnackBar(const SnackBar(content: Text('Program assigned!')));
+      await frames(tester, 4);
+      Navigator.of(tester.element(find.byType(ClientDetailScreen))).pop();
+      await frames(tester, 6);
+      expect(find.byType(ClientDetailScreen), findsNothing);
+      expect(find.text('Program assigned!'), findsOneWidget);
+      await unmount(tester);
+    });
+  });
+
+  // The families that outlive their sheet and are invalidated before the next
+  // coach's first read of them: Riverpod re-reads them as a REFRESH, which
+  // holds the previous coach's rows as data.
+  group('opened by B after A had it open', () {
+    Future<void> aReadTheNotes(WidgetTester tester) async {
+      await host(tester, launcher());
+      await tester.tap(find.text('notes'));
+      await pumpUntil(tester, () => seen(find.text('private about Alma')),
+          what: "A's notes");
+      Navigator.of(tester.element(find.text('private about Alma'))).pop();
+      await frames(tester);
+    }
+
+    for (final fate in ['still out', 'failed']) {
+      testWidgets("the notes sheet, B's read $fate: none of A's notes",
+          (tester) async {
+        await aReadTheNotes(tester);
+        await become(tester, memberB);
+        if (fate == 'failed') {
+          server.fails.add('GET coach_notes:$memberB');
+        } else {
+          server.holds['GET coach_notes:$memberB'] = Completer<void>();
+        }
+        await tester.tap(find.text('notes'));
+        for (var i = 0; i < 8; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+          expect(find.text('private about Alma'), findsNothing,
+              reason: "THE defect: A's private note was shown to B");
+        }
+        await pumpUntil(tester,
+            () => server.count('GET coach_notes:$memberB') == 1,
+            what: "B's own read");
+        await frames(tester);
+        expect(find.text('private about Alma'), findsNothing);
+        if (fate == 'failed') {
+          expect(find.text('Could not load notes'), findsOneWidget);
+        } else {
+          server.holds['GET coach_notes:$memberB']!.complete();
+          await pumpUntil(tester,
+              () => !seen(find.byType(CircularProgressIndicator)),
+              what: "B's own (empty) notes");
+          expect(find.text('Could not load notes'), findsNothing);
+        }
+        await unmount(tester);
+      });
+    }
+
+    testWidgets('control: the same coach opening them again sees them while '
+        'they are re-read', (tester) async {
+      await aReadTheNotes(tester);
+      final hold = server.holds['GET coach_notes:$memberA'] = Completer<void>();
+      await tester.tap(find.text('notes'));
+      await frames(tester);
+      expect(find.text('private about Alma'), findsOneWidget);
+      hold.complete();
+      await frames(tester);
+      expect(find.text('private about Alma'), findsOneWidget);
+      await unmount(tester);
+    });
+
+    testWidgets("the Assign sheet, its list invalidated: none of A's programs",
+        (tester) async {
+      await page(tester);
+      await tester.tap(find.text('Assign / Change Program').last);
+      await pumpUntil(tester, () => seen(find.text('Plan of A')), what: 'A');
+      Navigator.of(tester.element(find.text('Plan of A'))).pop();
+      await frames(tester);
+      for (final table in ['user_profiles', 'subscriptions']) {
+        server.seed(table, memberB, server.data[table]![memberA]!);
+      }
+      await become(tester, memberB);
+      c.invalidate(myProgramsProvider); // a program write does
+      Navigator.of(tester.element(find.byType(ClientDetailScreen))).push(
+          MaterialPageRoute<void>(builder: (_) => const ClientDetailScreen(
+              clientId: _client, clientName: 'Alma Stone', owner: memberB)));
+      await pumpUntil(tester,
+          () => seen(find.text('Assign / Change Program')), what: "B's page");
+      await frames(tester);
+      final hold =
+          server.holds['GET workout_programs:$memberB'] = Completer<void>();
+      await tester.tap(find.text('Assign / Change Program').last);
+      for (var i = 0; i < 8; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('Plan of A'), findsNothing,
+            reason: "THE defect: A's programs were B's to assign");
+      }
+      hold.complete();
+      await pumpUntil(tester,
+          () => seen(find.textContaining('No programs yet')),
+          what: "B's own");
       await unmount(tester);
     });
   });

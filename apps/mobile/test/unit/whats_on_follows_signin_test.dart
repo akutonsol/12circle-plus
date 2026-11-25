@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/core/realtime/realtime.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
+import 'package:circle_fitness/features/challenges/data/models/challenge_model.dart';
 import 'package:circle_fitness/features/challenges/domain/challenge_provider.dart';
 import 'package:circle_fitness/features/classes/domain/class_provider.dart';
 import 'package:circle_fitness/features/classes/domain/whats_on.dart';
@@ -12,6 +13,35 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/two_coach_postgrest.dart';
+
+/// Runs [change], a real auth transition, invalidating both personal reads as
+/// its event arrives and BEFORE the change of account is flushed (no read of
+/// the uid has run): riverpod takes each for a refresh. Answers, per source,
+/// whether the refresh was seen to hold the member's marked rows as AsyncData.
+Future<Map<String, bool>> _invalidatedBeforeTheFlush(
+    ProviderContainer c, Future<void> Function() change) async {
+  final held = {'classes': false, 'challenges': false};
+  void watch<T>(String name, FutureProvider<List<T>> p, bool Function(T) own) =>
+      c.listen<AsyncValue<List<T>>>(p, (_, v) {
+        if (v is AsyncData<List<T>> && v.isLoading && v.value.any(own)) {
+          held[name] = true;
+        }
+      });
+  watch('classes', liveClassesFromDbProvider, (k) => k.isBooked);
+  watch('challenges', liveChallengesProvider, (x) => x.isJoined);
+  final sub = c.listen(authStateProvider, (_, __) {
+    c
+      ..invalidate(liveClassesFromDbProvider)
+      ..invalidate(liveChallengesProvider)
+      // Read at once: an invalidated provider is rebuilt without asking first
+      // whether what it watches has changed.
+      ..read(liveClassesFromDbProvider)
+      ..read(liveChallengesProvider);
+  });
+  await change();
+  sub.close();
+  return held;
+}
 
 // P0-FL-59f (A-25) · "What's on" folds three reads into one list and counted a
 // read that is loading over an earlier answer as settled — so the next member's
@@ -243,25 +273,97 @@ void main() {
       expect(actions(), isNot(contains(theirs)));
     });
 
-    test('$source invalidated as the account changes, before anything is '
-        "flushed: an AsyncData of A's is not B's", () async {
+    test('$source invalidated as the account changes, before the change is '
+        "flushed: A's, held as settled data, are not B's", () async {
       server.holds['GET $source:$memberB'] = Completer<void>();
       final seen = <String?>{};
       c.listen(whatsOnProvider, (_, __) => seen.addAll(actions()));
-      c.listen(currentUserProvider, (_, u) {
-        if (u?.id != memberB) return;
-        c
-          ..invalidate(liveClassesFromDbProvider)
-          ..invalidate(liveChallengesProvider);
-      });
-      await becomes(memberB);
+      final held = await _invalidatedBeforeTheFlush(c, () => becomes(memberB));
+      expect(held[source], isTrue,
+          reason: "premise: Riverpod holds A's as AsyncData, being refreshed");
       expect(actions(), isNot(contains(theirs)));
       expect(seen, isNot(contains(theirs)));
+      expect(c.read(scheduleClassesProvider).where((k) => k.isBooked), isEmpty);
+    });
+
+    test('control: $source invalidated as A\'s token refreshes hold the list',
+        () async {
+      final hold = server.holds['GET $source:$memberA'] = Completer<void>();
+      final user = c.read(currentUserProvider);
+      await _invalidatedBeforeTheFlush(c, () async {
+        await refreshSession();
+        await until(() => c.read(currentUserProvider) != user, 'a new User');
+        await pumpEventQueue();
+      });
+      expect(server.count('GET $source:$memberA'), 2, reason: 're-read');
+      expect(actions(), containsAll(['Booked', 'Joined']));
+      hold.complete();
+      await until(settled, 'A');
+      expect(actions(), containsAll(['Booked', 'Joined']));
     });
   }
 
-  test('SEC3: B settled and closed the list, A settled elsewhere, B is back',
-      () async {
+  group('the challenge list that joins and progress change', () {
+    List<Challenge> list() => c.read(challengeNotifierProvider);
+    List<Challenge> joined() => [for (final x in list()) if (x.isJoined) x];
+
+    setUp(() async {
+      c.listen(challengeNotifierProvider, (_, __) {});
+      await until(() => joined().length == 1, "A's");
+    });
+
+    test("invalidated before the change is flushed: A's rows do not start B's "
+        'list', () async {
+      final hold =
+          server.holds['GET challenges:$memberB'] = Completer<void>();
+      final seen = <String>[];
+      c.listen(challengeNotifierProvider, (_, v) {
+        if (c.read(currentUserProvider)?.id != memberA) {
+          seen.addAll([for (final x in v) if (x.isJoined) x.id]);
+        }
+      });
+      final held = await _invalidatedBeforeTheFlush(c, () => becomes(memberB));
+      expect(held['challenges'], isTrue, reason: 'premise');
+      expect(list(), isEmpty,
+          reason: "THE defect: A's joined challenges were B's list");
+      expect(c.read(challengeNotifierProvider.notifier).hasLoaded, isFalse,
+          reason: 'nor is B told they have none');
+      hold.complete();
+      await until(() => list().length == 1, "B's own");
+      expect(joined(), isEmpty);
+      expect(seen, isEmpty, reason: 'not for one build');
+    });
+
+    test("and B's own read fails: still nothing of A's", () async {
+      server.fails.add('GET challenges:$memberB');
+      await _invalidatedBeforeTheFlush(c, () => becomes(memberB));
+      await until(() => c.read(liveChallengesProvider) is AsyncError, 'failed');
+      expect(list(), isEmpty);
+    });
+
+    test('control: the same member keeps their list through an invalidated '
+        'refresh, a token event and a failure', () async {
+      final notifier = c.read(challengeNotifierProvider.notifier);
+      server.fails.add('GET challenges:$memberA');
+      final user = c.read(currentUserProvider);
+      await _invalidatedBeforeTheFlush(c, () async {
+        await refreshSession();
+        await until(() => c.read(currentUserProvider) != user, 'a new User');
+      });
+      await until(() => c.read(liveChallengesProvider) is AsyncError, 'failed');
+      expect(joined(), hasLength(1));
+      expect(c.read(challengeNotifierProvider.notifier), same(notifier));
+      server.fails.clear();
+      c.invalidate(liveChallengesProvider);
+      await until(() => c.read(liveChallengesProvider) is AsyncData, 'ok');
+      expect(joined(), hasLength(1));
+    });
+  });
+
+  // B's CLASSES answer, so nothing but the challenges can hide the list: at
+  // 956c12e the record of who last settled was B's from before A came by.
+  test("SEC3: B settled and closed the list, A settled elsewhere, B is back "
+      'and reopens it', () async {
     c.dispose();
     c = ProviderContainer(overrides: [
       tableTickerProvider.overrideWith((ref, t) => Stream.value(0)),
@@ -270,24 +372,33 @@ void main() {
     await becomes(memberB);
     final screen = c.listen(whatsOnProvider, (_, __) {});
     await until(settled, 'B');
+    expect(actions(), isNot(contains('Joined')), reason: 'premise');
     screen.close();
-    await becomes(memberA);
-    c.listen(liveChallengesProvider, (_, __) {});
+    // What another screen of A's still reads.
+    final elsewhere = c.listen(liveChallengesProvider, (_, __) {});
     c.listen(liveClassesFromDbProvider, (_, __) {});
+    await becomes(memberA);
     await until(
         () =>
-            c.read(liveChallengesProvider) is AsyncData &&
             !c.read(liveChallengesProvider).isLoading &&
-            c.read(liveClassesFromDbProvider) is AsyncData &&
+            c.read(liveChallengesProvider).requireValue.single.isJoined &&
             !c.read(liveClassesFromDbProvider).isLoading,
         'A elsewhere');
-    server.holds['GET challenges:$memberB'] = Completer<void>();
-    server.holds['GET classes:$memberB'] = Completer<void>();
+    final hold = server.holds['GET challenges:$memberB'] = Completer<void>();
     await becomes(memberB);
+    await until(
+        () => ownerOfHeld(c.read(liveClassesFromDbProvider)) == memberB,
+        "B's classes");
     c.listen(whatsOnProvider, (_, __) {});
     await pumpEventQueue();
-    expect(actions(), isNot(contains('Joined')));
+    expect(c.read(liveChallengesProvider).isLoading, isTrue, reason: 'premise');
+    expect(actions(), isNot(contains('Joined')),
+        reason: "THE defect: B is shown A's Joined challenge");
     expect(actions(), isNot(contains('Booked')));
+    hold.complete();
+    await until(settled, "B's own");
+    expect(actions(), hasLength(2), reason: 'control');
+    elsewhere.close();
   });
 
   test("control: the member's own failed refresh, then a good one", () async {

@@ -240,6 +240,82 @@ void main() {
     }
   });
 
+  // SEC7: the page's read is many steps; each asks whose it still is.
+  group('the client page read of many steps', () {
+    const steps = [
+      'GET user_profiles',
+      'GET progress_photo_logs',
+      'POST p-1.jpg', // a logged photo's signed URL
+      'POST front.jpg', // an onboarding photo's
+      'POST side.heic', // ... the one that is not there
+      'GET weight_logs',
+      'GET weekly_checkins',
+      'GET workout_program_assignments',
+      'GET client_nutrition_plans',
+      'GET client_habits',
+      'GET workout_sessions',
+      'GET daily_scores',
+    ];
+    final p = clientDetailProvider(_client);
+
+    setUp(() {
+      server
+        ..seed('user_profiles', memberA, [
+          {'id': _client, 'first_name': 'Alma'}
+        ])
+        ..seed('user_profiles', memberB, [
+          {'id': _client, 'first_name': 'Alma'}
+        ])
+        ..seed('progress_photo_logs', memberA, [
+          {'user_id': _client, 'storage_path': '$_client/p-1.jpg'}
+        ])
+        ..photos.addAll(['$_client/p-1.jpg', '$_client/front.jpg']);
+    });
+
+    for (final (i, step) in steps.indexed) {
+      for (final next in [memberB, null]) {
+        test('$step out when ${next == null ? 'A signs out' : 'B signs in'}: '
+            'no later step goes out', () async {
+          c.read(openClientPagesProvider).opened(_client, memberA);
+          final hold = server.holds['$step:$memberA'] = Completer<void>();
+          c.listen<AsyncValue<Object?>>(p, (_, __) {});
+          await until(() => server.count('$step:$memberA') > 0, step);
+          await becomes(next);
+          hold.complete();
+          await Future<void>.delayed(const Duration(milliseconds: 80));
+          final as = next ?? 'anon';
+          expect(server.calls.where((k) => k.endsWith(':$as')), isEmpty,
+              reason: "THE defect: A's client was read on as $as");
+          for (final later in steps.skip(i + 1)) {
+            expect(server.count('$later:$memberA'), 0, reason: later);
+          }
+        });
+      }
+    }
+
+    test('control: A stays, their token refreshed meanwhile: every step, once, '
+        'as A', () async {
+      c.read(openClientPagesProvider).opened(_client, memberA);
+      final hold =
+          server.holds['GET progress_photo_logs:$memberA'] = Completer<void>();
+      c.listen<AsyncValue<Object?>>(p, (_, __) {});
+      await until(
+          () => server.count('GET progress_photo_logs:$memberA') > 0, 'step');
+      await tokenRefreshed();
+      hold.complete();
+      await until(() => c.read(p) is AsyncData, "A's answer");
+      for (final step in steps) {
+        expect(server.count('$step:$memberA'), 1, reason: step);
+      }
+      final detail = c.read(p).requireValue;
+      expect((detail['onboarding_photos'] as Map).keys, ['front']);
+      expect(((detail['progress_photos'] as List).single as Map)['url'],
+          contains('p-1.jpg'));
+      expect(server.count('POST front.jpeg:$memberA'), 0,
+          reason: 'the first existing extension wins');
+    });
+  });
+
   test("A's late assessment does not land on B, before B's own or after it",
       () async {
     server.seed('rpc/get_client_assessment', memberA, [
