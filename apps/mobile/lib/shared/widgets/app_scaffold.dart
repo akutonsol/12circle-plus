@@ -13,6 +13,8 @@
 //
 // The one client bottom nav is `app_shell.dart`, and it is FIT-001's five.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -198,6 +200,11 @@ class _ShakingBellIconState extends ConsumerState<_ShakingBellIcon>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _shake;
+  /// The next shake; null while animations are off.
+  Timer? _next;
+  /// The last unread count read for [_countUid].
+  int? _count;
+  String? _countUid;
 
   @override
   void initState() {
@@ -210,53 +217,98 @@ class _ShakingBellIconState extends ConsumerState<_ShakingBellIcon>
       TweenSequenceItem(tween: Tween(begin: 0.15, end: -0.1), weight: 2),
       TweenSequenceItem(tween: Tween(begin: -0.1, end: 0.0), weight: 1),
     ]).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
-    Future.delayed(const Duration(seconds: 1), _startShake);
+  }
+
+  /// Reduce motion: nothing moves and nothing is scheduled; a bell caught
+  /// mid-shake stops level (P0-FL-61).
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _next?.cancel();
+      _next = null;
+      _ctrl.reset();
+    } else {
+      _next ??= Timer(const Duration(seconds: 1), _startShake);
+    }
   }
 
   void _startShake() {
-    if (!mounted) return;
     _ctrl.forward(from: 0).then((_) {
-      Future.delayed(const Duration(seconds: 3), _startShake);
+      if (!mounted) return;
+      _next = Timer(const Duration(seconds: 3), _startShake);
     });
   }
 
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  void dispose() { _next?.cancel(); _ctrl.dispose(); super.dispose(); }
+
+  /// The signed-in account's unread count; null while nobody has read it (so
+  /// it is never said as "none"). The provider carries the previous account's
+  /// number through the next one's read, and through its failure: only a
+  /// settled read counts, and it is kept for that account alone.
+  int? _unread() {
+    final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+    final read = ref.watch(unreadCountProvider);
+    if (uid == null || uid != _countUid) _count = null;
+    _countUid = uid;
+    if (uid != null && !read.isLoading && !read.hasError) _count = read.value;
+    return _count;
+  }
 
   @override
   Widget build(BuildContext context) {
     // Real unread count drives the badge; tap opens the notifications screen.
-    final unread = ref.watch(unreadCountProvider).valueOrNull ?? 0;
-    return GestureDetector(
-      onTap: () => context.go('/notifications'),
-      behavior: HitTestBehavior.opaque,
-      child: AnimatedBuilder(
-        animation: _shake,
-        builder: (_, child) => Transform.rotate(
-          angle: unread > 0 ? _shake.value : 0, child: child),
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            const Icon(Icons.notifications, color: _C.primary, size: 26),
-            if (unread > 0)
-              Positioned(
-                top: -3, right: -3,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                  constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
-                  decoration: BoxDecoration(
-                    shape: unread > 9 ? BoxShape.rectangle : BoxShape.circle,
-                    borderRadius: unread > 9 ? BorderRadius.circular(8) : null,
-                    color: _C.error,
-                    boxShadow: [BoxShadow(color: _C.error.withValues(alpha: 0.6), blurRadius: 6)],
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(unread > 9 ? '9+' : '$unread',
-                    style: const TextStyle(color: Color(0xFF3A0A06), fontSize: 9,
-                      fontWeight: FontWeight.w800, height: 1)),
+    final known = _unread();
+    final unread = known ?? 0;
+    final bell = AnimatedBuilder(
+      animation: _shake,
+      builder: (_, child) => Transform.rotate(
+        angle: unread > 0 ? _shake.value : 0, child: child),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          const Icon(Icons.notifications, color: _C.primary, size: 26),
+          if (unread > 0)
+            Positioned(
+              top: -3, right: -3,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
+                decoration: BoxDecoration(
+                  shape: unread > 9 ? BoxShape.rectangle : BoxShape.circle,
+                  borderRadius: unread > 9 ? BorderRadius.circular(8) : null,
+                  color: _C.error,
+                  boxShadow: [BoxShadow(color: _C.error.withValues(alpha: 0.6), blurRadius: 6)],
                 ),
+                alignment: Alignment.center,
+                child: Text(unread > 9 ? '9+' : '$unread',
+                  style: const TextStyle(color: Color(0xFF3A0A06), fontSize: 9,
+                    fontWeight: FontWeight.w800, height: 1)),
               ),
-          ],
+            ),
+        ],
+      ),
+    );
+    void open() => context.go('/notifications');
+    return Semantics(
+      container: true,
+      button: true,
+      label: switch (known) {
+        null => 'Notifications',
+        0 => 'Notifications, none unread',
+        _ => 'Notifications, $known unread',
+      },
+      excludeSemantics: true,
+      onTap: open,
+      child: GestureDetector(
+        onTap: open,
+        behavior: HitTestBehavior.opaque,
+        // The icon stays where it was; the target grows to 44 around it.
+        child: Container(
+          width: 44, height: 44,
+          alignment: Alignment.centerRight,
+          child: bell,
         ),
       ),
     );
