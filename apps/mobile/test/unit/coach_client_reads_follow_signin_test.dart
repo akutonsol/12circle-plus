@@ -9,7 +9,13 @@ import 'package:circle_fitness/features/classes/data/models/class_model.dart';
 import 'package:circle_fitness/features/classes/domain/class_provider.dart';
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
 import 'package:circle_fitness/features/coach/domain/package_provider.dart';
-import 'package:circle_fitness/features/scoring/domain/score_provider.dart';
+import 'package:circle_fitness/features/coach_notes/domain/coach_note_provider.dart';
+import 'package:circle_fitness/features/dashboard/domain/coach_triage_provider.dart';
+import 'package:circle_fitness/features/dashboard/domain/still_reading.dart';
+import 'package:circle_fitness/features/dashboard/presentation/client_detail_screen.dart'
+    show answeredPaidPlan;
+import 'package:circle_fitness/features/scoring/domain/score_provider.dart'
+    hide coachLeaderboardProvider;
 import 'package:circle_fitness/features/vendor/domain/vendor_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -125,6 +131,20 @@ void main() {
       eventRegistrationsProvider('ev-1'),
       'GET event_registrations'
     ),
+    // Read through plain `.when`, so nothing of A's was shown; a token refresh
+    // read them again (N7).
+    'the sent invites': (sentInvitesProvider, 'GET coach_invites'),
+    'the leaderboard': (
+      coachLeaderboardProvider,
+      'GET coach_client_relationships'
+    ),
+    'who needs the coach today': (
+      coachTriageSignalsProvider,
+      'GET coach_client_relationships'
+    ),
+    "the coach's notes": (clientNotesProvider(_client), 'GET coach_notes'),
+    "the coach's programs": (myProgramsProvider, 'GET workout_programs'),
+    'my action items': (myActionItemsProvider, 'GET action_items'),
   };
 
   for (final e in families.entries) {
@@ -146,6 +166,21 @@ void main() {
             () => server.count('$request:$memberB') > 0, "B's own read");
       });
 
+      test("A's answer, late, does not land on B; then B's own does", () async {
+        final holdA = server.holds['$request:$memberA'] = Completer<void>();
+        final holdB = server.holds['$request:$memberB'] = Completer<void>();
+        c.listen<AsyncValue<Object?>>(provider, (_, __) {});
+        await until(() => server.count('$request:$memberA') > 0, "A's read");
+        await becomes(memberB);
+        holdA.complete();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        expect(c.read(provider).hasValue, isFalse,
+            reason: "A's answer landed on B");
+        expect(c.read(provider).hasError, isFalse);
+        holdB.complete();
+        await until(() => c.read(provider) is AsyncData, "B's answer");
+      });
+
       test('control: the same coach refreshing their token is not asked again',
           () async {
         final asA = await asked(request, provider);
@@ -165,6 +200,45 @@ void main() {
       });
     });
   }
+
+  group("a client whose open page is another account's", () {
+    final reads = {
+      for (final name in [
+        'the client page (profile, photos, weights, check-ins)',
+        'the PAR-Q and medical assessment (the LOGGED read)',
+        'the paid-plan check',
+        'the training schedule',
+        'the score',
+        "the coach's notes",
+      ])
+        name: families[name]!,
+    };
+    for (final e in reads.entries) {
+      final (provider, request) = e.value;
+      test('${e.key}: nothing is asked for B; and B\'s own page reads', () async {
+        final pages = c.read(openClientPagesProvider)..opened(_client, memberA);
+        final asA = await asked(request, provider);
+        await becomes(memberB);
+        await until(() => !c.read(provider).isLoading, 'refused');
+        expect(server.count('$request:$memberB'), 0,
+            reason: 'THE defect: a read in the name of an account that never '
+                'opened this page');
+        expect(c.read(provider).error, isA<ClientPageLeft>());
+        // B opens it themselves, A's page still beneath.
+        pages.opened(_client, memberB);
+        c.invalidate(provider as ProviderOrFamily);
+        await until(() => server.count('$request:$memberB') > 0, "B's read");
+        pages
+          ..closed(_client, memberB)
+          ..closed(_client, memberA);
+        expect(pages.admits(_client, 'anyone'), isTrue,
+            reason: 'no page is open any more');
+        // Control: A's return is read again, as A.
+        await becomes(memberA);
+        await until(() => server.count('$request:$memberA') > asA, 'A again');
+      });
+    }
+  });
 
   test("A's late assessment does not land on B, before B's own or after it",
       () async {
@@ -196,6 +270,34 @@ void main() {
     setUp(() => server.seed('subscriptions', memberA, [
           {'id': 's-1'}
         ]));
+
+    test("A's yes is not an answer while B's is out, at no state it passes "
+        'through', () async {
+      final p = clientHasPaidPlanProvider(_client);
+      final answers = <bool?>[];
+      c.listen(p, (_, v) => answers.add(answeredPaidPlan(v)));
+      await until(() => c.read(p) is AsyncData, 'A');
+      expect(answeredPaidPlan(c.read(p)), isTrue, reason: 'premise');
+      final hold = server.holds['GET subscriptions:$memberB'] = Completer();
+      answers.clear();
+      await becomes(memberB);
+      expect(c.read(p).hasValue, isTrue,
+          reason: "premise: Riverpod still holds A's yes");
+      expect(answeredPaidPlan(c.read(p)), isNull,
+          reason: "THE defect: A's paid plan unlocked B's services");
+      server.fails.add('GET subscriptions:$memberB');
+      hold.complete();
+      await until(() => c.read(p) is AsyncError, 'B failed');
+      expect(answeredPaidPlan(c.read(p)), isNull);
+      expect(answers, isNot(contains(true)));
+      // Control: B's own retry answers no; a re-check of it does not flicker.
+      server.fails.clear();
+      c.invalidate(p);
+      await until(() => c.read(p) is AsyncData && !c.read(p).isLoading, 'B');
+      expect(answeredPaidPlan(c.read(p)), isFalse);
+      c.invalidate(p);
+      expect(answeredPaidPlan(c.read(p)), isFalse);
+    });
 
     test("B's failed read is B's failure, not A's yes", () async {
       final p = clientHasPaidPlanProvider(_client);

@@ -32,6 +32,10 @@ class TwoCoachPostgrest extends TwoMemberPostgrest {
 
   final writes = <CoachWrite>[];
 
+  /// Storage objects (by path suffix) that a signed URL is made for; any other
+  /// is the 400 the storage API answers for an object that is not there.
+  final photos = <String>{};
+
   void seed(String table, String who, List<Map<String, Object?>> rows) =>
       (data[table] ??= {})[who] = rows;
 
@@ -48,6 +52,7 @@ class TwoCoachPostgrest extends TwoMemberPostgrest {
     super.reset();
     data.clear();
     writes.clear();
+    photos.clear();
   }
 
   @override
@@ -88,6 +93,10 @@ class TwoCoachPostgrest extends TwoMemberPostgrest {
     if (fails.contains(key)) {
       return _json(
           {'message': 'refused SECRET_TABLE', 'code': 'XX000'}, 500, request);
+    }
+    if (path.contains('/object/sign/') && photos.any(path.endsWith)) {
+      return _json({'signedURL': '${path.split('/storage/v1').last}?token=t'},
+          200, request);
     }
     if (path.startsWith('/storage/')) {
       return _json({'message': 'not found', 'statusCode': '404'}, 400, request);
