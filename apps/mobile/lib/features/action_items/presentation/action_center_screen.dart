@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
+import '../../../core/observability/app_failure.dart';
 import '../../../shared/theme/app_background.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart'
+    show couldntMessage;
 import '../data/models/action_item.dart';
 import '../domain/action_item_provider.dart';
 import '../../../core/widgets/back_leading.dart';
@@ -216,13 +220,42 @@ class _ActionTile extends ConsumerWidget {
   }
 
   Future<void> _toggle(BuildContext context, WidgetRef ref) async {
+    final auth = Supabase.instance.client.auth;
     final svc = ref.read(actionItemServiceProvider);
-    if (item.isCompleted) {
-      await svc.reopen(item.id);
-    } else {
-      await svc.completeActionItem(item.id);
+    final messenger = ScaffoldMessenger.of(context);
+    // The tile can be gone (the list re-read, or another member's) by the time
+    // this answers; the container is not.
+    final container = ProviderScope.containerOf(context, listen: false);
+    // The member whose task this is. A tile still up is not anyone else's.
+    final owner = item.clientId;
+    if (auth.currentUser?.id != owner) {
+      reportError('ActionCenter.identity',
+          StateError('action item: the signed-in account changed'));
+      return;
     }
-    ref.invalidate(myActionItemsProvider);
+    final reopening = item.isCompleted;
+    String? failed;
+    try {
+      final saved = reopening
+          ? await svc.reopen(item.id)
+          : await svc.completeActionItem(item.id);
+      if (!saved) {
+        failed = "Couldn't ${reopening ? 'reopen that action item' : 'mark that '
+            'action item done'} — it may already have changed. Pull down to "
+            'refresh.';
+      }
+    } catch (e, st) {
+      reportError('ActionCenter.toggle', e, st);
+      failed = couldntMessage(
+          reopening ? 'reopen that action item' : 'mark that action item done',
+          e);
+    }
+    // Another member's by now: theirs to read, and nothing to say to them.
+    if (auth.currentUser?.id != owner) return;
+    container.invalidate(myActionItemsProvider);
+    if (failed != null) {
+      messenger.showSnackBar(SnackBar(content: Text(failed)));
+    }
   }
 }
 

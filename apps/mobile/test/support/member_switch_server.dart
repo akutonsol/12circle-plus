@@ -2,17 +2,31 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'two_member_postgrest.dart';
+import 'two_member_postgrest.dart' hide refreshSession;
 
 export 'two_member_postgrest.dart'
-    show
-        initTwoMemberSupabase,
-        memberA,
-        memberB,
-        refreshSession,
-        signInAs,
-        signOut;
+    show initTwoMemberSupabase, memberA, memberB, signInAs, signOut;
+
+/// Refreshes the signed-in member's session: the same member, as a new [User].
+/// Fails unless the event really reached the listeners (`recoverSession` for
+/// the same uid sends none, so a control built on it controls nothing).
+Future<void> refreshSession() async {
+  final auth = Supabase.instance.client.auth;
+  final uid = auth.currentUser?.id;
+  final heard = <AuthChangeEvent>[];
+  final sub = auth.onAuthStateChange.listen((s) => heard.add(s.event));
+  await Future<void>.delayed(Duration.zero); // the replayed last event
+  heard.clear();
+  await auth.refreshSession();
+  await Future<void>.delayed(Duration.zero);
+  await sub.cancel();
+  if (!heard.contains(AuthChangeEvent.tokenRefreshed) ||
+      auth.currentUser?.id != uid) {
+    throw StateError('no token refresh was heard: $heard');
+  }
+}
 
 /// One request the fake server saw, with the member whose token it carried.
 class SeenRequest {
@@ -46,6 +60,9 @@ class MemberSwitchServer extends TwoMemberPostgrest {
   /// Keyed `METHOD target:who`: these writes match no row.
   final zeroRows = <String>{};
 
+  /// Keyed `METHOD target:who`: these never reach the server.
+  final offline = <String>{};
+
   /// Storage objects that exist (`uid/front.jpg`).
   final objects = <String>{};
 
@@ -62,6 +79,7 @@ class MemberSwitchServer extends TwoMemberPostgrest {
     seen.clear();
     rows.clear();
     zeroRows.clear();
+    offline.clear();
     objects.clear();
     unsignable.clear();
     holdUploadsOf = null;
@@ -105,6 +123,9 @@ class MemberSwitchServer extends TwoMemberPostgrest {
     if (r.target.startsWith('progress-photos/') && r.who == holdUploadsOf) {
       await uploadGate?.future;
     }
+    if (offline.contains(r.key)) {
+      throw http.ClientException('no connection SECRET', request.url);
+    }
     if (fails.contains(r.key)) {
       return _send(
           {'message': 'refused SECRET', 'code': 'XX000'}, 500, request);
@@ -144,6 +165,9 @@ class MemberSwitchServer extends TwoMemberPostgrest {
             {
               'id': 'row-1',
               if (r.body is Map) ...r.body as Map<String, dynamic>,
+              // An embed asked for is answered, as PostgREST would.
+              if ('${r.query['select']}'.contains('public_profiles'))
+                'public_profiles': {'first_name': 'Me', 'last_name': 'Myself'},
             }
           ];
     return (single ? (out.isEmpty ? null : out.first) : out, 200);

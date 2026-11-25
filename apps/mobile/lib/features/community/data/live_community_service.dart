@@ -104,6 +104,10 @@ class LiveCommunityService {
         .eq('post_id', postId)
         .eq('user_id', uid)
         .maybeSingle();
+    // P0-FL-59e · the reaction is that member's; nothing is written as another.
+    if (_db.auth.currentUser?.id != uid) {
+      throw StateError('reaction: the signed-in account changed');
+    }
     switch (reactionWriteFor(
       existingType: existing?['reaction_type'] as String?,
       chosen: parseReactionType(reactionType),
@@ -128,13 +132,23 @@ class LiveCommunityService {
 
   Future<void> addComment(String postId, String content) async {
     final uid = _db.auth.currentUser?.id;
-    if (uid == null) return;
+    // Thrown, as in createPost: a comment never sent is not one that was.
+    if (uid == null) throw Exception('Not authenticated');
     await _db.from('post_comments').insert({
       'post_id': postId,
       'user_id': uid,
       'content': content,
     });
     // Notify the post author of the new comment (COM-002).
+    // P0-FL-59e · as the member who commented, or not at all.
+    bool stillSignedIn() {
+      if (_db.auth.currentUser?.id == uid) return true;
+      reportError('community.addComment.identity',
+          StateError('comment notification: the signed-in account changed'));
+      return false;
+    }
+
+    if (!stillSignedIn()) return;
     try {
       final post = await _db
           .from('community_posts')
@@ -143,6 +157,7 @@ class LiveCommunityService {
           .maybeSingle();
       final authorId = post?['user_id'] as String?;
       if (authorId != null && authorId != uid) {
+        if (!stillSignedIn()) return;
         await NotificationService().notifyUser(
           recipientId: authorId,
           type: 'community',
@@ -150,8 +165,9 @@ class LiveCommunityService {
           body: 'Someone commented on your post.',
         );
       }
-    } catch (_) {
-      // ignore notification failures
+    } catch (e, st) {
+      // Best effort: the comment is saved. Recorded.
+      reportError('community.addComment.notify', e, st);
     }
   }
 

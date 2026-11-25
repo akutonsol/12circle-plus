@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
+import '../../../../core/observability/app_failure.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/animations/app_animations.dart';
 import '../../data/models/habit_model.dart';
@@ -7,6 +9,8 @@ import '../../domain/habit_provider.dart';
 import 'streak_badge.dart';
 import 'habit_progress_ring.dart';
 import '../../domain/habit_row.dart';
+import '../../../workout/presentation/widgets/section_load_failure.dart'
+    show couldntMessage;
 
 class HabitCard extends ConsumerStatefulWidget {
   final Habit habit;
@@ -19,6 +23,41 @@ class HabitCard extends ConsumerStatefulWidget {
 
 class _HabitCardState extends ConsumerState<HabitCard> {
   bool _showCompletion = false;
+
+  /// P0-FL-59e · whose habit this is: the member signed in when it was drawn.
+  /// The notifier read at tap time is the one signed in THEN, so it cannot
+  /// tell that a card still up is another member's.
+  late String? _owner = _signedIn;
+
+  static String? get _signedIn {
+    try {
+      return Supabase.instance.client.auth.currentUser?.id;
+    } on Error {
+      return null; // no client at all: the card alone, in a test
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _owner; // captured now, not at the first tap
+  }
+
+  @override
+  void didUpdateWidget(HabitCard old) {
+    super.didUpdateWidget(old);
+    // Another member's list reuses the cards.
+    if (old.habit.id != widget.habit.id) _owner = _signedIn;
+  }
+
+  /// False (recorded, and silent: it is not their tick) once someone else is
+  /// signed in.
+  bool _stillOwner() {
+    if (_signedIn == _owner) return true;
+    reportError('HabitCard.identity',
+        StateError('habit log: the signed-in account changed'));
+    return false;
+  }
 
   Color get _categoryColor {
     switch (widget.habit.category) {
@@ -50,20 +89,21 @@ class _HabitCardState extends ConsumerState<HabitCard> {
 
     // A write that did not save is put back by the notifier and said here,
     // never left ticked in silence (EC-12).
-    void notSaved() {
-      if (!mounted) return;
+    void notSaved(Object? error) {
+      if (!mounted || !_stillOwner()) return;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(content: Text(
-            "Couldn't save that — check your connection and try again.")));
+        ..showSnackBar(
+            SnackBar(content: Text(couldntMessage('save that', error))));
     }
 
     Future<void> toggle() async {
+      if (!_stillOwner()) return;
       if (!done) _onComplete();
-      final ok = await ref
-          .read(liveHabitNotifierProvider.notifier)
-          .toggleComplete(widget.habit.id);
-      if (!ok) notSaved();
+      final id = widget.habit.id;
+      final notifier = ref.read(liveHabitNotifierProvider.notifier);
+      final ok = await notifier.toggleComplete(id);
+      if (!ok) notSaved(notifier.failureOf(id));
     }
 
     return Stack(
@@ -225,13 +265,17 @@ class _HabitCardState extends ConsumerState<HabitCard> {
                         max: widget.habit.targetValue.toDouble(),
                         divisions: widget.habit.targetValue,
                         onChanged: (value) {
+                          if (!_stillOwner()) return;
                           AppAnimations.hapticLight();
-                          ref
-                              .read(liveHabitNotifierProvider.notifier)
-                              .updateValue(widget.habit.id, value.toInt())
-                              .then((ok) { if (!ok) notSaved(); });
+                          final id = widget.habit.id;
+                          final notifier =
+                              ref.read(liveHabitNotifierProvider.notifier);
+                          notifier.updateValue(id, value.toInt()).then((ok) {
+                            if (!ok) notSaved(notifier.failureOf(id));
+                          });
                         },
                         onChangeEnd: (value) {
+                          if (_signedIn != _owner) return;
                           if (value >= widget.habit.targetValue) _onComplete();
                         },
                       ),

@@ -9,7 +9,10 @@
 //
 // HOW TO SEE IT FAIL: put back a82f993's score_service, habit_provider,
 // community_provider, nutrition_service, action_item_service and
-// coaching_mode_provider; every test but the POSITIVE/NEGATIVE CONTROLs fails.
+// coaching_mode_provider; every test fails but the POSITIVE/NEGATIVE CONTROLs
+// and "A's notifier, asked once B is signed in: nothing is sent" (there it is
+// the disposed notifier's own error that stops it; "still mounted" below it is
+// the one that fails).
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -180,10 +183,15 @@ void main() {
       final n = LiveHabitNotifier(CoachProgramService(), ScoreService());
       await loaded(n);
       await signInAs(memberB);
-      expect(await n.toggleComplete('a1'), isFalse);
-      expect(await n.updateValue('a1', 1).catchError((_) => false), isFalse);
+      // `true`: nothing to tell B. (It was `false`, which the card says to the
+      // person signed in as "Couldn't save that"; lead ruling, round 2.)
+      expect(await n.toggleComplete('a1'), isTrue);
+      expect(await n.updateValue('a1', 1), isTrue);
       await settle();
       expect(asB(), isEmpty);
+      expect(origins(),
+          List.filled(2, 'LiveHabitNotifier.identity'));
+      expect(n.state.valueOrNull, isNull);
     });
 
     test("A's reload answers after B signed in: A's habits do not appear",
@@ -274,6 +282,63 @@ void main() {
       await expectLater(n.addComment('p1', 'nice'), throwsStateError);
       await expectLater(n.toggleLike('p1'), throwsStateError);
       expect(asB(), isEmpty);
+    });
+
+    test("A's feed read again answers after B signed in: it does not appear",
+        () async {
+      final n = notifier();
+      await until(() => n.state is AsyncData, 'the feed');
+      server.rows['community_posts'] = {
+        memberA: [
+          {
+            'id': 'p1', 'user_id': memberA, 'content': 'mine',
+            'created_at': '2026-11-20T08:00:00Z',
+          },
+        ],
+      };
+      final hold = server.holds['GET community_posts:$memberA'] = Completer();
+      final reload = n.reload();
+      await until(() => n.state.isLoading, 'the reload');
+      await signInAs(memberB);
+      hold.complete();
+      await reload;
+      expect(n.state.valueOrNull, isNull);
+    });
+
+    test("A's reaction is stored after B signed in: A's feed is not redrawn",
+        () async {
+      server.rows['community_posts'] = {
+        memberA: [
+          {
+            'id': 'p1', 'user_id': 'x', 'content': 'hi',
+            'created_at': '2026-11-20T08:00:00Z',
+          },
+        ],
+      };
+      final n = notifier();
+      await until(() => n.state is AsyncData, 'the feed');
+      final hold = server.holds['POST post_reactions:$memberA'] = Completer();
+      final like = n.toggleLike('p1');
+      await until(() => server.writes('post_reactions').isNotEmpty, 'the row');
+      await signInAs(memberB);
+      hold.complete();
+      await like;
+      expect(server.writes('post_reactions').single.row['user_id'], memberA);
+      expect(n.state.valueOrNull!.single.reactions, isEmpty);
+    });
+
+    test("B signs in between A's reaction look-up and its write: nothing is "
+        'written', () async {
+      final n = notifier();
+      await until(() => n.state is AsyncData, 'the feed');
+      final hold = server.holds['GET post_reactions:$memberA'] = Completer();
+      final like = n.toggleLike('p1');
+      await until(
+          () => server.reads('post_reactions').isNotEmpty, 'the look-up');
+      await signInAs(memberB);
+      hold.complete();
+      await expectLater(like, throwsStateError);
+      expect(server.writes(), isEmpty);
     });
 
     test('S7: the feed is disposed while the post is out: no state error',
@@ -448,6 +513,22 @@ void main() {
       await expectLater(
           n.setMode(CoachingMode.selfGuided), throwsA(isA<StateError>()));
       expect(server.writes(), isEmpty);
+    });
+
+    test("A's notifier, still mounted, asked once B is signed in: nothing is "
+        'sent', () async {
+      // Not tied to the signed-in member, so nothing has disposed it yet.
+      final mine = StateNotifierProvider<CoachingModeNotifier,
+          AsyncValue<CoachingMode>>((ref) => CoachingModeNotifier(ref, memberA));
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      c.listen(mine, (_, __) {});
+      await until(() => c.read(mine).hasValue, 'the mode');
+      await signInAs(memberB);
+      await expectLater(c.read(mine.notifier).setMode(CoachingMode.selfGuided),
+          throwsA(isA<StateError>()));
+      expect(server.writes(), isEmpty);
+      expect(origins(), ['CoachingModeNotifier.setMode.identity']);
     });
 
     test('POSITIVE CONTROL: saved, plan synced, and a token refresh keeps the '

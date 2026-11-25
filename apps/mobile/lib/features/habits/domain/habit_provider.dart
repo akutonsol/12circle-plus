@@ -82,7 +82,8 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
 
   /// False (recorded) once someone else is signed in: the habits here are not
   /// theirs, so neither is a log, nor points counted from them. Nothing of
-  /// them stays up either.
+  /// them stays up either. A refusal answers `true` to the caller: it is
+  /// another member's tick, and there is nothing to tell the one signed in.
   bool _isOwner(String what) {
     if (_signedIn == _owner) return true;
     reportError('LiveHabitNotifier.identity',
@@ -147,6 +148,24 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
 
   Future<void> reload() => _load();
 
+  final _failures = <String, Object>{};
+
+  /// Why [habitId]'s last write was not saved, for the next step said to the
+  /// member (the connection only when it IS the connection).
+  Object? failureOf(String habitId) => _failures[habitId];
+
+  /// The habit to log, or null (recorded) when this member has no such habit:
+  /// another member's card that is still up, or one deactivated meanwhile.
+  Habit? _mine(String habitId) {
+    for (final h in state.valueOrNull ?? const <Habit>[]) {
+      if (h.id == habitId) return h;
+    }
+    final error = StateError('habit log: not one of this member\'s habits');
+    reportError('LiveHabitNotifier.unknownHabit', error);
+    _failures[habitId] = error;
+    return null;
+  }
+
   /// Puts back [original] — only that habit, so a toggle that failed does not
   /// undo another one that saved meanwhile.
   void _restore(Habit original) {
@@ -165,9 +184,10 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
   /// failed write puts the habit back and returns false for the screen to say
   /// so, and points are awarded only for a tick that was saved.
   Future<bool> toggleComplete(String habitId) async {
-    if (!_isOwner('habit log')) return false; // nothing was sent
+    if (!_isOwner('habit log')) return true; // nothing was sent, or is said
+    final habit = _mine(habitId);
+    if (habit == null) return false; // nothing was sent
     final habits = state.valueOrNull ?? [];
-    final habit = habits.firstWhere((h) => h.id == habitId, orElse: () => habits.first);
     final newCompleted = !habit.isCompletedToday;
 
     // Optimistic update
@@ -183,6 +203,7 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
       await _svc.logHabit(habitId, completed: newCompleted, value: newCompleted ? habit.targetValue.toDouble() : 0);
     } catch (e, st) {
       reportError('LiveHabitNotifier.toggleComplete', e, st);
+      _failures[habitId] = e;
       // Not the signed-in member's tick: nothing to say to them about it.
       if (!_isOwner('habit log')) return true;
       _restore(habit);
@@ -214,9 +235,10 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
   /// Sets a counted habit's value and says whether it was saved; a failed
   /// write puts the habit back (EC-12).
   Future<bool> updateValue(String habitId, int value) async {
-    if (!_isOwner('habit log')) return false; // nothing was sent
+    if (!_isOwner('habit log')) return true; // nothing was sent, or is said
+    final habit = _mine(habitId);
+    if (habit == null) return false; // nothing was sent
     final habits = state.valueOrNull ?? [];
-    final habit = habits.firstWhere((h) => h.id == habitId);
     final isCompleted = value >= habit.targetValue;
     state = AsyncValue.data(habits.map((h) {
       if (h.id != habitId) return h;
@@ -227,6 +249,7 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
       return true;
     } catch (e, st) {
       reportError('LiveHabitNotifier.updateValue', e, st);
+      _failures[habitId] = e;
       if (!_isOwner('habit log')) return true;
       _restore(habit);
       return false;
@@ -234,12 +257,14 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
   }
 
   void incrementValue(String habitId) {
-    final habit = (state.valueOrNull ?? []).firstWhere((h) => h.id == habitId);
+    final habit = _mine(habitId);
+    if (habit == null) return;
     updateValue(habitId, (habit.currentValue + 1).clamp(0, habit.targetValue * 3));
   }
 
   void decrementValue(String habitId) {
-    final habit = (state.valueOrNull ?? []).firstWhere((h) => h.id == habitId);
+    final habit = _mine(habitId);
+    if (habit == null) return;
     updateValue(habitId, (habit.currentValue - 1).clamp(0, habit.targetValue * 3));
   }
 }
