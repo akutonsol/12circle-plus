@@ -429,8 +429,6 @@ void main() {
       await until(t, () => server.count('update-subscription') == 1, 'A asked');
       await signIn(t, _b);
       await until(t, () => seen(find.text('Upgrade to Self-Guided')), "B's plan");
-      expect(enabled(t, startsWith: 'Upgrade to AI-Guided'), isNotEmpty,
-          reason: "A's spinner is not B's");
       gate.complete();
       await settle(t);
       expect(server.count('create-checkout'), 0,
@@ -438,6 +436,19 @@ void main() {
       expect(launched, isEmpty);
       expect(find.byType(SnackBar), findsNothing);
       expect(recordedAccountChange(), isTrue);
+    });
+
+    testWidgets("A's busy plan card is not busy for B", (t) async {
+      await openAsA(t);
+      server.answers['client_plan:$_b'] = (200, 'free');
+      final gate = server.gates['update-subscription:$_a'] = Completer();
+      await t.tap(find.text('Upgrade to AI-Guided'));
+      await until(t, () => server.count('update-subscription') == 1, 'A asked');
+      await signIn(t, _b);
+      await until(t, () => seen(find.text('Upgrade to Self-Guided')), "B's plan");
+      expect(enabled(t, startsWith: 'Upgrade to AI-Guided'), isNotEmpty);
+      gate.complete();
+      await settle(t);
     });
 
     for (final (answer, what) in [
@@ -598,8 +609,11 @@ void main() {
       await openAsA(t);
       server.answers['client_plan:$_b'] = _down;
       await signIn(t, _b);
-      await until(t, () => seen(find.byType(PlanLoadFailedNotice)), 'the notice');
-      expect(find.text('Current'), findsNothing);
+      await until(
+          t, () => origins().contains('UpgradeScreen.clientPlan'), 'failure');
+      await settle(t);
+      expect(find.text('Current'), findsNothing, reason: "A's plan for B");
+      expect(find.byType(PlanLoadFailedNotice), findsOneWidget);
       expect(enabled(t), isEmpty);
       noBackendText();
       server.answers['client_plan:$_b'] = (200, 'free');
@@ -655,8 +669,12 @@ void main() {
       server.answers['client_plan:$_b'] = (200, 'coach_guided');
       server.answers['coach_client_relationships:$_b'] = _down;
       await signIn(t, _b);
-      await until(t, () => seen(find.text("Couldn't load your coach")), 'said');
-      expect(find.textContaining('Anna'), findsNothing);
+      await until(t, () => server.count('coach_client_relationships', _b) >= 1,
+          'B asked');
+      await settle(t);
+      expect(find.textContaining('Anna'), findsNothing,
+          reason: "A's coach offered to B");
+      expect(find.text("Couldn't load your coach"), findsOneWidget);
       expect(find.text('Current'), findsOneWidget, reason: "B's own plan");
     });
   });
@@ -694,10 +712,11 @@ void main() {
         'said, and Try again re-reads', (t) async {
       server.answers['coach_plan_tier:$_a'] = _down;
       await open(t, const CoachPlanScreen());
-      await until(t, () => seen(find.byType(SectionLoadFailure)), 'the failure');
-      expect(find.text("Couldn't load your plan"), findsOneWidget);
+      await until(t, () => server.count('coach_plan_tier') >= 1, 'asked');
+      await settle(t);
       expect(enabled(t, startsWith: 'Choose'), isEmpty,
           reason: 'a paying coach was offered every plan');
+      expect(find.text("Couldn't load your plan"), findsOneWidget);
       expect(find.text('Current'), findsNothing);
       expect(origins(), ['PaymentService.coachPlanTier']);
       noBackendText();
@@ -711,7 +730,7 @@ void main() {
     testWidgets('nothing is for sale while the tier is being read', (t) async {
       final gate = server.gates['coach_plan_tier:$_a'] = Completer();
       await open(t, const CoachPlanScreen());
-      await until(t, () => server.count('coach_plan_tier') == 1, 'asked');
+      await until(t, () => server.count('coach_plan_tier') >= 1, 'asked');
       expect(enabled(t, startsWith: 'Choose'), isEmpty);
       expect(find.text('Loading your plan…'), findsOneWidget);
       gate.complete();
@@ -779,9 +798,11 @@ void main() {
       await t.runAsync(() => signInAs(_b));
       server.answers['coach_plan_tier:$_b'] = _down;
       await show(const CoachPlanScreen());
-      expect(find.text('Current'), findsNothing, reason: 'pending');
-      await until(t, () => seen(find.byType(SectionLoadFailure)), 'failure');
+      expect(find.text('Current'), findsNothing,
+          reason: "A's plan was B's while B's read ran");
+      await settle(t);
       expect(find.text('Current'), findsNothing, reason: 'failed');
+      expect(find.byType(SectionLoadFailure), findsOneWidget);
       expect(enabled(t, startsWith: 'Choose'), isEmpty);
     });
 
@@ -798,9 +819,14 @@ void main() {
         'the choice', (t) async {
       await openAsA(t);
       server.answers['coach_plan_tier:$_a'] = _down;
+      final before = server.count('coach_plan_tier');
       container(t).invalidate(coachPlanTierProvider);
-      await until(t, () => seen(find.byType(SectionLoadFailure)), 'failure');
-      expect(find.text('Current'), findsOneWidget);
+      await until(
+          t, () => server.count('coach_plan_tier') > before, 're-read');
+      await settle(t);
+      expect(find.text('Current'), findsOneWidget,
+          reason: 'a failed refresh lost the plan');
+      expect(find.byType(SectionLoadFailure), findsOneWidget);
       expect(enabled(t, startsWith: 'Choose'), isEmpty);
     });
 
@@ -813,11 +839,12 @@ void main() {
       await t.tap(find.text('Choose Growth'));
       await until(t, () => server.count('create-checkout') == 1, 'A asked');
       await signIn(t, _b);
-      await until(t, () => enabled(t, startsWith: 'Choose').length == 3,
-          "B's three plans");
+      await settle(t);
+      final plans = enabled(t, startsWith: 'Choose').toList();
       gate.complete();
       await settle(t);
-      expect(launched, isEmpty);
+      expect(launched, isEmpty, reason: "A's checkout opened for B");
+      expect(plans, hasLength(3), reason: "A's spinner was B's");
       expect(find.byType(SnackBar), findsNothing);
       expect(recordedAccountChange(), isTrue);
     });
@@ -857,20 +884,17 @@ void main() {
       }
     }
 
-    /// B's status answers; B's money does not (yet, or at all).
-    void statusOnlyForB() {
-      server.answers['payments:$_b'] = _down;
-      server.answers['stripe-connect:$_b'] = (200, {'connected': true});
-    }
-
     testWidgets("A-19: B's revenue and balance failed: A's are not B's, and it "
         'is said and recorded', (t) async {
       await openAsA(t);
       server.answers['payments:$_b'] = _down;
       server.answers['stripe-connect:$_b'] = (200, {'connected': true});
       await signIn(t, _b);
-      await until(t, () => seen(find.text("Couldn't load your revenue")), 'said');
+      await until(t, () => seen(find.text('Finish setup')), "B's status");
+      await until(t, () => server.count('payments', _b) >= 1, 'B asked');
+      await settle(t);
       noneOfAs();
+      expect(find.text("Couldn't load your revenue"), findsOneWidget);
       expect(origins(), contains('CoachPaymentsScreen.revenue'));
       noBackendText();
     });
@@ -909,9 +933,10 @@ void main() {
       server.answers['payments:$_b'] = _down;
       server.answers['stripe-connect:$_b'] = _down;
       await signIn(t, _b);
-      await until(
-          t, () => seen(find.text("Couldn't load your Stripe status")), 'said');
+      await until(t, () => server.count('stripe-connect', _b) >= 2, 'B asked');
+      await settle(t);
       noneOfAs();
+      expect(find.text("Couldn't load your Stripe status"), findsOneWidget);
       expect(find.text('Payments active'), findsNothing);
       expect(origins(), contains('CoachPaymentsScreen.connectStatus'));
       coach(_b, 4400);
@@ -998,7 +1023,8 @@ void main() {
       final gate = server.gates['stripe-connect:$_a'] = Completer();
       await t.tap(find.text('Manage Stripe account'));
       await until(t, () => server.bodies.last.contains('onboard'), 'A asked');
-      statusOnlyForB();
+      server.answers['payments:$_b'] = _down;
+      server.answers['stripe-connect:$_b'] = (200, {'connected': true});
       await signIn(t, _b);
       await until(t, () => seen(find.text('Finish setup')), "B's status");
       gate.complete();
@@ -1083,10 +1109,12 @@ void main() {
       await t.tap(find.text(portal));
       await until(t, () => seen(find.text('Opening…')), 'A asked');
       await signIn(t, _b);
-      await until(t, () => seen(find.text(portal)), "B's button");
+      await settle(t);
+      final free = seen(find.text(portal));
       gate.complete();
       await settle(t);
       expect(launched, isEmpty, reason: "A's invoices opened for B");
+      expect(free, isTrue, reason: "A's busy button was B's");
       expect(find.byType(SnackBar), findsNothing);
       expect(recordedAccountChange(), isTrue);
     });
@@ -1095,8 +1123,13 @@ void main() {
       await openAsA(t);
       server.answers['client_plan:$_b'] = _down;
       await signIn(t, _b);
-      await until(t, () => seen(find.byType(PlanLoadFailedNotice)), 'the notice');
-      expect(find.text('Self-Guided'), findsNothing);
+      await until(
+          t,
+          () => origins().contains('ManageSubscriptionScreen.clientPlan'),
+          'failure');
+      await settle(t);
+      expect(find.text('Self-Guided'), findsNothing, reason: "A's plan for B");
+      expect(find.byType(PlanLoadFailedNotice), findsOneWidget);
     });
 
     testWidgets("Cancel plan: B signs in over A's dialog: closed, nothing sent",
