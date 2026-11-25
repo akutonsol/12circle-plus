@@ -10,7 +10,9 @@
 // AccountScope; "no frame" tests never pump between the switch and the act.
 //
 // HOW TO SEE IT FAIL: put back 3a90049's community_provider and
-// community_screen; every test but the POSITIVE / NEGATIVE CONTROLs fails.
+// community_screen; every test fails but the POSITIVE / NEGATIVE CONTROLs, the
+// feed's notifier (made anew there too) and "read failed … on Activity" (its
+// failure card is drawn in front of the carried value there).
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -259,6 +261,7 @@ void main() {
             expect(find.textContaining("Couldn't load"), findsWidgets);
           }
           expect(find.textContaining("Couldn't leave"), findsNothing);
+          expect(origins(), contains('GroupNotifier.identity'));
           if (bRead == 'pending') {
             bGroups.complete(); // B's own, when they come.
             await settle(t);

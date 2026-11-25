@@ -12,16 +12,20 @@
 // HOW TO SEE IT FAIL: put back 5f8b7f3's community_screen, create_post_sheet,
 // post_card and live_community_service. The POSITIVE CONTROLs pass there, and
 // so do "a second tap" and "A's reaction is stored after B signed in" (they
-// guard what is already right).
+// guard what is already right). Round 3's "a second post" and "the button says
+// so" fail on 3a90049; its comment tests pin guards that were there untested
+// (each kills the mutant that drops its guard).
 import 'dart:async';
 import 'dart:ui' as ui show Tristate;
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/community/data/live_community_service.dart';
+import 'package:circle_fitness/features/community/data/models/post_model.dart';
 import 'package:circle_fitness/features/community/domain/community_provider.dart';
 import 'package:circle_fitness/features/community/domain/post_type_choice.dart';
 import 'package:circle_fitness/features/community/presentation/community_screen.dart';
 import 'package:circle_fitness/features/community/presentation/widgets/create_post_sheet.dart';
+import 'package:circle_fitness/features/community/presentation/widgets/post_card.dart';
 import 'package:circle_fitness/features/community/presentation/widgets/reaction_bar.dart';
 import 'package:circle_fitness/features/workout/presentation/widgets/section_load_failure.dart';
 import 'package:flutter/material.dart';
@@ -553,6 +557,40 @@ void main() {
       await write(t);
       await switchTo(t, memberB);
       await settle(t);
+      await t.tap(find.text('Comment'));
+      await settle(t);
+      expect(t.widget<TextField>(find.byType(TextField)).controller!.text, '');
+      await close(t);
+    });
+
+    testWidgets('the card on its own, kept up across the switch: B opens the '
+        "box and A's draft is not in it", (t) async {
+      container = ProviderContainer();
+      addTearDown(container.dispose);
+      await t.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: PostCard(
+                index: 0,
+                post: CommunityPost(
+                  id: 'p1', userId: 'author-1', userName: 'Sam Rae',
+                  userRole: 'client', content: 'Hit a PR today',
+                  type: PostType.text, imageUrls: const [],
+                  reactions: const [], comments: const [],
+                  createdAt: DateTime(2026, 11, 20), isLiked: false,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await settle(t);
+      await write(t);
+      await switchTo(t, memberB);
+      await settle(t);
+      expect(find.byType(TextField), findsNothing, reason: 'premise: it closed');
       await t.tap(find.text('Comment'));
       await settle(t);
       expect(t.widget<TextField>(find.byType(TextField)).controller!.text, '');

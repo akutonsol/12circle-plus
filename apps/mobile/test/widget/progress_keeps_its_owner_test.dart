@@ -7,7 +7,8 @@
 // with A's values) inserted under a fresh `currentUser` — B.
 //
 // HOW TO SEE IT FAIL: put back a82f993's progress_screen.dart; every test but
-// the POSITIVE / NEGATIVE CONTROLs fails. (Round 2's "while A's photo is being
+// the POSITIVE / NEGATIVE CONTROLs fails. (Round 3's "with B's own loaded" fail
+// on 3a90049; its other tests pin guards that were there untested. Round 2's "while A's photo is being
 // stored", "B's Add Photo", missing-photo and large-text tests fail on 5f8b7f3
 // too.)
 import 'dart:async';

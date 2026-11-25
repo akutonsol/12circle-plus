@@ -369,10 +369,8 @@ final groupNotifierProvider = StateNotifierProvider<GroupNotifier,
       // P0-FL-10 · each failed groups read is recorded once, here, when it
       // settles into an error — not once per screen that shows it (Community
       // and Activity both do) and not on every rebuild.
-      // Not again by the next member's notifier, for the previous one's.
       if (next.hasError &&
           !next.isLoading &&
-          notifier._isMine(next.error!) &&
           (previous == null || previous.isLoading || !previous.hasError)) {
         reportError('community.groups', next.error!, next.stackTrace);
       }

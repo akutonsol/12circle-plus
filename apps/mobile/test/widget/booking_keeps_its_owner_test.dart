@@ -3,7 +3,8 @@
 //
 // HOW TO SEE IT FAIL: put back a82f993's booking_screen.dart; every test but
 // the POSITIVE / NEGATIVE CONTROLs fails. (Added in round 2: "switched before
-// the dialog is drawn" and the signed-out copy fail on 5f8b7f3 too.)
+// the dialog is drawn" and the signed-out copy fail on 5f8b7f3 too; round 3's,
+// tapped "with B's own loaded" or before they are, fail on 3a90049 too.)
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';

@@ -11,7 +11,9 @@
 //
 // HOW TO SEE IT FAIL: put back a82f993's intake_flow_screen.dart; every test
 // but the POSITIVE / NEGATIVE CONTROLs fails. (Round 2's "correction", "finished
-// elsewhere", "nothing new" and Done-page tests fail on 5f8b7f3 too.)
+// elsewhere", "nothing new" and Done-page tests fail on 5f8b7f3 too; round 3's
+// "Finish waits" — but "does not stop Finish" — and "you are not signed in" on
+// 3a90049.)
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';

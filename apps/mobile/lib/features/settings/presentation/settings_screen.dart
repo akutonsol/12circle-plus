@@ -934,7 +934,7 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
   @override
   Widget build(BuildContext context) {
     if (_signedIn != _owner) {
-      // First built after the switch, it was not listening to hear of it.
+      // However late the change is heard of.
       WidgetsBinding.instance.addPostFrameCallback((_) => _closeForOwner());
       return const SizedBox.shrink();
     }
