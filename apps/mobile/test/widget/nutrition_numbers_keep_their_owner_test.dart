@@ -359,11 +359,13 @@ void main() {
       await close(t);
     });
 
-    testWidgets("$name: the rows: A's refresh in flight at the switch, B "
-        "pending: nothing of A's", (t) async {
+    testWidgets("$name: the rows, totals and targets all being refreshed at the "
+        "switch, B pending: nothing of A's", (t) async {
       await open(t, screen, gate: false);
       final holdA = holdAll(memberA);
       final holdB = holdAll(memberB);
+      // Nothing that is read notifies the switch: the screen hears of it itself.
+      container.invalidate(nutritionGoalsProvider);
       await t.drag(
           find.byType(SingleChildScrollView).first, const Offset(0, 600));
       await settle(t);
@@ -376,6 +378,51 @@ void main() {
       await settle(t);
       noNumbers();
       holdB.complete();
+      await settle(t);
+      bsOwn();
+      await close(t);
+    });
+
+    testWidgets("$name: A's answer lands the instant B is signed in, no frame: "
+        "not B's", (t) async {
+      await open(t, screen, gate: false);
+      final holdA = holdAll(memberA);
+      final holdB = holdAll(memberB);
+      invalidateBoth();
+      unawaited(container
+          .read(todayNutritionProvider.future)
+          .then((_) {}, onError: (_) {}));
+      unawaited(container
+          .read(nutritionGoalsProvider.future)
+          .then((_) {}, onError: (_) {}));
+      await noFrame(t);
+      await t.runAsync(() => switchAnd(memberB, holdA.complete));
+      await noFrame(t);
+      await settle(t);
+      noNumbers();
+      holdB.complete();
+      await settle(t);
+      bsOwn();
+      await close(t);
+    });
+
+    testWidgets("$name: A's failure is not B's while B's read is pending",
+        (t) async {
+      server.fails.addAll([
+        'GET nutrition_logs:$memberA',
+        'GET client_nutrition_plans:$memberA',
+      ]);
+      await mount(t, screen, gate: false);
+      expect(find.textContaining("Couldn't load"), findsWidgets,
+          reason: 'premise');
+      final hold = holdAll(memberB);
+      await switchTo(t, memberB);
+      invalidateBoth();
+      await settle(t);
+      expect(container.read(todayNutritionProvider).hasError, isTrue,
+          reason: "premise: A's failure is carried");
+      expect(find.textContaining("Couldn't load"), findsNothing);
+      hold.complete();
       await settle(t);
       bsOwn();
       await close(t);

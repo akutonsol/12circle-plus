@@ -142,6 +142,26 @@ void main() {
     await close(t);
   });
 
+  testWidgets("A's failure is not B's while B's read is pending", (t) async {
+    server.fails.add('$key:$memberA');
+    container = ProviderContainer();
+    addTearDown(container.dispose);
+    await t.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: ActionCenterScreen())));
+    await settle(t);
+    expect(find.text(_couldNot), findsOneWidget, reason: 'premise');
+    final hold = server.holds['$key:$memberB'] = Completer();
+    await switchTo(t, memberB);
+    container.invalidate(myActionItemsProvider);
+    await settle(t);
+    expect(find.text(_couldNot), findsNothing);
+    hold.complete();
+    await settle(t);
+    expect(find.text('Swim'), findsOneWidget);
+    await close(t);
+  });
+
   testWidgets("A's none is not B's while B's read is pending", (t) async {
     server.rows['action_items']!.remove(memberA);
     container = ProviderContainer();
