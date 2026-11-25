@@ -237,10 +237,31 @@ void main() {
             status: 503, details: {'error': 'Could not read your membership'}),
         true
       ),
-      (const PostgrestException(message: 'x', code: '42501'), true),
-      (const PostgrestException(message: 'x', code: '503'), true),
-      (const PostgrestException(message: 'x', code: '502'), false),
-      (const PostgrestException(message: 'x', code: '504'), false),
+      (const FunctionException(status: 409), true),
+      (const FunctionException(status: 429), true),
+      // A 503 is "nothing changed" only where the function says so.
+      (const FunctionException(status: 503), false),
+      (
+        const FunctionException(status: 503, details: {'error': 'other'}),
+        false
+      ),
+      for (final s in [504, 520, 522, 524, 546])
+        (FunctionException(status: s), false),
+      // Round 4: the database's answer, or a 4xx, is a refusal …
+      for (final c in [
+        '42501', '23505', '57014', 'P0001', 'XX000', // SQLSTATE
+        'PGRST116', 'PGRST202', 'PGRST301',
+        '400', '401', '403', '404', '406', '409', '429', // no code in the body
+      ])
+        (PostgrestException(message: 'x', code: c), true),
+      // … a status that is not, and a code nobody knows, are not.
+      for (final c in [
+        '408', '500', '502', '503', '504', '520', '522', '524', '599',
+        '200', '302', '600', '', 'null', 'x', 'UNKNOWN', 'GATEWAY_TIMEOUT',
+        '4040', 'pgrst116', 'x42501', '425011', 'PGRST', 'ERROR', 'xPGRST116',
+      ])
+        (PostgrestException(message: 'x', code: c), false),
+      (const PostgrestException(message: 'x'), false),
       (http.ClientException('lost'), false),
       (TimeoutException('slow'), false),
       (StateError('unreadable'), false),

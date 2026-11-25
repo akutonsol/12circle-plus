@@ -79,19 +79,31 @@ void Function() whenOwnerGone(String? owner, void Function() then) {
 /// no answer, a fault after the payment provider may have acted, a reply that
 /// was lost — leaves the outcome unknown (P0-FL-60a, item 7).
 ///
-///  * a table read or write is one transaction: PostgREST's error means it was
-///    not made, except a gateway's (502/504), which does not know;
+///  * a table read or write is one transaction, so the database's own answer
+///    (an SQLSTATE) or PostgREST's (PGRST…) means it was not made. When the body
+///    names neither, the code is the HTTP status: a 4xx is a refusal, and a 5xx
+///    is a gateway's (502, 504, 520, 522, 524 …), which does not know;
 ///  * the payment functions refuse with a 4xx before they act, and name the
 ///    two failures after which nothing was changed.
 bool definitelyRefused(Object e) => switch (e) {
-      PostgrestException(:final code) => code != '502' && code != '504',
+      PostgrestException(:final code) => code != null &&
+          (_databaseCode.hasMatch(code) || _refusedStatus(int.tryParse(code))),
       FunctionException(:final status, :final details) =>
-        (status >= 400 && status < 500 && status != 408) ||
+        _refusedStatus(status) ||
             (details is Map &&
                 const {'stripe_cancel_failed', 'Could not read your membership'}
                     .contains(details['error'])),
       _ => false,
     };
+
+/// An SQLSTATE (five characters; with a digit, so that a gateway's word such as
+/// ERROR is not one), or a code of PostgREST's own.
+final _databaseCode =
+    RegExp(r'^((?=.*[0-9])[0-9A-Z]{5}|PGRST[0-9A-Z]{3})$');
+
+/// A 4xx — but not 408, which is an answer that did not come.
+bool _refusedStatus(int? status) =>
+    status != null && status >= 400 && status < 500 && status != 408;
 
 /// What a cancellation came to.
 enum CancelOutcome { cancelled, refused, unconfirmed }

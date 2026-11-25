@@ -44,8 +44,8 @@ import '../support/two_member_postgrest.dart';
 // new helpers by name is in test/unit/payment_ownership_helpers_test.dart.
 
 class _Server extends TwoMemberPostgrest {
-  /// Answers keyed `name:<who asked>` (else `name`): an rpc, a function or a
-  /// table name. `(status, body)`.
+  /// Answers keyed `METHOD name:<who asked>`, else `name:<who asked>`, else
+  /// `name`: an rpc, a function or a table name. `(status, body)`.
   final answers = <String, (int, Object?)>{};
 
   /// `name:<who>` held until completed. The answer is the one that was true
@@ -94,7 +94,8 @@ class _Server extends TwoMemberPostgrest {
         !path.contains('/rpc/')) {
       writes.add('${request.method} $key');
     }
-    final (status, body) = answers[key] ??
+    final (status, body) = answers['${request.method} $key'] ??
+        answers[key] ??
         answers[name] ??
         (path.contains('/rpc/') ? (200, null) : (200, const <Object?>[]));
     final gate = gates[key];
@@ -2427,6 +2428,37 @@ void main() {
                 ? unsureEnd
                 : 'Could not end coaching. Nothing was changed. Try again.');
         expect(origins(), contains('ManageSubscriptionScreen.stopCoach'));
+      });
+    }
+
+    // Round 4: the ONE write of an unpaid Stop. A gateway that gave up waiting
+    // does not know whether it landed; the database's own refusal does.
+    for (final (what, answer, text) in <(String, (int, Object?), String)>[
+      ('the gateway gives up (524)', (524, 'error code: 524'), unsureEnd),
+      ('a bare 500', (500, 'Internal Server Error'), unsureEnd),
+      (
+        'control: the database refuses',
+        (403, {'message': 'SECRET denied', 'code': '42501'}),
+        'Could not end coaching. Nothing was changed. Try again.'
+      ),
+    ]) {
+      testWidgets('End coaching (unpaid): $what', (t) async {
+        await openManage(t);
+        server.answers['subscriptions:$_a'] = (200, const []);
+        server.answers['PATCH coach_client_relationships:$_a'] = answer;
+        final before = server.count('coach_client_relationships', _a);
+        await t.tap(find.text('Stop'));
+        await until(t, () => seen(find.text('Yes, stop')), 'the dialog');
+        await settle(t);
+        await t.tap(find.text('Yes, stop'));
+        await outcome(t, text);
+        expect(server.writes, ['PATCH coach_client_relationships:$_a'],
+            reason: 'asked once, and the coach is told nothing');
+        expect(server.count('cancel-subscription'), 0, reason: 'unpaid');
+        expect(origins(), contains('ManageSubscriptionScreen.stopCoach'));
+        await settle(t);
+        expect(server.count('coach_client_relationships', _a),
+            greaterThan(before + 1), reason: 'the coaches are re-read, to check');
       });
     }
 
