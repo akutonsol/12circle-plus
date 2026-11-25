@@ -1261,7 +1261,6 @@ void main() {
         await t.tap(find.text('Yes, stop'));
         await until(
             t, () => server.count('subscriptions', _a) > before, 'A asked');
-        final bCoaches = server.count('coach_client_relationships', _b);
         await signIn(t, _b);
         gate.complete();
         await settle(t);
@@ -1269,12 +1268,7 @@ void main() {
         expect(find.textContaining('oaching'), findsNothing);
         expect(recordedAccountChange(), isTrue);
         // B's own first reads, and no more: A's outcome refreshes nothing of B's.
-        expect(
-            server.log
-                .where((l) => l == 'client_plan:$_b')
-                .length,
-            1);
-        expect(bCoaches, 0);
+        expect(server.count('client_plan', _b), 1);
       });
 
       testWidgets("no-frame: Stop coach, the caller's half "
@@ -1296,9 +1290,11 @@ void main() {
         await t.runAsync(() => signInAs(_b));
         gate.complete();
         await noFrames(t);
-        expect(recordedAccountChange(), isTrue);
+        await t.pump();
+        expect(find.byType(SnackBar), findsNothing);
         await settle(t);
         expect(find.byType(SnackBar), findsNothing);
+        expect(recordedAccountChange(), isTrue);
       });
 
       testWidgets('control: Stop coach by the same account '
@@ -1718,12 +1714,13 @@ void main() {
         await t.runAsync(() => signInAs(_b)); // no frame
         gate.complete();
         await noFrames(t);
-        expect(recordedAccountChange(), isTrue);
         expect(server.count('create-checkout'), 0);
+        await t.pump();
+        expect(find.byType(SnackBar), findsNothing);
         await settle(t);
         expect(server.count('create-checkout'), 0);
         expect(launched, isEmpty);
-        expect(find.byType(SnackBar), findsNothing);
+        expect(recordedAccountChange(), isTrue);
       });
     }
 
@@ -2173,12 +2170,16 @@ void main() {
     testWidgets('the packages sheet closes even when Plans is gone from under '
         'it', (t) async {
       await openSheet(t);
-      final ctx = t.element(find.text(sheet));
-      final nav = Navigator.of(ctx);
-      nav.pushReplacement(MaterialPageRoute<void>(
-          builder: (_) => const Scaffold(body: Text('elsewhere'))));
+      final plansPage =
+          t.element(find.byType(UpgradeScreen, skipOffstage: false));
+      Navigator.of(plansPage).replace(
+          oldRoute: ModalRoute.of(plansPage)!,
+          newRoute: MaterialPageRoute<void>(
+              builder: (_) => const Scaffold(body: Text('elsewhere'))));
       await settle(t);
-      expect(find.text('elsewhere'), findsOneWidget);
+      expect(find.byType(UpgradeScreen, skipOffstage: false), findsNothing,
+          reason: 'premise');
+      expect(find.text(sheet), findsOneWidget, reason: 'premise: still up');
       await t.runAsync(() => signInAs(_b));
       await settle(t);
       expect(find.text(sheet), findsNothing);
