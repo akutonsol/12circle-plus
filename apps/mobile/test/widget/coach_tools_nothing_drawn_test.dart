@@ -1026,10 +1026,11 @@ void main() {
             : await heardBy(t, () => refreshNoFrame(t));
         retry();
         await settleNoFrame(t);
-        expect(reads().length, via == memberB ? from : from + 1);
+        final sent = reads().length - from;
         if (via == memberB) await switchNoFrame(t, memberA);
         await settleReal(t);
         await isAs(t, 'A brace', from: from);
+        expect(sent, via == memberB ? 0 : 1, reason: 'A\'s own, and only as A');
         await unmountAll(t);
       });
 
