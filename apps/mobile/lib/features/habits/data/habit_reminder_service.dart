@@ -100,6 +100,7 @@ class HabitReminderService {
     final habitsWithReminders = habits
         .where((h) => h.reminderTime != null && h.reminderTime!.isNotEmpty)
         .toList();
+    if (stale()) return;
 
     for (int i = 0; i < habitsWithReminders.length; i++) {
       final habit = habitsWithReminders[i];
