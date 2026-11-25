@@ -381,17 +381,17 @@ void main() {
       final overflows = <String>[];
       final original = FlutterError.onError;
       FlutterError.onError = (d) => overflows.add(d.exceptionAsString());
-      await frames(tester, 2);
-      final before = overflows.length;
-      server.fails.add('$_rels:$memberA');
-      c.invalidate(coachClientsProvider);
-      await pumpUntil(tester,
-          () => seen(find.textContaining('may be out of date')),
-          what: 'the notice');
-      final bottoms =
-          overflows.skip(before).where((e) => e.contains('on the bottom'));
-      FlutterError.onError = original;
-      expect(bottoms, isEmpty);
+      final bool said;
+      try {
+        server.fails.add('$_rels:$memberA');
+        c.invalidate(coachClientsProvider);
+        await frames(tester, 12);
+        said = seen(find.textContaining('may be out of date'));
+      } finally {
+        FlutterError.onError = original;
+      }
+      expect(said, isTrue, reason: 'the notice');
+      expect(overflows.where((e) => e.contains('on the bottom')), isEmpty);
       await unmount(tester);
     });
 

@@ -433,6 +433,14 @@ void main() {
           expect(drafted(), findsNothing,
               reason: "THE defect: A's work stayed on screen");
           await frames(tester, 10);
+          expect(
+              name == 'notes'
+                  ? find.byIcon(Icons.send)
+                  : find.widgetWithText(
+                      name == 'price' ? AlertDialog : BottomSheet,
+                      sheets[name]!.$2),
+              findsNothing,
+              reason: "THE defect: A's sheet stayed open");
           if (name == 'notes' || name == 'action' || name == 'price') {
             expect(find.text('THE PAGE').hitTestable(), findsOneWidget,
                 reason: 'the sheet closed and only the sheet');
