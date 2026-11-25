@@ -293,9 +293,12 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
   /// in the screen's error state, as it does on first load: `_applyCoach` was
   /// called without being awaited or caught, so a failed slots read left the
   /// spinner up for good and the error unhandled.
-  Future<void> _selectCoach(String coachId) async {
-    if (coachId == _coachId) return;
-    if (_signedIn != _owner) return _followAccount();
+  ///
+  /// [owner], here and below: the member the row tapped was drawn for. A row
+  /// still up after a switch is not that of [_owner], who is followed at once.
+  Future<void> _selectCoach(String coachId, String? owner) async {
+    if (coachId == _coachId && owner == _owner) return;
+    if (!_stillOwner(owner, 'coach choice')) return;
     final seq = ++_loadSeq;
     setState(() => _state = _BookingState.loading);
     try {
@@ -329,10 +332,9 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
   /// the default 4 s is too short to read it (P0-FL-46 review N5).
   static const _refusalSnackDuration = Duration(seconds: 8);
 
-  Future<void> _cancelBooking(Map<String, dynamic> call) async {
+  Future<void> _cancelBooking(Map<String, dynamic> call, String? owner) async {
     final id = call['id'] as String?;
     if (id == null || _cancelling.contains(id)) return;
-    final owner = _owner;
     if (!_stillOwner(owner, 'cancel session')) return;
     final coachId = _coachId;
     final messenger = ScaffoldMessenger.of(context);
@@ -428,12 +430,11 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
     _load();
   }
 
-  Future<void> _book(Map<String, dynamic> slot) async {
-    final uid = _owner;
-    final coachId = _coachId;
-    if (uid == null || coachId == null) return;
+  Future<void> _book(Map<String, dynamic> slot, String? uid) async {
     // The slot is one of THIS member's coach's.
     if (!_stillOwner(uid, 'booking')) return;
+    final coachId = _coachId;
+    if (uid == null || coachId == null) return;
     try {
       // One write. The slot is marked booked by the database, which also refuses
       // a slot someone else has just taken (migration 187, 23505). The client's
@@ -543,6 +544,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) => _followAccount());
       return const Center(child: CircularProgressIndicator(color: _brand));
     }
+    final owner = _owner; // bound into each row's action
     final content = switch (_state) {
       _BookingState.loading  => const Center(child: CircularProgressIndicator(color: _brand)),
       _BookingState.signedOut => const Center(
@@ -568,8 +570,8 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         coachAvatar: _coachAvatar,
         slots: _slots,
         booked: _booked,
-        onBook: _book,
-        onCancel: _cancelBooking,
+        onBook: (slot) => _book(slot, owner),
+        onCancel: (call) => _cancelBooking(call, owner),
         cancelling: _cancelling,
       ),
     };
@@ -583,14 +585,14 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
          _state == _BookingState.loading);
     if (showPicker) {
       return Column(children: [
-        _coachSelector(),
+        _coachSelector(owner),
         Expanded(child: content),
       ]);
     }
     return content;
   }
 
-  Widget _coachSelector() => Container(
+  Widget _coachSelector(String? owner) => Container(
     height: 96,
     padding: const EdgeInsets.symmetric(vertical: 10),
     decoration: const BoxDecoration(
@@ -611,7 +613,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
           final selected = c['id'] == _coachId;
           final avatar = c['avatar'] as String?;
           return GestureDetector(
-            onTap: () => _selectCoach(c['id'] as String),
+            onTap: () => _selectCoach(c['id'] as String, owner),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(

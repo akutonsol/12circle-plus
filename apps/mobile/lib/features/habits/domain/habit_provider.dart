@@ -64,6 +64,14 @@ HabitCategory _parseCategory(String? s) => switch (s) {
   _ => HabitCategory.health,
 };
 
+/// The habit to log is not in this member's list (deactivated meanwhile, say):
+/// trying again cannot help, looking at the list again can (P0-FL-59e).
+class HabitNotListed implements Exception {
+  const HabitNotListed();
+  @override
+  String toString() => "habit log: not one of this member's habits";
+}
+
 // ── Notifier that persists to Supabase ────────────────────────────────────────
 class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
   final CoachProgramService _svc;
@@ -160,7 +168,7 @@ class LiveHabitNotifier extends StateNotifier<AsyncValue<List<Habit>>> {
     for (final h in state.valueOrNull ?? const <Habit>[]) {
       if (h.id == habitId) return h;
     }
-    final error = StateError('habit log: not one of this member\'s habits');
+    const error = HabitNotListed();
     reportError('LiveHabitNotifier.unknownHabit', error);
     _failures[habitId] = error;
     return null;

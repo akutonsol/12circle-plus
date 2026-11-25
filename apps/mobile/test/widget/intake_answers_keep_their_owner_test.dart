@@ -828,6 +828,138 @@ void main() {
     });
   });
 
+  group('Finish waits for a save of progress that is still out', () {
+    /// onboarding_complete as the server has it, in the order it answered.
+    Iterable<Object?> complete() => server.answered
+        .where((r) =>
+            r.target == 'user_profiles' &&
+            !r.isRead &&
+            r.row.containsKey('onboarding_complete'))
+        .map((r) => r.row['onboarding_complete']);
+
+    testWidgets('the held save answers, and only then Finish is sent: the row '
+        'stays complete, and nothing follows it', (t) async {
+      members(a: _finalPage);
+      await open(t);
+      server.answered.clear();
+      final hold = server.holds['PATCH user_profiles:$memberA'] = Completer();
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await settle(t, 2);
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      Supabase.instance.client.auth.stopAutoRefresh();
+      await settle(t, 2);
+      expect(server.writes('user_profiles').single.row['onboarding_complete'],
+          false, reason: 'premise: the step is out');
+      await t.tap(find.text('Enter 12 Circle'));
+      await settle(t, 3);
+      expect(find.text("That's everything we needed."), findsNothing);
+      hold.complete();
+      await settle(t);
+      expect(complete(), [false, true],
+          reason: 'the step landed after "complete"');
+      expect(server.writes('user_profiles').map((w) => w.method),
+          ['PATCH', 'POST'],
+          reason: 'the finish stored it all: no data save follows (M42)');
+      expect(find.text("That's everything we needed."), findsOneWidget);
+      await close(t);
+    });
+
+    testWidgets('the mark sent on opening, too', (t) async {
+      members(a: _finalPage);
+      final hold = server.holds['PATCH user_profiles:$memberA'] = Completer();
+      await open(t);
+      server.answered.clear();
+      await t.tap(find.text('Enter 12 Circle'));
+      await settle(t, 3);
+      hold.complete();
+      await settle(t);
+      expect(complete(), [false, true]);
+      expect(find.text("That's everything we needed."), findsOneWidget);
+      await close(t);
+    });
+
+    testWidgets('a save of progress that fails does not stop Finish', (t) async {
+      members(a: _finalPage);
+      await open(t);
+      final hold = server.holds['PATCH user_profiles:$memberA'] = Completer();
+      server.fails.add('PATCH user_profiles:$memberA');
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await settle(t, 2);
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      Supabase.instance.client.auth.stopAutoRefresh();
+      await t.tap(find.text('Enter 12 Circle'));
+      await settle(t, 2);
+      hold.complete();
+      await settle(t);
+      expect(server.writes('user_profiles').last.method, 'POST');
+      expect(find.text("That's everything we needed."), findsOneWidget);
+      expect(origins(), contains('intake.saveProgress.step'));
+      await close(t);
+    });
+
+    testWidgets("B signs in while A's Finish waits, no frame: A's answers are "
+        'not sent as B; recorded', (t) async {
+      members(a: _finalPage);
+      await open(t);
+      final hold = server.holds['PATCH user_profiles:$memberA'] = Completer();
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await settle(t, 2);
+      t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      Supabase.instance.client.auth.stopAutoRefresh();
+      await t.tap(find.text('Enter 12 Circle'));
+      await settle(t, 2);
+      await switchTo(t, memberB);
+      hold.complete();
+      await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 60)));
+      expect(server.writes('user_profiles').map((w) => (w.method, w.who)),
+          [('PATCH', memberA)]);
+      expect(origins(), contains('intake.identity'));
+      await settle(t);
+      nothingOfAlice();
+      expect(find.text("That's everything we needed."), findsNothing);
+      await close(t);
+    });
+  });
+
+  group('the not-saved notice of a member who comes back', () {
+    testWidgets('"you are not signed in" is gone: they are', (t) async {
+      members(a: _finalPage);
+      await open(t);
+      await t.runAsync(signOut);
+      await settle(t);
+      await t.tap(find.text('Enter 12 Circle'));
+      await settle(t);
+      expect(find.textContaining('you are not signed in'), findsOneWidget,
+          reason: 'premise');
+      await switchTo(t, memberA);
+      await settle(t);
+      expect(find.textContaining('you are not signed in'), findsNothing);
+      await t.tap(find.text('Enter 12 Circle'));
+      await settle(t);
+      expect(server.writes('user_profiles').last.row['id'], memberA);
+      expect(find.text("That's everything we needed."), findsOneWidget);
+      await close(t);
+    });
+
+    testWidgets('POSITIVE CONTROL: their own failed save is still said, with '
+        'its answers', (t) async {
+      members(a: _finalPage);
+      await open(t);
+      server.fails.add('POST user_profiles:$memberA');
+      await t.tap(find.text('Enter 12 Circle'));
+      await settle(t);
+      const failed = 'We could not save your answers. Nothing was lost';
+      expect(find.textContaining(failed), findsOneWidget, reason: 'premise');
+      await t.runAsync(signOut);
+      await settle(t);
+      await switchTo(t, memberA);
+      await settle(t);
+      expect(find.textContaining(failed), findsOneWidget);
+      await close(t);
+    });
+  });
+
   group('POSITIVE CONTROL: the same member', () {
     testWidgets('hiding the tab saves their answers to their row', (t) async {
       members();

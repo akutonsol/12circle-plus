@@ -262,7 +262,72 @@ void main() {
     await close(t);
   });
 
+  /// B's own coaches and slots are loaded, and no frame is drawn: what is up
+  /// is still A's.
+  Future<void> bLoaded(WidgetTester t) async {
+    await switchTo(t, memberB);
+    await t.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 150)));
+    expect(server.reads('coaching_calls', memberB), isNotEmpty,
+        reason: 'premise: B is loaded');
+    reported.clear();
+    server.seen.clear();
+  }
+
+  testWidgets("A's slot, booked from the undrawn list with B's own loaded: "
+      'nothing is sent, recorded', (t) async {
+    await open(t);
+    final book = t.widget<ElevatedButton>(bookButton()).onPressed!;
+    await bLoaded(t);
+    book();
+    await settle(t);
+    expect(server.writes(), isEmpty,
+        reason: "B booked A's slot: ${server.writes().toList()}");
+    expect(reported.map((f) => f.origin), contains('BookingScreen.identity'));
+    expect(find.byType(SnackBar), findsNothing);
+    expect(find.textContaining('Blake'), findsWidgets);
+    await close(t);
+  });
+
+  testWidgets("A's call, cancelled from the undrawn list with B's own loaded: "
+      'no dialog for B, nothing is sent', (t) async {
+    await open(t);
+    await bLoaded(t);
+    await t.tap(find.text('Cancel'));
+    await settle(t);
+    expect(find.text('Cancel session?'), findsNothing);
+    expect(server.writes(), isEmpty);
+    await close(t);
+  });
+
   group("two coaches", () {
+    testWidgets("A's other coach, picked in the undrawn list with B's own "
+        'loaded: not read as B, B keeps their own', (t) async {
+      await open(t);
+      await bLoaded(t);
+      await t.tap(find.text('Casey Moss'));
+      await settle(t);
+      expect(server.seen.where((r) => '${r.query}'.contains('coach-c')), isEmpty,
+          reason: "A's coach was read for B");
+      expect(reported.map((f) => f.origin), ['BookingScreen.identity']);
+      expect(find.textContaining('Blake'), findsWidgets);
+      expect(find.text("Couldn't load your bookings"), findsNothing);
+      await close(t);
+    });
+
+    testWidgets("picked before B's are loaded: B's own still arrive",
+        (t) async {
+      await open(t);
+      final hold =
+          server.holds['GET coach_client_relationships:$memberB'] = Completer();
+      await switchTo(t, memberB);
+      await t.tap(find.text('Casey Moss'));
+      hold.complete();
+      await settle(t);
+      expect(find.textContaining('Blake'), findsWidgets);
+      await close(t);
+    });
+
     setUp(() {
       Map<String, Object?> rel(String c) => {
             'coach_id': c,

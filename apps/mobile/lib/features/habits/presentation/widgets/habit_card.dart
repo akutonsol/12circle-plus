@@ -94,7 +94,11 @@ class _HabitCardState extends ConsumerState<HabitCard> {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
-            SnackBar(content: Text(couldntMessage('save that', error))));
+            SnackBar(content: Text(error is HabitNotListed
+                // (The Action Center's words; this screen has no pull down.)
+                ? "Couldn't save that — it may already have changed. Check "
+                    'your list of habits.'
+                : couldntMessage('save that', error))));
     }
 
     Future<void> toggle() async {

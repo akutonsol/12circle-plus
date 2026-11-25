@@ -20,7 +20,6 @@ import 'package:circle_fitness/features/habits/data/models/habit_model.dart';
 import 'package:circle_fitness/features/habits/domain/habit_provider.dart';
 import 'package:circle_fitness/features/habits/presentation/habit_screen.dart';
 import 'package:circle_fitness/features/habits/presentation/widgets/habit_card.dart';
-import 'package:circle_fitness/features/workout/presentation/widgets/section_load_failure.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -276,7 +275,32 @@ void main() {
       await t.tap(find.text('Walk a1'));
       await settle(t);
       expect(server.writes(), isEmpty);
-      expect(find.text(couldntMessage('save that', null)), findsOneWidget);
+      expect(
+          find.text("Couldn't save that — it may already have changed. Check "
+              'your list of habits.'),
+          findsOneWidget);
+      expect(find.textContaining('ry again'), findsNothing,
+          reason: 'trying again cannot help');
+      await close(t);
+    });
+
+    testWidgets("invalidated before the account change is flushed: A's habits "
+        "are not drawn while B's are read", (t) async {
+      c = ProviderContainer();
+      addTearDown(c.dispose);
+      await t.pumpWidget(UncontrolledProviderScope(
+          container: c, child: const MaterialApp(home: HabitScreen())));
+      await settle(t);
+      expect(find.text('Walk a1'), findsOneWidget, reason: 'premise');
+      final hold = server.holds['GET client_habits:$memberB'] = Completer();
+      await t.runAsync(() => signInAs(memberB));
+      c.invalidate(liveHabitNotifierProvider);
+      await settle(t);
+      expect(find.text('Walk a1'), findsNothing);
+      expect(c.read(liveHabitNotifierProvider).hasValue, isFalse);
+      hold.complete();
+      await settle(t);
+      expect(find.text('Walk b1'), findsOneWidget);
       await close(t);
     });
 

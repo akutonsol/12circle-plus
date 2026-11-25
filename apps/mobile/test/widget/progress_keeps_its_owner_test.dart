@@ -36,6 +36,7 @@ void main() {
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
     await initTwoMemberSupabase(server);
+    watchAuthChanges();
     picker.install();
   });
   tearDownAll(picker.dispose);
@@ -478,6 +479,71 @@ void main() {
       await close(t);
     });
 
+    testWidgets("A's late answer does not unlock B's pick: a second Add Photo "
+        'of B\'s opens nothing while theirs is out', (t) async {
+      await open(t, tab: 'Photos');
+      final gateA = Completer<Object?>();
+      picker.answer = (_) => gateA.future;
+      await t.tap(find.text('Add Photo'));
+      await settle(t);
+      await t.tap(find.text('Choose from Gallery'));
+      await settle(t);
+      await switchTo(t, memberB);
+      await settle(t);
+      final gateB = Completer<Object?>();
+      picker.answer = (_) => gateB.future;
+      await t.tap(find.text('Add Photo'));
+      await settle(t);
+      await t.tap(find.text('Choose from Gallery'));
+      await settle(t);
+      expect(picker.calls, hasLength(2), reason: 'premise: B is picking');
+      gateA.complete(null);
+      await settle(t);
+      await t.tap(find.text('Add Photo'));
+      await settle(t);
+      expect(find.text('Take Photo'), findsNothing,
+          reason: "A's answer unlocked B's pick");
+      gateB.complete(null);
+      await settle(t);
+      await close(t);
+    });
+
+    testWidgets("B signs in as A's source is chosen: no picker opens for B; "
+        'recorded', (t) async {
+      await open(t, tab: 'Photos');
+      await t.tap(find.text('Add Photo'));
+      await settle(t);
+      final choose = t
+          .widget<ListTile>(find.widgetWithText(ListTile, 'Choose from Gallery'))
+          .onTap!;
+      // The instant the account changes, before this screen has heard of it.
+      await t.runAsync(() => switchAnd(memberB, choose));
+      await settle(t);
+      expect(picker.calls, isEmpty);
+      expect(origins(), contains('progress.photo.identity'));
+      expect(server.writes(), isEmpty);
+      await close(t);
+    });
+
+    for (final what in ['Add Photo', 'Front']) {
+      testWidgets("A's '$what', tapped in the undrawn screen with B's own "
+          'loaded: nothing opens, recorded', (t) async {
+        await open(t, tab: 'Photos');
+        await switchTo(t, memberB);
+        await t.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 200)));
+        await t.tap(find.text(what));
+        await settle(t);
+        expect(find.text('Take Photo'), findsNothing);
+        expect(origins(), contains('ProgressScreen.identity'));
+        // B's own, once drawn, opens.
+        await t.tap(find.text(what));
+        await settle(t);
+        expect(find.text('Take Photo'), findsOneWidget);
+        await close(t);
+      });
+    }
+
     for (final kind in ['fails', 'unreadable']) {
       testWidgets("A's pick $kind after B signed in: recorded, B is not told",
           (t) async {
@@ -609,6 +675,27 @@ void main() {
         await close(t);
       });
 
+      testWidgets('newest and gone: the front baseline does not stand in for '
+          '"Today"', (t) async {
+        server.objects.add('$memberA/front.jpg');
+        await open(t, tab: 'Measurements');
+        expect(photos(t).where((u) => u.contains('front.jpg')), hasLength(1),
+            reason: 'only as the first photo, not as "Today" too');
+        expect(find.text(_gone), findsOneWidget);
+        await close(t);
+      });
+
+      testWidgets('NEGATIVE CONTROL: nothing in the gallery at all: the baseline '
+          'is the only, and latest, photo', (t) async {
+        server.objects.add('$memberA/front.jpg');
+        server.rows.remove('progress_photo_logs');
+        await open(t, tab: 'Measurements');
+        expect(photos(t).where((u) => u.contains('front.jpg')).length,
+            greaterThan(1));
+        expect(find.text(_gone), findsNothing);
+        await close(t);
+      });
+
       testWidgets('beside one that cannot be opened: only that one has a Try '
           'again, and it does not go round for the missing one', (t) async {
         server.objects.add('$memberA/gallery_3.jpg');
@@ -717,6 +804,37 @@ void main() {
     expect(find.text('Could not load your progress'), findsNothing);
     expect(find.text("Couldn't refresh your progress — $tryAgainHint"),
         findsOneWidget);
+    await close(t);
+  });
+
+  testWidgets("A's Refresh is still out when B signs in: B's own Refresh is not "
+      'ignored', (t) async {
+    await quiet(t);
+    await open(t);
+    Future<void> failedRefresh(String uid) async {
+      await t.tap(find.byIcon(Icons.add).last);
+      await settle(t);
+      server.fails.add('GET weight_logs:$uid');
+      await t.tap(find.text('Save Entry'));
+      await settle(t);
+      expect(find.text('Refresh'), findsOneWidget, reason: 'premise');
+      server.fails.clear();
+    }
+
+    await failedRefresh(memberA);
+    final held = server.holds['GET weight_logs:$memberA'] = Completer();
+    await t.tap(find.text('Refresh'));
+    await settle(t, 2);
+    await switchTo(t, memberB);
+    await settle(t);
+    await failedRefresh(memberB);
+    server.seen.clear();
+    await t.tap(find.text('Refresh'));
+    await settle(t);
+    expect(server.reads('weight_logs', memberB), hasLength(1),
+        reason: "B's Refresh waited for A's");
+    held.complete();
+    await settle(t);
     await close(t);
   });
 

@@ -74,6 +74,9 @@ class SeenRequest {
 class MemberSwitchServer extends TwoMemberPostgrest {
   final seen = <SeenRequest>[];
 
+  /// The requests in the order they were ANSWERED (a held one answers late).
+  final answered = <SeenRequest>[];
+
   /// `table` → member → that member's rows (a missing one answers none).
   final rows = <String, Map<String, List<Map<String, Object?>>>>{};
 
@@ -97,6 +100,7 @@ class MemberSwitchServer extends TwoMemberPostgrest {
   void reset() {
     super.reset();
     seen.clear();
+    answered.clear();
     rows.clear();
     zeroRows.clear();
     offline.clear();
@@ -143,6 +147,7 @@ class MemberSwitchServer extends TwoMemberPostgrest {
     if (r.target.startsWith('progress-photos/') && r.who == holdUploadsOf) {
       await uploadGate?.future;
     }
+    answered.add(r);
     if (offline.contains(r.key)) {
       throw http.ClientException('no connection SECRET', request.url);
     }

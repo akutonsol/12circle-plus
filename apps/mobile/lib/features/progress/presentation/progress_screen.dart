@@ -346,6 +346,14 @@ class _ProgressScreenState extends State<ProgressScreen>
     if (changed) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _followAccount());
     }
+    final owner = _owner;
+    // Bound into each button: the member it was drawn for.
+    VoidCallback of(VoidCallback act) => () {
+          if (owner == _owner && _signedIn == owner) return act();
+          reportError('ProgressScreen.identity',
+              StateError('a button: the signed-in account changed'));
+          _followAccount();
+        };
     return AppScaffold(
       title: 'PERFORMANCE',
       body: !changed && _owner == null
@@ -458,7 +466,7 @@ class _ProgressScreenState extends State<ProgressScreen>
                         currentKg: _currentWeightKg,
                         goalKg: _goalWeightKg,
                         logs: _weightLogs,
-                        onLogWeight: () => _showLogWeightSheet(context),
+                        onLogWeight: of(() => _showLogWeightSheet(context)),
                       ),
                       _MeasurementsTab(
                         measurements: _latestMeasurements,
@@ -470,7 +478,7 @@ class _ProgressScreenState extends State<ProgressScreen>
                         frontUnopened: _unopened.contains('front'),
                         latestUnopened: _latestUnopened,
                         latestMissing: _missing.contains(_latestGalleryPath),
-                        onLog: () => _showLogMeasurementSheet(context),
+                        onLog: of(() => _showLogMeasurementSheet(context)),
                       ),
                       _PhotosTab(
                         frontUrl: _frontUrl,
@@ -484,8 +492,9 @@ class _ProgressScreenState extends State<ProgressScreen>
                         reopening: _reopeningPhotos,
                         onReopen: _reopenPhotos,
                         onRefresh: _loadData,
-                        onAddPhoto: () => _pickAndUploadPhoto(context),
-                        onSetBaseline: (side) => _setBaselinePhoto(context, side),
+                        onAddPhoto: of(() => _pickAndUploadPhoto(context)),
+                        onSetBaseline: (side) =>
+                            of(() => _setBaselinePhoto(context, side))(),
                       ),
                     ],
                   ),

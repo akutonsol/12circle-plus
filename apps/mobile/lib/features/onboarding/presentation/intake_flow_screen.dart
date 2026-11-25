@@ -179,8 +179,10 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
   /// The answers of a member who was signed OUT mid-flow: not shown, not sent,
   /// and given back only if that same member signs in again ("Nothing was lost
   /// on this device", EC-03). Another member signing in drops them.
-  ({String uid, IntakeData data, Set<String> challenges, int step, String base})?
-      _held;
+  ({
+    String uid, IntakeData data, Set<String> challenges, int step, String base,
+    String? saveError,
+  })? _held;
 
   /// The flow was opened by someone else and this member's answers were read
   /// into it. They are saved once they answer or move on, not for merely
@@ -229,7 +231,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     if (left != null && !_loading && !_done && _resumeError == null) {
       _held = (
         uid: left, data: _data, challenges: {..._challenges}, step: _step,
-        base: _base,
+        base: _base, saveError: _saveError,
       );
     }
     if (uid != null && _held?.uid != uid) _held = null;
@@ -258,7 +260,9 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
         // Their own answers, read for them — the same member's too: they may
         // have finished elsewhere meanwhile, and a save here would undo it.
         _step = 0;
-        if (_held == null) _saveError = null;
+        // "You are not signed in" was said to nobody: they are by now. Their
+        // own failed save comes back with their answers.
+        _saveError = null;
         _done = finished;
         _resumeError = null;
         _arrivedBySwitch = true;
@@ -307,7 +311,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     // routes back here (covers closing before advancing past the first step).
     // Best effort and silent to the person (P0-FL-19 item 4), but a refused or
     // 0-row write is recorded rather than swallowed.
-    unawaited(() async {
+    _track(() async {
       try {
         final rows = await Supabase.instance.client
             .from('user_profiles')
@@ -402,6 +406,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
           _challenges.addAll(held.challenges);
           _step = held.step;
           _base = held.base;
+          _saveError = held.saveError;
           _loading = false;
           _resumeError = null;
         });
@@ -472,7 +477,19 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     }
   }
 
-  Future<void> _saveProgress() async {
+  /// Writes of `onboarding_complete: false` that have not answered yet, and
+  /// whose. The final save waits for that member's: one that landed after it
+  /// would leave a member who was told they are done marked incomplete.
+  final _progressWrites = <Future<void>, String?>{};
+
+  void _track(Future<void> write) {
+    _progressWrites[write] = _owner;
+    unawaited(write.whenComplete(() => _progressWrites.remove(write)));
+  }
+
+  void _saveProgress() => _track(_writeProgress());
+
+  Future<void> _writeProgress() async {
     // Never while the stored answers are unknown (loading, or the resume read
     // failed): what is in memory is blank and would overwrite them.
     if (_loading || _resumeError != null) return;
@@ -680,6 +697,17 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
       return;
     }
     {
+      // (None is started meanwhile: `_saving`.)
+      for (final MapEntry(key: write, value: whose)
+          in [..._progressWrites.entries]) {
+        if (whose == uid) await write.catchError((Object _) {}); // recorded there
+      }
+      if (generation != _generation || _signedIn != uid) {
+        reportError('intake.identity',
+            StateError('intake: the signed-in account changed'));
+        _followAccount();
+        return;
+      }
       _data.biggestChallenges = _challenges.toList();
       final coachingMode = _data.coachingMode;
       try {
