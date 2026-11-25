@@ -1320,13 +1320,13 @@ void main() {
     });
 
     // SECR4-3 · a refresh of A's failure is AsyncError(isLoading) for B.
-    for (final (who, when) in [
+    for (final (who, at) in [
       ('the bell', 'before'),
       ('the bell', 'after'),
       ('the open sheet', 'before'),
       ('the open sheet', 'after'),
     ]) {
-      testWidgets("A's failed read, invalidated $when the switch and before any "
+      testWidgets("A's failed read, invalidated $at the switch and before any "
           "frame: $who does not say it to B; then B's own", (tester) async {
         notes();
         server.fails.add('GET notifications:$memberA');
@@ -1341,9 +1341,9 @@ void main() {
         expect(said(), findsOneWidget, reason: 'premise');
         final hold =
             server.holds['GET notifications:$memberB'] = Completer<void>();
-        if (when == 'before') c.invalidate(coachNotificationsProvider);
+        if (at == 'before') c.invalidate(coachNotificationsProvider);
         await tester.runAsync(() => signInAs(memberB));
-        if (when == 'after') c.invalidate(coachNotificationsProvider);
+        if (at == 'after') c.invalidate(coachNotificationsProvider);
         for (var i = 0; i < 8; i++) {
           await tester.pump(const Duration(milliseconds: 100));
           if (who == 'the bell') {
