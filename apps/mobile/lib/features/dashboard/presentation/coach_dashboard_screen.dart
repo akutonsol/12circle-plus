@@ -338,6 +338,19 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
     final clients  = ref.watch(coachClientsProvider);
     final checkins = ref.watch(clientCheckinsProvider);
     final workouts = ref.watch(clientWorkoutLogsProvider);
+    // P0-FL-59f: each failed read is recorded once, when it settles, as the
+    // other tabs' reads are.
+    for (final (name, provider) in [
+      ('clients', coachClientsProvider),
+      ('checkins', clientCheckinsProvider),
+      ('workouts', clientWorkoutLogsProvider),
+    ]) {
+      ref.listen(provider, (previous, next) {
+        if (_settledFailure(previous, next)) {
+          reportError('CoachDashboardScreen.$name', next.error!, next.stackTrace);
+        }
+      });
+    }
 
     // F-15: a failed read must not become "no clients". These three reads
     // decide what a coach is told about their entire roster, and a failure
@@ -375,11 +388,19 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
     final clientsReading  = stillReading(clients, uid: uid);
     final checkinsReading = stillReading(checkins, uid: uid);
     final workoutsReading = stillReading(workouts, uid: uid);
-    // A re-read that failed over rows still shown.
-    final stale = [
-      for (final v in [clients, checkins, workouts])
-        if (v is AsyncError && mine(v)) v,
-    ];
+    // Re-reads that failed over rows still shown. `hasError`, not `is
+    // AsyncError`: while one is read AGAIN (a retry, a live tick) the failure
+    // is still the last word on what is shown, and its card says it is busy.
+    List<AsyncValue<Object?>> staleAmong(
+            List<AsyncValue<List<Map<String, dynamic>>>> reads) =>
+        [for (final v in reads) if (v.hasError && mine(v)) v];
+    // Said on the tabs that show those rows only, by tab index. (The names on
+    // Check-Ins and Workouts are the roster's.)
+    final staleOf = {
+      0: staleAmong([clients, checkins, workouts]),
+      2: staleAmong([clients, checkins]),
+      3: staleAmong([clients, workouts]),
+    };
     // Nor a failed one: a count over the empty stand-in is not a count.
     final clientsUnknown  = clientsReading  || clientsFailed;
     final checkinsUnknown = checkinsReading || checkinsFailed;
@@ -606,8 +627,12 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
 
         // Scrolls inside its own share, so at large text it cannot push the
         // tabs off a small screen.
-        if (stale.isNotEmpty)
-          ConstrainedBox(
+        AnimatedBuilder(
+          animation: _tabs,
+          builder: (context, _) {
+          final stale = staleOf[_tabs.index] ?? const [];
+          if (stale.isEmpty) return const SizedBox.shrink();
+          return ConstrainedBox(
             constraints: BoxConstraints(
                 maxHeight: MediaQuery.sizeOf(context).height * 0.3),
             child: SingleChildScrollView(
@@ -624,7 +649,8 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                 accent: _primary,
                 textColor: _white,
                 mutedColor: _muted,
-                detail: 'What is shown below may be out of date.'))),
+                detail: 'What is shown below may be out of date.')));
+          }),
 
         // ── Tab views ──
         Expanded(
@@ -632,7 +658,8 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
             controller: _tabs,
             children: [
               _buildClientsTab(clientList, checkinList, workoutList,
-                  failed: failed, reading: clientsReading),
+                  failed: failed, reading: clientsReading,
+                  owner: ownerOfHeld(clients)),
               _buildRequestsTab(),
               _buildCheckinsTab(checkinList, clientList,
                   failed: checkinsFailed, reading: checkinsReading),
@@ -795,6 +822,9 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
     List<Map<String, dynamic>> workouts, {
     required bool failed,
     required bool reading,
+    // P0-FL-59f: the coach whose rows these are, captured as they are built: a
+    // tap may be delivered before the next coach's frame is drawn.
+    required String? owner,
   }) {
     // Client Intelligence metrics
     final highRisk = clients.where((c) => c['risk_level'] == 'high').length;
@@ -1001,9 +1031,14 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
 
           return GestureDetector(
             onTap: () {
+              if (owner != null &&
+                  stoppedFor(owner, 'CoachDashboard.openClient', 'open client')) {
+                return;
+              }
               final name = '${client['first_name'] ?? ''} ${client['last_name'] ?? ''}'.trim();
               Navigator.push(context, MaterialPageRoute(builder: (_) =>
-                ClientDetailScreen(clientId: userId, clientName: name.isEmpty ? 'Client' : name)));
+                ClientDetailScreen(clientId: userId, clientName: name.isEmpty ? 'Client' : name,
+                  owner: owner)));
             },
             child: Container(
             margin: const EdgeInsets.only(bottom: 12),
@@ -1101,16 +1136,10 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                       final clientId  = client['id'] as String;
                       final clientFn  = client['first_name'] as String? ?? '';
                       final clientLn  = client['last_name'] as String? ?? '';
-                      // P0-FL-59f: the coach whose roster this row is on. The
-                      // conversation is opened as them, or not at all.
-                      final owner =
-                          ownerOfHeld(ref.read(coachClientsProvider)) ?? signedInUid();
-                      bool left() {
-                        if (stillSignedIn(owner)) return false;
-                        reportError('CoachDashboard.message', StateError(
-                            'open conversation: the signed-in account changed'));
-                        return true;
-                      }
+                      // P0-FL-59f: the conversation is opened as the coach whose
+                      // roster this row is on ([owner]), or not at all.
+                      bool left() => stoppedFor(owner ?? unknownOwner,
+                          'CoachDashboard.message', 'open conversation');
                       if (left()) return;
                       final convId = await MessagingService()
                           .getOrCreateCoachClientConversation(clientId);
@@ -1187,6 +1216,9 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
         reportError('CoachDashboardScreen.sentInvites', next.error!, next.stackTrace);
       }
     });
+    // P0-FL-59f: the coach whose requests these are, captured as their rows are
+    // built: an answer is sent as them or not at all.
+    final owner = ownerOfHeld(requestsAsync);
     return requestsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
       error: (_, __) => ListView(
@@ -1265,7 +1297,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                     const SizedBox(height: 12),
                     Row(children: [
                       Expanded(child: GestureDetector(
-                        onTap: () => _declineRequest(req['id'] as String, req['client_id'] as String),
+                        onTap: () => _declineRequest(req['id'] as String, req['client_id'] as String, owner),
                         child: Container(
                           padding: const EdgeInsets.symmetric(vertical: 10),
                           decoration: BoxDecoration(
@@ -1276,7 +1308,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                           child: const Text('Decline', style: TextStyle(color: _error, fontSize: 13, fontWeight: FontWeight.w700))))),
                       const SizedBox(width: 10),
                       Expanded(child: GestureDetector(
-                        onTap: () => _approveRequest(req['id'] as String, req['client_id'] as String),
+                        onTap: () => _approveRequest(req['id'] as String, req['client_id'] as String, owner),
                         child: Container(
                           padding: const EdgeInsets.symmetric(vertical: 10),
                           decoration: BoxDecoration(
@@ -1395,13 +1427,15 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
   // an answer that changed nothing, so the copy is the truth either way, and
   // the list is re-read so it shows what the server holds.
   //
-  // P0-FL-59f: what came of it is said only to the coach whose list it was on.
-  Future<void> _approveRequest(String relId, String clientId) async {
-    final owner = ownerOfHeld(ref.read(pendingRequestsProvider));
+  // P0-FL-59f: answered as [owner], the coach whose list the row was on, and
+  // what came of it is said only to them. An owner nobody knows is not them.
+  Future<void> _approveRequest(String relId, String clientId, String? owner) async {
+    const origin = 'CoachDashboard._approveRequest';
+    if (stoppedFor(owner ?? unknownOwner, origin, 'accept request')) return;
     try {
       await ref.read(coachRelServiceProvider).approveRequest(relId, clientId);
     } catch (e, s) {
-      reportError('CoachDashboard._approveRequest', e, s);
+      reportError(origin, e, s);
       if (mounted && !accountLeft(owner)) {
         ref.invalidate(pendingRequestsProvider);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
@@ -1410,19 +1444,21 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
       }
       return;
     }
-    if (!mounted || accountLeft(owner)) return;
+    if (stoppedFor(owner, origin, 'report accepted request')) return;
+    if (!mounted) return;
     ref.invalidate(pendingRequestsProvider);
     ref.invalidate(coachClientsProvider);
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Client accepted!'), backgroundColor: _brand));
   }
 
-  Future<void> _declineRequest(String relId, String clientId) async {
-    final owner = ownerOfHeld(ref.read(pendingRequestsProvider));
+  Future<void> _declineRequest(String relId, String clientId, String? owner) async {
+    const origin = 'CoachDashboard._declineRequest';
+    if (stoppedFor(owner ?? unknownOwner, origin, 'decline request')) return;
     try {
       await ref.read(coachRelServiceProvider).declineRequest(relId, clientId);
     } catch (e, s) {
-      reportError('CoachDashboard._declineRequest', e, s);
+      reportError(origin, e, s);
       if (mounted && !accountLeft(owner)) {
         ref.invalidate(pendingRequestsProvider);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
@@ -1431,7 +1467,8 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
       }
       return;
     }
-    if (!mounted || accountLeft(owner)) return;
+    if (stoppedFor(owner, origin, 'report declined request')) return;
+    if (!mounted) return;
     ref.invalidate(pendingRequestsProvider);
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Request declined'), backgroundColor: Color(0xFF333333)));
@@ -1448,7 +1485,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
       backgroundColor: _card,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (_) => OpenedByAccount(child: StatefulBuilder(builder: (ctx, setSt) => Padding(
+      builder: (_) => OpenedByAccount(owner: owner, child: StatefulBuilder(builder: (ctx, setSt) => Padding(
         padding: EdgeInsets.fromLTRB(20, 24, 20, MediaQuery.of(ctx).viewInsets.bottom + 24),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Invite a Client', style: TextStyle(color: _white, fontSize: 18, fontWeight: FontWeight.w700)),
@@ -1471,9 +1508,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
           SizedBox(width: double.infinity, child: ElevatedButton(
             onPressed: sending ? null : () async {
               if (emailCtrl.text.isEmpty) return;
-              if (!stillSignedIn(owner)) {
-                reportError('CoachDashboard.sendInvite',
-                    StateError('send invite: the signed-in account changed'));
+              if (stoppedFor(owner, 'CoachDashboard.sendInvite', 'send invite')) {
                 emailCtrl.clear();
                 return;
               }
@@ -1492,7 +1527,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                     content: Text("Couldn't send the invite — check your connection and try again.")));
                 return;
               }
-              if (!stillSignedIn(owner)) return;
+              if (stoppedFor(owner, 'CoachDashboard.sendInvite', 'report sent invite')) return;
               ref.invalidate(sentInvitesProvider);
               if (ctx.mounted) {
                 Navigator.pop(ctx);
@@ -2135,8 +2170,13 @@ class _NotificationsSheetState extends ConsumerState<_NotificationsSheet> {
     setState(() => _busy.add(key));
     try {
       await write();
-      if (accountLeft(_owner)) return false;
-      if (mounted) setState(() { _busy.remove(key); _failure = null; });
+      if (_owner != null &&
+          stoppedFor(_owner, 'CoachNotificationsSheet.$origin', 'report $what')) {
+        return false;
+      }
+      // Swiped away meanwhile: done, and nobody is here to show it to.
+      if (!mounted) return false;
+      setState(() { _busy.remove(key); _failure = null; });
       return true;
     } catch (e, st) {
       // A 0-row write is recorded either way: it is still a write that

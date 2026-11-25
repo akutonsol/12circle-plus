@@ -41,8 +41,8 @@ void main() {
     });
 
     test('their own rows are an answer, also while re-read, also empty', () {
-      for (final rows in [_rows(), <Map<String, dynamic>>[]]) {
-        ownedBy('a', rows);
+      for (final read in [_rows(), <Map<String, dynamic>>[]]) {
+        final rows = ownedBy('a', read);
         expect(stillReading(held(rows), uid: 'a'), isFalse);
         expect(stillReading(AsyncData(rows), uid: 'a'), isFalse);
       }
@@ -56,9 +56,37 @@ void main() {
       expect(ownerOfHeld(failed), 'a');
     });
 
-    test('signed out marks nothing', () {
-      expect(ownerOfHeld(AsyncData(ownedBy(null, _rows()))), isNull);
+    test('signed out marks nothing; no value has no owner', () async {
+      expect(ownerOfHeld(AsyncData(ownedBy(null, _rows()))), unknownOwner,
+          reason: 'A is signed in here: rows nobody marked are not theirs');
       expect(ownerOfHeld(const AsyncLoading<_Rows>()), isNull);
+      await signOut();
+      expect(ownerOfHeld(AsyncData(ownedBy(null, _rows()))), isNull);
+    });
+
+    test('rows that lost their mark fail closed for whoever is signed in', () {
+      for (final lost in [
+        _rows(),
+        ownedBy(memberA, _rows()).toList(),
+        ownedBy(memberA, _rows()).map((r) => r).toList(),
+      ]) {
+        expect(ownerOfHeld(AsyncData(lost)), unknownOwner);
+        expect(stillReading(AsyncData(lost), uid: memberA), isTrue);
+      }
+      // Control: a real empty answer nobody marked is still an answer.
+      expect(ownerOfHeld(const AsyncData(<Map<String, dynamic>>[])), isNull);
+      expect(
+          stillReading(const AsyncData(<Map<String, dynamic>>[]), uid: memberA),
+          isFalse);
+    });
+
+    test('a shared const [] is never marked for anyone', () {
+      const shared = <Map<String, dynamic>>[];
+      final a = ownedBy('a', shared);
+      final b = ownedBy('b', shared);
+      expect(ownerOfHeld(const AsyncData(shared)), isNull);
+      expect(ownerOfHeld(AsyncData(a)), 'a', reason: "B's mark replaced A's");
+      expect(ownerOfHeld(AsyncData(b)), 'b');
     });
   });
 

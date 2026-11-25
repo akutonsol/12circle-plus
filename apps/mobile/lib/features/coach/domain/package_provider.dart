@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../dashboard/domain/still_reading.dart' show readAsClientPageOwner;
 import '../data/package_service.dart';
 
 final packageServiceProvider = Provider<PackageService>((ref) => PackageService());
@@ -43,7 +44,7 @@ final myScheduleProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
 final clientScheduleProvider =
     FutureProvider.autoDispose.family<Map<String, dynamic>?, String>((ref, clientId) async {
   // P0-FL-59f: RLS answers for the signed-in coach (by id: see clientDetailProvider).
-  ref.watch(currentUserProvider.select((u) => u?.id));
+  readAsClientPageOwner(ref, clientId);
   final svc = ref.watch(packageServiceProvider);
   return _recorded('clientScheduleProvider', () => svc.getClientSchedule(clientId));
 });

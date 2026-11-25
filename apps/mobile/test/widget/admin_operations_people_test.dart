@@ -7,6 +7,7 @@ import 'package:circle_fitness/features/admin/domain/admin_provider.dart';
 import 'package:circle_fitness/features/admin/domain/admin_trust.dart';
 import 'package:circle_fitness/features/admin/presentation/admin_operations_screen.dart';
 import 'package:circle_fitness/features/admin/presentation/admin_people_screen.dart';
+import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 
 /// V5 §185 — P5 · Operations and People. Both pages are ListViews, so the harness uses a
 /// tall surface to build every section rather than relaxing the finders (§183.3).
@@ -37,6 +38,7 @@ Future<void> _pumpSettled(WidgetTester t, Widget screen, List<Override> o) async
 }
 
 final _denied = <Override>[
+  currentUserProvider.overrideWithValue(null),
   adminReleaseStatusProvider.overrideWith((_) async => null),
   adminWearableConnectionsProvider.overrideWith((_) async => null),
   adminSecurityEventsProvider.overrideWith((_) async => null),

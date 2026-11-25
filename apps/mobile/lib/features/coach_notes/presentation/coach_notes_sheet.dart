@@ -8,16 +8,22 @@ import '../domain/coach_note_provider.dart';
 
 /// Coach: private notes about a client (Module 29). Opens a bottom sheet with
 /// the existing notes and an inline composer.
+/// [owner] is the coach whose page opens it (P0-FL-59f); whoever is signed in
+/// now, if the page does not say.
 Future<void> showCoachNotesSheet(
-    BuildContext context, WidgetRef ref, String clientId, String clientName) {
+    BuildContext context, WidgetRef ref, String clientId, String clientName,
+    {String? owner}) async {
+  final opener = owner ?? signedInUid();
+  if (stoppedFor(opener, 'CoachNotesSheet.open', 'open sheet')) return;
   // Read on each opening. The family outlives the sheet, so a failed read
   // would otherwise be shown again every time it is opened.
   ref.invalidate(clientNotesProvider(clientId));
-  return showModalBottomSheet(
+  await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
     builder: (_) => OpenedByAccount(
+        owner: opener,
         child: _NotesSheet(clientId: clientId, clientName: clientName)),
   );
 }
@@ -60,7 +66,7 @@ class _NotesSheetState extends ConsumerState<_NotesSheet> {
         .read(coachNoteServiceProvider)
         .addNote(widget.clientId, _ctrl.text.trim(), owner: _owner, tag: _tag);
     if (!mounted) return;
-    if (!stillSignedIn(_owner)) {
+    if (stoppedFor(_owner, 'CoachNotesSheet.add', 'report saved note')) {
       _ctrl.clear();
       return;
     }
@@ -138,22 +144,26 @@ class _NotesSheetState extends ConsumerState<_NotesSheet> {
                         // closed); save and read already report (#78).
                         onDelete: () async {
                           final messenger = ScaffoldMessenger.of(context);
-                          if (!stillSignedIn(_owner)) {
-                            reportError('CoachNotesSheet.delete', StateError(
-                                'delete note: the signed-in account changed'));
+                          if (stoppedFor(_owner, 'CoachNotesSheet.delete',
+                              'delete note')) {
                             return;
                           }
                           try {
                             await ref
                                 .read(coachNoteServiceProvider)
                                 .deleteNote(notes[i].id);
-                          } catch (_) {
+                          } catch (e, st) {
+                            reportError('CoachNotesSheet.delete', e, st);
                             if (!mounted || !stillSignedIn(_owner)) return;
                             messenger.showSnackBar(const SnackBar(
                                 content: Text("Couldn't delete the note — try again.")));
                             return;
                           }
-                          if (!mounted || !stillSignedIn(_owner)) return;
+                          if (stoppedFor(_owner, 'CoachNotesSheet.delete',
+                              'report deleted note')) {
+                            return;
+                          }
+                          if (!mounted) return;
                           ref.invalidate(clientNotesProvider(widget.clientId));
                         }),
                   ),

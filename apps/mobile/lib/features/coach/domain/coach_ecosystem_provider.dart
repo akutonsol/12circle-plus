@@ -3,7 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../../core/realtime/realtime.dart';
-import '../../dashboard/domain/still_reading.dart' show ownedBy;
+import '../../dashboard/domain/still_reading.dart' show ownedBy, readAsClientPageOwner;
 import '../data/coach_program_service.dart';
 import '../data/coach_relationship_service.dart';
 import '../data/score_service.dart';
@@ -35,7 +35,7 @@ final pendingRequestsProvider = FutureProvider<List<Map<String, dynamic>>>((ref)
 // the class guard in per_user_provider_scope_test.dart cannot see. Each watches
 // the user so a change of account recomputes it instead of serving the last one's.
 final myProgramsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
-  ref.watch(currentUserProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id)); // by id: a token refresh is the same coach
   return _programSvc.getMyPrograms();
 });
 
@@ -132,7 +132,7 @@ final monthScoresProvider = FutureProvider<List<Map<String, dynamic>>>((ref) asy
 
 final sentInvitesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
-  ref.watch(currentUserProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   final coachId = Supabase.instance.client.auth.currentUser?.id;
   if (coachId == null) return [];
   final data = await Supabase.instance.client
@@ -146,7 +146,7 @@ final sentInvitesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) asy
 
 final coachLeaderboardProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
-  ref.watch(currentUserProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   // Live: ticks on the table it READS (P0-FL-47). It watched 'user_scores',
   // which only the award_points / apply_penalty RPCs write; a client's daily
   // score is the app's `daily_scores` upsert, so it never moved this tab.
@@ -175,12 +175,13 @@ final coachLeaderboardProvider = FutureProvider<List<Map<String, dynamic>>>((ref
 // read below follows who that is — by id only, so a token refresh is not a
 // re-read (and not a second logged assessment read). Keyed by the client alone
 // they left one coach's PAR-Q, injuries, photos and weights on the page for the
-// next account, with no `assessment_access_log` row naming it.
+// next account, with no `assessment_access_log` row naming it. Nor is it asked
+// for a page its reader never opened ([readAsClientPageOwner]).
 const clientDetailProfileColumns =
     'id, first_name, last_name, avatar_url, coaching_mode, created_at, onboarding_complete';
 
 final clientDetailProvider = FutureProvider.autoDispose.family<Map<String, dynamic>, String>((ref, clientId) async {
-  ref.watch(currentUserProvider.select((u) => u?.id));
+  readAsClientPageOwner(ref, clientId);
   final db = Supabase.instance.client;
   final profile = await db
       .from('user_profiles')
@@ -333,7 +334,7 @@ class ClientAssessment {
 /// never an empty assessment: an empty one would read as no PAR-Q flags.
 final clientAssessmentProvider = FutureProvider.autoDispose
     .family<ClientAssessment, String>((ref, clientId) async {
-  ref.watch(currentUserProvider.select((u) => u?.id));
+  readAsClientPageOwner(ref, clientId);
   final dynamic res;
   try {
     res = await Supabase.instance.client
@@ -371,6 +372,6 @@ final scoreServiceProvider = Provider((_) => _scoreSvc);
 /// Coaches can only assign work (programs/nutrition/habits/etc.) once true.
 final clientHasPaidPlanProvider =
     FutureProvider.autoDispose.family<bool, String>((ref, clientId) async {
-  ref.watch(currentUserProvider.select((u) => u?.id));
+  readAsClientPageOwner(ref, clientId);
   return _programSvc.clientHasPaidPlan(clientId);
 });

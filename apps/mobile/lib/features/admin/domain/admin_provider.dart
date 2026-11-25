@@ -1,6 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/config/app_env.dart';
-import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../data/admin_metrics_service.dart';
 import '../data/admin_trust_service.dart';
@@ -104,17 +103,8 @@ final adminWearableConnectionsProvider =
 
 /// Whose search text the two search boxes hold (P0-FL-59f), by id only: a
 /// refreshed token is the same admin and keeps what they typed.
-///
-/// With no auth client to ask — never in the running app; a widget test pumps
-/// these pages with every read replaced — nobody owns the text.
-final _searchOwnerProvider = Provider<String?>((ref) {
-  try {
-    return ref.watch(currentUserProvider.select((u) => u?.id));
-  } catch (e, st) {
-    reportError('adminSearchOwner', e, st);
-    return null;
-  }
-});
+final _searchOwnerProvider = Provider<String?>(
+    (ref) => ref.watch(currentUserProvider.select((u) => u?.id)));
 
 /// The People search box's current text. Empty means no filter — NOT "match nothing".
 /// Starts empty for each admin: the text is the previous one's search

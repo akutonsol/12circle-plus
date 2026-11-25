@@ -3,6 +3,7 @@ import '../../../core/observability/network_failure.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
+import '../../auth/domain/auth_provider.dart';
 import '../../coach/domain/coach_ecosystem_provider.dart';
 import '../../coach/presentation/coach_video_response_screen.dart';
 import '../../action_items/presentation/assign_action_item_sheet.dart';
@@ -106,7 +107,11 @@ List<Map<String, String>> _generateActions(Map<String, dynamic> d) {
 class ClientDetailScreen extends ConsumerStatefulWidget {
   final String clientId;
   final String clientName;
-  const ClientDetailScreen({super.key, required this.clientId, required this.clientName});
+  /// The coach whose list this was opened from; whoever is signed in when the
+  /// page is first built, if the opener does not say.
+  final String? owner;
+  const ClientDetailScreen({super.key, required this.clientId,
+    required this.clientName, this.owner});
 
   @override
   ConsumerState<ClientDetailScreen> createState() => _ClientDetailScreenState();
@@ -116,20 +121,51 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabs;
 
+  /// P0-FL-59f: whose client this page shows. For anyone else (and once they
+  /// sign out) it shows nothing and reads nothing; what was typed on it goes
+  /// with its content. Back in as the same coach, the page is theirs again.
+  late final String? _owner;
+  late final OpenClientPages _pages;
+  bool _gone = false;
+
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 4, vsync: this);
+    _owner = widget.owner ?? signedInUid();
+    _pages = ref.read(openClientPagesProvider)..opened(widget.clientId, _owner);
   }
 
   @override
   void dispose() {
+    _pages.closed(widget.clientId, _owner);
     _tabs.dispose();
     super.dispose();
   }
 
+  /// The page of a coach who left: a way back, and nothing else.
+  Widget _goneFor(BuildContext context) {
+    if (!_gone) {
+      _gone = true;
+      // What was last said on it ("Marked done: …") goes too.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.maybeOf(context)
+          ?..clearSnackBars()
+          ..removeCurrentSnackBar();
+      });
+    }
+    return Scaffold(
+      backgroundColor: _bg,
+      body: SafeArea(child: Column(children: [_header(context, '')])));
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Watched so that a change redraws; the auth client itself decides.
+    if (hasAuthClient) ref.watch(currentUserProvider.select((u) => u?.id));
+    if (!stillSignedIn(_owner)) return _goneFor(context);
+    _gone = false;
     final detailAsync = ref.watch(clientDetailProvider(widget.clientId));
     // P0-FL-37: the assessment is read separately, through the logged RPC, and
     // watched HERE so it is read once per page open whichever tab is showing.
@@ -140,7 +176,7 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
       backgroundColor: _bg,
       body: SafeArea(
         child: Column(children: [
-          _header(context),
+          _header(context, widget.clientName),
           _tabBar(),
           Expanded(child: detailAsync.when(
             loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
@@ -169,10 +205,10 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
                 controller: _tabs,
                 children: [
                   _OverviewTab(detail: detail, clientId: widget.clientId,
-                    assessment: assessment),
+                    assessment: assessment, owner: _owner),
                   gated ? gatePage() : _AssessmentTab(detail: detail),
                   gated ? gatePage() : _ParqHealthTab(detail: detail),
-                  _ProgressTab(detail: detail),
+                  _ProgressTab(detail: detail, owner: _owner),
                 ],
               );
             },
@@ -182,7 +218,7 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
     );
   }
 
-  Widget _header(BuildContext context) => Container(
+  Widget _header(BuildContext context, String name) => Container(
     padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
     decoration: BoxDecoration(
       color: _card,
@@ -193,7 +229,7 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
         onTap: () => Navigator.pop(context),
         child: const Icon(Icons.arrow_back_ios, color: _wht, size: 20)),
       const SizedBox(width: 12),
-      Text(widget.clientName,
+      Text(name,
         style: const TextStyle(color: _wht, fontSize: 18, fontWeight: FontWeight.w700)),
     ]),
   );
@@ -223,8 +259,10 @@ class _OverviewTab extends ConsumerWidget {
   /// The logged assessment read (P0-FL-37). The risk badge and AI summary are
   /// assessment data, so they follow its state rather than the profile's.
   final AsyncValue<ClientAssessment> assessment;
+  /// The coach whose page this is: what is opened from it is theirs.
+  final String? owner;
   const _OverviewTab({required this.detail, required this.clientId,
-    required this.assessment});
+    required this.assessment, required this.owner});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -255,13 +293,7 @@ class _OverviewTab extends ConsumerWidget {
     // NOT "not subscribed" — [paidPlan] is null then, and the lock message is
     // kept for a check that answered no.
     final paidAsync  = ref.watch(clientHasPaidPlanProvider(clientId));
-    // P0-FL-59f: the check watches nothing but the signed-in id, so an
-    // AsyncLoading that holds an answer holds the PREVIOUS coach's. (A retry or
-    // refresh by the same coach stays AsyncData while it re-reads.)
-    final bool? paidPlan =
-        paidAsync is! AsyncLoading && paidAsync.hasValue && !paidAsync.hasError
-            ? paidAsync.requireValue
-            : null;
+    final bool? paidPlan = answeredPaidPlan(paidAsync);
     final paidCheckFailed = paidPlan == null && paidAsync.hasError && !paidAsync.isLoading;
     // Consecutive failed checks, so a Try again that fails again reads
     // differently from the first failure instead of looking like nothing happened.
@@ -399,7 +431,8 @@ class _OverviewTab extends ConsumerWidget {
         // ── Coach Action Center ──
         _CoachActionCenter(actions: actions, clientId: clientId, paidPlan: paidPlan,
           paidCheckFailed: paidCheckFailed,
-          riskActionsUnavailable: _assessmentUnavailable(assessment)),
+          riskActionsUnavailable: _assessmentUnavailable(assessment),
+          owner: owner),
         const SizedBox(height: 12),
 
         // ── Assigned Program ──
@@ -458,14 +491,16 @@ class _OverviewTab extends ConsumerWidget {
               onTap: () => _showSheet(context, _AssignHabitsSheet(clientId: clientId, ref: ref))),
             const SizedBox(height: 8),
             _ActionButton(icon: Icons.checklist_rounded, label: 'Assign Action Item',
-              onTap: () => showAssignActionItemSheet(context, ref, clientId)),
+              onTap: () => showAssignActionItemSheet(context, ref, clientId, owner: owner)),
             const SizedBox(height: 8),
             _ActionButton(icon: Icons.videocam_rounded, label: 'Send Video Response',
               onTap: () {
+                if (stoppedFor(owner, 'ClientDetail.videoResponse', 'open video response')) return;
                 final name = '$firstName $lastName'.trim();
                 Navigator.push(context, MaterialPageRoute(
-                  builder: (_) => CoachVideoResponseScreen(
-                    clientId: clientId, clientName: name.isEmpty ? 'Client' : name)));
+                  builder: (_) => OpenedByAccount(owner: owner,
+                    child: CoachVideoResponseScreen(
+                      clientId: clientId, clientName: name.isEmpty ? 'Client' : name))));
               }),
           ],
           const SizedBox(height: 8),
@@ -473,11 +508,11 @@ class _OverviewTab extends ConsumerWidget {
           _ActionButton(icon: Icons.lock_outline, label: 'Private Notes',
             onTap: () {
               final name = '$firstName $lastName'.trim();
-              showCoachNotesSheet(context, ref, clientId, name.isEmpty ? 'Client' : name);
+              showCoachNotesSheet(context, ref, clientId, name.isEmpty ? 'Client' : name, owner: owner);
             }),
           const SizedBox(height: 8),
           _ActionButton(icon: Icons.attach_money_rounded, label: 'Set Custom Price',
-            onTap: () => _showCustomPriceDialog(context, clientId)),
+            onTap: () => _showCustomPriceDialog(context, clientId, owner)),
         ])),
         const SizedBox(height: 12),
 
@@ -505,11 +540,12 @@ class _OverviewTab extends ConsumerWidget {
   }
 
   void _showSheet(BuildContext context, Widget sheet) {
+    if (stoppedFor(owner, 'ClientDetail.openSheet', 'open sheet')) return;
     showModalBottomSheet(
       context: context, backgroundColor: _card,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (_) => OpenedByAccount(child: sheet));
+      builder: (_) => OpenedByAccount(owner: owner, child: sheet));
   }
 
   Widget _chip(String label, Color color) => Container(
@@ -747,23 +783,23 @@ class _ClientTimeline extends StatelessWidget {
 /// whose many providers a dialog test does not need.
 @visibleForTesting
 void showCustomPriceDialogForTest(BuildContext context, String clientId) =>
-    _showCustomPriceDialog(context, clientId);
+    _showCustomPriceDialog(context, clientId, signedInUid());
 
 /// Coach sets a custom monthly price for THIS client (overrides their global
 /// rate). Leaving it blank and saving clears the override.
-void _showCustomPriceDialog(BuildContext context, String clientId) {
+void _showCustomPriceDialog(BuildContext context, String clientId, String? owner) {
+  // P0-FL-59f: opened and typed by [owner], saved as them or not at all; the
+  // dialog closes when the account changes.
+  if (stoppedFor(owner, 'ClientDetail.customPrice', 'open client price')) return;
   final ctrl = TextEditingController();
   // Why the last Save did not happen, shown on the field INSIDE the dialog. A
   // SnackBar went to the page's messenger, under the dialog's scrim, so the
   // coach saw nothing. [saving] disables Save while the write is in flight.
   String? error;
   var saving = false;
-  // P0-FL-59f: typed by this coach, saved as them or not at all; the dialog
-  // closes when the account changes.
-  final owner = signedInUid();
   showDialog(
     context: context,
-    builder: (dctx) => OpenedByAccount(child: StatefulBuilder(builder: (sctx, setDialogState) => AlertDialog(
+    builder: (dctx) => OpenedByAccount(owner: owner, child: StatefulBuilder(builder: (sctx, setDialogState) => AlertDialog(
       backgroundColor: _card,
       title: const Text('Custom Price', style: TextStyle(color: _wht, fontWeight: FontWeight.w800)),
       content: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -797,9 +833,7 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
         ),
         TextButton(
           onPressed: saving ? null : () async {
-            if (!stillSignedIn(owner)) {
-              reportError('ClientDetail.customPrice',
-                  StateError('set client price: the signed-in account changed'));
+            if (stoppedFor(owner, 'ClientDetail.customPrice', 'set client price')) {
               ctrl.clear();
               return;
             }
@@ -815,7 +849,8 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
             });
             try {
               await CoachRelationshipService().setClientPrice(clientId, value);
-            } catch (e) {
+            } catch (e, st) {
+              reportError('ClientDetail.customPrice', e, st);
               // A write that failed escaped here unhandled, with nothing said.
               // setClientPrice's StateError says what happened (signed out, no
               // relationship with this client — P0-FL-3). A generic failure
@@ -835,7 +870,8 @@ void _showCustomPriceDialog(BuildContext context, String clientId) {
               });
               return;
             }
-            if (!sctx.mounted || !dctx.mounted || !stillSignedIn(owner)) return;
+            if (stoppedFor(owner, 'ClientDetail.customPrice', 'report client price')) return;
+            if (!sctx.mounted || !dctx.mounted) return;
             Navigator.pop(dctx);
             ScaffoldMessenger.of(dctx).showSnackBar(SnackBar(
                 content: Text(value == null
@@ -1211,7 +1247,9 @@ class _ParqHealthTab extends StatelessWidget {
 // ── Progress Tab ──────────────────────────────────────────────────────────────
 class _ProgressTab extends StatelessWidget {
   final Map<String, dynamic> detail;
-  const _ProgressTab({required this.detail});
+  /// The coach whose page this is: the photos opened from it are theirs to see.
+  final String? owner;
+  const _ProgressTab({required this.detail, required this.owner});
 
   @override
   Widget build(BuildContext context) {
@@ -1519,22 +1557,27 @@ class _ProgressTab extends StatelessWidget {
     );
   }
 
-  void _showPhoto(BuildContext context, String url) => showDialog(
-    context: context,
-    barrierColor: Colors.black.withValues(alpha: 0.9),
-    builder: (dctx) => GestureDetector(
-      onTap: () => Navigator.pop(dctx),
-      child: Stack(children: [
-        Center(child: InteractiveViewer(
-          child: Image.network(url, fit: BoxFit.contain,
-            errorBuilder: (_, __, ___) => const Icon(Icons.broken_image, color: _mut, size: 48)))),
-        Positioned(top: 40, right: 20,
-          child: GestureDetector(
-            onTap: () => Navigator.pop(dctx),
-            child: const Icon(Icons.close, color: _wht, size: 28))),
-      ]),
-    ),
-  );
+  /// P0-FL-59f: the client's photo is [owner]'s to look at. It closes when they
+  /// leave, and is not drawn at all if they left before its first frame.
+  void _showPhoto(BuildContext context, String url) {
+    if (stoppedFor(owner, 'ClientDetail.showPhoto', 'show client photo')) return;
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.9),
+      builder: (dctx) => OpenedByAccount(owner: owner, child: GestureDetector(
+        onTap: () => Navigator.pop(dctx),
+        child: Stack(children: [
+          Center(child: InteractiveViewer(
+            child: Image.network(url, fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) => const Icon(Icons.broken_image, color: _mut, size: 48)))),
+          Positioned(top: 40, right: 20,
+            child: GestureDetector(
+              onTap: () => Navigator.pop(dctx),
+              child: const Icon(Icons.close, color: _wht, size: 28))),
+        ]),
+      )),
+    );
+  }
 
   Widget _statRow(String label, String value) => Padding(
     padding: const EdgeInsets.only(bottom: 6),
@@ -1670,9 +1713,12 @@ class _CoachActionCenter extends ConsumerStatefulWidget {
   /// PAR-Q") cannot be generated. Said in one neutral line — no action is
   /// invented in their place, and their absence is not "nothing to review".
   final bool riskActionsUnavailable;
+  /// The coach whose page this is (P0-FL-59f): nothing is opened, changed or
+  /// said from it for anyone else.
+  final String? owner;
   const _CoachActionCenter({required this.actions, required this.clientId,
     required this.paidPlan, required this.paidCheckFailed,
-    this.riskActionsUnavailable = false});
+    this.riskActionsUnavailable = false, required this.owner});
 
   @override
   ConsumerState<_CoachActionCenter> createState() => _CoachActionCenterState();
@@ -1682,6 +1728,9 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
   final Set<String> _cleared = {};        // approved or dismissed → hidden
   final Map<String, String> _edited = {}; // text overrides
 
+  bool _left(String what) =>
+      stoppedFor(widget.owner, 'CoachActionCenter', what);
+
   String _key(Map<String, String> a) => a['text'] ?? '';
   String _text(Map<String, String> a) => _edited[_key(a)] ?? a['text'] ?? '';
 
@@ -1689,10 +1738,11 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
   /// `true` only after their write succeeded; closing one, or a failed save,
   /// answers false.
   Future<bool> _openSheet(Widget sheet) async {
+    if (_left('open sheet')) return false;
     final saved = await showModalBottomSheet<bool>(
       context: context, backgroundColor: _card, isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (_) => OpenedByAccount(child: sheet));
+      builder: (_) => OpenedByAccount(owner: widget.owner, child: sheet));
     return saved ?? false;
   }
 
@@ -1702,6 +1752,7 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
   /// hid the recommendation for the rest of the visit, and the coach believed
   /// it was handled.
   Future<void> _approve(Map<String, String> a) async {
+    if (_left('approve')) return;
     final icon = a['icon'] ?? '';
     final opensService = icon == 'fitness' || icon == 'nutrition' || icon == 'habit' || icon == 'checkin';
     // Services stay locked until the client is on a paid plan with this coach.
@@ -1733,7 +1784,7 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
         done = await _openSheet(_AssignHabitsSheet(clientId: widget.clientId, ref: ref));
         break;
       case 'checkin':
-        done = await showAssignActionItemSheet(context, ref, widget.clientId);
+        done = await showAssignActionItemSheet(context, ref, widget.clientId, owner: widget.owner);
         break;
       default:
         // Nothing to save: acknowledging the recommendation IS the action.
@@ -1742,22 +1793,26 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
           behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 2)));
         done = true;
     }
-    if (!mounted || !done) return;
+    if (!mounted || !done || _left('clear an approved item')) return;
     setState(() => _cleared.add(_key(a)));
   }
 
   void _dismiss(Map<String, String> a) {
+    if (_left('dismiss')) return;
     setState(() => _cleared.add(_key(a)));
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text('Dismissed: ${_text(a)}'),
       behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 1)));
   }
 
+  /// P0-FL-59f: the dialog holds what was recommended about the client. It
+  /// closes with its coach, and nothing typed in it is kept for the next one.
   void _edit(Map<String, String> a) {
+    if (_left('edit')) return;
     final ctrl = TextEditingController(text: _text(a));
     showDialog(
       context: context,
-      builder: (dctx) => AlertDialog(
+      builder: (dctx) => OpenedByAccount(owner: widget.owner, child: AlertDialog(
         backgroundColor: _card,
         title: const Text('Edit Action', style: TextStyle(color: _wht, fontSize: 16)),
         content: TextField(
@@ -1778,10 +1833,11 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
             onPressed: () {
               final txt = ctrl.text.trim();
               Navigator.pop(dctx);
-              if (txt.isNotEmpty) setState(() => _edited[_key(a)] = txt);
+              if (txt.isEmpty || !mounted || _left('save an edited item')) return;
+              setState(() => _edited[_key(a)] = txt);
             },
             child: const Text('Save', style: TextStyle(color: _brand))),
-        ]));
+        ])));
   }
 
   @override
@@ -1801,9 +1857,9 @@ class _CoachActionCenterState extends ConsumerState<_CoachActionCenter> {
             button: true,
             label: 'Add action item',
             excludeSemantics: true,
-            onTap: () => showAssignActionItemSheet(context, ref, widget.clientId),
+            onTap: () => showAssignActionItemSheet(context, ref, widget.clientId, owner: widget.owner),
             child: TextButton.icon(
-              onPressed: () => showAssignActionItemSheet(context, ref, widget.clientId),
+              onPressed: () => showAssignActionItemSheet(context, ref, widget.clientId, owner: widget.owner),
               icon: const Icon(Icons.add_rounded, color: _brand, size: 16),
               label: const Text('Add', style: TextStyle(color: _brand, fontSize: 12, fontWeight: FontWeight.w700)),
               // 44px floor (P0-FL-48); it was shrink-wrapped to the text.
@@ -2009,6 +2065,15 @@ class _LoadFailedNotice extends StatelessWidget {
   }
 }
 
+/// Whether the client is on a paid plan, or null while that is not known.
+///
+/// P0-FL-59f: the check watches nothing but the signed-in id, so an
+/// [AsyncLoading] that holds an answer holds the PREVIOUS coach's. (A retry or
+/// refresh by the same coach stays [AsyncData] while it re-reads.)
+@visibleForTesting
+bool? answeredPaidPlan(AsyncValue<bool> v) =>
+    v is! AsyncLoading && v.hasValue && !v.hasError ? v.requireValue : null;
+
 /// The settled assessment answer, or null while it loads or after it failed.
 ClientAssessment? _settledAssessment(AsyncValue<ClientAssessment> a) =>
     !a.isLoading && !a.hasError && a.hasValue ? a.requireValue : null;
@@ -2210,9 +2275,7 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
     // Read before the await: the coach can dismiss the sheet while the write is in
     // flight, and a disposed State's `ref` throws.
     final container = ProviderScope.containerOf(context);
-    if (!stillSignedIn(_owner)) {
-      reportError('AssignProgramSheet._assign',
-          StateError('assign program: the signed-in account changed'));
+    if (stoppedFor(_owner, 'AssignProgramSheet._assign', 'assign program')) {
       setState(() => _selectedProgramId = null);
       return;
     }
@@ -2220,7 +2283,7 @@ class _AssignProgramSheetState extends ConsumerState<_AssignProgramSheet> {
     try {
       await ref.read(coachProgramServiceProvider)
           .assignProgram(_selectedProgramId!, widget.clientId);
-      if (!stillSignedIn(_owner)) return;
+      if (stoppedFor(_owner, 'AssignProgramSheet._assign', 'report assigned program')) return;
       // The page behind the sheet reads the assignment through these two, and
       // neither refreshes itself: the Assigned Program card kept naming the
       // program this one had just replaced.
@@ -2406,9 +2469,7 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
     final carb = int.tryParse(_carb.text);
     final fat  = int.tryParse(_fat.text);
     if (cal == null || pro == null || carb == null || fat == null) return;
-    if (!stillSignedIn(_owner)) {
-      reportError('AssignNutritionSheet._save',
-          StateError('save nutrition plan: the signed-in account changed'));
+    if (stoppedFor(_owner, 'AssignNutritionSheet._save', 'save nutrition plan')) {
       for (final c in [_cal, _pro, _carb, _fat, _water, _notes]) { c.clear(); }
       setState(() => _loaded = false);
       return;
@@ -2423,7 +2484,7 @@ class _AssignNutritionSheetState extends ConsumerState<_AssignNutritionSheet> {
         calories: cal, protein: pro, carbs: carb, fat: fat,
         waterOz: int.tryParse(_water.text),
         notes: _notes.text.isEmpty ? null : _notes.text);
-      if (!stillSignedIn(_owner)) return;
+      if (stoppedFor(_owner, 'AssignNutritionSheet._save', 'report saved plan')) return;
       // The page behind the sheet reads the plan through this and does not refresh
       // itself: it kept saying "No nutrition plan assigned yet".
       container.invalidate(clientDetailProvider(widget.clientId));
@@ -2628,9 +2689,7 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
   Future<void> _save() async {
     // Never send a selection that was not pre-filled from the server (P0-FL-12).
     if (!_loaded) return;
-    if (!stillSignedIn(_owner)) {
-      reportError('AssignHabitsSheet._save',
-          StateError('assign habits: the signed-in account changed'));
+    if (stoppedFor(_owner, 'AssignHabitsSheet._save', 'assign habits')) {
       setState(() {
         _selected.clear();
         _loaded = false;
@@ -2650,7 +2709,7 @@ class _AssignHabitsSheetState extends ConsumerState<_AssignHabitsSheet> {
     }).toList();
     try {
       await ref.read(coachProgramServiceProvider).assignHabits(widget.clientId, habits);
-      if (!stillSignedIn(_owner)) return;
+      if (stoppedFor(_owner, 'AssignHabitsSheet._save', 'report assigned habits')) return;
       // The page lists the client's habits from this and does not refresh itself.
       container.invalidate(clientDetailProvider(widget.clientId));
     } catch (e, s) {

@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../dashboard/domain/still_reading.dart' show readAsClientPageOwner;
 import '../data/score_engine.dart';
 import '../../../core/realtime/realtime.dart';
 
@@ -57,7 +58,7 @@ final coachLeaderboardProvider =
 /// coach was this one's until (and unless) their own read answered.
 final clientScoreProvider = FutureProvider.autoDispose
     .family<Map<String, dynamic>?, String>((ref, clientId) async {
-  ref.watch(currentUserProvider.select((u) => u?.id));
+  readAsClientPageOwner(ref, clientId);
   ref.watch(scoreRefreshProvider);
   ref.watch(tableTickerProvider('user_scores'));
   return ref.watch(scoreEngineProvider).clientScore(clientId);

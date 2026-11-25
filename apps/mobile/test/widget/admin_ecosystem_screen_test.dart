@@ -6,6 +6,7 @@ import 'package:circle_fitness/features/admin/domain/admin_metrics.dart';
 import 'package:circle_fitness/features/admin/domain/admin_provider.dart';
 import 'package:circle_fitness/features/admin/presentation/admin_ecosystem_screen.dart';
 import 'package:circle_fitness/features/admin/presentation/admin_tokens.dart';
+import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 
 /// V5 §184 — P5 · Ecosystem. The page is a ListView, so the harness uses a tall surface
 /// to build every section (§183.3) rather than relaxing the finders.
@@ -25,6 +26,7 @@ Future<void> _pump(WidgetTester t, List<Override> overrides) async {
 }
 
 final _denied = <Override>[
+  currentUserProvider.overrideWithValue(null),
   adminCommunityOverviewProvider.overrideWith((_) async => null),
   adminEventsOverviewProvider.overrideWith((_) async => null),
   adminTrainingOverviewProvider.overrideWith((_) async => null),

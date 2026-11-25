@@ -7,6 +7,7 @@ import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/checkins/domain/checkin_provider.dart';
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
 import 'package:circle_fitness/features/dashboard/domain/coach_triage_provider.dart';
+import 'package:circle_fitness/features/dashboard/domain/still_reading.dart';
 import 'package:circle_fitness/features/dashboard/presentation/coach_dashboard_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
@@ -136,8 +137,8 @@ void main() {
         // unless a test says so.
         coachNotificationsProvider.overrideWith((ref) async* {
           subscriptions++;
-          yield rows;
-          if (later != null) yield* later;
+          yield ownedBy(_uid, rows); // as the real stream marks its rows
+          if (later != null) yield* later.map((r) => ownedBy(_uid, r));
         }),
         currentUserProfileProvider.overrideWith((ref) async => null),
         currentUserDisplayNameProvider.overrideWithValue('Coach'),

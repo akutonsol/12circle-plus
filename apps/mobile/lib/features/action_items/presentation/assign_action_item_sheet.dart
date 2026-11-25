@@ -1,19 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../core/observability/app_failure.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../dashboard/domain/still_reading.dart';
 import '../domain/action_item_provider.dart';
 
 /// Coach: assign an action item to a client. Returns true if assigned.
+/// [owner] is the coach whose page opens it (P0-FL-59f); whoever is signed in
+/// now, if the page does not say.
 Future<bool> showAssignActionItemSheet(
-    BuildContext context, WidgetRef ref, String clientId) async {
+    BuildContext context, WidgetRef ref, String clientId,
+    {String? owner}) async {
+  final opener = owner ?? signedInUid();
+  if (stoppedFor(opener, 'AssignActionItemSheet.open', 'open sheet')) {
+    return false;
+  }
   final result = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
     builder: (_) =>
-        OpenedByAccount(child: _AssignSheet(clientId: clientId, ref: ref)),
+        OpenedByAccount(
+            owner: opener, child: _AssignSheet(clientId: clientId, ref: ref)),
   );
   return result ?? false;
 }
@@ -65,9 +72,8 @@ class _AssignSheetState extends State<_AssignSheet> {
 
   Future<void> _save() async {
     if (_title.text.trim().isEmpty) return;
-    if (!stillSignedIn(_owner)) {
-      reportError('AssignActionItemSheet._save',
-          StateError('assign action item: the signed-in account changed'));
+    if (stoppedFor(
+        _owner, 'AssignActionItemSheet._save', 'assign action item')) {
       _title.clear();
       _desc.clear();
       return;
@@ -81,7 +87,11 @@ class _AssignSheetState extends State<_AssignSheet> {
           dueDate: _due, // points are awarded automatically by the scoring engine
 
         );
-    if (!mounted || !stillSignedIn(_owner)) return;
+    if (stoppedFor(_owner, 'AssignActionItemSheet._save',
+        'report assigned action item')) {
+      return;
+    }
+    if (!mounted) return;
     if (ok) {
       widget.ref.invalidate(clientActionItemsProvider(widget.clientId));
       widget.ref.invalidate(actionCompletionProvider(widget.clientId));
