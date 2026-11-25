@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'core/identity/account_scope.dart';
 import 'core/theme/twelve_circle_theme.dart';
 import 'core/router/app_router.dart';
 import 'core/config/app_env.dart';
@@ -36,14 +37,14 @@ void main() async {
   );
 
   // Password-reset deep link: Supabase parses the token during initialize() and
-  // establishes a recovery session, but the auth-stream event fires before the
-  // router subscribes (so it's missed on web). Flag it from the captured launch
-  // URL so the router opens /reset-password. We tag the reset link with our own
+  // establishes a recovery session before the router exists. The launch URL
+  // says what the link was for; the recovery is bound to the account the link
+  // signed in, if it signed anyone in. We tag the reset link with our own
   // ?recovery=1 marker (set in resetPassword) so it's distinguishable from an
   // OAuth return — both otherwise come back with ?code= under PKCE.
   final isRecovery = launchUri.queryParameters['recovery'] == '1' ||
       launchUri.fragment.contains('type=recovery');
-  if (isRecovery) passwordRecoveryNotifier.value = true;
+  if (isRecovery) await bindPasswordRecoveryAtLaunch(launchUri);
 
   // OAuth redirect errors come back as ?error=...&error_code=... (and the same
   // in the #fragment). Surface a friendly message on the login screen and strip
@@ -58,11 +59,25 @@ void main() async {
 
   await HabitReminderService().initialize();
 
-  runApp(
-    const ProviderScope(
-      child: CircleFitnessApp(),
-    ),
-  );
+  runApp(const CircleFitnessRoot());
+}
+
+/// The whole app under the account it belongs to (P0-FL-59a).
+class CircleFitnessRoot extends StatelessWidget {
+  const CircleFitnessRoot(
+      {super.key, this.overrides = const [], this.theme});
+
+  /// For tests (the app's theme fetches its fonts over the network).
+  final List<Override> overrides;
+  final ThemeData? theme;
+
+  @override
+  Widget build(BuildContext context) => AccountScope(
+        overrides: overrides,
+        // The device's habit reminders are the account's that set them.
+        onOwnerLeft: (_) => HabitReminderService().cancelAll(),
+        child: CircleFitnessApp(theme: theme),
+      );
 }
 
 /// Reads an OAuth error from a redirect URL (params live in the query and/or
@@ -103,17 +118,21 @@ class _AppScrollBehavior extends MaterialScrollBehavior {
 }
 
 class CircleFitnessApp extends ConsumerWidget {
-  const CircleFitnessApp({super.key});
+  const CircleFitnessApp({super.key, this.theme});
+
+  /// Null: the app's own.
+  final ThemeData? theme;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);
+    final theme = this.theme ?? TwelveCircleTheme.theme;
     return MaterialApp.router(
       title: '12 Circle Fitness',
       debugShowCheckedModeBanner: false,
       // 12 Circle Theme on Helix (three-tier tokens; app is dark-locked).
-      theme: TwelveCircleTheme.theme,
-      darkTheme: TwelveCircleTheme.theme,
+      theme: theme,
+      darkTheme: theme,
       themeMode: ThemeMode.dark,
       scrollBehavior: _AppScrollBehavior(),
       routerConfig: router,

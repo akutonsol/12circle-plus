@@ -660,10 +660,18 @@ class _SignOutButton extends ConsumerWidget {
                 child: const Text("Sign Out", style: TextStyle(color: Color(0xFFFFB4AB)))),
             ]));
         if (confirmed == true && context.mounted) {
-          await ref.read(authNotifierProvider.notifier).signOut();
+          // The service, not authNotifierProvider: signing out ends this
+          // account's provider container (AccountScope) before the server
+          // answers, and the notifier would set state on a disposed one.
+          try {
+            await ref.read(authServiceProvider).signOut();
+          } catch (e, st) {
+            reportError('ProfileScreen.signOut', e, st);
+          }
           if (kIsWeb) {
             reloadForLogout();
-          } else {
+          } else if (router?.configuration.navigatorKey.currentState != null) {
+            // Still the router on screen (no AccountScope above).
             router?.go('/login');
           }
         }

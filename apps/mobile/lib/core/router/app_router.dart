@@ -2,7 +2,9 @@ import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../identity/account_scope.dart';
 import '../observability/app_failure.dart' show reportError;
 import '../../features/auth/domain/auth_provider.dart';
 import '../../features/coach/data/pending_invite.dart';
@@ -105,10 +107,85 @@ import '../../features/settings/presentation/help_center_screen.dart';
 import 'app_shell.dart';
 import '../../features/auth/presentation/reset_password_screen.dart';
 
-/// True while the user is in a password-recovery session (arrived via the email
-/// reset link). The router forces them to /reset-password until they set a new
-/// password. The reset screen clears it.
-final passwordRecoveryNotifier = ValueNotifier<bool>(false);
+/// The uid of the account in a password-recovery session (it arrived through
+/// its email reset link), or null. The router forces THAT account, and nobody
+/// else, to /reset-password until it sets a new password (P0-FL-59a, W2).
+/// Set with [startPasswordRecovery], cleared with [endPasswordRecovery].
+///
+/// It was a bool: whoever was signed in was forced onto the form, and the form
+/// set that account's password.
+final passwordRecoveryNotifier = ValueNotifier<String?>(null);
+
+/// The device's note of which account has a recovery in progress. Only so that
+/// reloading the web form (the link's one-time code is spent by then) still
+/// finds it for the same account. See [bindPasswordRecoveryAtLaunch].
+const passwordRecoveryStorageKey = 'password_recovery_uid';
+
+/// [uid] opened its password-reset link.
+void startPasswordRecovery(String uid) {
+  passwordRecoveryNotifier.value = uid;
+  _rememberRecovery(uid);
+}
+
+/// The recovery is over: the password was set, or its account is not the one
+/// signed in any more.
+void endPasswordRecovery() {
+  passwordRecoveryNotifier.value = null;
+  _rememberRecovery(null);
+}
+
+Future<void> _rememberRecovery(String? uid) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    uid == null
+        ? await prefs.remove(passwordRecoveryStorageKey)
+        : await prefs.setString(passwordRecoveryStorageKey, uid);
+  } catch (e, st) {
+    reportError('appRouter.rememberRecovery', e, st);
+  }
+}
+
+/// Decides at launch whether [launchUri] started a recovery, and for whom.
+/// Call once, straight after `Supabase.initialize()`.
+///
+/// The reset link's marker (`?recovery=1`, or `type=recovery`) says only what
+/// the link was FOR. `Supabase.initialize()` has already tried the link's code:
+///
+/// * it worked: the last auth event is the session the link established
+///   (`passwordRecovery`, or `signedIn`), and the recovery is that account's;
+/// * it failed (expired, used, no code): gotrue leaves whoever was signed in
+///   signed in and reports only an error. No recovery started. The one
+///   exception is a reload of the form: the account still signed in is the one
+///   this device noted as recovering.
+Future<void> bindPasswordRecoveryAtLaunch(Uri launchUri) async {
+  final marked = launchUri.queryParameters['recovery'] == '1' ||
+      launchUri.fragment.contains('type=recovery');
+  if (!marked) return;
+  final auth = Supabase.instance.client.auth;
+  AuthState? last;
+  try {
+    last = await auth.onAuthStateChange.first;
+  } catch (e, st) {
+    reportError('appRouter.recoveryLink', e, st);
+  }
+  final established = last?.event == AuthChangeEvent.passwordRecovery ||
+          last?.event == AuthChangeEvent.signedIn
+      ? last?.session?.user.id
+      : null;
+  if (established != null) return startPasswordRecovery(established);
+
+  final uid = auth.currentUser?.id;
+  if (uid == null) return;
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getString(passwordRecoveryStorageKey) == uid &&
+        auth.currentUser?.id == uid) {
+      startPasswordRecovery(uid);
+    }
+  } catch (e, st) {
+    reportError('appRouter.recoveryReload', e, st);
+  }
+}
 
 /// Holds a user-facing message when an OAuth redirect returns an error
 /// (e.g. flow_state_already_used, access_denied). Set in main() from the launch
@@ -124,10 +201,11 @@ final accountReadFailureNotifier =
     ValueNotifier<({String userId, Object error})?>(null);
 
 /// Redeems a remembered coach invite (owner decision 4, PendingInvite) for the
-/// signed-in account, and refreshes what a new coach changes.
-void _redeemInvite(Ref ref) {
+/// signed-in account, and refreshes what a new coach changes. [live] is false
+/// once this router's account has left: there is nothing to refresh then.
+void _redeemInvite(Ref ref, bool Function() live) {
   PendingInvite.redeem(Supabase.instance.client).then((outcome) {
-    if (outcome == InviteOutcome.linked) {
+    if (outcome == InviteOutcome.linked && live()) {
       ref.invalidate(assignedCoachProvider);
       ref.invalidate(myCoachesProvider);
       ref.invalidate(clientPlanProvider);
@@ -138,31 +216,53 @@ void _redeemInvite(Ref ref) {
 class _RouterNotifier extends ChangeNotifier {
   final Ref _ref;
   bool _disposed = false;
+  bool get live => !_disposed;
   late final ProviderSubscription<AsyncValue<AuthState>> _sub;
   _RouterNotifier(this._ref) {
+    // A generation that began with someone already signed in (A -> B) has had
+    // no sign-in of its own: its first event is not "logged in".
+    final beganSignedIn = _ref.read(accountGenerationProvider).startedAs != null;
     _sub = _ref.listen(authStateProvider, (prev, next) {
-      final hadSession = prev?.valueOrNull?.session != null;
-      final hasSession = next.valueOrNull?.session != null;
+      // A failed token refresh reports an error and ends nothing.
+      if (next is! AsyncData<AuthState>) return;
+      final before = prev?.valueOrNull;
+      final hadSession = before == null ? beganSignedIn : before.session != null;
+      final session = next.value.session;
+      // A recovery belongs to one account: signed out, or anyone else, ends it.
+      final recovering = passwordRecoveryNotifier.value;
+      if (recovering != null && recovering != session?.user.id) {
+        endPasswordRecovery();
+      }
       // Password-reset link tapped → drive the user to the reset screen.
-      if (next.valueOrNull?.event == AuthChangeEvent.passwordRecovery) {
-        passwordRecoveryNotifier.value = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!_disposed) notifyListeners();
-        });
+      if (next.value.event == AuthChangeEvent.passwordRecovery &&
+          session != null) {
+        startPasswordRecovery(session.user.id);
+        _notifySoon();
         return;
       }
-      // Only trigger the router redirect on login — logout is handled
-      // by reloadForLogout() (web) or context.go (mobile) in the UI layer,
-      // avoiding the ShellRoute nested-navigator disposal assertion.
-      if (!hadSession && hasSession) {
+      // Only trigger the router redirect on login. When the account that owns
+      // the app leaves (sign-out, expiry, another account), AccountScope throws
+      // the whole router away instead of routing it, which avoids the
+      // ShellRoute nested-navigator disposal assertion.
+      if (!hadSession && session != null) {
         // A coach invite opened before signing in is redeemed now.
-        _redeemInvite(_ref);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!_disposed) notifyListeners();
-        });
+        _redeemInvite(_ref, () => live);
+        _notifySoon();
       }
     });
   }
+
+  /// After a frame — and asks for one: a session that arrives while nothing on
+  /// screen is moving (another web tab signing in over a still sign-in page)
+  /// otherwise waited for whatever drew the next.
+  void _notifySoon() {
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) {
+        if (!_disposed) notifyListeners();
+      })
+      ..ensureVisualUpdate();
+  }
+
   @override
   void dispose() { _disposed = true; _sub.close(); super.dispose(); }
 }
@@ -205,8 +305,12 @@ final routerProvider = Provider<GoRouter>((ref) {
   final notifier = _RouterNotifier(ref);
   ref.onDispose(notifier.dispose);
 
-  return GoRouter(
-    initialLocation: '/splash',
+  // One router per account generation (AccountScope). The first opens the
+  // launch deep link, or the splash; the launch link is not a later account's.
+  final first = ref.read(accountGenerationProvider).isFirst;
+  final router = GoRouter(
+    initialLocation: first ? '/splash' : '/login',
+    overridePlatformDefaultLocation: !first,
     refreshListenable: Listenable.merge([notifier, passwordRecoveryNotifier]),
     redirect: (context, state) async {
       final isAuthenticated = Supabase.instance.client.auth.currentSession != null;
@@ -219,7 +323,9 @@ final routerProvider = Provider<GoRouter>((ref) {
         final token = state.uri.queryParameters['invite'];
         if (token != null && token.isNotEmpty) {
           await PendingInvite.capture(token);
-          if (isAuthenticated) _redeemInvite(ref);
+          if (isAuthenticated && notifier.live) {
+            _redeemInvite(ref, () => notifier.live);
+          }
         }
       }
 
@@ -227,8 +333,11 @@ final routerProvider = Provider<GoRouter>((ref) {
       if (path == '/splash') return null;
 
       // Password recovery takes priority: keep the user on /reset-password
-      // until they set a new password (or it's cleared).
-      if (passwordRecoveryNotifier.value) {
+      // until they set a new password (or it's cleared). Only the account the
+      // reset link was for.
+      final recovering = passwordRecoveryNotifier.value;
+      if (recovering != null &&
+          recovering == Supabase.instance.client.auth.currentUser?.id) {
         return path == '/reset-password' ? null : '/reset-password';
       }
 
@@ -248,38 +357,49 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       if (isAuthenticated && isAuthRoute) {
         if (path == '/intake') return null;
-        final userId = Supabase.instance.client.auth.currentUser?.id;
-        try {
-          if (userId != null) {
-            final profile = await Supabase.instance.client
+        final auth = Supabase.instance.client.auth;
+        // P0-FL-59a (A-29): the account can change while its role is read.
+        // That role is someone else's — read again for whoever is here now.
+        for (var userId = auth.currentUser?.id; userId != null;) {
+          Map<String, dynamic>? profile;
+          Object? failure;
+          try {
+            profile = await Supabase.instance.client
                 .from('user_profiles')
                 .select('role, onboarding_complete')
                 .eq('id', userId)
                 .maybeSingle();
-            final role = profile?['role'] as String? ?? 'client';
-            // Only send to intake when flag is explicitly false (new account mid-onboarding).
-            // null means the field was never set → treat as complete and go to /home.
-            final needsOnboarding = profile?['onboarding_complete'] == false;
-            accountReadFailureNotifier.value = null;
-            if (role == 'coach') return '/coach-dashboard';
-            if (role == 'admin') return '/admin-dashboard';
-            if (role == 'vendor') return '/vendor-portal';
-            return needsOnboarding ? '/intake' : '/home';
+          } catch (e, st) {
+            // P0-FL-15. Was `catch (_) {}` then '/home': a coach, admin or
+            // vendor whose role read failed was dropped into the client app.
+            // Do not guess. Land on /login, the one auth route that can say
+            // what happened: LoginScreen sees the session, re-runs the read
+            // and shows "Couldn't load your account" with Try again and Sign
+            // out. No loop: from /login this returns null (stay), and every
+            // other auth route goes to /login once.
+            reportError('appRouter.redirect.roleRead', e, st);
+            failure = e;
           }
-        } catch (e, st) {
-          // P0-FL-15. Was `catch (_) {}` then '/home': a coach, admin or
-          // vendor whose role read failed was dropped into the client app.
-          // Do not guess. Land on /login, the one auth route that can say
-          // what happened: LoginScreen sees the session, re-runs the read
-          // and shows "Couldn't load your account" with Try again and Sign
-          // out. No loop: from /login this returns null (stay), and every
-          // other auth route goes to /login once.
-          reportError('appRouter.redirect.roleRead', e, st);
-          // Hand the failure to the login screen so it can say so at once.
-          if (userId != null) {
-            accountReadFailureNotifier.value = (userId: userId, error: e);
+          final nowId = auth.currentUser?.id;
+          if (nowId != userId) {
+            if (nowId == null) return null; // signed out: an auth route stays
+            userId = nowId;
+            continue;
           }
-          return path == '/login' ? null : '/login';
+          if (failure != null) {
+            // Hand the failure to the login screen so it can say so at once.
+            accountReadFailureNotifier.value = (userId: userId, error: failure);
+            return path == '/login' ? null : '/login';
+          }
+          final role = profile?['role'] as String? ?? 'client';
+          // Only send to intake when flag is explicitly false (new account mid-onboarding).
+          // null means the field was never set → treat as complete and go to /home.
+          final needsOnboarding = profile?['onboarding_complete'] == false;
+          accountReadFailureNotifier.value = null;
+          if (role == 'coach') return '/coach-dashboard';
+          if (role == 'admin') return '/admin-dashboard';
+          if (role == 'vendor') return '/vendor-portal';
+          return needsOnboarding ? '/intake' : '/home';
         }
         return '/home';
       }
@@ -417,4 +537,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
     ],
   );
+  // Also unhooks it from passwordRecoveryNotifier, which outlives it.
+  ref.onDispose(router.dispose);
+  return router;
 });

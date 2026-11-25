@@ -163,13 +163,20 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Future<void> _signOutAfterFailure() async {
     if (_signingOut) return;
     setState(() => _signingOut = true);
-    await ref.read(authNotifierProvider.notifier).signOut();
-    if (!mounted) return;
-    final result = ref.read(authNotifierProvider);
-    final stillSignedIn = Supabase.instance.client.auth.currentSession != null;
-    if (result.hasError) {
-      reportError('LoginScreen._signOutAfterFailure', result.error!, result.stackTrace);
+    // The service, not authNotifierProvider: signing out ends this account's
+    // provider container (AccountScope) before the server answers, and the
+    // notifier would set state on a disposed one. A new sign-in form (empty)
+    // takes this one's place then; without AccountScope the fields are cleared
+    // below.
+    Object? error;
+    try {
+      await ref.read(authServiceProvider).signOut();
+    } catch (e, st) {
+      error = e;
+      reportError('LoginScreen._signOutAfterFailure', e, st);
     }
+    if (!mounted) return;
+    final stillSignedIn = Supabase.instance.client.auth.currentSession != null;
     setState(() {
       _signingOut = false;
       if (!stillSignedIn) {
@@ -182,7 +189,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       }
     });
     if (stillSignedIn) {
-      _showError(isNetworkFailure(result.error)
+      _showError(isNetworkFailure(error)
           ? "Couldn't sign you out — check your connection and try again."
           : "Couldn't sign you out — try again in a moment. If it keeps happening, contact support.");
     }

@@ -1,10 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/errors/auth_error_text.dart';
 import '../../../core/observability/app_failure.dart';
-import '../../../core/router/app_router.dart' show passwordRecoveryNotifier;
+import '../../../core/router/app_router.dart'
+    show endPasswordRecovery, passwordRecoveryNotifier;
 import 'widgets/auth_design.dart';
 
 /// Reached after the user taps the password-reset link in their email. Supabase
@@ -22,14 +25,62 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   bool _loading = false;
   bool _done = false;
 
+  /// The account this form sets the password of (P0-FL-59a, W2): the one the
+  /// reset link was for, else the one signed in when the form opened.
+  String? _owner;
+  late final StreamSubscription<AuthState> _auth;
+
+  String? get _signedIn => Supabase.instance.client.auth.currentUser?.id;
+
+  @override
+  void initState() {
+    super.initState();
+    _owner = passwordRecoveryNotifier.value ?? _signedIn;
+    _auth = Supabase.instance.client.auth.onAuthStateChange.listen((state) {
+      if (state.session?.user.id != _owner && _signedIn != _owner) {
+        _accountChanged();
+      }
+    }, onError: (Object _, StackTrace __) {});
+  }
+
+  /// The account signed in is not [_owner]: what was typed here is not for it.
+  /// Nothing is sent, and the form is left — unless the form is now this
+  /// account's own (its reset link), which starts it again empty.
+  void _accountChanged() {
+    if (!mounted) return;
+    final now = _signedIn;
+    _pwCtrl.clear();
+    _confirmCtrl.clear();
+    setState(() {
+      _loading = false;
+      _done = false;
+    });
+    if (now != null && now == passwordRecoveryNotifier.value) {
+      _owner = now;
+      return;
+    }
+    if (passwordRecoveryNotifier.value != null) endPasswordRecovery();
+    GoRouter.maybeOf(context)?.go('/login');
+  }
+
+  void _reportChanged() => reportError('ResetPasswordScreen._submit',
+      StateError('set new password: the signed-in account changed'));
+
   @override
   void dispose() {
+    _auth.cancel();
     _pwCtrl.dispose();
     _confirmCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
+    final owner = _owner;
+    if (_signedIn != owner) {
+      _reportChanged();
+      _accountChanged();
+      return;
+    }
     final pw = _pwCtrl.text;
     final confirm = _confirmCtrl.text;
     if (pw.length < 6) {
@@ -41,17 +92,50 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
       return;
     }
     setState(() => _loading = true);
+    final auth = Supabase.instance.client.auth;
+    // Another account arriving while the update is out. `_signedIn` cannot say
+    // so afterwards: gotrue's updateUser copies the ANSWERED user (owner) onto
+    // whatever session is current by then.
+    var changed = false;
+    final watch = auth.onAuthStateChange.listen((state) {
+      if (state.session?.user.id != owner) changed = true;
+    }, onError: (Object _, StackTrace __) {});
     try {
-      await Supabase.instance.client.auth.updateUser(UserAttributes(password: pw));
-      passwordRecoveryNotifier.value = false;
+      await auth.updateUser(UserAttributes(password: pw));
+      await Future<void>.delayed(Duration.zero); // let the last event land
+      if (changed) {
+        _reportChanged();
+        // Put the signed-in account's own user back on its session.
+        if (auth.currentSession != null) await auth.refreshSession();
+        _accountChanged();
+        return;
+      }
+      endPasswordRecovery();
       if (mounted) setState(() { _loading = false; _done = true; });
     } catch (e, st) {
       reportError('ResetPasswordScreen._submit', e, st);
-      if (mounted) {
+      if (mounted && !changed && _signedIn == owner) {
         setState(() => _loading = false);
         _snack(authErrorText(e));
       }
+    } finally {
+      unawaited(watch.cancel());
     }
+  }
+
+  /// Signs out the account whose password was set, and only that one.
+  Future<void> _backToSignIn() async {
+    final router = GoRouter.maybeOf(context);
+    if (_signedIn == _owner) {
+      try {
+        await Supabase.instance.client.auth.signOut();
+      } catch (e, st) {
+        // The session is gone from this device either way (gotrue removes it
+        // before it tells the server).
+        reportError('ResetPasswordScreen._backToSignIn', e, st);
+      }
+    }
+    if (mounted) router?.go('/login');
   }
 
   void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
@@ -72,10 +156,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
               border: Border.all(color: AuthColors.purpleLight.withValues(alpha: 0.4), width: 1.5)),
             child: const Icon(Icons.check_rounded, color: AuthColors.purpleLight, size: 44))),
           const SizedBox(height: 32),
-          AuthButton(label: 'Back to Sign In', onTap: () async {
-            await Supabase.instance.client.auth.signOut();
-            if (context.mounted) context.go('/login');
-          }),
+          AuthButton(label: 'Back to Sign In', onTap: _backToSignIn),
         ],
       );
     }
