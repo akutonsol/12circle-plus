@@ -54,6 +54,14 @@ void main() {
   });
 
   Future<void> reachDone(WidgetTester t) async {
+    // A failing test never reaches end(): a removal left held would hang the
+    // next one's sign-out.
+    addTearDown(() {
+      _store.refuseRemoval = false;
+      final hold = _store.holdRemoval;
+      if (hold != null && !hold.isCompleted) hold.complete();
+      _store.holdRemoval = null;
+    });
     await t.runAsync(signOut);
     await t.runAsync(() => signInAs(acctA));
     startPasswordRecovery(acctA);
