@@ -178,10 +178,27 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
   /// gave Edit back over a copy the newest read could not confirm.
   int _loadSeq = 0;
 
+  static String? _uidOf(String? key) => key?.split('|').first;
+  static String? get _signedInUid => Supabase.instance.client.auth.currentUser?.id;
+
+  /// P0-FL-59d r4 · what [uid] is shown may no longer be theirs (or is out of
+  /// date): the next build, for whoever it is for, reads its own.
+  void _forget(String? uid) {
+    if (mounted && _uidOf(_loadedKey) == uid) setState(() => _loadedKey = null);
+  }
+
   /// Loads the overlay for [key] (`uid|staff` or `uid|client`); a response
   /// that lands after the member or view changed, or after a newer read
   /// started, is dropped.
+  ///
+  /// P0-FL-59d r4 · the read goes out as whoever is signed in, and the key is
+  /// only as new as the last build: with nothing drawn in between, coach B's
+  /// overlay was read under A's key, shown to A as theirs, and saved over A's.
   Future<void> _loadFor(String key, bool staff) async {
+    if (_signedInUid != _uidOf(key)) {
+      if (mounted) setState(() => _loadedKey = null);
+      return;
+    }
     _loadedKey = key;
     final seq = ++_loadSeq;
     try {
@@ -189,11 +206,13 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
           ? await _svc.getCoachOverlay(widget.exerciseId)
           : await _svc.resolveExerciseMedia(widget.exerciseId);
       if (!mounted || _loadedKey != key || seq != _loadSeq) return;
+      if (_signedInUid != _uidOf(key)) return _forget(_uidOf(key));
       setState(() {
         _isStaff = staff; _overlay = data; _loadError = null; _loading = false;
       });
     } catch (e) {
       if (!mounted || _loadedKey != key || seq != _loadSeq) return;
+      if (_signedInUid != _uidOf(key)) return _forget(_uidOf(key));
       // Keep whatever was shown for this member + view; say the read failed.
       setState(() { _isStaff = staff; _loadError = e; _loading = false; });
     }
@@ -366,9 +385,8 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
     // P0-FL-59d · the coach this editor is opened by. The section follows the
     // signed-in coach; the sheet over it did not, and Save replaced the next
     // coach's overlay with what the last one had typed.
-    final owner = _loadedKey?.split('|').first;
-    bool mine() =>
-        owner != null && Supabase.instance.client.auth.currentUser?.id == owner;
+    final owner = _uidOf(_loadedKey);
+    bool mine() => owner != null && _signedInUid == owner;
     if (!mine()) {
       reportError('CoachFocusSection._openEditor',
           StateError('Coaching editor: the signed-in account changed'));
@@ -599,11 +617,12 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                       voiceClearError = null;
                       final cleared = await _svc.clearCoachVoice(widget.exerciseId,
                           expectedUid: owner);
-                      if (!mine()) return;
+                      if (!mine()) return _forget(owner);
                       if (!cleared) {
                         voiceClearError = couldntMessage('remove your voice note', _svc.lastError);
                       }
                       await rereadSheet();
+                      if (!mine()) return _forget(owner);
                       _load(); if (ctx.mounted) setSheet(() {});
                     }),
                 ])),
@@ -633,6 +652,7 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                 // removed, so that message no longer describes what is there.
                 voiceClearError = null;
                 await rereadSheet();
+                if (!mine()) return _forget(owner);
                 _load(); if (ctx.mounted) setSheet(() {});
               })),
             const SizedBox(height: 16),
@@ -652,7 +672,7 @@ class _CoachFocusSectionState extends ConsumerState<CoachFocusSection> {
                     focus: focus,
                     videoRef: videoCtl.text.trim().isEmpty ? null : videoCtl.text.trim(),
                     expectedUid: owner);
-                if (!mine()) return;
+                if (!mine()) return _forget(owner);
                 if (!ok) {
                   // Keep the sheet and what was typed; say it (recorded).
                   saving = false;

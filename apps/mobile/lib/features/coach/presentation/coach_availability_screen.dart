@@ -339,7 +339,8 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
     final done =
         notified ? 'Session cancelled — client notified.' : 'Session cancelled.';
     if (slotError == null) {
-      messenger.showSnackBar(SnackBar(content: Text(done)));
+      _endWithAccount(messenger, owner,
+          messenger.showSnackBar(SnackBar(content: Text(done))));
     } else {
       _sayReopenFailed(messenger, slotId!, slotError, owner,
           lead: '${done.substring(0, done.length - 1)}. ');
@@ -548,7 +549,8 @@ class _CoachAvailabilityScreenState extends State<CoachAvailabilityScreen> {
               ],
             ),
             if (_loading && !held) Positioned(top: 0, left: 0, right: 0,
-              child: Semantics(container: true, liveRegion: true,
+              // (Not a live region: it was announced on every refresh.)
+              child: Semantics(container: true,
                 label: 'Refreshing your availability', excludeSemantics: true,
                 child: const LinearProgressIndicator(
                   minHeight: 3, color: _brand, backgroundColor: Colors.transparent))),

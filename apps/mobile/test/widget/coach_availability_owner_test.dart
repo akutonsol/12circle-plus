@@ -577,7 +577,10 @@ void main() {
       await settleReal(t);
       expect(find.text('Publish Slot'), findsNothing, reason: 'premise: saved');
       expect(cue, findsOneWidget, reason: 'the new slot is on its way, unsaid');
-      expect(t.getSemantics(cue).getSemanticsData().flagsCollection.isLiveRegion, isTrue);
+      // Round 4: named, and not announced at every refresh. (Fails on 054bbfc.)
+      final said = t.getSemantics(cue).getSemanticsData();
+      expect(said.label, 'Refreshing your availability');
+      expect(said.flagsCollection.isLiveRegion, isFalse);
       expect(places(), before, reason: '1x: nothing moved');
       server.tables['coach_availability']!.add(slot(memberA, 'nutrition_review'));
       again.complete();

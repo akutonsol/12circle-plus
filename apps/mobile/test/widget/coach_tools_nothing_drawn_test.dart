@@ -3,11 +3,13 @@ import 'package:circle_fitness/features/coach/presentation/coach_availability_sc
 import 'package:circle_fitness/features/coach/presentation/coach_pricing_sheet.dart';
 import 'package:circle_fitness/features/exercise_database/presentation/create_exercise_screen.dart';
 import 'package:circle_fitness/features/exercise_database/presentation/widgets/coach_focus_section.dart';
+import 'package:circle_fitness/features/exercise_database/presentation/widgets/coach_voice.dart';
 import 'package:circle_fitness/features/profile/presentation/integrations_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 
 import '../support/coach_tools_server.dart';
 import '../support/fake_coach_audio.dart';
@@ -100,6 +102,19 @@ void main() {
   Iterable<String> changed() => reported
       .where((f) => '${f.error}'.contains('signed-in account changed'))
       .map((f) => f.origin);
+
+  /// [event] is on the auth stream, not only in the client.
+  Future<void> heardBy(WidgetTester t, Future<void> Function() event) async {
+    final heard = <String?>[];
+    final sub = Supabase.instance.client.auth.onAuthStateChange
+        .listen((s) => heard.add(s.session?.accessToken));
+    await settleNoFrame(t); // (what it replays to a new listener)
+    heard.clear();
+    await event();
+    expect(heard, [Supabase.instance.client.auth.currentSession?.accessToken],
+        reason: 'premise: the event arrived');
+    await t.runAsync(sub.cancel);
+  }
 
   const focusPage = Scaffold(
       body: SingleChildScrollView(child: CoachFocusSection(exerciseId: 'ex-1')));
@@ -445,7 +460,7 @@ void main() {
         await settleNoFrame(t);
         await settleReal(t);
         expect(server.writes.length, writes, reason: "A's exercise was published by B");
-        expect(changed(), answer == 'Back to Library' ? isEmpty : ['CreateExerciseScreen._save']);
+        expect(changed(), answer == 'Back to Library' ? isEmpty : ['CreateExerciseScreen._submitForGlobal']);
         pageIsThere();
         await unmountAll(t);
       }
@@ -547,6 +562,56 @@ void main() {
       expect(server.writes.last.query, contains('id=eq.slot-1'));
       expect(server.writes.last.who, memberA);
       expect(find.text('Slot reopened.'), findsOneWidget);
+      await unmountAll(t);
+    });
+
+    // Round 4 (R3-2). Fails on 054bbfc: a timed message, but one that stays for
+    // the next account (longer when it waits behind another).
+    Future<void> leaveWithCancelled(WidgetTester t, int messages) async {
+      const said = 'Session cancelled — client notified.';
+      final own = [
+        for (var i = 0; i < messages; i++)
+          {...server.tables['coaching_calls']!.first, 'id': 'call-$i', 'availability_slot_id': null},
+      ];
+      server.tables['coaching_calls'] = [...own];
+      await open(t, const CoachAvailabilityScreen());
+      final notices = server.hold((s) => s.table == 'notifications');
+      for (var i = 0; i < messages; i++) {
+        await t.tap(find.widgetWithText(TextButton, 'Cancel').first);
+        await settleReal(t);
+        await t.tap(find.text('Cancel session'));
+        await settleReal(t);
+      }
+      expect(server.to('notifications').length, messages, reason: 'premise: on their way');
+      await t.tap(find.byTooltip('Back'));
+      await settleReal(t, rounds: 10);
+      expect(under, findsNothing, reason: 'premise: the page is left');
+      notices.complete();
+      await settleReal(t);
+      expect(find.text(said), findsOneWidget, reason: 'premise');
+    }
+
+    for (final (to, messages) in [(memberB, 1), (null, 1), (memberB, 2)]) {
+      testWidgets('"Session cancelled" ×$messages after the page is left goes with its '
+          'account (${to == null ? 'signed out' : 'A→B'})', (t) async {
+        await leaveWithCancelled(t, messages);
+        await switchNoFrame(t, to);
+        await t.pump();
+        await settleReal(t, rounds: 2);
+        expect(find.byType(SnackBar), findsNothing,
+            reason: "A's action is told to the next account");
+        await unmountAll(t);
+      });
+    }
+
+    testWidgets('control: "Session cancelled" stays through the same coach\'s token refresh',
+        (t) async {
+      await leaveWithCancelled(t, 1);
+      await heardBy(t, () => refreshNoFrame(t));
+      await t.pump();
+      await settleReal(t, rounds: 2);
+      expect(find.text('Session cancelled — client notified.'), findsOneWidget);
+      expect(reported, isEmpty);
       await unmountAll(t);
     });
 
@@ -771,7 +836,9 @@ void main() {
       await settleNoFrame(t);
       await settleReal(t);
       expect(routes.pushed, before);
-      expect(changed(), ['CreateExerciseScreen._save']);
+      // Round 4: not recorded as a save. (Fails on 054bbfc; so do the two above
+      // and below for the same reason.)
+      expect(changed(), ['CreateExerciseScreen._importJson']);
       pageIsThere();
       await unmountAll(t);
     });
@@ -794,7 +861,7 @@ void main() {
       await settleReal(t);
       expect(t.takeException(), isNull);
       expect(picker.calls, isEmpty);
-      expect(changed(), ['CreateExerciseScreen._save', 'CreateExerciseScreen._save']);
+      expect(changed(), ['CreateExerciseScreen._pickMedia', 'CreateExerciseScreen._pickMedia']);
       expect(find.text('Tap to add image'), findsOneWidget);
       pageIsThere();
       await unmountAll(t);
@@ -847,6 +914,189 @@ void main() {
           what: 'saved');
       expect(server.writes.map((s) => s.who).toSet(), {memberA});
       expect(reported, isEmpty);
+      await unmountAll(t);
+    });
+  });
+
+  // Round 4 (R3-1) · the section's re-read goes out as whoever is signed in. With
+  // nothing drawn it was kept under A's key: A, back before a frame, was shown
+  // B's overlay as "YOUR COACHING", and Edit + Save wrote it over A's.
+  group("A, B and A back with nothing drawn: A's coaching is A's", () {
+    Iterable<Sent> reads() =>
+        server.log.where((s) => !s.isWrite && s.table == 'coach_exercise_media');
+
+    Future<void> edit(WidgetTester t) async {
+      await t.tap(find.text('Edit'));
+      await settleReal(t);
+      expect(find.text('Coach this exercise'), findsOneWidget, reason: 'premise');
+    }
+
+    /// What A is shown, offered to edit, and saves — in that order: a Save
+    /// closes the sheet and reads again, which hides what it saved.
+    Future<void> isAs(WidgetTester t, String focus, {required int from}) async {
+      expect(find.text('B hips'), findsNothing, reason: "B's overlay, drawn to A");
+      expect(find.textContaining('B note'), findsNothing);
+      expect(find.text(focus), findsOneWidget);
+      expect(find.text('YOUR COACHING'), findsOneWidget);
+      expect(reads().skip(from).where((s) => s.who == memberB), isEmpty,
+          reason: "A's re-read, sent as B");
+      await edit(t);
+      final typed = [for (final f in t.widgetList<TextField>(find.byType(TextField)))
+        f.controller!.text];
+      expect(typed, containsAllInOrder([focus, 'A note']));
+      expect(typed.join(), isNot(contains('B ')));
+      final writes = server.writes.length;
+      await t.tap(find.text('Save coaching'));
+      await settleReal(t);
+      final saved = server.writes.skip(writes).single;
+      expect(saved.who, memberA);
+      expect(saved.body, allOf(contains(focus), contains('A note')));
+      expect(saved.body, isNot(contains('B ')));
+    }
+
+    /// What the server holds for A from now on.
+    void aNow(String focus) =>
+        server.tables['coach_exercise_media']!.first['focus'] = [focus];
+
+    // What is answered while B is signed in. The first two fail on 054bbfc with
+    // B's overlay on A's screen; the last two with A's own from BEFORE the
+    // change (and Edit offered that to be saved again).
+    for (final (name, act, waitsFor) in <(String, String, bool Function(Sent))>[
+      // (The removal reads the row first: the re-read is the one after its PATCH.)
+      ('the re-read after removing the note', 'remove',
+        (s) => !s.isWrite && s.table == 'coach_exercise_media' &&
+            server.log.any((l) => l.method == 'PATCH')),
+      ('the re-read after a new note', 'record',
+        (s) => !s.isWrite && s.table == 'coach_exercise_media'),
+      ('the removal itself', 'remove', (s) => s.method == 'PATCH'),
+      ('the save itself', 'save',
+        (s) => s.method == 'POST' && s.table == 'coach_exercise_media'),
+    ]) {
+      for (final via in [memberB, memberA]) {
+        testWidgets(via == memberB ? name : 'control: $name, A with a new token', (t) async {
+          await open(t, focusPage);
+          await edit(t);
+          final wait = server.hold(waitsFor);
+          switch (act) {
+            case 'remove':
+              await t.tap(find.byTooltip('Remove your voice note'));
+            case 'record':
+              t.widget<CoachVoiceRecorder>(find.byType(CoachVoiceRecorder)).onRecorded();
+            default:
+              await t.tap(find.text('Save coaching'));
+          }
+          await settleReal(t);
+          expect(waitsFor(server.log.last), isTrue, reason: 'premise: it waits');
+          final from = reads().length;
+          server.held.clear(); // (only that one waits)
+          aNow('A brace, later');
+          via == memberB
+              ? await switchNoFrame(t, memberB)
+              : await heardBy(t, () => refreshNoFrame(t));
+          wait.complete();
+          await settleNoFrame(t);
+          if (via == memberB) await switchNoFrame(t, memberA);
+          await settleReal(t);
+          if (via == memberA && act != 'save') {
+            expect(find.text('Coach this exercise'), findsOneWidget, reason: 'it stays');
+            Navigator.of(t.element(find.text('Coach this exercise'))).pop();
+            await settleReal(t, rounds: 8);
+          }
+          await isAs(t, 'A brace, later', from: from);
+          expect(reported, isEmpty);
+          await unmountAll(t);
+        });
+      }
+    }
+
+    for (final via in [memberB, memberA]) {
+      testWidgets(via == memberB
+          ? 'Try again, delivered while B is signed in'
+          : 'control: Try again, A with a new token', (t) async {
+        await open(t, focusPage);
+        await edit(t);
+        server.failing = (s) => !s.isWrite && s.table == 'coach_exercise_media';
+        await t.tap(find.text('Save coaching'));
+        await settleReal(t);
+        server.failing = (_) => false;
+        final retry = tapOf(t, 'Try again');
+        final from = reads().length;
+        via == memberB
+            ? await switchNoFrame(t, memberB)
+            : await heardBy(t, () => refreshNoFrame(t));
+        retry();
+        await settleNoFrame(t);
+        expect(reads().length, via == memberB ? from : from + 1);
+        if (via == memberB) await switchNoFrame(t, memberA);
+        await settleReal(t);
+        await isAs(t, 'A brace', from: from);
+        await unmountAll(t);
+      });
+
+      testWidgets(via == memberB
+          ? "a client's Try again, delivered while B is signed in"
+          : "control: a client's Try again, A with a new token", (t) async {
+        server.tables['user_profiles'] = [
+          for (final u in [memberA, memberB]) {'id': u, 'role': 'client'},
+        ];
+        server.answers['resolve_exercise_media'] =
+            {'has_coach_overlay': true, 'focus': ['For A'], 'coach_name': 'Coach Ana'};
+        server.failing = (s) => s.table == 'resolve_exercise_media';
+        await open(t, focusPage);
+        server.failing = (_) => false;
+        final retry = tapOf(t, 'Try again');
+        via == memberB
+            ? await switchNoFrame(t, memberB)
+            : await heardBy(t, () => refreshNoFrame(t));
+        retry();
+        await settleNoFrame(t);
+        if (via == memberB) await switchNoFrame(t, memberA);
+        await settleReal(t);
+        expect(server.to('resolve_exercise_media').map((s) => s.who).toSet(), {memberA},
+            reason: "A's re-read, sent as B");
+        expect(find.text('For A'), findsOneWidget);
+        expect(find.textContaining("Couldn't"), findsNothing);
+        await unmountAll(t);
+      });
+    }
+
+    // The answer to a read that A sent, landing while B is signed in: it is not
+    // kept, and the section is not left waiting for it either. Fails on 054bbfc:
+    // A, back, is shown what that read said (a failure, or the older cues).
+    for (final fails in [false, true]) {
+      testWidgets("A's first read ${fails ? 'fails' : 'answers'} while B is signed in: "
+          'A reads again', (t) async {
+        final first = server.hold(
+            (s) => !s.isWrite && s.table == 'coach_exercise_media');
+        if (fails) server.failing = (s) => s.table == 'coach_exercise_media';
+        await open(t, focusPage);
+        expect(reads().single.who, memberA, reason: 'premise');
+        server.held.clear();
+        server.failing = (_) => false;
+        aNow('A brace, later');
+        await switchNoFrame(t, memberB);
+        first.complete();
+        await settleNoFrame(t);
+        await switchNoFrame(t, memberA);
+        await settleReal(t);
+        expect(find.textContaining("Couldn't"), findsNothing);
+        await isAs(t, 'A brace, later', from: 0);
+        await unmountAll(t);
+      });
+    }
+
+    testWidgets("with a frame for B in between, B is shown B's own and reads once",
+        (t) async {
+      await open(t, focusPage);
+      await edit(t);
+      final wait = server.hold((s) => s.method == 'POST');
+      await t.tap(find.text('Save coaching'));
+      await settleReal(t);
+      await switchTo(t, memberB);
+      wait.complete(); // A's save: it does not make B's section read again
+      await settleReal(t);
+      expect(find.text('B hips'), findsOneWidget);
+      expect(reads().where((s) => s.who == memberB), hasLength(1));
       await unmountAll(t);
     });
   });

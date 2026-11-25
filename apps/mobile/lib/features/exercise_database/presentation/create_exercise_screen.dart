@@ -245,11 +245,11 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   /// [form] is the one shown, and its coach is signed in.
   bool _still(int form) => form == _form && _uid == _owner;
 
-  /// True when [form] is no longer the signed-in coach's: recorded, the form
-  /// is cleared, and the caller sends nothing.
-  bool _accountChanged(int form, String what) {
+  /// True when [form] is no longer the signed-in coach's: recorded as
+  /// [method]'s, the form is cleared, and the caller sends nothing.
+  bool _accountChanged(String method, int form, String what) {
     if (_still(form)) return false;
-    reportError('CreateExerciseScreen._save',
+    reportError('CreateExerciseScreen.$method',
         StateError('$what: the signed-in account changed'));
     _followAccount();
     return true;
@@ -629,7 +629,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
 
   /// Paste an exercise JSON (e.g. AI-generated) to prefill the form.
   Future<void> _importJson(int form) async {
-    if (_accountChanged(form, 'Importing an exercise')) return;
+    if (_accountChanged('_importJson', form, 'Importing an exercise')) return;
     final ctrl = TextEditingController();
     final owner = _owner;
     final ok = await showDialog<bool>(
@@ -730,7 +730,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   Future<(XFile, Uint8List)?> _pickMedia(
       int form, String what, Future<XFile?> Function() open) async {
     if (_picking) return null;
-    if (_accountChanged(form, 'Choosing media')) return null;
+    if (_accountChanged('_pickMedia', form, 'Choosing media')) return null;
     _picking = true;
     try {
       final XFile? file;
@@ -812,7 +812,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   /// [form] is the one the tapped Save was drawn on: its own coach's, at every
   /// step below (P0-FL-59d).
   Future<void> _save(int form) async {
-    if (_accountChanged(form, 'Saving an exercise')) return;
+    if (_accountChanged('_save', form, 'Saving an exercise')) return;
     // The SnackBar's "Save again" can be tapped while a save is running; the
     // Save button is disabled then, and so is this.
     if (_saving) return;
@@ -884,7 +884,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
       id = await ref.read(myExercisesNotifierProvider.notifier).create(fields: fields);
       // (Null: the service recorded why.)
       if (id == null && !_still(form)) return _followAccount();
-      if (id != null && _accountChanged(form, 'Exercise details')) return;
+      if (id != null && _accountChanged('_save', form, 'Exercise details')) return;
       if (id != null) {
         // B1 · the row exists now: from here on this screen edits it. A later
         // Save (after a media/relations failure) updates THIS row instead of
@@ -924,7 +924,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
           contentStatus: _editingContentStatus,
           instructions: _listFrom(_instructionCtrls),
         )) {
-      if (_accountChanged(form, 'Submitting for review')) return;
+      if (_accountChanged('_save', form, 'Submitting for review')) return;
       if (await svc.reviewExercise(id, 'under_review')) {
         if (_still(form)) _editingContentStatus = 'under_review';
       } else {
@@ -954,7 +954,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     if (id != null) {
       // Upload picked image + video files.
       String? imageUrl;
-      if (_accountChanged(form, 'Exercise media')) return;
+      if (_accountChanged('_save', form, 'Exercise media')) return;
       if (_imageBytes != null) {
         svc.lastError = null;
         imageUrl = await svc.uploadImage(_imageBytes!, _imageExt, id);
@@ -964,7 +964,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
       }
       final uploadedVariants = List<VideoVariant>.from(variants);
       for (int i = 0; i < _videoEntries.length; i++) {
-        if (_accountChanged(form, 'Exercise media')) return;
+        if (_accountChanged('_save', form, 'Exercise media')) return;
         final entry = _videoEntries[i];
         if (entry.bytes != null) {
           svc.lastError = null;
@@ -978,7 +978,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
         }
       }
 
-      if (_accountChanged(form, 'Exercise media')) return;
+      if (_accountChanged('_save', form, 'Exercise media')) return;
       if (mediaOnly) {
         // Coach attaching media to an admin/platform exercise (privileged RPC).
         svc.lastError = null;
@@ -995,7 +995,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
             mediaStepFailed('saveImageUrl', "the image couldn't be attached");
           }
         }
-        if (_accountChanged(form, 'Exercise videos')) return;
+        if (_accountChanged('_save', form, 'Exercise videos')) return;
         if (uploadedVariants.length != variants.length || editingExisting) {
           if (!await svc.updateExercise(id, {
             'video_variants': uploadedVariants.map((v) => v.toJson()).toList(),
@@ -1003,7 +1003,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
             mediaStepFailed('saveVideoVariants', "the videos couldn't be attached");
           }
         }
-        if (_accountChanged(form, 'Exercise muscles and equipment')) return;
+        if (_accountChanged('_save', form, 'Exercise muscles and equipment')) return;
         svc.lastError = null;
         if (!await svc.syncRelations(id, _relationsJson())) {
           mediaStepFailed('syncRelations',
@@ -1168,7 +1168,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
             TextButton(
               onPressed: () {
                 _popRoute(dctx);
-                if (_accountChanged(form, 'Submitting an exercise')) return;
+                if (_accountChanged('_submitForGlobal', form, 'Submitting an exercise')) return;
                 ref.read(myExercisesNotifierProvider.notifier).submitForGlobal(savedId).then((ok) {
                   if (!mounted || !_still(form)) return;
                   // The result was ignored: a submission that failed still said
