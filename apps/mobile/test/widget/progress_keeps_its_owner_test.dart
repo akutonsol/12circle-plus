@@ -25,6 +25,9 @@ import '../support/fake_image_picker.dart';
 import '../support/member_switch_server.dart';
 import '../support/pump_until.dart';
 
+/// The product's words for it (Julia's copy to confirm).
+const _gone = 'This photo is no longer available.';
+
 void main() {
   final server = MemberSwitchServer();
   final picker = FakeImagePicker();
@@ -590,8 +593,7 @@ void main() {
       testWidgets('is said to be gone, recorded; there is no Try again for it, '
           'and it is not "Today" from another day', (t) async {
         await open(t, tab: 'Photos');
-        expect(find.text(progressPhotoMissingMessage), findsOneWidget);
-        expect(find.text('This photo is no longer available.'), findsOneWidget);
+        expect(find.text(_gone), findsOneWidget);
         expect(find.byType(SectionLoadFailure), findsNothing,
             reason: 'asking again cannot bring the file back');
         expect(find.text('Nov 22, 2026'), findsOneWidget);
@@ -599,11 +601,11 @@ void main() {
         expect(origins(), ['ProgressScreen.openPhoto']);
         await t.tap(find.byIcon(Icons.view_list_rounded));
         await settle(t);
-        expect(find.text(progressPhotoMissingMessage), findsOneWidget);
+        expect(find.text(_gone), findsOneWidget);
         await t.tap(find.text('Measurements'));
         await settle(t);
         expect(photos(t).where((u) => u.contains('gallery_1')), isEmpty);
-        expect(find.text(progressPhotoMissingMessage), findsOneWidget);
+        expect(find.text(_gone), findsOneWidget);
         await close(t);
       });
 
@@ -618,12 +620,12 @@ void main() {
         });
         await open(t, tab: 'Photos');
         expect(find.byType(SectionLoadFailure), findsOneWidget);
-        expect(find.text(progressPhotoMissingMessage), findsOneWidget);
+        expect(find.text(_gone), findsOneWidget);
         server.unsignable.clear();
         await t.tap(find.widgetWithText(TextButton, 'Try again'));
         await settle(t);
         expect(find.byType(SectionLoadFailure), findsNothing);
-        expect(find.text(progressPhotoMissingMessage), findsOneWidget);
+        expect(find.text(_gone), findsOneWidget);
         await close(t);
       });
 
@@ -637,7 +639,7 @@ void main() {
           for (final where in ['Photos', 'Measurements']) {
             await t.tap(find.text(where).first, warnIfMissed: false);
             await settle(t);
-            final text = find.text(progressPhotoMissingMessage);
+            final text = find.text(_gone);
             expect(text, findsOneWidget, reason: where);
             expectWhole(t, text, scale);
           }

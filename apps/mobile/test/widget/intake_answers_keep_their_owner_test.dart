@@ -763,6 +763,71 @@ void main() {
     });
   });
 
+  group('the Done page', () {
+    Future<void> finish(WidgetTester t) async {
+      members(a: _finalPage);
+      await open(t);
+      await t.tap(find.text('Enter 12 Circle'));
+      await settle(t);
+      expect(find.text("That's everything we needed."), findsOneWidget,
+          reason: 'premise');
+      server.seen.clear();
+    }
+
+    testWidgets('hiding the tab on it does not mark them incomplete again',
+        (t) async {
+      await finish(t);
+      await hide(t);
+      expect(server.writes(), isEmpty,
+          reason: '${server.writes().toList()}');
+      await close(t);
+    });
+
+    testWidgets('signed out and back in on it: still done; hiding the tab '
+        'does not mark them incomplete', (t) async {
+      await finish(t);
+      await t.runAsync(signOut);
+      await settle(t);
+      await hide(t);
+      await switchTo(t, memberA);
+      await settle(t);
+      expect(find.text("That's everything we needed."), findsOneWidget);
+      await hide(t);
+      expect(server.writes(), isEmpty,
+          reason: '${server.writes().toList()}');
+      await close(t);
+    });
+
+    testWidgets("B signs in on it: B's own flow, not A's; A back: still done",
+        (t) async {
+      await finish(t);
+      await switchTo(t, memberB);
+      await settle(t);
+      expect(find.text("That's everything we needed."), findsNothing);
+      expect(find.text('Bob'), findsOneWidget);
+      await switchTo(t, memberA);
+      await settle(t);
+      expect(find.text("That's everything we needed."), findsOneWidget);
+      await hide(t);
+      expect(server.writes(), isEmpty);
+      await close(t);
+    });
+
+    testWidgets('hiding the tab while Finish is being saved sends no '
+        '"incomplete" after it', (t) async {
+      members(a: _finalPage);
+      await open(t);
+      final hold = server.holds['POST user_profiles:$memberA'] = Completer();
+      await t.tap(find.text('Enter 12 Circle'));
+      await settle(t, 2);
+      await hide(t);
+      expect(server.writes('user_profiles').map((w) => w.method), ['POST']);
+      hold.complete();
+      await settle(t);
+      await close(t);
+    });
+  });
+
   group('POSITIVE CONTROL: the same member', () {
     testWidgets('hiding the tab saves their answers to their row', (t) async {
       members();
@@ -816,71 +881,6 @@ void main() {
       expect(server.writes('generate_client_plan').single.who, memberA);
       expect(find.text("That's everything we needed."), findsOneWidget);
       await close(t);
-    });
-
-    group('the Done page', () {
-      Future<void> finish(WidgetTester t) async {
-        members(a: _finalPage);
-        await open(t);
-        await t.tap(find.text('Enter 12 Circle'));
-        await settle(t);
-        expect(find.text("That's everything we needed."), findsOneWidget,
-            reason: 'premise');
-        server.seen.clear();
-      }
-
-      testWidgets('hiding the tab on it does not mark them incomplete again',
-          (t) async {
-        await finish(t);
-        await hide(t);
-        expect(server.writes(), isEmpty,
-            reason: '${server.writes().toList()}');
-        await close(t);
-      });
-
-      testWidgets('signed out and back in on it: still done; hiding the tab '
-          'does not mark them incomplete', (t) async {
-        await finish(t);
-        await t.runAsync(signOut);
-        await settle(t);
-        await hide(t);
-        await switchTo(t, memberA);
-        await settle(t);
-        expect(find.text("That's everything we needed."), findsOneWidget);
-        await hide(t);
-        expect(server.writes(), isEmpty,
-            reason: '${server.writes().toList()}');
-        await close(t);
-      });
-
-      testWidgets("B signs in on it: B's own flow, not A's; A back: still done",
-          (t) async {
-        await finish(t);
-        await switchTo(t, memberB);
-        await settle(t);
-        expect(find.text("That's everything we needed."), findsNothing);
-        expect(find.text('Bob'), findsOneWidget);
-        await switchTo(t, memberA);
-        await settle(t);
-        expect(find.text("That's everything we needed."), findsOneWidget);
-        await hide(t);
-        expect(server.writes(), isEmpty);
-        await close(t);
-      });
-
-      testWidgets('hiding the tab while Finish is being saved sends no '
-          '"incomplete" after it', (t) async {
-        members(a: _finalPage);
-        await open(t);
-        final hold = server.holds['POST user_profiles:$memberA'] = Completer();
-        await t.tap(find.text('Enter 12 Circle'));
-        await settle(t, 2);
-        await hide(t);
-        expect(server.writes('user_profiles').map((w) => w.method), ['POST']);
-        hold.complete();
-        await settle(t);
-        await close(t);
-      });
     });
 
     testWidgets('NEGATIVE CONTROL: a member with no stored answers starts '

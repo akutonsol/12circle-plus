@@ -147,7 +147,9 @@ void main() {
         'already read: nothing is sent, recorded', (t) async {
       await open(t);
       await writePost(t);
-      final onPost = t.widget<CreatePostSheet>(find.byType(CreatePostSheet)).onPost;
+      // (dynamic: on 5f8b7f3 it answered nothing to wait for)
+      final dynamic onPost =
+          t.widget<CreatePostSheet>(find.byType(CreatePostSheet)).onPost;
       await switchTo(t, memberB);
       await noFrame(t);
       await t.runAsync(() async {
