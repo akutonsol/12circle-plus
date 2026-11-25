@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/exercise_database/presentation/widgets/coach_focus_section.dart';
 import 'package:circle_fitness/features/exercise_database/presentation/widgets/coach_voice.dart';
