@@ -89,6 +89,19 @@ void main() {
     await t.pump();
   }
 
+  Completer<void> holdToken() =>
+      _server.holds['POST token'] = Completer<void>();
+
+  /// Whatever a test that failed left unanswered: gotrue keeps waiting for a
+  /// token refresh, and so would every test after it.
+  void releaseHolds() {
+    for (final hold in _server.holds.values) {
+      if (!hold.isCompleted) hold.complete();
+    }
+  }
+
+  tearDown(releaseHolds);
+
   void expectBsOwnSession(String when) {
     expect(_auth.currentUser?.id, acctB, reason: when);
     expect(AccountServer.sub(_auth.currentSession!.accessToken), acctB);
@@ -118,6 +131,7 @@ void main() {
             await body(t);
             expect(t.takeException(), isNull);
           } finally {
+            releaseHolds();
             await unmountApp(t, _server);
           }
         });
@@ -259,7 +273,7 @@ void main() {
           await mountApp(t, as: acctB, at: '/forgot-password', overrides: [
             clientPlanProvider.overrideWith((ref) async => ClientPlan.coachGuided),
           ]);
-          final token = _server.holds['POST token'] = Completer<void>();
+          final token = holdToken();
           final gen = appContainer(t);
           final heard = <AuthState>[];
           final sub = _auth.onAuthStateChange.listen(heard.add);
@@ -275,7 +289,6 @@ void main() {
           expectBsOwnSession('before any frame');
           expect(_goesOut(heard), isEmpty,
               reason: 'told on, it would undo what the other tabs did since');
-          expect(_server.of('token'), isEmpty);
           expect(_stored.who, (acctB, acctB));
           expect(appContainer(t), same(gen));
 
@@ -283,8 +296,9 @@ void main() {
           await t.runAsync(leave);
           token.complete();
           await tick(t);
-          expect(_auth.currentUser?.id, then);
+          expect(_auth.currentUser?.id, then, reason: 'B came back');
           expect(_stored.who, then == null ? null : (then, then));
+          expect(_server.of('token'), isEmpty);
           await settleApp(t);
           final now = appContainer(t).read(accountGenerationProvider);
           expect((now.number, now.startedAs), (1, then));
@@ -357,14 +371,14 @@ void main() {
     ]) {
       testWidgets("B's own token has expired: B's user is put back with no request "
           'of ours, so $what is not undone by the answer', (t) async {
-        final token = _server.holds['POST token'] = Completer<void>();
+        final token = holdToken();
         await mixedOnExpiredToken(t);
-        expect(_server.of('token'), isEmpty);
         await t.runAsync(leave);
         token.complete();
         await tick(t);
-        expect(_auth.currentUser?.id, then);
+        expect(_auth.currentUser?.id, then, reason: 'B came back');
         expect(_stored.who, then == null ? null : (then, then));
+        expect(_server.of('token'), isEmpty);
         await end(t);
       });
     }
