@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../data/action_item_service.dart';
 import '../data/models/action_item.dart';
 import '../../nutrition/domain/nutrition_provider.dart' show readForMember;
@@ -14,14 +15,17 @@ final myActionItemsProvider = FutureProvider.autoDispose<List<ActionItem>>(
     (ref) => readForMember(
         ref, ref.watch(actionItemServiceProvider).getMyActionItems));
 
-/// Coach view: a given client's action items.
+/// Coach view: a given client's action items — those RLS shows the signed-in
+/// coach, so it follows who that is (P0-FL-59f).
 final clientActionItemsProvider =
     FutureProvider.family<List<ActionItem>, String>((ref, clientId) async {
+  ref.watch(currentUserProvider.select((u) => u?.id));
   return ref.watch(actionItemServiceProvider).getClientActionItems(clientId);
 });
 
 /// Completion stats for a client (coach dashboard).
 final actionCompletionProvider = FutureProvider.family<
     ({int assigned, int completed, double rate}), String>((ref, clientId) async {
+  ref.watch(currentUserProvider.select((u) => u?.id));
   return ref.watch(actionItemServiceProvider).completionStats(clientId);
 });
