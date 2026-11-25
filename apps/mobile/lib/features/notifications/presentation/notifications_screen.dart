@@ -24,18 +24,16 @@ class _C {
   static const errCont     = Color(0xFF93000A);
 }
 
-/// Runs [change] (one of the notifier's three) and says it when the server did
-/// not take it — to the member who asked, not to whoever signed in meanwhile
-/// (P0-FL-60c).
+/// Runs [change] (one of [notifier]'s three) and says it when the server did
+/// not take it — to the member whose list the control was drawn for, not to
+/// whoever is signed in by the tap or by the answer (P0-FL-60c). [notifier] is
+/// the one the control was BUILT with: read at the tap, it would be the next
+/// member's, and act for them.
 Future<bool> _saySo(BuildContext context, String doWhat,
-    AsyncValueGetter<bool> change) async {
-  final c = ProviderScope.containerOf(context, listen: false);
+    NotificationsNotifier notifier, AsyncValueGetter<bool> change) async {
   final messenger = ScaffoldMessenger.maybeOf(context);
-  String? uid() => Supabase.instance.client.auth.currentUser?.id;
-  final owner = uid();
-  final notifier = c.read(notificationsProvider.notifier);
   final ok = await change();
-  if (!ok && uid() == owner) {
+  if (!ok && Supabase.instance.client.auth.currentUser?.id == notifier.owner) {
     messenger?.showSnackBar(
         SnackBar(content: Text(couldntMessage(doWhat, notifier.lastError))));
   }
@@ -60,9 +58,22 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
   //
   // The board draws marking-read as something the client does, so it is.
 
+  /// The list whose "Mark all read" is on its way; that one takes no second tap.
+  NotificationsNotifier? _markingAll;
+
+  Future<void> _markAll(NotificationsNotifier notifier) async {
+    if (identical(_markingAll, notifier)) return;
+    setState(() => _markingAll = notifier);
+    await _saySo(context, 'mark them read', notifier, notifier.markAllRead);
+    if (!mounted || !identical(_markingAll, notifier)) return;
+    setState(() => _markingAll = null);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(notificationsProvider);
+    final notifier = ref.watch(notificationsProvider.notifier);
+    final marking = identical(_markingAll, notifier);
     final topPad = MediaQuery.of(context).padding.top;
 
     return Scaffold(
@@ -110,17 +121,19 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
                 style: TextStyle(color: _C.onSurface, fontSize: 22,
                   fontWeight: FontWeight.w700)),
               const Spacer(),
-              GestureDetector(
-                onTap: () => _saySo(context, 'mark them read', ref.read(notificationsProvider.notifier).markAllRead),
+              NamedIconButton(
+                label: marking ? 'Marking all read' : markAllReadLabel,
+                onTap: marking ? null : () => _markAll(notifier),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                   decoration: BoxDecoration(
                     color: _C.brand.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(color: _C.brand.withValues(alpha: 0.25))),
-                  child: const Text(markAllReadLabel,
-                    style: TextStyle(color: _C.primary, fontSize: 11,
-                      fontWeight: FontWeight.w600)))),
+                  child: Text(markAllReadLabel,
+                    style: TextStyle(
+                      color: _C.primary.withValues(alpha: marking ? 0.5 : 1),
+                      fontSize: 11, fontWeight: FontWeight.w600)))),
             ]),
           ),
 
@@ -134,15 +147,15 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
               error: (e, _) => Center(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(20),
-                  child: _LoadFailure(state: state))),
+                  child: _LoadFailure(state: state, notifier: notifier))),
               data: (list) => Column(children: [
                 if (state.hasError)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: _LoadFailure(state: state)),
+                    child: _LoadFailure(state: state, notifier: notifier)),
                 Expanded(child: list.isEmpty
                     ? _EmptyState()
-                    : _NotificationList(list: list)),
+                    : _NotificationList(list: list, notifier: notifier)),
               ]),
             ),
           ),
@@ -152,32 +165,34 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
   }
 }
 
-class _LoadFailure extends ConsumerWidget {
+class _LoadFailure extends StatelessWidget {
   final AsyncValue<List<AppNotification>> state;
-  const _LoadFailure({required this.state});
+  final NotificationsNotifier notifier;
+  const _LoadFailure({required this.state, required this.notifier});
   @override
-  Widget build(BuildContext context, WidgetRef ref) => SectionLoadFailure(
+  Widget build(BuildContext context) => SectionLoadFailure(
         what: state.hasValue ? 'your latest notifications' : 'your notifications',
         error: state.error,
         busy: state.isLoading,
-        onRetry: () => ref.read(notificationsProvider.notifier).refresh(),
+        onRetry: notifier.refresh,
         accent: _C.primary,
         textColor: _C.onSurface,
         mutedColor: _C.onSurfVar);
 }
 
 // ── Notification List ─────────────────────────────────────────────────────────
-class _NotificationList extends ConsumerWidget {
+class _NotificationList extends StatelessWidget {
   final List<AppNotification> list;
-  const _NotificationList({required this.list});
+  final NotificationsNotifier notifier;
+  const _NotificationList({required this.list, required this.notifier});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final groups = _groupByDate(list);
     return RefreshIndicator(
       color: _C.primary,
       backgroundColor: _C.surfCont,
-      onRefresh: () => ref.read(notificationsProvider.notifier).refresh(),
+      onRefresh: notifier.refresh,
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
         itemCount: _countItems(groups),
@@ -188,8 +203,8 @@ class _NotificationList extends ConsumerWidget {
           return Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: _NotificationCard(notification: n,
-              onTap: () => _saySo(context, 'mark that read', () => ref.read(notificationsProvider.notifier).markRead(n.id)),
-              onDismiss: () => _saySo(context, 'delete that', () => ref.read(notificationsProvider.notifier).delete(n.id))));
+              onTap: () => _saySo(context, 'mark that read', notifier, () => notifier.markRead(n.id)),
+              onDismiss: () => _saySo(context, 'delete that', notifier, () => notifier.delete(n.id))));
         },
       ),
     );

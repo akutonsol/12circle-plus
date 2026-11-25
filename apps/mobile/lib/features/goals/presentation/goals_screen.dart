@@ -1,10 +1,12 @@
 import '../../../core/observability/app_failure.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/theme/app_background.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
+import '../data/goal_service.dart';
 import '../data/models/goal.dart';
 import '../domain/goal_provider.dart';
 import '../../../core/widgets/back_leading.dart';
@@ -17,9 +19,15 @@ const goalActionFailedMessage =
 /// The signed-in account, by id: a token refresh is the same member.
 final _goalsUid = currentUserProvider.select((u) => u?.id);
 
-/// Whether [owner] is still signed in, asked after a write came back. False
-/// too when the app's providers went with the account in the meantime.
+/// Whether [owner] — the account a control was built for — is still signed in:
+/// asked at the tap, and again after a write came back. False too when the
+/// app's providers went with the account in the meantime.
 bool _stillFor(ProviderContainer c, String? owner) {
+  // The auth client first: the provider hears of a change a moment later.
+  if (owner != null &&
+      Supabase.instance.client.auth.currentUser?.id != owner) {
+    return false;
+  }
   try {
     return c.read(_goalsUid) == owner;
   } on StateError {
@@ -42,14 +50,17 @@ class GoalsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final goalsAsync = ref.watch(myGoalsProvider);
     final uid = ref.watch(_goalsUid);
-    // P0-FL-60c · what was read stays on screen while it is read again, and
-    // when that fails — but only for the member it was read for.
-    final List<Goal>? last =
-        goalsAsync.hasValue ? goalsAsync.requireValue : null;
-    final kept = last != null &&
-        last.isNotEmpty &&
-        uid != null &&
-        last.every((g) => g.clientId == uid);
+    // P0-FL-60c · every state of goalsOfProvider(uid) is uid's: what was read
+    // stays on screen while it is read again, and when that fails.
+    void reread() => ref.invalidate(goalsOfProvider(uid));
+    final failure = goalsAsync.hasError
+        ? SectionLoadFailure(
+            what: goalsAsync.hasValue ? 'your latest goals' : 'your goals',
+            error: goalsAsync.error,
+            busy: goalsAsync.isLoading,
+            onRetry: reread,
+          )
+        : null;
     return AppGradientBackground(
       child: Scaffold(
       backgroundColor: Colors.transparent,
@@ -63,35 +74,37 @@ class GoalsScreen extends ConsumerWidget {
       ),
       floatingActionButton: FloatingActionButton.extended(
         backgroundColor: AppColors.purple,
-        onPressed: () => _showAddGoal(context),
+        onPressed: () => _showAddGoal(context, uid),
         icon: const Icon(Icons.add, color: Colors.white),
         label: const Text('New Goal', style: TextStyle(color: Colors.white)),
       ),
       body: goalsAsync.when(
-        skipLoadingOnReload: kept,
-        skipError: kept,
+        skipLoadingOnReload: true,
+        skipError: true,
         loading: () => const Center(
             child: CircularProgressIndicator(color: AppColors.purple)),
-        error: (_, __) => const Center(
-            child: Text('Could not load goals',
-                style: TextStyle(color: AppColors.textTertiary))),
+        error: (_, __) => Center(
+            child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20), child: failure)),
         data: (goals) {
-          if (goals.isEmpty) return const _Empty();
+          if (goals.isEmpty) {
+            return Column(children: [
+              if (failure != null)
+                Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: failure),
+              const Expanded(child: _Empty()),
+            ]);
+          }
           final active = goals.where((g) => !g.isCompleted).toList();
           final done = goals.where((g) => g.isCompleted).toList();
           return RefreshIndicator(
             color: AppColors.purple,
-            onRefresh: () async => ref.invalidate(myGoalsProvider),
+            onRefresh: () async => reread(),
             child: ListView(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 96),
               children: [
-                if (goalsAsync.hasError)
-                  SectionLoadFailure(
-                    what: 'your latest goals',
-                    error: goalsAsync.error,
-                    busy: goalsAsync.isLoading,
-                    onRetry: () => ref.invalidate(myGoalsProvider),
-                  ),
+                if (failure != null) failure,
                 if (active.isNotEmpty) ...[
                   const _Label('Active'),
                   ...active.map((g) => _GoalCard(goal: g, owner: uid)),
@@ -167,7 +180,7 @@ class _GoalCard extends ConsumerWidget {
                 // The card can go while the write is in flight, its ref with it.
                 final c = ProviderScope.containerOf(context, listen: false);
                 final messenger = ScaffoldMessenger.maybeOf(context);
-                if (c.read(_goalsUid) != owner) {
+                if (!_stillFor(c, owner)) {
                   reportError('GoalsScreen.$v',
                       StateError('goal $v: the signed-in account changed'),
                       StackTrace.current);
@@ -179,17 +192,19 @@ class _GoalCard extends ConsumerWidget {
                 }
                 try {
                   if (v == 'complete') {
-                    await c.read(goalServiceProvider).complete(goal.id);
+                    await c.read(goalServiceProvider).completeFor(owner, goal.id);
                   } else if (v == 'delete') {
-                    await c.read(goalServiceProvider).deleteGoal(goal.id);
+                    await c.read(goalServiceProvider).deleteGoalFor(owner, goal.id);
                   }
-                  if (_stillFor(c, owner)) c.invalidate(myGoalsProvider);
+                  if (_stillFor(c, owner)) c.invalidate(goalsOfProvider(owner));
                 } catch (e, s) {
                   reportError('GoalsScreen.$v', e, s);
                   // Not to whoever signed in meanwhile.
                   if (!_stillFor(c, owner)) return;
                   messenger?.showSnackBar(SnackBar(
-                      content: Text(couldntMessage('update your goal', e))));
+                      content: Text(couldntMessage(
+                          v == 'delete' ? 'delete your goal' : 'update your goal',
+                          e))));
                 }
               },
               itemBuilder: (_) => const [
@@ -234,7 +249,9 @@ class _GoalCard extends ConsumerWidget {
 
   Future<void> _showUpdate(BuildContext context) => showDialog<void>(
         context: context,
-        builder: (_) => _UpdateProgressDialog(goal: goal, owner: owner),
+        builder: (_) => _OwnersOnly(
+            owner: owner,
+            child: _UpdateProgressDialog(goal: goal, owner: owner)),
       );
 }
 
@@ -272,14 +289,6 @@ class _UpdateProgressDialogState extends ConsumerState<_UpdateProgressDialog> {
     final c = ProviderScope.containerOf(context, listen: false);
     final messenger = ScaffoldMessenger.maybeOf(context);
     final owner = widget.owner;
-    if (c.read(_goalsUid) != owner) {
-      reportError(
-          'GoalsScreen.update',
-          StateError('goal update: the signed-in account changed'),
-          StackTrace.current);
-      _leave();
-      return;
-    }
     setState(() {
       _saving = true;
       _failure = null;
@@ -289,13 +298,13 @@ class _UpdateProgressDialogState extends ConsumerState<_UpdateProgressDialog> {
     try {
       saved = await c
           .read(goalServiceProvider)
-          .updateProgress(widget.goal.id, val);
+          .updateProgressFor(owner, widget.goal.id, val);
     } catch (e) {
       error = e; // recorded by the service
     }
     // Not to whoever signed in meanwhile.
     if (!_stillFor(c, owner)) return;
-    c.invalidate(myGoalsProvider);
+    c.invalidate(goalsOfProvider(owner));
     if (saved) {
       if (mounted) Navigator.pop(context);
       return;
@@ -311,17 +320,8 @@ class _UpdateProgressDialogState extends ConsumerState<_UpdateProgressDialog> {
     });
   }
 
-  /// Goes with the member it was opened for, at once and silently.
-  void _leave() {
-    _ctrl.clear();
-    _removeRoute(context);
-  }
-
   @override
   Widget build(BuildContext context) {
-    ref.listen(_goalsUid, (_, uid) {
-      if (uid != widget.owner) _leave();
-    });
     final failure = _failure;
     return AlertDialog(
       backgroundColor: AppColors.surfaceDark,
@@ -363,6 +363,22 @@ class _UpdateProgressDialogState extends ConsumerState<_UpdateProgressDialog> {
   }
 }
 
+/// A dialog, sheet or picker that goes with the member it was opened for, at
+/// once and silently: what was typed in [child] with it. Asked in the build, so
+/// a route opened just before the switch is never drawn for the next member.
+class _OwnersOnly extends ConsumerWidget {
+  final String? owner;
+  final Widget child;
+  const _OwnersOnly({required this.owner, required this.child});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (ref.watch(_goalsUid) == owner) return child;
+    _removeRoute(context);
+    return const SizedBox.shrink();
+  }
+}
+
 /// Removes the route [context] is in (not whatever is on top of it), after
 /// this frame: the account can change during a build.
 void _removeRoute(BuildContext context) {
@@ -394,24 +410,25 @@ class _Empty extends StatelessWidget {
       );
 }
 
-void _showAddGoal(BuildContext context) {
+void _showAddGoal(BuildContext context, String? owner) {
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => const _AddGoalSheet(),
+    builder: (_) => _OwnersOnly(owner: owner, child: _AddGoalSheet(owner: owner)),
   );
 }
 
 class _AddGoalSheet extends ConsumerStatefulWidget {
-  const _AddGoalSheet();
+  /// Who opened the sheet: what is typed here is theirs alone (P0-FL-60c).
+  final String? owner;
+  const _AddGoalSheet({required this.owner});
   @override
   ConsumerState<_AddGoalSheet> createState() => _AddGoalSheetState();
 }
 
 class _AddGoalSheetState extends ConsumerState<_AddGoalSheet> {
-  /// Who opened the sheet: what is typed here is theirs alone (P0-FL-60c).
-  late final String? _owner;
+  String? get _owner => widget.owner;
   String? _failure;
   final _title = TextEditingController();
   final _start = TextEditingController();
@@ -429,20 +446,6 @@ class _AddGoalSheetState extends ConsumerState<_AddGoalSheet> {
     ('wellness', '🌿 Wellness'),
     ('performance', '🏃 Performance'),
   ];
-
-  @override
-  void initState() {
-    super.initState();
-    _owner = ref.read(_goalsUid);
-  }
-
-  /// Nothing of what was typed stays for whoever signed in since.
-  void _leave() {
-    for (final c in [_title, _start, _target, _unit]) {
-      c.clear();
-    }
-    _removeRoute(context);
-  }
 
   @override
   void dispose() {
@@ -480,7 +483,7 @@ class _AddGoalSheetState extends ConsumerState<_AddGoalSheet> {
     // Not to whoever signed in meanwhile.
     if (!_stillFor(c, _owner)) return;
     if (saved) {
-      c.invalidate(myGoalsProvider);
+      c.invalidate(goalsOfProvider(_owner));
       if (mounted) Navigator.pop(context);
       return;
     }
@@ -498,9 +501,6 @@ class _AddGoalSheetState extends ConsumerState<_AddGoalSheet> {
 
   @override
   Widget build(BuildContext context) {
-    ref.listen(_goalsUid, (_, uid) {
-      if (uid != _owner) _leave();
-    });
     final failure = _failure;
     return Container(
       padding: EdgeInsets.only(
@@ -565,6 +565,8 @@ class _AddGoalSheetState extends ConsumerState<_AddGoalSheet> {
           onTap: () async {
             final picked = await showDatePicker(
               context: context,
+              builder: (_, picker) => _OwnersOnly(
+                  owner: _owner, child: picker ?? const SizedBox.shrink()),
               initialDate: DateTime.now().add(const Duration(days: 30)),
               firstDate: DateTime.now(),
               lastDate: DateTime.now().add(const Duration(days: 730)),

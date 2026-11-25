@@ -24,8 +24,8 @@ class NotificationService {
   static const _firstRetry = Duration(seconds: 2);
   static const _maxRetry = Duration(minutes: 1);
 
-  /// The signed-in user's notifications, live, for as long as it is listened
-  /// to.
+  /// [owner]'s notifications, live, for as long as it is listened to; nothing
+  /// while somebody else, or nobody, is signed in (P0-FL-60c).
   ///
   /// supabase's `.stream()` ends for good when one of its reads fails: it
   /// unsubscribes and closes on a failed fetch, at start or on a reconnect.
@@ -33,9 +33,8 @@ class NotificationService {
   /// only when this emits) and the open Notifications list for the rest of
   /// the session. When it ends it is now opened again, backing off while it
   /// keeps failing. Errors are still passed on.
-  Stream<List<AppNotification>> streamNotifications() {
-    final uid = _uid;
-    if (uid == null) return const Stream.empty();
+  Stream<List<AppNotification>> streamNotifications({required String? owner}) {
+    if (owner == null || _uid != owner) return const Stream.empty();
     late final StreamController<List<AppNotification>> out;
     StreamSubscription<List<AppNotification>>? sub;
     Timer? retry;
@@ -44,13 +43,13 @@ class NotificationService {
       sub = _db
           .from('notifications')
           .stream(primaryKey: ['id'])
-          .eq('recipient_id', uid)
+          .eq('recipient_id', owner)
           .order('created_at', ascending: false)
           .map((rows) => rows.map(AppNotification.fromJson).toList())
           .listen(
         (list) {
           delay = _firstRetry;
-          out.add(list);
+          if (_uid == owner) out.add(list);
         },
         onError: out.addError,
         onDone: () {
@@ -72,14 +71,16 @@ class NotificationService {
     return out.stream;
   }
 
-  Future<int> fetchUnreadCount() async {
-    final uid = _uid;
-    if (uid == null) return 0;
+  /// [owner]'s; throws when it is no longer [owner] who is signed in, before
+  /// the read or by the time it answers: the count would be somebody else's.
+  Future<int> fetchUnreadCount({required String owner}) async {
+    _mustBeSignedIn(owner, 'counting unread notifications');
     final rows = await _db
         .from('notifications')
         .select('id')
-        .eq('recipient_id', uid)
+        .eq('recipient_id', owner)
         .eq('read', false);
+    _mustBeSignedIn(owner, 'counting unread notifications');
     return (rows as List).length;
   }
 
@@ -115,7 +116,8 @@ class NotificationService {
         .select('id');
     if (rows.isNotEmpty) return;
     // Nothing changed: either nothing was unread (fine), or the change was
-    // refused in silence.
+    // refused in silence. Asked as the same member, or not asked.
+    _mustBeSignedIn(owner, 'marking all notifications read');
     final unread = await _db
         .from('notifications')
         .select('id')

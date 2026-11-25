@@ -9,19 +9,54 @@ import '../data/notification_model.dart';
 
 final _svc = NotificationService();
 
-// All three follow who is signed in BY ID (P0-FL-60c): a token refresh is the
-// same member, and keeps their list and its live feed.
+/// Who is signed in, BY ID (P0-FL-60c): a token refresh is the same member, and
+/// keeps their list, their count and their live feed.
+final _uid = currentUserProvider.select((u) => u?.id);
 
-final notificationsStreamProvider = StreamProvider<List<AppNotification>>((ref) {
-  ref.watch(currentUserProvider.select((u) => u?.id));
-  return _svc.streamNotifications();
+// P0-FL-60c · whose a value is never follows from loading/data/error: riverpod
+// carries the last value through all three. The feed is kept per account; the
+// count remembers whose it was and is forgotten for anybody else.
+
+final _feedOf =
+    StreamProvider.autoDispose.family<List<AppNotification>, String>(
+        (ref, uid) => _svc.streamNotifications(owner: uid));
+
+/// The signed-in member's live feed; nothing while nobody is signed in.
+final notificationsStreamProvider =
+    Provider<AsyncValue<List<AppNotification>>>((ref) {
+  final uid = ref.watch(_uid);
+  return uid == null ? const AsyncLoading() : ref.watch(_feedOf(uid));
 });
 
-final unreadCountProvider = FutureProvider<int>((ref) async {
-  ref.watch(currentUserProvider.select((u) => u?.id));
+class _CountOwner {
+  bool read = false;
+  String? uid;
+}
+
+final _countOwner = Provider<_CountOwner>((ref) => _CountOwner());
+
+/// The signed-in member's unread count; null while it is not known (nobody is
+/// signed in, or their own count was never read).
+final unreadCountProvider = FutureProvider<int?>((ref) async {
+  final uid = ref.watch(_uid);
   // Re-fetches whenever the stream fires (via invalidation from notifier)
   ref.watch(notificationsStreamProvider);
-  return _svc.fetchUnreadCount();
+  final last = ref.read(_countOwner);
+  if (last.read && last.uid != uid) {
+    // Not loading: a reload of the last account's count to a load of this
+    // one's would not be announced, and the badge would keep the old number.
+    ref.state = const AsyncData(null);
+  }
+  last
+    ..read = true
+    ..uid = uid;
+  if (uid == null) return null;
+  try {
+    return await _svc.fetchUnreadCount(owner: uid);
+  } catch (e, st) {
+    reportError('unreadCountProvider', e, st);
+    rethrow;
+  }
 });
 
 typedef _ListEdit = List<AppNotification> Function(List<AppNotification>);
@@ -31,18 +66,17 @@ class NotificationsNotifier extends StateNotifier<AsyncValue<List<AppNotificatio
 
   /// Whose list this is. Nothing is read into it, or written from it, once
   /// another account is signed in.
-  final String? _owner = _currentUid();
+  final String? owner = _currentUid();
 
   static String? _currentUid() => Supabase.instance.client.auth.currentUser?.id;
-  bool get _isOwners => mounted && _currentUid() == _owner;
+  bool get _isOwners => mounted && _currentUid() == owner;
 
   NotificationsNotifier() : super(const AsyncValue.loading()) {
     _load();
     // Live feed — new/updated notifications flow in without a manual refresh.
-    _sub = _svc.streamNotifications().listen(
-      (list) {
-        if (_isOwners) state = AsyncValue.data(list);
-      },
+    // It carries nothing once another account is signed in.
+    _sub = _svc.streamNotifications(owner: owner).listen(
+      (list) => state = AsyncValue.data(list),
       onError: (Object e, StackTrace st) {
         // Keep the last good state; the stream reopens itself.
         reportError('NotificationsNotifier.stream', e, st);
@@ -92,26 +126,40 @@ class NotificationsNotifier extends StateNotifier<AsyncValue<List<AppNotificatio
       lastError = e;
       return false;
     }
-    final shown = mounted ? _shown : null;
-    if (shown != null) state = AsyncValue.data(apply(shown));
+    final shown = _isOwners ? _shown : null;
+    if (shown != null) _show(apply(shown));
     return true;
+  }
+
+  /// The changed list; a refresh still running, or one that failed, is still
+  /// that — the rest of the list is no newer for it.
+  void _show(List<AppNotification> list) {
+    final was = state;
+    AsyncValue<List<AppNotification>> next = AsyncValue.data(list);
+    if (was is AsyncError<List<AppNotification>>) {
+      next = AsyncValue<List<AppNotification>>.error(was.error, was.stackTrace)
+          .copyWithPrevious(next);
+    }
+    state = was.isLoading
+        ? const AsyncValue<List<AppNotification>>.loading().copyWithPrevious(next)
+        : next;
   }
 
   Future<bool> markRead(String id) => _change(
       'markRead',
-      () => _svc.markRead(id, owner: _owner),
+      () => _svc.markRead(id, owner: owner),
       (list) => list
           .map((n) => n.id == id ? n.copyWith(read: true) : n)
           .toList());
 
   Future<bool> markAllRead() => _change(
       'markAllRead',
-      () => _svc.markAllRead(owner: _owner),
+      () => _svc.markAllRead(owner: owner),
       (list) => list.map((n) => n.copyWith(read: true)).toList());
 
   Future<bool> delete(String id) => _change(
       'delete',
-      () => _svc.deleteNotification(id, owner: _owner),
+      () => _svc.deleteNotification(id, owner: owner),
       (list) => list.where((n) => n.id != id).toList());
 
   Future<void> refresh() => _load();
@@ -122,7 +170,7 @@ final notificationsProvider =
       (ref) {
         // A new list for each account: the notifier holds one account's rows
         // and its stream, and outlived sign-out.
-        ref.watch(currentUserProvider.select((u) => u?.id));
+        ref.watch(_uid);
         return NotificationsNotifier();
       },
     );

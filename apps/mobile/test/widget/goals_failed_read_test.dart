@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-// /goals has a failure state — "Could not load goals" — that could not be
+// /goals has a failure state — "Couldn't load your goals" — that could not be
 // reached: `GoalService.getMyGoals` caught every error and returned `[]`, so a
 // failed read told a client who had set goals "No goals yet / Tap "New Goal"
 // to set your first target." And `myGoalsProvider` was kept for the session,
@@ -128,7 +128,7 @@ void main() {
         const ProviderScope(child: MaterialApp(home: GoalsScreen())));
     expect(find.text('No goals yet'), findsNothing,
         reason: 'THE defect: a client with a goal was told they have none');
-    expect(find.text('Could not load goals'), findsOneWidget);
+    expect(find.text("Couldn't load your goals"), findsOneWidget);
   });
 
   testWidgets('a failure clears on the next visit', (tester) async {
@@ -140,7 +140,7 @@ void main() {
     Widget screen(Widget home) =>
         UncontrolledProviderScope(container: app, child: MaterialApp(home: home));
     await show(tester, screen(const GoalsScreen()));
-    expect(find.text('Could not load goals'), findsOneWidget);
+    expect(find.text("Couldn't load your goals"), findsOneWidget);
 
     await show(tester, screen(const SizedBox())); // leave /goals
     server.fails = false;
@@ -170,6 +170,6 @@ void main() {
     await show(tester,
         const ProviderScope(child: MaterialApp(home: GoalsScreen())));
     expect(find.text('No goals yet'), findsOneWidget);
-    expect(find.text('Could not load goals'), findsNothing);
+    expect(find.text("Couldn't load your goals"), findsNothing);
   });
 }

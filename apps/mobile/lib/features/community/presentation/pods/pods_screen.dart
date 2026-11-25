@@ -1,8 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/observability/app_failure.dart';
-import '../../../auth/domain/auth_provider.dart';
 import '../../../workout/presentation/widgets/section_load_failure.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -16,13 +16,13 @@ const _wht   = Colors.white;
 const _mut   = Color(0xFFCFC2D6);
 
 // ── UC34: Accountability Pods ─────────────────────────────────────────────────
-class PodsScreen extends ConsumerStatefulWidget {
+class PodsScreen extends StatefulWidget {
   const PodsScreen({super.key});
   @override
-  ConsumerState<PodsScreen> createState() => _PodsScreenState();
+  State<PodsScreen> createState() => _PodsScreenState();
 }
 
-class _PodsScreenState extends ConsumerState<PodsScreen> {
+class _PodsScreenState extends State<PodsScreen> {
   final _db = Supabase.instance.client;
   List<Map<String, dynamic>> _myPods = [];
   List<Map<String, dynamic>> _openPods = [];
@@ -45,13 +45,36 @@ class _PodsScreenState extends ConsumerState<PodsScreen> {
   /// The pod being joined; one at a time.
   String? _joining;
 
+  /// Who is signed in is followed here, without a frame: an answer can land
+  /// while the app is hidden.
+  StreamSubscription<AuthState>? _authSub;
+
   @override
   void initState() {
     super.initState();
     _owner = _db.auth.currentUser?.id;
-    ref.listenManual(
-        currentUserProvider.select((u) => u?.id), (_, __) => _followAccount());
+    _authSub = _db.auth.onAuthStateChange.listen((_) => _followAccount(),
+        onError: (Object e, StackTrace st) =>
+            reportError('PodsScreen.onAuthStateChange', e, st));
     _load();
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  /// Whether [owner] is still the one signed in, and the one shown. Otherwise
+  /// the screen follows whoever is.
+  bool _still(String? owner) {
+    if (owner != null &&
+        owner == _owner &&
+        _db.auth.currentUser?.id == owner) {
+      return true;
+    }
+    _followAccount();
+    return false;
   }
 
   /// Nothing of the previous member's stays, and the next one's are read.
@@ -62,7 +85,6 @@ class _PodsScreenState extends ConsumerState<PodsScreen> {
     setState(() {
       _owner = uid;
       _epoch++;
-      _loadSeq++;
       _myPods = [];
       _openPods = [];
       _loaded = false;
@@ -76,7 +98,7 @@ class _PodsScreenState extends ConsumerState<PodsScreen> {
   /// [again]: what is on its way may predate a change just made.
   Future<void> _load({bool again = false}) async {
     final owner = _owner;
-    if (owner == null || (_loading && !again)) return;
+    if (owner == null || (_loading && !again) || !_still(owner)) return;
     final seq = ++_loadSeq;
     setState(() => _loading = true);
     try {
@@ -89,7 +111,7 @@ class _PodsScreenState extends ConsumerState<PodsScreen> {
             .eq('status', 'open')
             .limit(10),
       ]);
-      if (!mounted || seq != _loadSeq) return;
+      if (!mounted || seq != _loadSeq || !_still(owner)) return;
       setState(() {
         _myPods = List<Map<String, dynamic>>.from(mine as List);
         _openPods = List<Map<String, dynamic>>.from(open as List);
@@ -100,7 +122,7 @@ class _PodsScreenState extends ConsumerState<PodsScreen> {
     } catch (e, st) {
       // Not "no pods": said as a failure, over whatever was read before.
       reportError('PodsScreen.load', e, st);
-      if (!mounted || seq != _loadSeq) return;
+      if (!mounted || seq != _loadSeq || !_still(owner)) return;
       setState(() {
         _loadError = e;
         _loading = false;
@@ -108,18 +130,12 @@ class _PodsScreenState extends ConsumerState<PodsScreen> {
     }
   }
 
-  Future<void> _joinPod(Map<String, dynamic> pod) async {
-    final owner = _owner;
+  /// [owner]: who the Join button was built for. Nothing is sent, read again
+  /// or said once they are no longer the one signed in.
+  Future<void> _joinPod(Map<String, dynamic> pod, String? owner) async {
+    if (!_still(owner)) return _accountChanged();
+    if (_joining != null) return;
     final epoch = _epoch;
-    if (owner == null || _joining != null) return;
-    if (_db.auth.currentUser?.id != owner) {
-      reportError(
-          'PodsScreen.joinPod',
-          StateError('joining a pod: the signed-in account changed'),
-          StackTrace.current);
-      _followAccount();
-      return;
-    }
     final podId = pod['id'] as String;
     setState(() => _joining = podId);
     Object? error;
@@ -129,32 +145,45 @@ class _PodsScreenState extends ConsumerState<PodsScreen> {
       reportError('PodsScreen.joinPod', e, st);
       error = e;
     }
-    if (!mounted || epoch != _epoch) return;
+    if (!mounted) return;
+    if (epoch != _epoch || !_still(owner)) return _accountChanged();
     if (error == null) {
       // The server took it: theirs, even if the read that follows fails.
       setState(() => _myPods = [..._myPods, pod]);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Joined pod! Welcome to your accountability group 🙌'),
-        backgroundColor: Color(0xFF6FFBBE)));
+      _say('Joined pod! Welcome to your accountability group 🙌',
+          background: const Color(0xFF6FFBBE));
     }
     // "Already a member" (23505) is answered by the pods themselves.
     final duplicate = error is PostgrestException && error.code == '23505';
     if (error == null || duplicate) await _load(again: true);
-    if (!mounted || epoch != _epoch) return;
+    if (!mounted) return;
+    if (epoch != _epoch || !_still(owner)) return _accountChanged();
     setState(() => _joining = null);
     if (error == null) return;
-    // Said by the pods that were read, or by the read that failed.
-    final answered = duplicate &&
-        (_loadError != null || _myPods.any((m) => m['id'] == podId));
-    if (!answered) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(couldntMessage('join that pod', error))));
+    if (!duplicate) {
+      _say(couldntMessage('join that pod', error));
+    } else if (!_myPods.any((m) => m['id'] == podId)) {
+      // The pods were not read (said above them), so the answer is said here;
+      // or they were, and it is not among them.
+      _say(_loadError != null
+          ? "You're already in that pod."
+          : couldntMessage('join that pod', error));
     }
   }
+
+  void _accountChanged() => reportError(
+      'PodsScreen.joinPod',
+      StateError('joining a pod: the signed-in account changed'),
+      StackTrace.current);
+
+  void _say(String message, {Color? background}) =>
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), backgroundColor: background));
 
   @override
   Widget build(BuildContext context) {
     final error = _loadError;
+    final owner = _owner;
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
@@ -204,7 +233,7 @@ class _PodsScreenState extends ConsumerState<PodsScreen> {
                             pod: p, isJoined: alreadyIn,
                             busy: _joining != null,
                             joining: _joining == p['id'],
-                            onJoin: alreadyIn ? null : () => _joinPod(p));
+                            onJoin: alreadyIn ? null : () => _joinPod(p, owner));
                         }).toList(),
                       )),
               ]),

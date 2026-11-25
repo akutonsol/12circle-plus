@@ -252,14 +252,17 @@ void main() {
   }
 
   group('mark achieved / delete', () {
-    for (final (item, method) in [('Mark achieved', 'PATCH'), ('Delete', 'DELETE')]) {
+    for (final (item, method, verb) in [
+      ('Mark achieved', 'PATCH', 'update'),
+      ('Delete', 'DELETE', 'delete'),
+    ]) {
       testWidgets('"$item" that changed no row is a failure', (tester) async {
         server.filtered.add('$method goals:$memberA');
         await show(tester);
         await choose(tester, item);
         await settle(tester);
         expect(writes(), hasLength(1));
-        expect(text("Couldn't update your goal — $_support"), findsOneWidget,
+        expect(text("Couldn't $verb your goal — $_support"), findsOneWidget,
             reason: 'THE defect: no row changed, and nothing was said');
         expect(text('Bench 100 kg'), findsOneWidget);
         expect(reported, isNotEmpty);
@@ -429,7 +432,7 @@ void main() {
       hold.complete();
       await settle(tester);
       expect(text('Bench 100 kg'), findsNothing);
-      expect(text('Could not load goals'), findsOneWidget);
+      expect(text("Couldn't load your goals"), findsOneWidget);
       await done(tester);
     });
 

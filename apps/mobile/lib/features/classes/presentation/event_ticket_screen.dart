@@ -87,10 +87,28 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
   String? _stillOwner(String what) {
     final owner = _owner;
     if (owner != null && _db.auth.currentUser?.id == owner) return owner;
-    reportError('EventTicketScreen.$what',
-        StateError('$what: the signed-in account changed'), StackTrace.current);
+    _accountChanged(what);
     _followAccount();
     return null;
+  }
+
+  /// Register and Buy act for [owner], the member the button was drawn for —
+  /// the screen may have followed, and read for, somebody else since.
+  void _actFor(String? owner, String what, VoidCallback act) {
+    if (owner == _owner) return act();
+    _accountChanged(what);
+  }
+
+  void _accountChanged(String what) => reportError('EventTicketScreen.$what',
+      StateError('$what: the signed-in account changed'), StackTrace.current);
+
+  /// Whether what started for [owner], in [epoch], may still be shown and said:
+  /// asked after every await. Otherwise the screen follows whoever is signed in.
+  bool _stillOn(int epoch, String? owner) {
+    if (!mounted || epoch != _epoch) return false;
+    if (_db.auth.currentUser?.id == owner) return true;
+    _followAccount();
+    return false;
   }
 
   void _say(String message) => ScaffoldMessenger.of(context)
@@ -108,7 +126,7 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
           .eq('event_id', widget.event['id'] as String)
           .eq('user_id', uid)
           .maybeSingle();
-      if (!mounted || epoch != _epoch) return;
+      if (!mounted || !_stillOn(epoch, uid)) return;
       setState(() {
         _checking = false;
         _checked = true;
@@ -121,7 +139,7 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
     } catch (e, st) {
       // Not "not registered": the status is unknown until it is read.
       reportError('EventTicketScreen.checkRegistration', e, st);
-      if (!mounted || epoch != _epoch) return;
+      if (!mounted || !_stillOn(epoch, uid)) return;
       setState(() {
         _checking = false;
         _checked = false;
@@ -144,7 +162,8 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
         'qr_code': code,
         'status': 'confirmed',
       });
-      if (!mounted || epoch != _epoch) return;
+      if (!mounted) return;
+      if (!_stillOn(epoch, uid)) return _accountChanged('register');
       setState(() { _registered = true; _ticketCode = code; });
     } catch (e, st) {
       // I-COM-01 / DAT-4. This block used to invent a demo ticket code and set
@@ -158,12 +177,12 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
       // `_registered` stays false and the build falls through to the register
       // affordance.
       reportError('EventTicketScreen.register', e, st);
-      if (!mounted || epoch != _epoch) return;
+      if (!_stillOn(epoch, uid)) return;
       // "Already registered" (23505) is answered by the registration itself:
       // read it again, so the ticket shown is the one that exists.
       if (e is PostgrestException && e.code == '23505') {
         await _checkRegistration();
-        if (!mounted || epoch != _epoch) return;
+        if (!_stillOn(epoch, uid)) return;
         if (_registered || !_checked) return; // the ticket, or the failure, shows
       }
       _say(couldntMessage('complete your registration', e));
@@ -176,7 +195,8 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
   /// Uses in-app Embedded Checkout on web when configured, else hosted redirect.
   Future<void> _buyTicket() async {
     if (_loading || _checking || !_checked || _registered) return;
-    if (_stillOwner('buyTicket') == null) return;
+    final uid = _stillOwner('buyTicket');
+    if (uid == null) return;
     final epoch = _epoch;
     final eventId = widget.event['id'] as String;
     final svc = PaymentService();
@@ -191,7 +211,10 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
       reportError('EventTicketScreen.buyTicket', e, st);
       error = e;
     }
-    if (!mounted || epoch != _epoch) return;
+    if (!mounted) return;
+    // Nothing of a checkout that was dropped, or failed, is said to whoever
+    // signed in meanwhile.
+    if (!_stillOn(epoch, uid)) return _accountChanged('buyTicket');
     setState(() => _loading = false);
     if (error != null) {
       _say(couldntMessage('start checkout', error));
@@ -227,9 +250,13 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
         detail: isFree ? 'Registering is paused until it loads.' : 'Buying a ticket is paused until it loads.')];
     }
     final busy = _loading || _checking || !_checked;
+    final owner = _owner;
+    final VoidCallback act = isFree
+        ? () => _actFor(owner, 'register', _register)
+        : () => _actFor(owner, 'buyTicket', _buyTicket);
     return [
       SizedBox(width: double.infinity, child: ElevatedButton(
-        onPressed: busy ? null : (isFree ? _register : _buyTicket),
+        onPressed: busy ? null : act,
         style: ElevatedButton.styleFrom(
           backgroundColor: _brand, foregroundColor: _wht,
           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -237,7 +264,9 @@ class _EventTicketScreenState extends State<EventTicketScreen> {
         child: busy
             ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(
                 color: _wht, strokeWidth: 2,
-                semanticsLabel: _loading ? null : 'Checking your registration'))
+                semanticsLabel: !_loading
+                    ? 'Checking your registration'
+                    : isFree ? 'Registering' : 'Starting checkout'))
             : Text(
                 isFree ? 'Register & Get Ticket' : 'Buy Ticket — \$$price',
                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
