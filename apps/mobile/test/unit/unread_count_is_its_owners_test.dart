@@ -213,6 +213,25 @@ void main() {
     expect(count(), 1);
   });
 
+  test("A's count landing in the turn the client changes is told to nobody",
+      () async {
+    final hold = server.holds['GET $_t:$memberA'] = Completer<void>();
+    c.invalidate(unreadCountProvider);
+    await settle();
+    final from = told.length;
+    hold.complete();
+    unawaited(signInAs(memberB)); // the client has B; nobody was told
+    expect(signedIn(), memberB, reason: 'premise');
+    await settle();
+    expectNothingOfAsTold(from);
+    expect(count(), 1);
+    expect(
+        reported.where((f) =>
+            f.origin == 'unreadCountProvider' &&
+            '${f.error}'.contains('the signed-in account changed')),
+        hasLength(1));
+  });
+
   test("a feed read that lands with B signed in is not A's badge's news",
       () async {
     // Nothing of the container is flushed between the switch and the answer.

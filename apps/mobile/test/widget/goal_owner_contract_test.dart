@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/goals/data/goal_service.dart';
 import 'package:circle_fitness/features/goals/domain/goal_provider.dart';
@@ -80,6 +82,29 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 6));
   });
+  test("a list is read, and kept, only as its member", () async {
+    final hold = server.holds['GET goals:$memberA'] = Completer<void>();
+    final provider = goalsOfProvider(memberA);
+    c.listen(provider, (_, __) {});
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    await signInAs(memberB);
+    hold.complete();
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(c.read(provider), isA<AsyncError<Object?>>(), reason: 'landed as B');
+    expect(reported.single.origin, 'goalsOfProvider');
+    // Asked for with B signed in: B's are not read into A's list.
+    final asked = server.log.length;
+    c.invalidate(provider);
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(server.log.length, asked);
+    expect(c.read(provider).hasValue, isFalse);
+    // Control: A again.
+    await signInAs(memberA);
+    c.invalidate(provider);
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(c.read(provider).requireValue.single.title, 'Bench 100 kg');
+  });
+
   test('a change for a member no longer signed in is not sent, and is recorded '
       'where it was swallowed', () async {
     await signInAs(memberB);

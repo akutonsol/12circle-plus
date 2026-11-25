@@ -55,6 +55,8 @@ final unreadCountProvider = FutureProvider<int?>((ref) async {
     return await _svc.fetchUnreadCount(owner: uid);
   } catch (e, st) {
     reportError('unreadCountProvider', e, st);
+    // Not uid's to be told any more, and nothing of theirs is kept.
+    if (Supabase.instance.client.auth.currentUser?.id != uid) return null;
     rethrow;
   }
 });

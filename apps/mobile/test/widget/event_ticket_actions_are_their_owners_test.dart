@@ -220,6 +220,50 @@ void main() {
     }
   }
 
+  testWidgets("A's ticket is not drawn by a build in the turn the client changes",
+      (tester) async {
+    (server.rows[_regs] ??= []).add({
+      'id': 'r-A', 'event_id': 'e1', 'user_id': memberA,
+      'qr_code': 'TKT-A', 'status': 'confirmed',
+    });
+    await show(tester);
+    expect(text('TKT-A'), findsOneWidget, reason: 'premise');
+    await tester.runAsync(() async {
+      final switching = signInAs(memberB);
+      expect(signedIn(), memberB, reason: 'premise: before any event');
+      tester.element(find.byType(EventTicketScreen)).markNeedsBuild();
+      tester.binding.buildOwner!.buildScope(tester.binding.rootElement!);
+      expect(text('TKT-A'), findsNothing);
+      await switching;
+    });
+    await settle(tester);
+    expect(text('TKT-A'), findsNothing);
+    await done(tester);
+  });
+
+  testWidgets("A's status read from before A signed out does not offer Register",
+      (tester) async {
+    final before = server.holds['GET $_regs:$memberA'] = Completer<void>();
+    await show(tester); // "not registered", held
+    await tester.runAsync(signOut);
+    await settle(tester);
+    (server.rows[_regs] ??= []).add({
+      'id': 'r-A', 'event_id': 'e1', 'user_id': memberA,
+      'qr_code': 'TKT-A', 'status': 'confirmed',
+    });
+    final now = server.holds['GET $_regs:$memberA'] = Completer<void>();
+    await tester.runAsync(() => signInAs(memberA));
+    await settle(tester);
+    before.complete();
+    await settle(tester);
+    expect(text(_register), findsNothing,
+        reason: 'the answer is from before: they have registered since');
+    now.complete();
+    await settle(tester);
+    expect(text('TKT-A'), findsOneWidget);
+    await done(tester);
+  });
+
   for (final (name, arrange) in <(String, void Function())>[
     ('taken', () {}),
     ('refused', () => server.fails.add('POST $_regs:$memberA')),
