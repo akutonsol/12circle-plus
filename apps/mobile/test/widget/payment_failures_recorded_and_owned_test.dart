@@ -2436,6 +2436,7 @@ void main() {
     for (final (what, answer, text) in <(String, (int, Object?), String)>[
       ('the gateway gives up (524)', (524, 'error code: 524'), unsureEnd),
       ('a bare 500', (500, 'Internal Server Error'), unsureEnd),
+      ('a bare 503', (503, {'message': 'offline'}), unsureEnd),
       (
         'control: the database refuses',
         (403, {'message': 'SECRET denied', 'code': '42501'}),
@@ -2461,6 +2462,22 @@ void main() {
             greaterThan(before + 1), reason: 'the coaches are re-read, to check');
       });
     }
+
+    // What the screen cannot tell apart: cancelCoach's first READ lost behind a
+    // gateway changed nothing, but its error is the one a lost write gives, so
+    // it is not said to have changed nothing (precision for FL-59d's cancelCoach).
+    testWidgets('End coaching: the subscriptions read lost behind a gateway '
+        '(500, no code) is not confirmed, and nothing is written', (t) async {
+      await openManage(t);
+      server.answers['GET subscriptions:$_a'] = (500, {'message': 'offline'});
+      await t.tap(find.text('Stop'));
+      await until(t, () => seen(find.text('Yes, stop')), 'the dialog');
+      await settle(t);
+      await t.tap(find.text('Yes, stop'));
+      await outcome(t, unsureEnd);
+      expect(server.writes, isEmpty);
+      expect(server.count('cancel-subscription'), 0);
+    });
 
     testWidgets('Plans says a failed refresh of the plan it still shows; '
         'choices stay enabled; Try again clears it', (t) async {
