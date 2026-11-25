@@ -73,7 +73,7 @@ void main() {
       {'id': id, 'name': 'Walk $id', 'target_value': 1};
 
   Future<void> loaded(LiveHabitNotifier n) => until(
-      () => n.debugState is AsyncData, 'the habits');
+      () => n.state is AsyncData, 'the habits');
 
   void twoHabits() => server.rows['client_habits'] = {
         memberA: [habit('a1'), habit('a2')],
@@ -156,7 +156,7 @@ void main() {
       expect(asB(), isEmpty,
           reason: "B's daily_scores and score events were written from A's "
               'habits: ${asB().toList()}');
-      expect(n.debugState.valueOrNull, isNull,
+      expect(n.state.valueOrNull, isNull,
           reason: "A's habits do not stay up");
     });
 
@@ -196,7 +196,7 @@ void main() {
       await signInAs(memberB);
       hold.complete();
       await reload;
-      expect(n.debugState.valueOrNull, isNull);
+      expect(n.state.valueOrNull, isNull);
     });
 
     test('POSITIVE CONTROL: a saved tick awards its own member', () async {
@@ -209,7 +209,7 @@ void main() {
       expect((day.who, day.row['user_id'], day.row['habits_points']),
           (memberA, memberA, 10));
       expect(server.writes('award_points').single.who, memberA);
-      expect(n.debugState.valueOrNull!.first.isCompletedToday, isTrue);
+      expect(n.state.valueOrNull!.first.isCompletedToday, isTrue);
       expect(reported, isEmpty);
     });
 
@@ -251,7 +251,7 @@ void main() {
 
     test("A's post answers after B signed in: no points for B", () async {
       final n = notifier();
-      await until(() => n.debugState is AsyncData, 'the feed');
+      await until(() => n.state is AsyncData, 'the feed');
       final hold = server.holds['POST community_posts:$memberA'] = Completer();
       final post = n.addPost('Leg day');
       await until(() => server.writes('community_posts').isNotEmpty, 'post');
@@ -268,7 +268,7 @@ void main() {
     test("A's draft, posted, commented or reacted once B is signed in: nothing "
         'is sent, and it is not taken for saved', () async {
       final n = notifier();
-      await until(() => n.debugState is AsyncData, 'the feed');
+      await until(() => n.state is AsyncData, 'the feed');
       await signInAs(memberB);
       await expectLater(n.addPost('Leg day'), throwsStateError);
       await expectLater(n.addComment('p1', 'nice'), throwsStateError);
@@ -279,7 +279,7 @@ void main() {
     test('S7: the feed is disposed while the post is out: no state error',
         () async {
       final n = notifier();
-      await until(() => n.debugState is AsyncData, 'the feed');
+      await until(() => n.state is AsyncData, 'the feed');
       final hold = server.holds['POST community_posts:$memberA'] = Completer();
       final post = n.addPost('Leg day');
       await until(() => server.writes('community_posts').isNotEmpty, 'post');
@@ -290,10 +290,10 @@ void main() {
 
     test('POSITIVE CONTROL: the post is shown and its member awarded', () async {
       final n = notifier();
-      await until(() => n.debugState is AsyncData, 'the feed');
+      await until(() => n.state is AsyncData, 'the feed');
       await n.addPost('Leg day');
       await until(() => server.writes('daily_scores').isNotEmpty, 'the day');
-      expect(n.debugState.valueOrNull!.single.content, 'Leg day');
+      expect(n.state.valueOrNull!.single.content, 'Leg day');
       expect(server.writes('daily_scores').single.row['community_points'], 10);
       expect(server.writes().map((w) => w.who).toSet(), {memberA});
       expect(reported, isEmpty);

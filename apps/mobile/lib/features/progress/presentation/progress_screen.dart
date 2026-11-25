@@ -155,7 +155,7 @@ class _ProgressScreenState extends State<ProgressScreen>
     if (_signedIn != _owner) return _followAccount();
     final uid = _owner;
     final seq = ++_loadSeq;
-    bool stale() => !mounted || seq != _loadSeq || _signedIn != uid;
+    bool stale() => seq != _loadSeq || _signedIn != uid;
     // With nothing loaded there is nothing to keep up meanwhile: a retry that
     // drew the (empty) tabs said "Log your first weight" until it answered.
     setState(() {
@@ -168,7 +168,7 @@ class _ProgressScreenState extends State<ProgressScreen>
           .from('user_profiles')
           .select('weight_kg, weight_goal_kg, height_cm')
           .eq('id', uid).maybeSingle();
-      if (stale()) return;
+      if (!mounted || stale()) return;
 
       final logs = await Supabase.instance.client
           .from('weight_logs')
@@ -176,7 +176,7 @@ class _ProgressScreenState extends State<ProgressScreen>
           .eq('user_id', uid)
           .order('logged_at', ascending: false)
           .limit(30);
-      if (stale()) return;
+      if (!mounted || stale()) return;
 
       // The LATEST 24, oldest first (the chart's order). Ascending with
       // `limit(24)` kept the first 24 ever, and `.last` of those was taken as
@@ -189,7 +189,7 @@ class _ProgressScreenState extends State<ProgressScreen>
           .eq('user_id', uid)
           .order('logged_at', ascending: false)
           .limit(24);
-      if (stale()) return;
+      if (!mounted || stale()) return;
       final measurementHistory =
           List<Map<String, dynamic>>.from(measurementRows as List).reversed.toList();
       final measurements =
@@ -201,7 +201,7 @@ class _ProgressScreenState extends State<ProgressScreen>
           .eq('user_id', uid)
           .order('logged_at', ascending: false)
           .limit(10);
-      if (stale()) return;
+      if (!mounted || stale()) return;
 
       // Signed URLs for onboarding photos (1 hr expiry). Not there = no photo
       // yet; any other failure is recorded and said.
@@ -219,7 +219,7 @@ class _ProgressScreenState extends State<ProgressScreen>
         Object? failure;
         for (final ext in exts) {
           final (url, error) = await _openPhoto('$uid/${entry.$1}.$ext');
-          if (stale()) return;
+          if (!mounted || stale()) return;
           failure ??= error;
           if (url == null) continue;
           entry.$2(url);
@@ -238,7 +238,7 @@ class _ProgressScreenState extends State<ProgressScreen>
         final path = log['storage_path'] as String?;
         if (path != null && path.isNotEmpty && path.contains('gallery_')) {
           final (url, error) = await _openPhoto(path);
-          if (stale()) return;
+          if (!mounted || stale()) return;
           if (url != null) galleryUrls[path] = url;
           if (url == null) unopened.add(path);
           if (url == null && error == null) {
@@ -269,7 +269,7 @@ class _ProgressScreenState extends State<ProgressScreen>
       }
     } catch (e, st) {
       reportError('ProgressScreen._loadData', e, st);
-      if (stale()) return; // not the signed-in member's failure to be told
+      if (!mounted || stale()) return; // not the signed-in member's failure to be told
       if (_loadedOnce) {
         // What is shown stays; the refresh that failed is said.
         final failed = couldntMessage('refresh your progress', e);

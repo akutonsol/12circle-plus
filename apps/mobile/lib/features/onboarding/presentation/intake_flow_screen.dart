@@ -356,8 +356,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
   Future<void> _readProgress(String uid) async {
     // Late: another member's by the time it answers. Dropped, unseen.
     final generation = _generation;
-    bool stale() =>
-        !mounted || generation != _generation || _signedIn != uid;
+    bool stale() => generation != _generation || _signedIn != uid;
     try {
       final profile = await Supabase.instance.client
           .from('user_profiles')
@@ -375,7 +374,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
           )
           .eq('id', uid)
           .maybeSingle();
-      if (stale()) return;
+      if (!mounted || stale()) return;
       if (profile != null) {
         final savedStep = (profile['onboarding_step'] as num?)?.toInt() ?? 0;
         final saved = IntakeData.fromSupabase(profile);
@@ -433,7 +432,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
       // blank answers over the stored ones. Now the failure is said, with
       // Try again, and nothing is saved until a read succeeds.
       reportError('intake.loadProgress.read', e, st);
-      if (stale()) return; // not the signed-in member's failure
+      if (!mounted || stale()) return; // not the signed-in member's failure
       setState(() {
         _loading = false;
         _resumeError = e;
@@ -4986,8 +4985,8 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
               'activated_at':  DateTime.now().toUtc().toIso8601String(),
             }, onConflict: 'coach_id,client_id');
         linked = true;
-        if (!_stillOwner('coach choice') || !mounted) return;
-        ref.invalidate(assignedCoachProvider);
+        if (!_stillOwner('coach choice')) return;
+        if (mounted) ref.invalidate(assignedCoachProvider);
         // Intake yields a single coach: cancel any other active relationship
         // (e.g. a coach picked earlier then changed) so re-selecting replaces
         // rather than accumulates. Multi-coach is added later via marketplace.

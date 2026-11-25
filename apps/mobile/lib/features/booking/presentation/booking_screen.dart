@@ -127,7 +127,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
     if (_signedIn != _owner) return _followAccount();
     final seq = ++_loadSeq;
     final uid = _owner;
-    bool stale() => !mounted || seq != _loadSeq || _signedIn != uid;
+    bool stale() => seq != _loadSeq || _signedIn != uid;
     setState(() => _state = _BookingState.loading);
     if (uid == null) { setState(() => _state = _BookingState.noCoach); return; }
 
@@ -148,7 +148,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
           // Most recently activated first → default matches the "assigned coach"
           // shown on the home screen (assignedCoachProvider uses activated_at).
           .order('activated_at', ascending: false, nullsFirst: false);
-      if (stale()) return;
+      if (!mounted || stale()) return;
       final list = List<Map<String, dynamic>>.from(rels as List);
 
       // Second query. `public_profiles` (migration 110) is the sanctioned
@@ -165,7 +165,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
             .select('id, first_name, last_name, avatar_url, '
                 'coach_title, coach_bio, specialties')
             .inFilter('id', coachIds);
-        if (stale()) return;
+        if (!mounted || stale()) return;
         for (final row in (profiles as List)) {
           final m = Map<String, dynamic>.from(row as Map);
           final id = m['id'] as String?;
@@ -222,7 +222,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
       // answer. An empty value is an answer; this is not one.
       // P0-FL-53b · and it is recorded: this catch swallowed it unseen.
       reportError('BookingScreen._load', e, st);
-      if (stale()) return;
+      if (!mounted || stale()) return;
       setState(() {
         _slots  = [];
         _booked = [];
@@ -250,8 +250,8 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
   /// Loads the chosen coach's open slots + the client's booked calls with them.
   Future<void> _applyCoach(String coachId, int seq) async {
     final uid = _owner;
-    bool stale() => !mounted || seq != _loadSeq || _signedIn != uid;
-    if (uid == null || stale()) return;
+    bool stale() => seq != _loadSeq || _signedIn != uid;
+    if (uid == null || !mounted || stale()) return;
     final c = _coaches.firstWhere((x) => x['id'] == coachId,
         orElse: () => _coaches.first);
     _coachId          = coachId;
@@ -274,13 +274,13 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
         // Soonest first, stated: postgrest-dart orders DESCENDING when
         // `ascending` is omitted, which listed these furthest first.
         .order('slot_time', ascending: true);
-    if (stale()) return;
+    if (!mounted || stale()) return;
     final bookedData = await _db
         .from('coaching_calls').select()
         .eq('client_id', uid).eq('coach_id', coachId).eq('status', 'scheduled')
         .gte('scheduled_at', now.toUtc().toIso8601String())
         .order('scheduled_at', ascending: true);
-    if (stale()) return;
+    if (!mounted || stale()) return;
     setState(() {
       _slots  = List<Map<String, dynamic>>.from(slotsData as List);
       _booked = List<Map<String, dynamic>>.from(bookedData as List);
