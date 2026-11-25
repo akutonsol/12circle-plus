@@ -8,6 +8,7 @@ import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../dashboard/domain/dashboard_provider.dart';
+import '../../workout/data/models/workout_model.dart' show Workout;
 import '../../workout/domain/workout_provider.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../../workout/presentation/zone_entry.dart';
@@ -518,6 +519,11 @@ class _SectionLabel extends StatelessWidget {
   ]);
 }
 
+// P0-FL-60b · this member's workouts and their status (see [forMember]).
+final _memberWorkouts = forMember<List<Workout>>(assignedWorkoutsProvider);
+final _memberStatuses = forMember<Map<String, Map<String, dynamic>>>(
+    programSessionStatusProvider);
+
 // ── Featured Card ─────────────────────────────────────────────────────────────
 class _FeaturedCard extends ConsumerWidget {
   final _Module module;
@@ -525,8 +531,8 @@ class _FeaturedCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final workouts = ref.watch(assignedWorkoutsProvider).valueOrNull ?? const [];
-    final statusMap = ref.watch(programSessionStatusProvider).valueOrNull ?? const {};
+    final workouts = ref.watch(_memberWorkouts).value ?? const [];
+    final statusMap = ref.watch(_memberStatuses).value ?? const {};
 
     // Find an in-progress workout, plus program-level completion.
     dynamic inProgress;

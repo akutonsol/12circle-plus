@@ -66,33 +66,50 @@ final streakProvider = FutureProvider<int>((ref) async {
   }
 });
 
-/// P0-FL-60b · a read of this file's, for the member signed in NOW. Riverpod
-/// keeps the previous member's value (and error) while the next one's read is
-/// in flight or after it failed; neither is shown here. A failed refresh for
-/// the same member keeps their value, beside the error.
+/// P0-FL-60b · a read, for the member signed in NOW. Riverpod keeps the
+/// previous member's value (and error) while the next one's read is in flight
+/// or after it failed; neither is shown here. A failed refresh for the same
+/// member keeps their value, beside the error.
 typedef MemberRead<T> = ({T? value, Object? error, bool busy});
 
-/// Whose answer a read last gave, and whose the last value was. Outlives the
-/// provider that keeps it up to date (it is what that provider remembers from
-/// one answer to the next); the uid beside each field is what makes reading it
-/// safe for anybody else.
+extension MemberReadAnswer<T> on MemberRead<T> {
+  /// As one answer, for a reader that shows no kept value beside a failure.
+  AsyncValue<T> get answer {
+    final e = error, v = value;
+    if (e != null) return AsyncError(e, StackTrace.empty);
+    return v == null ? AsyncLoading<T>() : AsyncData(v);
+  }
+}
+
+/// Whose answer a read last gave (and the failure, if it was one), and whose the
+/// last value was. Outlives the provider that keeps it up to date (it is what
+/// that provider remembers from one answer to the next); the uid beside each
+/// field is what makes reading it safe for anybody else.
 class _ReadOwner<T extends Object> {
-  bool settled = false;
+  Object? error;
   String? settledFor;
   T? value;
   String? valueOf;
 }
 
-Provider<MemberRead<T>> _forMember<T extends Object>(
+/// [provider] (which must follow the signed-in uid) as a [MemberRead].
+///
+/// Only a FINISHED read says whose it is: invalidated before the change of
+/// account is flushed, [provider] is `AsyncData(isLoading)` of the last
+/// member's under the next one's uid. And the uid is watched here: a listener
+/// is not told when `AsyncData(isLoading)` becomes `AsyncLoading`.
+///
+/// Auto-disposed: a closed panel's read is not made again for the next member.
+AutoDisposeProvider<MemberRead<T>> forMember<T extends Object>(
     FutureProvider<T> provider) {
   final ownerProvider = Provider<_ReadOwner<T>>((ref) => _ReadOwner<T>());
-  return Provider<MemberRead<T>>((ref) {
+  return Provider.autoDispose<MemberRead<T>>((ref) {
     final uid = ref.watch(currentUserProvider.select((u) => u?.id));
     final read = ref.watch(provider);
     final owner = ref.watch(ownerProvider);
     if (!read.isLoading) {
       owner
-        ..settled = true
+        ..error = read.error
         ..settledFor = uid;
       if (!read.hasError) {
         owner
@@ -102,15 +119,13 @@ Provider<MemberRead<T>> _forMember<T extends Object>(
     }
     return (
       value: owner.valueOf == uid ? owner.value : null,
-      error: owner.settled && owner.settledFor == uid && read.hasError
-          ? read.error
-          : null,
+      error: owner.settledFor == uid ? owner.error : null,
       busy: read.isLoading,
     );
   });
 }
 
-final memberStreakProvider = _forMember(streakProvider);
+final memberStreakProvider = forMember(streakProvider);
 
 // ── Upcoming Classes (next 5 from Supabase) ───────────────────────────────────
 //
@@ -142,7 +157,7 @@ final upcomingClassesProvider = FutureProvider<List<Map<String, dynamic>>>((ref)
   }
 });
 
-final memberUpcomingClassesProvider = _forMember(upcomingClassesProvider);
+final memberUpcomingClassesProvider = forMember(upcomingClassesProvider);
 
 // ── Upcoming Events (next 5 from Supabase) ────────────────────────────────────
 final upcomingEventsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
@@ -162,7 +177,7 @@ final upcomingEventsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) 
   }
 });
 
-final memberUpcomingEventsProvider = _forMember(upcomingEventsProvider);
+final memberUpcomingEventsProvider = forMember(upcomingEventsProvider);
 
 // ── Motivational quotes (rotates daily) ──────────────────────────────────────
 const _quotes = [

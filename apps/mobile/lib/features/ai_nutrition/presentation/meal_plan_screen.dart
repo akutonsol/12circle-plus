@@ -85,7 +85,10 @@ class _MealPlanScreenState extends ConsumerState<MealPlanScreen> {
     final outcome = mealPlanOutcome(ref.watch(mealPlanNotifierProvider));
     final rebuildError = _plan.rebuildError;
     final goals    = ref.watch(nutritionGoalsProvider);
-    goals.whenData(_loadGoalsOnce);
+    // P0-FL-60b · a finished read only: invalidated before a change of account
+    // is flushed, this is `AsyncData(isLoading)` of the last member's targets,
+    // and the form takes the first ones it is given.
+    if (!goals.isLoading) goals.whenData(_loadGoalsOnce);
 
     return Scaffold(
       backgroundColor: AppColors.bgDark,

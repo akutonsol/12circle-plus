@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
 import '../../auth/domain/auth_provider.dart';
@@ -15,6 +16,7 @@ import '../../challenges/domain/challenge_provider.dart';
 import '../../challenges/data/models/challenge_model.dart';
 import '../../community/domain/community_provider.dart';
 import '../../home/domain/home_session_card.dart';
+import '../../workout/data/models/workout_model.dart' show Workout;
 import '../../workout/domain/workout_provider.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
 
@@ -32,6 +34,14 @@ class _C {
   static const blue         = Color(0xFF93C5FD);
   static const error        = Color(0xFFFFB4AB);
 }
+
+// ── This member's reads (P0-FL-60b) ───────────────────────────────────────────
+// See [forMember]: none of these says whose its value is.
+final _memberChallenges = forMember<List<Challenge>>(liveChallengesProvider);
+final _memberWorkouts = forMember<List<Workout>>(assignedWorkoutsProvider);
+final _memberMonth =
+    forMember<List<Map<String, dynamic>>>(monthScoresProvider);
+final _memberWeek = forMember<List<Map<String, dynamic>>>(weekScoresProvider);
 
 // ── Fit and touch helpers (P0-FL-58) ──────────────────────────────────────────
 
@@ -210,6 +220,7 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
         SystemUiOverlayStyle.light.copyWith(statusBarColor: Colors.transparent));
     final topPad = MediaQuery.of(context).padding.top;
     final userName = ref.watch(currentFirstNameProvider);
+    final uid = ref.watch(currentUserProvider.select((u) => u?.id));
     // P0-FL-60b · a failure and its Try again need the whole width.
     final streakFailed =
         ref.watch(memberStreakProvider.select((s) => s.error != null));
@@ -260,7 +271,8 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
                 const SizedBox(height: 16),
 
                 // ── Performance ring card ──────────────────────────────────────
-                _PerformanceCard(),
+                // Keyed: its animation holds figures, one member's only.
+                _PerformanceCard(key: ValueKey(uid)),
                 const SizedBox(height: 16),
 
                 // ── Daily steps + Macros row ───────────────────────────────────
@@ -340,7 +352,13 @@ class _DailyWorkoutCard extends ConsumerWidget {
     // has none of them (`title`, `estimated_minutes`, and no energy figure), so
     // every client — with a plan, on a rest day, or with no coach — was shown
     // "Full Body Strength · 45 min · ~380 kcal". That is F-20 again.
-    final session = homeSession(ref.watch(assignedWorkoutsProvider));
+    //
+    // P0-FL-60b · a read still going may hold another member's plan: what THIS
+    // one was last given stands until it ends.
+    final read = ref.watch(_memberWorkouts);
+    final session = read.busy
+        ? homeSession(read.answer)
+        : homeSession(ref.watch(assignedWorkoutsProvider));
     final badges = homeSessionBadges(session.workout);
     final title = session.title ?? session.emptyLine;
     final large = _largeText(context);
@@ -566,6 +584,7 @@ class _WaterTrackerCard extends ConsumerWidget {
 
 // ── Performance Card ──────────────────────────────────────────────────────────
 class _PerformanceCard extends ConsumerStatefulWidget {
+  const _PerformanceCard({super.key});
   @override
   ConsumerState<_PerformanceCard> createState() => _PerformanceCardState();
 }
@@ -601,8 +620,8 @@ class _PerformanceCardState extends ConsumerState<_PerformanceCard>
 
   @override
   Widget build(BuildContext context) {
-    final monthAsync = ref.watch(monthScoresProvider);
-    final weekAsync = ref.watch(weekScoresProvider);
+    final monthAsync = ref.watch(_memberMonth).answer;
+    final weekAsync = ref.watch(_memberWeek).answer;
 
     return monthAsync.when(
       loading: () => _GlassCard(
@@ -917,21 +936,17 @@ class _MotivationalQuoteCard extends ConsumerWidget {
 }
 
 // ── Challenge Section ─────────────────────────────────────────────────────────
-class _ChallengeSection extends ConsumerStatefulWidget {
-  @override
-  ConsumerState<_ChallengeSection> createState() => _ChallengeSectionState();
-}
-
-class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
-  // P0-FL-53b · the last list this section showed, and for whom. A failed
-  // refresh keeps it on screen under the failure notice; a list read for
-  // another member (Riverpod holds A's value while B's read fails) is never
-  // shown.
-  List<Challenge>? _held;
-  String? _heldFor;
+class _ChallengeSection extends ConsumerWidget {
+  /// Whether [owner], whose rows are on screen, has left (recorded).
+  static bool _left(String? owner) {
+    if (Supabase.instance.client.auth.currentUser?.id == owner) return false;
+    reportError('activity.challenges.join',
+        StateError('join a challenge: the signed-in account changed'));
+    return true;
+  }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     // P0-FL-49 · the preference of the member signed in NOW. Riverpod keeps the
     // previous member's row through a re-read, so the held value showed (or
     // hid) the prompt on A's `notif_challenges` while B's read was in flight
@@ -940,13 +955,11 @@ class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
     final profile       = ref.watch(confirmedCurrentProfileProvider);
     final showPrompt    =
         profile != null && (profile['notif_challenges'] as bool?) != true;
-    final challengesAsync = ref.watch(liveChallengesProvider);
-    final uid = ref.watch(currentUserProvider)?.id;
-    if (challengesAsync is AsyncData<List<Challenge>>) {
-      _held = challengesAsync.value;
-      _heldFor = uid;
-    }
-    final held = _heldFor == uid ? _held : null;
+    // P0-FL-60b · the list read for THIS member. A failed refresh keeps it
+    // under the failure notice.
+    final read = ref.watch(_memberChallenges);
+    final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+    final held = read.value;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _SectionHeader(
@@ -974,7 +987,7 @@ class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
               label: 'Enable challenge alerts',
               onTap: () => context.push('/notification-preferences'),
               child: const _Pill(text: 'Enable', color: _C.primary, tint: 0.15))))
-      else if (challengesAsync.hasError) ...[
+      else if (read.error != null) ...[
         // P0-FL-53b · a failed read said "No active challenges": a claim about
         // what exists that the app could not make. The failure is recorded
         // once, by LiveChallengeService.getActiveChallenges. What this member
@@ -983,8 +996,8 @@ class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
           padding: const EdgeInsets.all(18),
           child: SectionLoadFailure(
             what: 'challenges',
-            error: challengesAsync.error,
-            busy: challengesAsync.isLoading,
+            error: read.error,
+            busy: read.busy,
             onRetry: () => ref.invalidate(liveChallengesProvider),
             textColor: _C.onSurface,
             mutedColor: _C.onSurfVar,
@@ -993,23 +1006,22 @@ class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
                 : null)),
         if (held != null && held.any((c) => c.status == ChallengeStatus.active)) ...[
           const SizedBox(height: 10),
-          _challengeList(context, held),
+          _challengeList(context, ref, uid, held),
         ],
       ]
+      else if (held == null)
+        _GlassCard(
+          padding: const EdgeInsets.symmetric(vertical: 28),
+          child: const Center(
+            child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2)))
       else
-        challengesAsync.when(
-          loading: () => _GlassCard(
-            padding: const EdgeInsets.symmetric(vertical: 28),
-            child: const Center(
-              child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2))),
-          // Unreachable: `hasError` is handled above.
-          error: (_, __) => const SizedBox.shrink(),
-          data: (all) => _challengeList(context, all),
-        ),
+        _challengeList(context, ref, uid, held),
     ]);
   }
 
-  Widget _challengeList(BuildContext context, List<Challenge> all) {
+  /// [owner]: whose rows these are.
+  Widget _challengeList(BuildContext context, WidgetRef ref, String? owner,
+      List<Challenge> all) {
             final active = all
                 .where((c) => c.status == ChallengeStatus.active)
                 .take(3)
@@ -1079,16 +1091,17 @@ class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
                           : _TapTarget(
                             label: 'Join ${c.title}',
                             onTap: () async {
-                              final ok = await ref.read(challengeNotifierProvider.notifier)
-                                  .joinChallenge(c.id);
-                              if (!context.mounted) return;
+                              if (_left(owner)) return;
+                              final challenges =
+                                  ref.read(challengeNotifierProvider.notifier);
+                              final ok = await challenges.joinChallenge(c.id);
+                              if (_left(owner) || !context.mounted) return;
                               if (ok) {
                                 ref.invalidate(liveChallengesProvider);
                               } else {
                                 // P0-FL-53b · recorded by the notifier; said in
                                 // the one voice, announced.
-                                final err = ref.read(challengeNotifierProvider.notifier)
-                                    .lastJoinError;
+                                final err = challenges.lastJoinError;
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Semantics(liveRegion: true,
