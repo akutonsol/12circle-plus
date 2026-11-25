@@ -8,6 +8,24 @@ import 'two_member_postgrest.dart' show TwoMemberPostgrest, memberA, memberB;
 /// One request, with who asked (the uid the bearer token names).
 typedef Asked = ({String method, String table, String who, String query, String body});
 
+/// How a scripted request is answered.
+enum Outcome {
+  /// As the table would.
+  ok,
+
+  /// 500, and nothing made.
+  refused,
+
+  /// Nothing matched, as a row the caller may not touch: 200 with no rows.
+  matchesNothing,
+
+  /// Made, and then the connection drops: the caller sees a network error.
+  lost,
+}
+
+/// One request's answer, used once: [outcome], after [until] completes.
+typedef Scripted = ({bool Function(Asked) where, Outcome outcome, Completer<void>? until});
+
 /// The workout tables, as two members on one device see them (P0-FL-59b).
 ///
 /// Row security as the live policies have it: a member reads and updates only
@@ -30,6 +48,10 @@ class WorkoutMembersServer extends http.BaseClient {
   bool Function(Asked)? holdWhere;
   Completer<void>? heldByWhere;
 
+  /// One-shot answers for the next requests [Scripted.where] picks, in order:
+  /// each is used by the first request it matches, then dropped.
+  final script = <Scripted>[];
+
   /// What an RPC or an Edge Function answers, keyed `name:<who>`.
   final answers = <String, Object?>{};
 
@@ -48,6 +70,7 @@ class WorkoutMembersServer extends http.BaseClient {
     holdWhere = null;
     heldByWhere = null;
     answers.clear();
+    script.clear();
     locked.clear();
     asked.clear();
     _ids = 0;
@@ -111,12 +134,23 @@ class WorkoutMembersServer extends http.BaseClient {
         (method: request.method, table: table, who: who, query: u.query, body: body);
     asked.add(ask);
     final key = '${request.method} $table:$who';
-    final failing = fails.contains(key);
-    final answer = failing ? null : _answer(request, table, who, body);
+    final at = script.indexWhere((s) => s.where(ask));
+    final scripted = at < 0 ? null : script.removeAt(at);
+    final failing = fails.contains(key) || scripted?.outcome == Outcome.refused;
+    final answer = failing
+        ? null
+        : scripted?.outcome == Outcome.matchesNothing
+            ? _json(const <Object?>[], 200, request)
+            : _answer(request, table, who, body);
     final hold = holds[key];
     if (hold != null) await hold.future;
     if (holdWhere?.call(ask) ?? false) await heldByWhere!.future;
+    await scripted?.until?.future;
     if (failing) return _json({'message': 'refused SECRET', 'code': 'XX000'}, 500, request);
+    if (scripted?.outcome == Outcome.lost) {
+      // Made — and the connection dropped before the answer came back.
+      throw http.ClientException('Connection closed before full header was received', u);
+    }
     return answer!;
   }
 

@@ -1295,9 +1295,12 @@ void main() {
       server.locked.add(sid);
       final to = await swapFirst(t);
       await settle(t, 6);
-      expect(find.textContaining("Couldn't swap to $to — try again in a moment"), findsOneWidget,
+      // The row takes no write, so the undo is not stored either (round 3,
+      // B1): nothing is promised about what a reload brings back.
+      expect(find.text('$before is back — but the change could not be saved.'), findsOneWidget,
           reason: 'THE defect: 0 rows counted as swapped');
       expect(find.text('Swapped to $to'), findsNothing);
+      expect(find.textContaining('Swapped to'), findsNothing);
       expect(first(), before, reason: 'it would be back on the next reload anyway');
       expect(c.read(selectedWorkoutProvider)!.exercises.first.instanceId,
           _aWorkout.exercises.first.instanceId,
