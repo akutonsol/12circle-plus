@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/observability/app_failure.dart';
@@ -49,6 +52,65 @@ bool ownerGone(String? owner, String origin, String what) {
 StateError _accountChanged(String what) =>
     StateError('$what: the signed-in account changed');
 
+/// Runs [then] once, as soon as [owner] is no longer the signed-in account,
+/// and returns how to stop waiting for that (P0-FL-60a).
+///
+/// From the auth client, not from a widget or a provider container: what it
+/// takes away (a SnackBar, a sheet) outlives the screen that showed it, and
+/// may have to go before the next frame.
+void Function() whenOwnerGone(String? owner, void Function() then) {
+  final GoTrueClient auth;
+  try {
+    auth = Supabase.instance.client.auth;
+  } on AssertionError {
+    return () {}; // no client, so no account to change (see [signedInUid])
+  }
+  late final StreamSubscription<AuthState> sub;
+  sub = auth.onAuthStateChange.listen((_) {
+    if (signedInUid() == owner) return;
+    sub.cancel();
+    then();
+    // An auth failure is its own event's to record (and changes no account).
+  }, onError: (Object _) {});
+  return sub.cancel;
+}
+
+/// True when the server's answer says the change was NOT made. Anything else —
+/// no answer, a fault after the payment provider may have acted, a reply that
+/// was lost — leaves the outcome unknown (P0-FL-60a, item 7).
+///
+///  * a table read or write is one transaction: PostgREST's error means it was
+///    not made, except a gateway's (502/504), which does not know;
+///  * the payment functions refuse with a 4xx before they act, and name the
+///    two failures after which nothing was changed.
+bool definitelyRefused(Object e) => switch (e) {
+      PostgrestException(:final code) => code != '502' && code != '504',
+      FunctionException(:final status, :final details) =>
+        (status >= 400 && status < 500 && status != 408) ||
+            (details is Map &&
+                const {'stripe_cancel_failed', 'Could not read your membership'}
+                    .contains(details['error'])),
+      _ => false,
+    };
+
+/// What a cancellation came to.
+enum CancelOutcome { cancelled, refused, unconfirmed }
+
+/// Cancellations whose `false` was not the server's refusal.
+final _unconfirmedCancels = <String>{};
+
+extension CancelSubscriptionOutcome on PaymentService {
+  /// [PaymentService.cancelSubscription], with its `false` told apart: refused
+  /// by the server, or not known to have failed.
+  Future<CancelOutcome> cancelSubscriptionOutcome(String rowId) async {
+    _unconfirmedCancels.remove(rowId);
+    if (await cancelSubscription(rowId)) return CancelOutcome.cancelled;
+    return _unconfirmedCancels.remove(rowId)
+        ? CancelOutcome.unconfirmed
+        : CancelOutcome.refused;
+  }
+}
+
 /// Module 16 — Payments (Stripe).
 /// The app never touches the secret key; it asks the `create-checkout` Edge
 /// Function for a hosted Checkout URL and opens it, then reads subscription /
@@ -64,11 +126,22 @@ class PaymentService {
   Future<void> _open(Object? url, String? owner, String what) async {
     if (signedInUid() != owner) throw _accountChanged(what);
     if (url is! String) throw StateError('$what: no url in the answer');
-    final opened = await launchUrl(
-      Uri.parse(url),
-      mode: kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
-      webOnlyWindowName: kIsWeb ? '_self' : null,
-    );
+    final bool opened;
+    try {
+      opened = await launchUrl(
+        Uri.parse(url),
+        mode: kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
+        webOnlyWindowName: kIsWeb ? '_self' : null,
+      );
+    } catch (e, st) {
+      // N-5: url_launcher and Uri.parse put the LINK in their message, and it
+      // opens the member's invoices or payout account for whoever has it. The
+      // type and code are what is recorded.
+      final code = e is PlatformException ? ' ${e.code}' : '';
+      Error.throwWithStackTrace(
+          StateError('$what: the page did not open (${e.runtimeType}$code)'),
+          st);
+    }
     if (!opened) throw StateError('$what: the page did not open');
   }
 
@@ -125,7 +198,9 @@ class PaymentService {
 
   /// Switches the active membership to another tier in place (Self <-> AI).
   /// Returns 'changed' on success, 'needs_checkout' if there's no membership to
-  /// change (caller should start a checkout), or 'error'.
+  /// change (caller should start a checkout), 'payment_issue', 'error' (the
+  /// server refused; nothing was changed) or 'unconfirmed' (no answer that says
+  /// so: the swap may have gone through and only the reply been lost).
   Future<String> changeMembership(String newKind) async {
     try {
       final res = await _db.functions
@@ -138,9 +213,9 @@ class PaymentService {
       if (data is Map && (data['ok'] == true)) return 'changed';
       throw StateError('update-subscription: unexpected response');
     } catch (e, st) {
-      // P0-FL-60a: 'error' is said by the caller; the cause was lost.
+      // P0-FL-60a: said by the caller; the cause was lost.
       reportError('PaymentService.changeMembership', e, st);
-      return 'error';
+      return definitelyRefused(e) ? 'error' : 'unconfirmed';
     }
   }
 
@@ -154,6 +229,8 @@ class PaymentService {
     } catch (e, st) {
       // P0-FL-56b: `false` is said by the caller; the cause was lost.
       reportError('PaymentService.cancelSubscription', e, st);
+      // Read by [CancelSubscriptionOutcome].
+      if (!definitelyRefused(e)) _unconfirmedCancels.add(subscriptionRowId);
       return false;
     }
   }

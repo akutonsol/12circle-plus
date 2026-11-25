@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/observability/app_failure.dart';
 import '../data/payment_service.dart'
-    show CheckoutRefused, ownerGone, signedInUid;
+    show CheckoutRefused, ownerGone, signedInUid, whenOwnerGone;
 import '../domain/payment_provider.dart';
 
 /// What a client is told when a checkout could not be started for a reason
@@ -46,12 +46,53 @@ Future<bool> launchCheckout(
     problem = checkoutFailedMessage;
   }
   // The service recorded it.
-  if (signedInUid() != owner) return false;
   if (context.mounted) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(problem), backgroundColor: const Color(0xFFFFB4AB)));
+    showOwnedSnackBar(ScaffoldMessenger.of(context), owner,
+        SnackBar(content: Text(problem), backgroundColor: const Color(0xFFFFB4AB)));
   }
   return false;
+}
+
+/// Says the outcome of [owner]'s action to [owner] only (P0-FL-60a): not shown
+/// when another account is signed in, and gone — without its exit animation —
+/// when that changes, even if the screen that showed it is not there any more.
+void showOwnedSnackBar(
+    ScaffoldMessengerState messenger, String? owner, SnackBar bar) {
+  if (signedInUid() != owner || !messenger.mounted) return;
+  final shown = messenger.showSnackBar(bar);
+  final stop = whenOwnerGone(owner, () {
+    if (!messenger.mounted) return;
+    // Every bar up or waiting is from before the account changed.
+    messenger
+      ..clearSnackBars()
+      ..removeCurrentSnackBar();
+  });
+  shown.closed.whenComplete(stop);
+}
+
+/// Runs [open], which pushes one route, and takes that route away when [owner]
+/// is no longer signed in (P0-FL-60a) — before it is drawn, if no frame ran in
+/// between. For a sheet another feature draws; a dialog of ours is an
+/// [OwnedDialog].
+void openOwnedRoute(BuildContext context, String? owner, VoidCallback open) {
+  final navigator = Navigator.of(context);
+  Route<dynamic>? top() {
+    Route<dynamic>? r;
+    navigator.popUntil((route) {
+      r = route;
+      return true; // looks, pops nothing
+    });
+    return r;
+  }
+
+  final before = top();
+  open();
+  final pushed = top();
+  if (pushed == null || identical(pushed, before)) return;
+  final stop = whenOwnerGone(owner, () {
+    if (navigator.mounted && pushed.isActive) navigator.removeRoute(pushed);
+  });
+  pushed.popped.whenComplete(stop);
 }
 
 /// A dialog about one account's payment: it closes itself, unanswered, when
@@ -68,14 +109,33 @@ class OwnedDialog extends ConsumerStatefulWidget {
 
 class _OwnedDialogState extends ConsumerState<OwnedDialog> {
   String? get _owner => widget.owner;
+  late final void Function() _stop;
+
+  @override
+  void initState() {
+    super.initState();
+    // Also for an account that left before this was first drawn.
+    _stop = whenOwnerGone(_owner, _close);
+  }
+
+  @override
+  void dispose() {
+    _stop();
+    super.dispose();
+  }
+
+  void _close() {
+    if (!mounted) return;
+    final route = ModalRoute.of(context);
+    if (route == null || !route.isActive) return;
+    // Not on top: its barrier would stay behind whatever is.
+    route.isCurrent
+        ? Navigator.of(context).pop()
+        : Navigator.of(context).removeRoute(route);
+  }
 
   @override
   Widget build(BuildContext context) {
-    ref.listen<String?>(paymentAccountProvider, (_, uid) {
-      if (uid == _owner) return;
-      final route = ModalRoute.of(context);
-      if (route != null && route.isCurrent) Navigator.of(context).pop();
-    });
     return ref.watch(paymentAccountProvider) == _owner && signedInUid() == _owner
         ? widget.child
         : const SizedBox.shrink();

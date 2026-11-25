@@ -13,8 +13,12 @@ import 'package:circle_fitness/features/payments/domain/entitlements.dart';
 import 'package:circle_fitness/features/payments/domain/payment_provider.dart';
 import 'package:circle_fitness/features/payments/presentation/coach_payments_screen.dart';
 import 'package:circle_fitness/features/payments/presentation/coach_plan_screen.dart';
+import 'package:circle_fitness/features/payments/presentation/checkout_launcher.dart';
 import 'package:circle_fitness/features/payments/presentation/manage_subscription_screen.dart';
+import 'package:circle_fitness/features/payments/presentation/payment_result_screen.dart';
+import 'package:circle_fitness/features/payments/presentation/paywall_gate.dart';
 import 'package:circle_fitness/features/payments/presentation/upgrade_screen.dart';
+import 'package:circle_fitness/features/profile/presentation/subscription_screen.dart';
 import 'package:circle_fitness/features/workout/presentation/widgets/section_load_failure.dart';
 
 import '../support/pump_until.dart';
@@ -35,7 +39,9 @@ import '../support/two_member_postgrest.dart';
 // providers; nothing here mounts an account scope, and every screen STAYS
 // mounted across the switch. The request log says who asked for what.
 //
-// HOW TO SEE IT FAIL: `git checkout a82f993 -- lib/features/payments`.
+// HOW TO SEE IT FAIL: `git checkout a82f993 -- lib/features/payments`. The
+// groups marked R3 (rounds 2 and 3): `git checkout 5cafdd4 -- lib/features/payments`
+// (they need the round-3 helpers only where they say so).
 
 class _Server extends TwoMemberPostgrest {
   /// Answers keyed `name:<who asked>` (else `name`): an rpc, a function or a
@@ -45,6 +51,9 @@ class _Server extends TwoMemberPostgrest {
   /// `name:<who>` held until completed. The answer is the one that was true
   /// when the request ARRIVED.
   final gates = <String, Completer<void>>{};
+
+  /// `name:<who>` whose connection is lost: the request is thrown, unanswered.
+  final lost = <String>{};
 
   /// Every non-auth request: `name:<who>`.
   final log = <String>[];
@@ -60,6 +69,7 @@ class _Server extends TwoMemberPostgrest {
     super.reset();
     answers.clear();
     gates.clear();
+    lost.clear();
     log.clear();
     bodies.clear();
     writes.clear();
@@ -89,6 +99,9 @@ class _Server extends TwoMemberPostgrest {
         (path.contains('/rpc/') ? (200, null) : (200, const <Object?>[]));
     final gate = gates[key];
     if (gate != null) await gate.future;
+    if (lost.contains(key)) {
+      throw http.ClientException('Connection closed', request.url);
+    }
     return http.StreamedResponse(
         Stream.value(utf8.encode(jsonEncode(body))), status,
         request: request, headers: {'content-type': 'application/json'});
@@ -129,7 +142,10 @@ void main() {
       return switch (launch) {
         _Launch.opens => true,
         _Launch.refuses => false,
-        _Launch.throws => throw PlatformException(code: 'ACTIVITY_NOT_FOUND'),
+        // As url_launcher does: the link is in the message.
+        _Launch.throws => throw PlatformException(
+            code: 'ACTIVITY_NOT_FOUND',
+            message: 'No Activity found to handle intent { ${launched.last} }'),
       };
     });
   });
@@ -194,9 +210,11 @@ void main() {
     test('changeMembership: a failure and an unreadable answer are recorded',
         () async {
       server.answers['update-subscription'] = _down;
-      expect(await svc().changeMembership('ai_guided'), 'error');
+      // R3 (item 7): the 500 may come after Stripe swapped the plan, and the
+      // unreadable answer says nothing — neither is "it was not changed".
+      expect(await svc().changeMembership('ai_guided'), 'unconfirmed');
       server.answers['update-subscription'] = (200, {'what': 1});
-      expect(await svc().changeMembership('ai_guided'), 'error');
+      expect(await svc().changeMembership('ai_guided'), 'unconfirmed');
       expect(origins(), [
         'PaymentService.changeMembership',
         'PaymentService.changeMembership'
@@ -386,6 +404,16 @@ void main() {
     }
   }
 
+  /// The same without drawing a frame: what was in flight lands and runs, the
+  /// screen and Riverpod's flush (which needs a frame) stay where they were.
+  Future<void> noFrames(WidgetTester t) async {
+    for (var i = 0; i < 12; i++) {
+      await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)));
+      await t.idle();
+    }
+  }
+
   ProviderContainer container(WidgetTester t) =>
       ProviderScope.containerOf(t.element(find.byType(MaterialApp)));
 
@@ -447,7 +475,11 @@ void main() {
       await t.tap(find.text('Upgrade to AI-Guided'));
       await settle(t);
       expect(server.count('update-subscription', _b), 0);
+      expect(server.count('update-subscription'), 0);
+      expect(recordedAccountChange(), isTrue, reason: 'the refusal is recorded');
+      expect(find.byType(SnackBar), findsNothing);
     });
+
     testWidgets("A's busy plan card is not busy for B", (t) async {
       await openAsA(t);
       server.answers['client_plan:$_b'] = (200, 'free');
@@ -1208,25 +1240,95 @@ void main() {
       expect(server.count('cancel-subscription'), 0);
     });
 
-    testWidgets("Stop coach: B signs in while A's is being ended: B is told "
-        'nothing', (t) async {
-      shareCoach();
-      await openAsA(t);
-      await tapStop(t);
-      server.answers['subscriptions:$_a'] = _down;
-      final gate = server.gates['subscriptions:$_a'] = Completer();
-      final before = server.count('subscriptions', _a);
-      await t.tap(find.text('Yes, stop'));
-      await until(
-          t, () => server.count('subscriptions', _a) > before, 'A asked');
-      await signIn(t, _b);
-      gate.complete();
-      await settle(t);
-      expect(find.byType(SnackBar), findsNothing);
-      expect(server.writes, isEmpty);
-      expect(recordedAccountChange(), isTrue);
-    });
+    // The caller's half only: cancelCoach's own steps after the switch are
+    // FL-59d's, so what it sends is NOT asserted here (the lead runs that on the
+    // combined head). The read succeeds and cancelCoach goes on to an outcome,
+    // so there IS something to say — to A, not to B.
+    for (final paid in [true, false]) {
+      testWidgets("Stop coach, the caller's half (${paid ? 'paid' : 'unpaid'}): "
+          "B signs in while A's is being ended: B is told nothing and it is "
+          'recorded', (t) async {
+        shareCoach();
+        await openAsA(t);
+        await tapStop(t);
+        server.answers['subscriptions:$_a'] = (200, [
+          if (paid) {'id': 's-a', 'current_period_end': '2027-03-03T00:00:00Z'},
+        ]);
+        server.answers['cancel-subscription'] =
+            (200, {'ok': true, 'endsAt': '2027-03-03T00:00:00Z'});
+        final gate = server.gates['subscriptions:$_a'] = Completer();
+        final before = server.count('subscriptions', _a);
+        await t.tap(find.text('Yes, stop'));
+        await until(
+            t, () => server.count('subscriptions', _a) > before, 'A asked');
+        final bCoaches = server.count('coach_client_relationships', _b);
+        await signIn(t, _b);
+        gate.complete();
+        await settle(t);
+        expect(find.byType(SnackBar), findsNothing);
+        expect(find.textContaining('oaching'), findsNothing);
+        expect(recordedAccountChange(), isTrue);
+        // B's own first reads, and no more: A's outcome refreshes nothing of B's.
+        expect(
+            server.log
+                .where((l) => l == 'client_plan:$_b')
+                .length,
+            1);
+        expect(bCoaches, 0);
+      });
 
+      testWidgets("no-frame: Stop coach, the caller's half "
+          "(${paid ? 'paid' : 'unpaid'}): the outcome lands before a frame",
+          (t) async {
+        shareCoach();
+        await openAsA(t);
+        await tapStop(t);
+        server.answers['subscriptions:$_a'] = (200, [
+          if (paid) {'id': 's-a', 'current_period_end': '2027-03-03T00:00:00Z'},
+        ]);
+        server.answers['cancel-subscription'] =
+            (200, {'ok': true, 'endsAt': '2027-03-03T00:00:00Z'});
+        final gate = server.gates['subscriptions:$_a'] = Completer();
+        final before = server.count('subscriptions', _a);
+        await t.tap(find.text('Yes, stop'));
+        await until(
+            t, () => server.count('subscriptions', _a) > before, 'A asked');
+        await t.runAsync(() => signInAs(_b));
+        gate.complete();
+        await noFrames(t);
+        expect(recordedAccountChange(), isTrue);
+        await settle(t);
+        expect(find.byType(SnackBar), findsNothing);
+      });
+
+      testWidgets('control: Stop coach by the same account '
+          "(${paid ? 'paid' : 'unpaid'}) ends it and says so", (t) async {
+        shareCoach();
+        await openAsA(t);
+        await tapStop(t);
+        server.answers['subscriptions:$_a'] = (200, [
+          if (paid) {'id': 's-a', 'current_period_end': '2027-03-03T12:00:00Z'},
+        ]);
+        server.answers['cancel-subscription:$_a'] =
+            (200, {'ok': true, 'endsAt': '2027-03-03T12:00:00Z'});
+        await t.runAsync(refreshSession);
+        await settle(t);
+        await t.tap(find.text('Yes, stop'));
+        await until(t, () => seen(find.byType(SnackBar)), 'the outcome');
+        expect(find.textContaining('until Mar 3'),
+            paid ? findsOneWidget : findsNothing);
+        expect(server.count('cancel-subscription', _a), paid ? 1 : 0);
+        expect(
+            server.writes,
+            paid
+                ? isEmpty
+                : [
+                    'PATCH coach_client_relationships:$_a',
+                    'POST notifications:$_a',
+                  ]);
+        expect(reported, isEmpty);
+      });
+    }
 
     testWidgets("no-frame: A's coach row tapped after B signed in draws no dialog", (t) async {
       shareCoach();
@@ -1281,5 +1383,1417 @@ void main() {
       await until(t, () => seen(find.byType(SnackBar)), 'the outcome');
       expect(find.textContaining('Nothing was changed'), findsOneWidget);
     });
+  });
+
+  // ── rounds 2 and 3 ────────────────────────────────────────────────────────
+
+  group('R3 the owner travels with the value (item 1)', () {
+    final sources = <String, (String, FutureProvider<Object?>, Object?)>{
+      'coachPlanTierProvider': ('coach_plan_tier', coachPlanTierProvider, 'growth'),
+      'membershipTierProvider':
+          ('active_membership', membershipTierProvider, 'ai_guided'),
+      'mySubscriptionsProvider': ('subscriptions', mySubscriptionsProvider, [
+        {'id': 'sub-A', 'kind': 'self_guided', 'status': 'active'}
+      ]),
+      'coachRevenueProvider': ('payments', coachRevenueProvider, const []),
+      'coachBalanceProvider': ('stripe-connect', coachBalanceProvider, {'pending': 1}),
+      'coachConnectStatusProvider':
+          ('stripe-connect', coachConnectStatusProvider, {'connected': true}),
+      'coachSubscriptionProvider': ('subscriptions', coachSubscriptionProvider('c'), null),
+      'clientPlanProvider': ('client_plan', clientPlanProvider, 'ai_guided'),
+    };
+
+    Future<ProviderContainer> read(
+        WidgetTester t, String name, ProviderBase<AsyncValue<Object?>> p) async {
+      await t.runAsync(() => signInAs(_a));
+      await t.pumpWidget(ProviderScope(
+          child: MaterialApp(
+              home: Consumer(builder: (_, ref, __) {
+        ref.watch(p);
+        return const SizedBox();
+      }))));
+      final c = container(t);
+      await until(t, () => c.read(p).hasValue, "A's value");
+      return c;
+    }
+
+    sources.forEach((name, s) {
+      final (table, provider, answer) = s;
+      testWidgets('$name: A → B and an invalidate before the change is flushed: '
+          "a reload, never an AsyncData with A's value", (t) async {
+        server.answers['$table:$_a'] = (200, answer);
+        final c = await read(t, name, provider);
+        server.answers['$table:$_b'] = (200, answer);
+        server.gates['$table:$_b'] = Completer();
+        await t.runAsync(() => signInAs(_b)); // no frame
+        c.invalidate(provider);
+        await t.pump();
+        final now = c.read(provider);
+        expect(now.isLoading, isTrue);
+        expect(now, isNot(isA<AsyncData<Object?>>()), reason: '$now');
+        server.gates['$table:$_b']!.complete();
+        await until(t, () => !c.read(provider).isLoading, "B's answer");
+      });
+
+      testWidgets('$name: control — the same account invalidating (its token '
+          'refreshed first) keeps its value meanwhile', (t) async {
+        server.answers['$table:$_a'] = (200, answer);
+        final c = await read(t, name, provider);
+        await t.runAsync(refreshSession);
+        await settle(t);
+        server.gates['$table:$_a'] = Completer();
+        c.invalidate(provider);
+        await t.pump();
+        expect(c.read(provider).isLoading, isTrue);
+        expect(c.read(provider).hasValue, isTrue);
+        server.gates['$table:$_a']!.complete();
+        await until(t, () => !c.read(provider).isLoading, 'the refresh');
+      });
+    });
+
+    test('a settled value keeps the account its read started for, whoever is '
+        'signed in when it is looked at', () async {
+      await signInAs(_a);
+      var reads = 0;
+      // A source that is NOT re-read on an account change: it stays settled.
+      final source = FutureProvider<String>((ref) async => 'read ${++reads}');
+      final owned = ownedReadProvider(source);
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      c.listen(owned, (_, __) {});
+      await pumpEventQueue();
+      expect(c.read(owned).value, 'read 1');
+      await signInAs(_b);
+      await pumpEventQueue();
+      expect(c.read(source).value, 'read 1', reason: 'premise: still settled');
+      expect(c.read(owned).hasValue, isFalse, reason: "A's value became B's");
+      c.invalidate(source);
+      await pumpEventQueue();
+      expect(c.read(owned).value, 'read 2', reason: "B's own read is B's");
+      await signInAs(_a);
+      await pumpEventQueue();
+      expect(c.read(owned).hasValue, isFalse, reason: "B's value became A's");
+    });
+
+    test("a read that starts after the auth client changed and before the app "
+        'knows counts for nobody', () async {
+      await signInAs(_a);
+      var reads = 0;
+      final source = FutureProvider<String>((ref) async => 'read ${++reads}');
+      final owned = ownedReadProvider(source);
+      // The app still believes in A while the client is B's.
+      final c = ProviderContainer(
+          overrides: [paymentAccountProvider.overrideWithValue(_a)]);
+      addTearDown(c.dispose);
+      c.listen(owned, (_, __) {});
+      await pumpEventQueue();
+      expect(c.read(owned).value, 'read 1');
+      await signInAs(_b);
+      c.invalidate(source);
+      await pumpEventQueue();
+      expect(c.read(source).value, 'read 2', reason: 'premise');
+      expect(c.read(owned).hasValue, isFalse,
+          reason: "B's answer was taken for A's");
+    });
+
+    testWidgets('Coach plan: no frame, then an invalidate; B pending, then B '
+        'answers', (t) async {
+      server.answers['coach_plan_tier:$_a'] = (200, 'growth');
+      await open(t, const CoachPlanScreen());
+      await until(t, () => seen(find.text('Current')), "A's plan");
+      server.answers['coach_plan_tier:$_b'] = (200, 'elite');
+      final gate = server.gates['coach_plan_tier:$_b'] = Completer();
+      await t.runAsync(() => signInAs(_b)); // no frame
+      container(t).invalidate(coachPlanTierProvider);
+      await settle(t);
+      expect(server.count('coach_plan_tier', _b), greaterThan(0));
+      expect(find.text('Current'), findsNothing);
+      expect(enabled(t, startsWith: 'Choose'), isEmpty);
+      gate.complete();
+      await until(t, () => seen(find.text('Current')), "B's plan");
+      expect(find.text('Choose Elite'), findsNothing);
+    });
+
+    testWidgets('control: Coach plan, the same account, invalidate in flight '
+        'keeps "Current"', (t) async {
+      server.answers['coach_plan_tier:$_a'] = (200, 'growth');
+      await open(t, const CoachPlanScreen());
+      await until(t, () => seen(find.text('Current')), "A's plan");
+      await t.runAsync(refreshSession);
+      final gate = server.gates['coach_plan_tier:$_a'] = Completer();
+      container(t).invalidate(coachPlanTierProvider);
+      await settle(t);
+      expect(server.count('coach_plan_tier', _a), 2, reason: 'premise');
+      expect(find.text('Current'), findsOneWidget);
+      expect(find.text('Choose Growth'), findsNothing);
+      gate.complete();
+      await settle(t);
+      expect(find.text('Current'), findsOneWidget);
+    });
+
+    Future<void> manageAsA(WidgetTester t) async {
+      server.answers['client_plan:$_a'] = (200, 'self_guided');
+      server.answers['client_plan:$_b'] = (200, 'free');
+      server.answers['subscriptions:$_a'] = (200, [
+        {
+          'id': 'sub-A',
+          'kind': 'self_guided',
+          'status': 'active',
+          'current_period_end': '2027-03-03T12:00:00Z'
+        }
+      ]);
+      await open(t, const ManageSubscriptionScreen());
+      await until(
+          t, () => seen(find.text('Self-Guided Membership')), "A's row");
+    }
+
+    testWidgets("Manage: no frame, then an invalidate, B pending: A's row is "
+        'not drawn and there is nothing to cancel', (t) async {
+      await manageAsA(t);
+      server.answers['subscriptions:$_b'] = (200, const []);
+      final gate = server.gates['subscriptions:$_b'] = Completer();
+      await t.runAsync(() => signInAs(_b)); // no frame
+      container(t).invalidate(mySubscriptionsProvider);
+      await settle(t);
+      expect(server.count('subscriptions', _b), greaterThan(0));
+      expect(find.text('Self-Guided Membership'), findsNothing);
+      expect(find.textContaining('Renews'), findsNothing);
+      expect(find.textContaining('Cancel'), findsNothing);
+      expect(server.count('cancel-subscription'), 0);
+      gate.complete();
+      await until(t, () => seen(find.textContaining('on the Free plan')),
+          "B's own answer");
+    });
+
+    testWidgets('control: Manage, the same account, invalidate in flight keeps '
+        'its row', (t) async {
+      await manageAsA(t);
+      final gate = server.gates['subscriptions:$_a'] = Completer();
+      container(t).invalidate(mySubscriptionsProvider);
+      await settle(t);
+      expect(server.count('subscriptions', _a), 2, reason: 'premise');
+      expect(find.text('Self-Guided Membership'), findsOneWidget);
+      gate.complete();
+      await settle(t);
+      expect(find.text('Self-Guided Membership'), findsOneWidget);
+    });
+
+    testWidgets("Manage signed out: A's rows and coaches go away", (t) async {
+      server.answers['coach_client_relationships:$_a'] = (200, [
+        {'coach_id': 'c-1', 'status': 'active'}
+      ]);
+      server.answers['public_profiles:$_a'] = (200, [
+        {'id': 'c-1', 'first_name': 'Anna', 'last_name': 'Coach'}
+      ]);
+      await manageAsA(t);
+      await until(t, () => seen(find.text('Anna Coach')), "A's coach");
+      server.answers['client_plan:anon'] = _down;
+      await t.runAsync(signOut);
+      await settle(t);
+      expect(find.text('Self-Guided Membership'), findsNothing);
+      expect(find.text('Anna Coach'), findsNothing);
+      expect(find.text('Self-Guided'), findsNothing);
+    });
+
+    testWidgets("N-6: A's failure is not B's first state: B pending shows "
+        'loading, not a failure', (t) async {
+      server.answers['client_plan:$_a'] = (200, 'self_guided');
+      server.answers['client_plan:$_b'] = (200, 'free');
+      server.answers['subscriptions:$_a'] = _down;
+      server.answers['coach_client_relationships:$_a'] = _down;
+      await open(t, const ManageSubscriptionScreen());
+      await until(
+          t,
+          () =>
+              seen(find.text("Couldn't load your subscriptions")) &&
+              seen(find.text("Couldn't load your coaches")),
+          "A's failures");
+      final subs = server.gates['subscriptions:$_b'] = Completer();
+      final rels = server.gates['coach_client_relationships:$_b'] = Completer();
+      await signIn(t, _b);
+      await until(
+          t,
+          () =>
+              server.count('subscriptions', _b) > 0 &&
+              server.count('coach_client_relationships', _b) > 0,
+          'B asked');
+      await settle(t);
+      expect(find.byType(SectionLoadFailure), findsNothing,
+          reason: "A's failure was B's");
+      expect(find.byType(CircularProgressIndicator), findsNWidgets(2));
+      subs.complete();
+      rels.complete();
+      await until(t, () => seen(find.textContaining('not working with a coach')),
+          "B's own answers");
+    });
+
+    testWidgets("control: B's own failure is B's", (t) async {
+      server.answers['client_plan'] = (200, 'free');
+      server.answers['subscriptions:$_b'] = _down;
+      await open(t, const ManageSubscriptionScreen());
+      await settle(t);
+      await signIn(t, _b);
+      await until(t, () => seen(find.text("Couldn't load your subscriptions")),
+          "B's failure");
+    });
+  });
+
+  group('R3 an action belongs to the account it was built for (items 2, 3)', () {
+    const rel = {'coach_id': 'c-1', 'status': 'active'};
+
+    void shareCoach() {
+      server.answers['coach_client_relationships'] = (200, [rel]);
+      server.answers['public_profiles'] = (200, [
+        {'id': 'c-1', 'first_name': 'Anna', 'last_name': 'Coach'}
+      ]);
+    }
+
+    Future<void> manage(WidgetTester t) async {
+      server.answers['client_plan'] = (200, 'self_guided');
+      server.answers['subscriptions'] = (200, [
+        {'id': 'sub-1', 'kind': 'self_guided', 'status': 'active'},
+        {'id': 'sub-2', 'kind': 'ai_guided', 'status': 'active'},
+      ]);
+      await open(t, const ManageSubscriptionScreen());
+      await until(t, () => seen(find.text('Cancel')), "A's plan");
+      await settle(t);
+    }
+
+    Future<void> plans(WidgetTester t) async {
+      server.answers['client_plan'] = (200, 'self_guided');
+      server.answers['subscriptions'] = (200, [
+        {'id': 'sub-1', 'kind': 'self_guided', 'status': 'active'},
+        {'id': 'sub-2', 'kind': 'ai_guided', 'status': 'active'},
+      ]);
+      await open(t, const UpgradeScreen());
+      await until(t, () => seen(find.text('Current')), "A's plan");
+    }
+
+    void nothingSent() {
+      expect(server.count('cancel-subscription'), 0);
+      expect(server.count('update-subscription'), 0);
+      expect(server.count('create-checkout'), 0);
+      expect(server.writes, isEmpty);
+      expect(launched, isEmpty);
+      expect(find.byType(SnackBar), findsNothing);
+    }
+
+    testWidgets('no-frame: Cancel plan confirmed after B signed in sends '
+        'nothing, recorded', (t) async {
+      await manage(t);
+      await t.tap(find.text('Cancel'));
+      await until(t, () => seen(find.text('Switch to Free?')), 'the dialog');
+      await settle(t);
+      await t.runAsync(() => signInAs(_b)); // no frame
+      await t.tap(find.text('Switch to Free'), warnIfMissed: false);
+      await noFrames(t);
+      await settle(t);
+      nothingSent();
+      expect(recordedAccountChange(), isTrue);
+      expect(find.byType(OwnedDialog), findsNothing);
+    });
+
+    testWidgets('no-frame: Plans, Switch to Free confirmed after B signed in '
+        'sends nothing, recorded', (t) async {
+      await plans(t);
+      await t.tap(find.text('Switch to Free'));
+      await until(t, () => seen(find.text('Switch to Free?')), 'the dialog');
+      await settle(t);
+      await t.runAsync(() => signInAs(_b)); // no frame
+      await t.tap(find.text('Switch to Free').last, warnIfMissed: false);
+      await noFrames(t);
+      await settle(t);
+      nothingSent();
+      expect(recordedAccountChange(), isTrue);
+      expect(find.byType(OwnedDialog), findsNothing);
+    });
+
+    testWidgets("no-frame: Plans, A's subscriptions read lands after B signed "
+        'in: no dialog, nothing sent, recorded', (t) async {
+      await plans(t);
+      final gate = server.gates['subscriptions:$_a'] = Completer();
+      await t.tap(find.text('Switch to Free'));
+      await until(t, () => server.count('subscriptions', _a) == 1, 'A asked');
+      await t.runAsync(() => signInAs(_b)); // no frame
+      gate.complete();
+      await noFrames(t);
+      await t.pump();
+      expect(find.byType(OwnedDialog), findsNothing,
+          reason: "A's question was put to B");
+      expect(recordedAccountChange(), isTrue);
+      await settle(t);
+      nothingSent();
+    });
+
+    testWidgets("no-frame: Plans, A's subscriptions read FAILS after B signed "
+        'in: B is told nothing', (t) async {
+      await plans(t);
+      server.answers['subscriptions:$_a'] = _down;
+      final gate = server.gates['subscriptions:$_a'] = Completer();
+      await t.tap(find.text('Switch to Free'));
+      await until(t, () => server.count('subscriptions', _a) == 1, 'A asked');
+      await t.runAsync(() => signInAs(_b)); // no frame
+      gate.complete();
+      await noFrames(t);
+      await t.pump();
+      expect(find.byType(SnackBar), findsNothing);
+      await settle(t);
+      nothingSent();
+      expect(origins(), contains('UpgradeScreen.mySubscriptions'));
+    });
+
+    for (final (answer, what) in [
+      ((200, {'needsCheckout': true}), 'needs_checkout'),
+      ((200, {'ok': true}), 'changed'),
+      (_down, 'failed'),
+    ]) {
+      testWidgets("no-frame: W26, A's plan change answers ($what) after B signed "
+          'in: no checkout, nothing said, recorded', (t) async {
+        await plans(t);
+        server.answers['update-subscription:$_a'] = answer;
+        server.answers['create-checkout'] = (200, {'url': 'https://stripe/x'});
+        final gate = server.gates['update-subscription:$_a'] = Completer();
+        await t.tap(find.text('Upgrade to AI-Guided'));
+        await until(
+            t, () => server.count('update-subscription') == 1, 'A asked');
+        await t.runAsync(() => signInAs(_b)); // no frame
+        gate.complete();
+        await noFrames(t);
+        expect(recordedAccountChange(), isTrue);
+        expect(server.count('create-checkout'), 0);
+        await settle(t);
+        expect(server.count('create-checkout'), 0);
+        expect(launched, isEmpty);
+        expect(find.byType(SnackBar), findsNothing);
+      });
+    }
+
+    testWidgets('W26: A signs out while the plan change runs: no checkout',
+        (t) async {
+      await plans(t);
+      server.answers['update-subscription:$_a'] = (200, {'needsCheckout': true});
+      final gate = server.gates['update-subscription:$_a'] = Completer();
+      await t.tap(find.text('Upgrade to AI-Guided'));
+      await until(t, () => server.count('update-subscription') == 1, 'A asked');
+      await t.runAsync(signOut);
+      gate.complete();
+      await settle(t);
+      expect(server.count('create-checkout'), 0);
+      expect(recordedAccountChange(), isTrue);
+    });
+
+    testWidgets("no-frame: A's billing button tapped after B signed in asks for "
+        'nothing', (t) async {
+      await manage(t);
+      server.answers['create-portal-session'] = (200, {'url': 'https://stripe/b'});
+      await t.runAsync(() => signInAs(_b)); // no frame
+      await t.tap(find.text('Manage billing & payment method'));
+      await noFrames(t);
+      await settle(t);
+      expect(server.count('create-portal-session'), 0);
+      expect(launched, isEmpty);
+      expect(recordedAccountChange(), isTrue);
+    });
+
+    testWidgets("no-frame: A's portal failure is not said to B", (t) async {
+      await manage(t);
+      server.answers['create-portal-session:$_a'] = _down;
+      final gate = server.gates['create-portal-session:$_a'] = Completer();
+      await t.tap(find.text('Manage billing & payment method'));
+      await until(
+          t, () => server.count('create-portal-session') == 1, 'A asked');
+      await t.runAsync(() => signInAs(_b)); // no frame
+      gate.complete();
+      await noFrames(t);
+      await t.pump();
+      expect(find.byType(SnackBar), findsNothing);
+      expect(origins(), contains('PaymentService.openBillingPortal'));
+      await settle(t);
+      expect(find.text('Manage billing & payment method'), findsOneWidget);
+    });
+
+    testWidgets("B's own portal request stays busy when A's answer lands",
+        (t) async {
+      await manage(t);
+      final a = server.gates['create-portal-session:$_a'] = Completer();
+      final b = server.gates['create-portal-session:$_b'] = Completer();
+      server.answers['create-portal-session:$_b'] = (200, {'url': 'https://stripe/b'});
+      await t.tap(find.text('Manage billing & payment method'));
+      await until(
+          t, () => server.count('create-portal-session', _a) == 1, 'A asked');
+      await signIn(t, _b);
+      await until(t, () => seen(find.text('Cancel')), "B's plan");
+      await t.tap(find.text('Manage billing & payment method'));
+      await until(
+          t, () => server.count('create-portal-session', _b) == 1, 'B asked');
+      a.complete();
+      await settle(t);
+      expect(find.text('Opening…'), findsOneWidget);
+      b.complete();
+      await until(t, () => launched.isNotEmpty, "B's page");
+      await settle(t);
+      expect(launched, ['https://stripe/b']);
+      expect(find.text('Manage billing & payment method'), findsOneWidget);
+    });
+
+    testWidgets('no-frame: portal, A → B → A: the button is not stuck on its '
+        'spinner', (t) async {
+      await manage(t);
+      server.answers['create-portal-session:$_a'] = (200, {'url': 'https://stripe/a'});
+      final gate = server.gates['create-portal-session:$_a'] = Completer();
+      await t.tap(find.text('Manage billing & payment method'));
+      await until(t, () => seen(find.text('Opening…')), 'A asked');
+      await t.runAsync(() => signInAs(_b));
+      gate.complete();
+      await noFrames(t);
+      expect(launched, isEmpty);
+      await t.runAsync(() => signInAs(_a));
+      await settle(t);
+      expect(find.text('Opening…'), findsNothing);
+    });
+
+    testWidgets('no-frame: launchCheckout for another account sends nothing',
+        (t) async {
+      await t.runAsync(() => signInAs(_b));
+      late BuildContext ctx;
+      late WidgetRef ref;
+      await t.pumpWidget(ProviderScope(
+          child: MaterialApp(
+              home: Scaffold(body: Consumer(builder: (c, r, __) {
+        ctx = c;
+        ref = r;
+        return const SizedBox();
+      })))));
+      bool? started;
+      await t.runAsync(() async => started = await launchCheckout(ctx, ref,
+          kind: 'coach_plan', tier: 'growth', owner: _a));
+      await t.pump();
+      expect(started, isFalse);
+      nothingSent();
+      expect(recordedAccountChange(), isTrue);
+    });
+
+    // N-7
+    testWidgets('no-frame: A → B → A around a plan change: the card is not '
+        'stuck on its spinner', (t) async {
+      await plans(t);
+      server.answers['update-subscription:$_a'] = (200, {'ok': true});
+      final gate = server.gates['update-subscription:$_a'] = Completer();
+      await t.tap(find.text('Upgrade to AI-Guided'));
+      await until(t, () => server.count('update-subscription') == 1, 'A asked');
+      await t.runAsync(() => signInAs(_b));
+      gate.complete();
+      await noFrames(t);
+      await t.runAsync(() => signInAs(_a));
+      await settle(t);
+      expect(find.text('Current'), findsOneWidget);
+      expect(enabled(t, startsWith: 'Upgrade to AI-Guided'), isNotEmpty);
+    });
+
+    testWidgets('no-frame: A → B → A around Switch to Free: the card is not '
+        'stuck on its spinner', (t) async {
+      await plans(t);
+      server.answers['cancel-subscription'] = (200, {'ok': true});
+      final gate = server.gates['cancel-subscription:$_a'] = Completer();
+      await t.tap(find.text('Switch to Free'));
+      await until(t, () => seen(find.text('Switch to Free?')), 'the dialog');
+      await settle(t);
+      await t.tap(find.text('Switch to Free').last);
+      await until(t, () => server.count('cancel-subscription') == 1, 'one sent');
+      await t.runAsync(() => signInAs(_b));
+      gate.complete();
+      await noFrames(t);
+      expect(server.count('cancel-subscription'), 1);
+      await t.runAsync(() => signInAs(_a));
+      await settle(t);
+      expect(find.text('Current'), findsOneWidget);
+      expect(enabled(t, startsWith: 'Switch to Free'), isNotEmpty);
+    });
+
+    // Same-account controls of the five probes.
+    testWidgets('control: the same account (its token refreshed) changes its '
+        'plan', (t) async {
+      await plans(t);
+      server.answers['update-subscription:$_a'] = (200, {'ok': true});
+      await t.runAsync(refreshSession);
+      await t.tap(find.text('Upgrade to AI-Guided'));
+      await until(
+          t, () => seen(find.text('Your plan is now AI-Guided.')), 'said');
+      expect(server.bodies, ['update-subscription:$_a {"newKind":"ai_guided"}']);
+      expect(reported, isEmpty);
+    });
+
+    testWidgets('control: the same account (its token refreshed) cancels its '
+        'plan from its row', (t) async {
+      await manage(t);
+      server.answers['cancel-subscription:$_a'] = (200, {'ok': true});
+      await t.runAsync(refreshSession);
+      await t.tap(find.text('Cancel'));
+      await until(t, () => seen(find.text('Switch to Free?')), 'the dialog');
+      await settle(t);
+      await t.tap(find.text('Switch to Free'));
+      await until(t, () => seen(find.text('Switched to the Free plan.')), 'said');
+      expect(server.bodies.toSet(), {
+        'cancel-subscription:$_a {"subscriptionId":"sub-1"}',
+        'cancel-subscription:$_a {"subscriptionId":"sub-2"}',
+      });
+      expect(reported, isEmpty);
+    });
+
+    testWidgets('control: the same account (its token refreshed) is asked about '
+        'its coach row and can keep it', (t) async {
+      shareCoach();
+      await manage(t);
+      await until(t, () => seen(find.text('Stop')), "A's coach");
+      await t.runAsync(refreshSession);
+      await t.tap(find.text('Stop'));
+      await until(t, () => seen(find.text('Stop working with Anna Coach?')),
+          'the dialog');
+      await settle(t);
+      await t.tap(find.text('Keep coach'));
+      await settle(t);
+      expect(find.text('Stop working with Anna Coach?'), findsNothing);
+      nothingSent();
+      expect(reported, isEmpty);
+    });
+
+    testWidgets('control: the same account (its token refreshed) buys a coach '
+        'plan', (t) async {
+      server.answers['coach_plan_tier'] = (200, null);
+      server.answers['create-checkout:$_a'] = (200, {'url': 'https://stripe/a'});
+      await open(t, const CoachPlanScreen());
+      await until(t, () => enabled(t).length == 3, 'plans');
+      await t.runAsync(refreshSession);
+      await t.tap(find.text('Choose Starter'));
+      await until(t, () => launched.isNotEmpty, 'the page');
+      expect(launched, ['https://stripe/a']);
+      await settle(t);
+      expect(reported, isEmpty);
+      expect(server.count('coach_plan_tier', _a), 2, reason: 're-read after');
+    });
+
+    testWidgets("no-frame: A's checkout that ends after B signed in does not "
+        "re-read B's plan", (t) async {
+      server.answers['coach_plan_tier'] = (200, null);
+      server.answers['create-checkout:$_a'] = (200, {'url': 'https://stripe/a'});
+      await open(t, const CoachPlanScreen());
+      await until(t, () => enabled(t).length == 3, 'plans');
+      final gate = server.gates['create-checkout:$_a'] = Completer();
+      await t.tap(find.text('Choose Starter'));
+      await until(t, () => server.count('create-checkout') == 1, 'A asked');
+      await t.runAsync(() => signInAs(_b)); // no frame
+      gate.complete();
+      await noFrames(t);
+      await settle(t);
+      expect(server.count('coach_plan_tier', _b), 1, reason: "B's own read only");
+      expect(launched, isEmpty);
+      expect(find.byType(SnackBar), findsNothing);
+    });
+  });
+
+  group('R3 readers of a held plan or coach (item 5, A-21)', () {
+    void member(String uid, {String role = 'client'}) =>
+        server.answers['user_profiles:$uid'] = (200, {'id': uid, 'role': role});
+
+    Future<void> gate(WidgetTester t, String planOfA) async {
+      member(_a);
+      member(_b);
+      server.answers['client_plan:$_a'] = (200, planOfA);
+      await open(
+          t,
+          const PaywallGate(
+              required: ClientPlan.aiGuided,
+              featureName: 'AI coach',
+              child: Text('GATED')));
+      await until(
+          t,
+          () => seen(find.text('GATED')) || seen(find.byType(PaywallLocked)),
+          "A's gate");
+    }
+
+    testWidgets("PaywallGate: A's paid plan does not open it for B while B's "
+        'read is pending; a genuine Free locks it', (t) async {
+      await gate(t, 'ai_guided');
+      expect(find.text('GATED'), findsOneWidget, reason: 'premise');
+      server.answers['client_plan:$_b'] = (200, 'free');
+      final g = server.gates['client_plan:$_b'] = Completer();
+      await signIn(t, _b);
+      await until(t, () => server.count('client_plan', _b) > 0, 'B asked');
+      await settle(t);
+      expect(find.text('GATED'), findsNothing, reason: "A's plan opened it");
+      expect(find.byType(PaywallLocked), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      g.complete();
+      await until(t, () => seen(find.byType(PaywallLocked)), "B's Free");
+      expect(find.text('GATED'), findsNothing);
+    });
+
+    testWidgets("PaywallGate: A's Free does not lock B whose read failed: the "
+        'gate fails open, as it does for anyone', (t) async {
+      await gate(t, 'free');
+      expect(find.byType(PaywallLocked), findsOneWidget, reason: 'premise');
+      server.answers['client_plan:$_b'] = _down;
+      await signIn(t, _b);
+      await until(t, () => seen(find.text('GATED')), 'fail open');
+      expect(find.byType(PaywallLocked), findsNothing);
+    });
+
+    testWidgets("PaywallGate: A's FAILURE does not open it for B", (t) async {
+      member(_a);
+      member(_b);
+      server.answers['client_plan:$_a'] = _down;
+      await open(
+          t,
+          const PaywallGate(
+              required: ClientPlan.aiGuided,
+              featureName: 'AI coach',
+              child: Text('GATED')));
+      await until(t, () => seen(find.text('GATED')), 'A: fail open');
+      server.answers['client_plan:$_b'] = (200, 'free');
+      final g = server.gates['client_plan:$_b'] = Completer();
+      await signIn(t, _b);
+      await until(t, () => server.count('client_plan', _b) > 0, 'B asked');
+      await settle(t);
+      expect(find.text('GATED'), findsNothing);
+      g.complete();
+      await until(t, () => seen(find.byType(PaywallLocked)), "B's Free");
+    });
+
+    testWidgets('PaywallGate: no frame, then an invalidate', (t) async {
+      await gate(t, 'ai_guided');
+      server.answers['client_plan:$_b'] = (200, 'free');
+      final g = server.gates['client_plan:$_b'] = Completer();
+      await t.runAsync(() => signInAs(_b)); // no frame
+      container(t).invalidate(clientPlanProvider);
+      await settle(t);
+      expect(find.text('GATED'), findsNothing);
+      g.complete();
+      await until(t, () => seen(find.byType(PaywallLocked)), "B's Free");
+    });
+
+    testWidgets('control: PaywallGate keeps the same account through a token '
+        'refresh, a pending refresh and a failed one', (t) async {
+      await gate(t, 'ai_guided');
+      await t.runAsync(refreshSession);
+      await settle(t);
+      expect(find.text('GATED'), findsOneWidget);
+      server.answers['client_plan:$_a'] = _down;
+      final g = server.gates['client_plan:$_a'] = Completer();
+      final before = server.count('client_plan', _a);
+      container(t).invalidate(clientPlanProvider);
+      await until(t, () => server.count('client_plan', _a) > before, 're-read');
+      await settle(t);
+      expect(find.text('GATED'), findsOneWidget, reason: 'pending');
+      g.complete();
+      await settle(t);
+      expect(find.text('GATED'), findsOneWidget, reason: 'failed');
+    });
+
+    testWidgets('control: PaywallGate keeps a locked account locked through a '
+        'failed refresh', (t) async {
+      await gate(t, 'free');
+      server.answers['client_plan:$_a'] = _down;
+      final before = server.count('client_plan', _a);
+      container(t).invalidate(clientPlanProvider);
+      await until(t, () => server.count('client_plan', _a) > before, 're-read');
+      await settle(t);
+      expect(find.byType(PaywallLocked), findsOneWidget);
+    });
+
+    testWidgets("Subscription: A's tier is not B's — pending, then failed, with "
+        'Try again', (t) async {
+      server.answers['client_plan:$_a'] = (200, 'coach_guided');
+      await open(t, const SubscriptionScreen());
+      await until(t, () => seen(find.text('CURRENT')), "A's tier");
+      server.answers['client_plan:$_b'] = _down;
+      final g = server.gates['client_plan:$_b'] = Completer();
+      await signIn(t, _b);
+      await until(t, () => server.count('client_plan', _b) > 0, 'B asked');
+      await settle(t);
+      expect(find.text('CURRENT'), findsNothing, reason: 'pending');
+      expect(find.text('…'), findsOneWidget);
+      g.complete();
+      await until(t, () => seen(find.byType(PlanLoadFailedNotice)), 'failure');
+      expect(find.text('CURRENT'), findsNothing, reason: 'failed');
+      expect(find.text('—'), findsOneWidget);
+      server.answers['client_plan:$_b'] = (200, 'free');
+      await t.tap(find.text('Try again'));
+      await until(t, () => seen(find.text('CURRENT')), "B's own");
+      expect(find.text('Basic'), findsWidgets, reason: 'a genuine Free');
+    });
+
+    testWidgets('control: Subscription keeps the tier through a token refresh '
+        'and a failed refresh by the same account', (t) async {
+      server.answers['client_plan:$_a'] = (200, 'coach_guided');
+      await open(t, const SubscriptionScreen());
+      await until(t, () => seen(find.text('CURRENT')), "A's tier");
+      await t.runAsync(refreshSession);
+      await settle(t);
+      server.answers['client_plan:$_a'] = _down;
+      final before = server.count('client_plan', _a);
+      container(t).invalidate(clientPlanProvider);
+      await until(t, () => server.count('client_plan', _a) > before, 're-read');
+      await settle(t);
+      expect(find.text('CURRENT'), findsOneWidget);
+    });
+
+    for (final failed in [false, true]) {
+      testWidgets("Payment result: A's coach is not B's "
+          "(${failed ? 'failed' : 'pending'})", (t) async {
+        server.answers['coach_client_relationships:$_a'] =
+            (200, {'coach_id': 'c-a', 'status': 'active'});
+        server.answers['public_profiles:$_a'] =
+            (200, {'id': 'c-a', 'first_name': 'Anna', 'last_name': 'Coach'});
+        await open(t, const PaymentResultScreen(success: true));
+        await until(
+            t, () => seen(find.text('Book your sessions')), "A's coach");
+        if (failed) {
+          server.answers['coach_client_relationships:$_b'] = _down;
+        } else {
+          server.gates['coach_client_relationships:$_b'] = Completer();
+        }
+        await signIn(t, _b);
+        await until(t, () => server.count('coach_client_relationships', _b) > 0,
+            'B asked');
+        await settle(t);
+        expect(find.text('Book your sessions'), findsNothing,
+            reason: "A's coach sent B to book");
+        expect(find.text('Continue'), findsOneWidget);
+        // The screen's own 2 s re-read, now B's.
+        await t.pump(const Duration(seconds: 3));
+        await settle(t);
+        expect(find.text('Book your sessions'), findsNothing);
+        server.gates['coach_client_relationships:$_b']?.complete();
+        await settle(t);
+      });
+    }
+
+    testWidgets('control: Payment result keeps the same account\'s coach through '
+        'its re-read and a failed one', (t) async {
+      server.answers['coach_client_relationships:$_a'] =
+          (200, {'coach_id': 'c-a', 'status': 'active'});
+      server.answers['public_profiles:$_a'] =
+          (200, {'id': 'c-a', 'first_name': 'Anna', 'last_name': 'Coach'});
+      await open(t, const PaymentResultScreen(success: true));
+      await until(t, () => seen(find.text('Book your sessions')), "A's coach");
+      server.answers['coach_client_relationships:$_a'] = _down;
+      await t.pump(const Duration(seconds: 3));
+      await settle(t);
+      expect(server.count('coach_client_relationships', _a), 2,
+          reason: 'premise: re-read');
+      expect(find.text('Book your sessions'), findsOneWidget);
+      expect(origins(), contains('PaymentResultScreen.assignedCoach'));
+    });
+  });
+
+  group('R3 sheets and SnackBars leave with their account (item 6)', () {
+    const sheet = "Anna Coach's Packages";
+    const said = 'Your plan is now AI-Guided.';
+
+    Future<void> openPlans(WidgetTester t, {String plan = 'coach_guided'}) async {
+      for (final uid in [_a, _b]) {
+        server.answers['client_plan:$uid'] = (200, plan);
+      }
+      server.answers['coach_client_relationships:$_a'] =
+          (200, {'coach_id': 'c-a', 'status': 'active'});
+      server.answers['public_profiles:$_a'] =
+          (200, {'id': 'c-a', 'first_name': 'Anna', 'last_name': 'Coach'});
+      await open(t, const UpgradeScreen());
+      await until(t, () => seen(find.text('Current')), "A's plan");
+    }
+
+    final button = find.text("View Anna Coach's packages");
+
+    Future<void> openSheet(WidgetTester t) async {
+      await openPlans(t);
+      await until(t, () => seen(button), "A's coach");
+      await t.tap(button);
+      await until(t, () => seen(find.text(sheet)), 'the sheet');
+      await settle(t);
+    }
+
+    testWidgets('the packages sheet closes when B signs in', (t) async {
+      await openSheet(t);
+      await t.runAsync(() => signInAs(_b));
+      await t.pump(); // the very next frame
+      expect(find.text(sheet), findsNothing);
+      await settle(t);
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(find.text('Current'), findsOneWidget, reason: 'Plans is still there');
+    });
+
+    testWidgets('the packages sheet closes on sign-out', (t) async {
+      await openSheet(t);
+      server.answers['client_plan:anon'] = _down;
+      await t.runAsync(signOut);
+      await t.pump();
+      expect(find.text(sheet), findsNothing);
+      await settle(t);
+      expect(find.byType(BottomSheet), findsNothing);
+    });
+
+    testWidgets('the packages sheet closes even when Plans is gone from under '
+        'it', (t) async {
+      await openSheet(t);
+      final ctx = t.element(find.text(sheet));
+      final nav = Navigator.of(ctx);
+      nav.pushReplacement(MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('elsewhere'))));
+      await settle(t);
+      expect(find.text('elsewhere'), findsOneWidget);
+      await t.runAsync(() => signInAs(_b));
+      await settle(t);
+      expect(find.text(sheet), findsNothing);
+      expect(find.text('elsewhere'), findsOneWidget);
+    });
+
+    testWidgets('no-frame: pushed, then B signs in: never drawn', (t) async {
+      await openPlans(t);
+      await until(t, () => seen(button), "A's coach");
+      await t.tap(button); // no frame
+      await t.runAsync(() => signInAs(_b));
+      await t.pump();
+      expect(find.text(sheet), findsNothing);
+      await settle(t);
+      expect(find.text(sheet), findsNothing);
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(server.count('coach_packages', _b), 0, reason: 'read as B');
+    });
+
+    testWidgets("no-frame: A's packages button tapped after B signed in opens "
+        'nothing, recorded', (t) async {
+      await openPlans(t);
+      await until(t, () => seen(button), "A's coach");
+      await t.runAsync(() => signInAs(_b)); // no frame
+      await t.tap(button);
+      await settle(t);
+      expect(find.text(sheet), findsNothing);
+      expect(recordedAccountChange(), isTrue);
+    });
+
+    testWidgets('control: a token refresh keeps the sheet; swiping it away works '
+        'and it can be opened again', (t) async {
+      await openSheet(t);
+      await t.runAsync(refreshSession);
+      await settle(t);
+      expect(find.text(sheet), findsOneWidget);
+      await t.tapAt(const Offset(350, 40)); // the barrier
+      await settle(t);
+      expect(find.text(sheet), findsNothing);
+      await t.tap(button);
+      await until(t, () => seen(find.text(sheet)), 'the sheet again');
+      expect(reported, isEmpty);
+    });
+
+    Future<void> say(WidgetTester t) async {
+      await openPlans(t, plan: 'self_guided');
+      server.answers['update-subscription:$_a'] = (200, {'ok': true});
+      await t.tap(find.text('Upgrade to AI-Guided'));
+      await until(t, () => seen(find.text(said)), 'said to A');
+      await settle(t);
+      expect(find.text(said), findsOneWidget, reason: 'premise: still up');
+    }
+
+    testWidgets("A's plan-change SnackBar is gone at B's first frame", (t) async {
+      await say(t);
+      await t.runAsync(() => signInAs(_b));
+      await t.pump();
+      expect(find.text(said), findsNothing);
+      await settle(t);
+      expect(find.byType(SnackBar), findsNothing);
+    });
+
+    testWidgets("A's plan-change SnackBar is gone when A signs out and Plans "
+        'was already left', (t) async {
+      await say(t);
+      final nav = Navigator.of(t.element(find.byType(UpgradeScreen)));
+      nav.pushReplacement(MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('elsewhere'))));
+      await settle(t);
+      expect(find.byType(UpgradeScreen), findsNothing);
+      expect(find.text(said), findsOneWidget, reason: 'premise: it follows');
+      await t.runAsync(signOut);
+      await t.pump();
+      expect(find.text(said), findsNothing);
+    });
+
+    testWidgets('no-frame: shown, then B signs in: never drawn', (t) async {
+      await openPlans(t, plan: 'self_guided');
+      server.answers['update-subscription:$_a'] = (200, {'ok': true});
+      await t.tap(find.text('Upgrade to AI-Guided'));
+      await until(t, () => server.count('update-subscription') == 1, 'asked');
+      await noFrames(t); // the answer is in; nothing drawn since
+      await t.runAsync(() => signInAs(_b));
+      await t.pump();
+      expect(find.text(said), findsNothing);
+      await settle(t);
+      expect(find.text(said), findsNothing);
+    });
+
+    testWidgets("A's end-coaching SnackBar is gone at B's first frame",
+        (t) async {
+      server.answers['client_plan'] = (200, 'coach_guided');
+      server.answers['coach_client_relationships'] = (200, [
+        {'coach_id': 'c-1', 'status': 'active'}
+      ]);
+      server.answers['public_profiles'] = (200, [
+        {'id': 'c-1', 'first_name': 'Anna', 'last_name': 'Coach'}
+      ]);
+      await open(t, const ManageSubscriptionScreen());
+      await until(t, () => seen(find.text('Stop')), "A's coach");
+      await t.tap(find.text('Stop'));
+      await until(t, () => seen(find.text('Yes, stop')), 'the dialog');
+      await settle(t);
+      await t.tap(find.text('Yes, stop'));
+      await until(t, () => seen(find.textContaining('Coaching ended')), 'said');
+      await settle(t);
+      await t.runAsync(() => signInAs(_b));
+      await t.pump();
+      expect(find.textContaining('Coaching ended'), findsNothing);
+    });
+
+    testWidgets('control: a token refresh keeps the SnackBar, and it leaves on '
+        'its own', (t) async {
+      await say(t);
+      await t.runAsync(refreshSession);
+      await t.pump();
+      expect(find.text(said), findsOneWidget);
+      await t.pump(const Duration(seconds: 5));
+      await settle(t);
+      expect(find.text(said), findsNothing);
+    });
+  });
+
+  group('R3 what could not be confirmed is not said to have failed (item 7)', () {
+    const plans = [
+      {'id': 'sub-1', 'kind': 'self_guided', 'status': 'active'},
+    ];
+
+    Future<void> openPlans(WidgetTester t) async {
+      server.answers['client_plan:$_a'] = (200, 'self_guided');
+      server.answers['subscriptions:$_a'] = (200, plans);
+      await open(t, const UpgradeScreen());
+      await until(t, () => seen(find.text('Current')), "A's plan");
+    }
+
+    Future<void> openManage(WidgetTester t) async {
+      server.answers['client_plan:$_a'] = (200, 'self_guided');
+      server.answers['subscriptions:$_a'] = (200, plans);
+      server.answers['coach_client_relationships'] = (200, [
+        {'coach_id': 'c-1', 'status': 'active'}
+      ]);
+      server.answers['public_profiles'] = (200, [
+        {'id': 'c-1', 'first_name': 'Anna', 'last_name': 'Coach'}
+      ]);
+      await open(t, const ManageSubscriptionScreen());
+      await until(t,
+          () => seen(find.text('Cancel')) && seen(find.text('Stop')), 'rows');
+    }
+
+    Future<void> outcome(WidgetTester t, String text) async {
+      await until(t, () => seen(find.byType(SnackBar)), 'the outcome');
+      final shown = t.widgetList<Text>(find.descendant(
+          of: find.byType(SnackBar), matching: find.byType(Text)));
+      expect(shown.map((w) => w.data), [text]);
+      noBackendText();
+    }
+
+    const unsurePlan = "Couldn't confirm your plan change — check your plan "
+        'before trying again.';
+    const unsureCancel = "Couldn't confirm the cancellation — check your plan "
+        'before trying again.';
+    const unsureEnd = "Couldn't confirm that coaching ended — check your "
+        'coaches before trying again.';
+
+    for (final (what, setUpAnswer, text) in <(String, void Function(), String)>[
+      ('the connection is lost', () => server.lost.add('update-subscription:$_a'), unsurePlan),
+      ('the server faults', () => server.answers['update-subscription:$_a'] = _down, unsurePlan),
+      (
+        'the server refuses (4xx)',
+        () => server.answers['update-subscription:$_a'] =
+            (400, {'error': 'SECRET Unknown membership tier'}),
+        "Couldn't change your plan. Try again."
+      ),
+      (
+        'the server says it could not read the membership',
+        () => server.answers['update-subscription:$_a'] =
+            (503, {'error': 'Could not read your membership'}),
+        "Couldn't change your plan. Try again."
+      ),
+    ]) {
+      testWidgets('plan change: $what', (t) async {
+        await openPlans(t);
+        setUpAnswer();
+        final before = server.count('client_plan', _a);
+        await t.tap(find.text('Upgrade to AI-Guided'));
+        await outcome(t, text);
+        await settle(t);
+        expect(server.count('client_plan', _a), greaterThan(before),
+            reason: 'the plan is re-read, to check');
+        expect(server.count('create-checkout'), 0);
+        expect(origins(), contains('PaymentService.changeMembership'));
+      });
+    }
+
+    for (final (what, setUpAnswer, text) in <(String, void Function(), String)>[
+      ('the connection is lost', () => server.lost.add('cancel-subscription:$_a'), unsureCancel),
+      ('the server faults', () => server.answers['cancel-subscription:$_a'] = _down, unsureCancel),
+      (
+        'the server refuses (4xx)',
+        () => server.answers['cancel-subscription:$_a'] = (404, {'error': 'x'}),
+        'Could not cancel. Try again.'
+      ),
+      (
+        'Stripe refused and nothing was changed',
+        () => server.answers['cancel-subscription:$_a'] =
+            (502, {'error': 'stripe_cancel_failed'}),
+        'Could not cancel. Try again.'
+      ),
+    ]) {
+      testWidgets('Switch to Free on Plans: $what', (t) async {
+        await openPlans(t);
+        setUpAnswer();
+        await t.tap(find.text('Switch to Free'));
+        await until(t, () => seen(find.text('Switch to Free?')), 'the dialog');
+        await settle(t);
+        await t.tap(find.text('Switch to Free').last);
+        await outcome(t, text);
+      });
+
+      testWidgets('Cancel on Manage: $what', (t) async {
+        await openManage(t);
+        setUpAnswer();
+        await t.tap(find.text('Cancel'));
+        await until(t, () => seen(find.text('Switch to Free?')), 'the dialog');
+        await settle(t);
+        await t.tap(find.text('Switch to Free'));
+        await outcome(t, text);
+      });
+
+      testWidgets('End coaching (paid): $what', (t) async {
+        await openManage(t);
+        setUpAnswer();
+        await t.tap(find.text('Stop'));
+        await until(t, () => seen(find.text('Yes, stop')), 'the dialog');
+        await settle(t);
+        await t.tap(find.text('Yes, stop'));
+        await outcome(
+            t,
+            text == unsureCancel
+                ? unsureEnd
+                : 'Could not end coaching. Nothing was changed. Try again.');
+        expect(origins(), contains('ManageSubscriptionScreen.stopCoach'));
+      });
+    }
+
+    testWidgets('an unconfirmed cancellation is forgotten when the retry is '
+        'refused', (t) async {
+      final svc = PaymentService();
+      await t.runAsync(() async {
+        await signInAs(_a);
+        server.answers['cancel-subscription:$_a'] = _down;
+        expect(await svc.cancelSubscriptionOutcome('s'),
+            CancelOutcome.unconfirmed);
+        server.answers['cancel-subscription:$_a'] = (403, {'error': 'x'});
+        expect(await svc.cancelSubscriptionOutcome('s'), CancelOutcome.refused);
+        server.answers['cancel-subscription:$_a'] = (200, {'ok': true});
+        expect(
+            await svc.cancelSubscriptionOutcome('s'), CancelOutcome.cancelled);
+      });
+    });
+
+    testWidgets('Plans says a failed refresh of the plan it still shows; '
+        'choices stay enabled; Try again clears it', (t) async {
+      await openPlans(t);
+      server.answers['client_plan:$_a'] = _down;
+      container(t).invalidate(clientPlanProvider);
+      await until(t, () => seen(find.byType(PlanLoadFailedNotice)), 'the notice');
+      expect(find.text(kPlanLoadFailedMessage), findsOneWidget);
+      expect(find.text('This is the plan from the last time it loaded.'),
+          findsOneWidget);
+      expect(find.text('Current'), findsOneWidget);
+      expect(enabled(t, startsWith: 'Upgrade to AI-Guided'), isNotEmpty);
+      server.answers['client_plan:$_a'] = (200, 'self_guided');
+      await t.tap(find.text('Try again'));
+      await until(
+          t, () => !seen(find.byType(PlanLoadFailedNotice)), 'it to clear');
+      expect(find.text('Current'), findsOneWidget);
+    });
+
+    testWidgets('Manage says a failed refresh of the plan it still shows; the '
+        'row can still be cancelled', (t) async {
+      await openManage(t);
+      server.answers['client_plan:$_a'] = _down;
+      container(t).invalidate(clientPlanProvider);
+      await until(t, () => seen(find.byType(PlanLoadFailedNotice)), 'the notice');
+      expect(find.text('This is the plan from the last time it loaded.'),
+          findsOneWidget);
+      expect(find.text('Self-Guided'), findsOneWidget);
+      await t.tap(find.text('Cancel'));
+      await until(t, () => seen(find.text('Switch to Free?')), 'still offered');
+    });
+
+    testWidgets("Plans: A's failed refresh is not said to B", (t) async {
+      await openPlans(t);
+      server.answers['client_plan:$_a'] = _down;
+      container(t).invalidate(clientPlanProvider);
+      await until(t, () => seen(find.byType(PlanLoadFailedNotice)), 'the notice');
+      server.answers['client_plan:$_b'] = (200, 'free');
+      final gate = server.gates['client_plan:$_b'] = Completer();
+      await signIn(t, _b);
+      await settle(t);
+      expect(find.byType(PlanLoadFailedNotice), findsNothing);
+      gate.complete();
+      await until(t, () => seen(find.text('Current')), "B's plan");
+    });
+
+    Future<void> openPayments(WidgetTester t) async {
+      server.answers['stripe-connect'] =
+          (200, {'connected': true, 'charges_enabled': true});
+      await open(t, const CoachPaymentsScreen());
+      await until(t, () => seen(find.text('Manage Stripe account')), 'status');
+      await settle(t);
+    }
+
+    int onboards() => server.bodies.where((b) => b.contains('onboard')).length;
+
+    testWidgets('the Stripe button asks once, is busy meanwhile, and is free '
+        'again', (t) async {
+      await openPayments(t);
+      server.answers['stripe-connect:$_a'] = (200, {'url': 'https://stripe/a'});
+      final gate = server.gates['stripe-connect:$_a'] = Completer();
+      await t.tap(find.text('Manage Stripe account'));
+      await t.pump();
+      await t.tap(find.text('Manage Stripe account'), warnIfMissed: false);
+      await until(t, () => onboards() > 0, 'asked');
+      await settle(t);
+      expect(onboards(), 1);
+      expect(find.bySemanticsLabel(RegExp('Opening Stripe')), findsOneWidget);
+      expect(enabled(t), isEmpty);
+      gate.complete();
+      await until(t, () => launched.isNotEmpty, 'the page');
+      await settle(t);
+      expect(launched, ['https://stripe/a']);
+      expect(enabled(t), isNotEmpty);
+      expect(
+          t.getSize(find.byType(ElevatedButton)).height, greaterThanOrEqualTo(44));
+    });
+
+    testWidgets("no-frame: A's Stripe button tapped after B signed in asks for "
+        'nothing', (t) async {
+      await openPayments(t);
+      await t.runAsync(() => signInAs(_b)); // no frame
+      await t.tap(find.text('Manage Stripe account'));
+      await noFrames(t);
+      await settle(t);
+      expect(onboards(), 0);
+      expect(recordedAccountChange(), isTrue);
+    });
+
+    testWidgets("no-frame: A's failed onboarding is not said to B, whose button "
+        'is free', (t) async {
+      await openPayments(t);
+      server.answers['stripe-connect:$_a'] = _down;
+      final gate = server.gates['stripe-connect:$_a'] = Completer();
+      await t.tap(find.text('Manage Stripe account'));
+      await until(t, () => onboards() == 1, 'A asked');
+      await t.runAsync(() => signInAs(_b)); // no frame
+      gate.complete();
+      await noFrames(t);
+      await t.pump();
+      expect(find.byType(SnackBar), findsNothing);
+      await settle(t);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(enabled(t), isNotEmpty);
+    });
+  });
+
+  group('R3 gaps (items 8, 9)', () {
+    final openers = <String, (String, Future<Object?> Function())>{
+      'startCheckout': (
+        'create-checkout',
+        () => PaymentService().startCheckout(kind: 'ai_guided')
+      ),
+      'openBillingPortal': (
+        'create-portal-session',
+        () => PaymentService().openBillingPortal()
+      ),
+      'connectStripeOnboard': (
+        'stripe-connect',
+        () async {
+          await PaymentService().connectStripeOnboard();
+          return true;
+        }
+      ),
+    };
+    openers.forEach((name, o) {
+      for (final (how, url) in [
+        (_Launch.throws, 'https://stripe/secret-link'),
+        (_Launch.refuses, 'https://stripe/secret-link'),
+        (_Launch.opens, 'https://[secret-link'), // not a URL at all
+      ]) {
+        test('N-5: $name, ${how.name} $url: a failure, recorded without the link',
+            () async {
+          await signInAs(_a);
+          server.answers[o.$1] = (200, {'url': url});
+          launch = how;
+          Object? thrown;
+          Object? answer;
+          try {
+            answer = await o.$2();
+          } catch (e) {
+            thrown = e;
+          }
+          expect(name == 'startCheckout' ? answer : thrown,
+              name == 'startCheckout' ? isFalse : isNotNull);
+          expect(origins(), ['PaymentService.$name']);
+          for (final f in reported) {
+            expect('$f', isNot(contains('secret-link')));
+          }
+          expect('$thrown', isNot(contains('secret-link')));
+          if (how == _Launch.throws) {
+            expect('${reported.single}', contains('ACTIVITY_NOT_FOUND'));
+          }
+        });
+      }
+
+      test('control: $name opens its page', () async {
+        await signInAs(_a);
+        server.answers[o.$1] = (200, {'url': 'https://stripe/a'});
+        expect(await o.$2(), isTrue);
+        expect(launched, ['https://stripe/a']);
+        expect(reported, isEmpty);
+      });
+    });
+
+    test('"No billing account yet" under another status is a failure', () async {
+      await signInAs(_a);
+      server.answers['create-portal-session'] =
+          (500, {'error': 'No billing account yet'});
+      await expectLater(PaymentService().openBillingPortal(), throwsA(anything));
+      expect(origins(), ['PaymentService.openBillingPortal']);
+    });
+
+    Map<String, Object> money(int cents) => {
+          'connected': true,
+          'charges_enabled': true,
+          'pending': cents * 2,
+          'paid': cents * 3,
+        };
+    (int, Object?) revenue(int cents) => (200, [
+          {
+            'coach_payout': cents,
+            'client_source': 'marketplace',
+            'status': 'paid',
+            'created_at': '2026-01-01T00:00:00Z',
+          }
+        ]);
+
+    Future<void> payments(WidgetTester t) async {
+      server.answers['payments:$_a'] = revenue(11100);
+      server.answers['stripe-connect:$_a'] = (200, money(11100));
+      await open(t, const CoachPaymentsScreen());
+      await until(t,
+          () => seen(find.text(r'$111')) && seen(find.text(r'$222')), "A's money");
+    }
+
+    testWidgets("B's balance failing alone: B's revenue shows, A's balance does "
+        'not, and it is said', (t) async {
+      await payments(t);
+      server.answers['payments:$_b'] = revenue(4400);
+      server.answers['stripe-connect:$_b'] = (200, money(4400));
+      await signIn(t, _b);
+      await until(t, () => seen(find.text(r'$44')), "B's revenue");
+      server.answers['stripe-connect:$_b'] = _down;
+      container(t).invalidate(coachBalanceProvider);
+      await until(
+          t, () => seen(find.text("Couldn't load your payouts")), 'said');
+      expect(find.text(r'$88'), findsOneWidget, reason: "B's own, kept");
+      for (final s in [r'$111', r'$222', r'$333']) {
+        expect(find.text(s), findsNothing);
+      }
+      expect(find.text("Couldn't load your revenue"), findsNothing);
+      expect(find.text(r'$44'), findsWidgets);
+    });
+
+    for (final fails in [false, true]) {
+      final what = fails ? 'failure' : 'answer';
+      testWidgets("revenue: A's delayed $what lands before B's own read", (t) async {
+        await payments(t);
+        if (fails) server.answers['payments:$_a'] = _down;
+        server.answers['payments:$_b'] = revenue(4400);
+        server.answers['stripe-connect:$_b'] = (200, money(4400));
+        final a = server.gates['payments:$_a'] = Completer();
+        final b = server.gates['payments:$_b'] = Completer();
+        container(t).invalidate(coachRevenueProvider);
+        await until(t, () => server.count('payments', _a) == 2, 'A refreshed');
+        await signIn(t, _b);
+        await until(t, () => server.count('payments', _b) == 1, 'B asked');
+        a.complete();
+        await settle(t);
+        expect(find.text(r'$111'), findsNothing);
+        expect(find.text("Couldn't load your revenue"), findsNothing);
+        b.complete();
+        await until(t, () => seen(find.text(r'$44')), "B's revenue");
+      });
+
+      testWidgets("revenue, no-frame: A's delayed $what lands before B is known",
+          (t) async {
+        await payments(t);
+        if (fails) server.answers['payments:$_a'] = _down;
+        server.answers['payments:$_b'] = revenue(4400);
+        server.answers['stripe-connect:$_b'] = (200, money(4400));
+        final a = server.gates['payments:$_a'] = Completer();
+        final b = server.gates['payments:$_b'] = Completer();
+        container(t).invalidate(coachRevenueProvider);
+        await until(t, () => server.count('payments', _a) == 2, 'A refreshed');
+        await t.runAsync(() => signInAs(_b));
+        a.complete();
+        await noFrames(t);
+        await settle(t);
+        expect(find.text(r'$111'), findsNothing);
+        expect(find.text("Couldn't load your revenue"), findsNothing);
+        b.complete();
+        await until(t, () => seen(find.text(r'$44')), "B's revenue");
+      });
+
+      testWidgets("coach tier: A's delayed $what lands before B's own read",
+          (t) async {
+        server.answers['coach_plan_tier:$_a'] = fails ? _down : (200, 'growth');
+        server.answers['coach_plan_tier:$_b'] = (200, 'elite');
+        final a = server.gates['coach_plan_tier:$_a'] = Completer();
+        final b = server.gates['coach_plan_tier:$_b'] = Completer();
+        await open(t, const CoachPlanScreen());
+        await until(t, () => server.count('coach_plan_tier', _a) == 1, 'A asked');
+        await signIn(t, _b);
+        await until(t, () => server.count('coach_plan_tier', _b) == 1, 'B asked');
+        a.complete();
+        await settle(t);
+        expect(find.text('Current'), findsNothing);
+        expect(find.byType(SectionLoadFailure), findsNothing);
+        expect(enabled(t, startsWith: 'Choose'), isEmpty);
+        b.complete();
+        await until(t, () => seen(find.text('Current')), "B's plan");
+        expect(find.text('Choose Elite'), findsNothing);
+      });
+
+      testWidgets("plan: A's delayed $what lands before B's own read", (t) async {
+        server.answers['client_plan:$_a'] = fails ? _down : (200, 'ai_guided');
+        server.answers['client_plan:$_b'] = (200, 'free');
+        final a = server.gates['client_plan:$_a'] = Completer();
+        final b = server.gates['client_plan:$_b'] = Completer();
+        await open(t, const UpgradeScreen());
+        await until(t, () => server.count('client_plan', _a) == 1, 'A asked');
+        await signIn(t, _b);
+        await until(t, () => server.count('client_plan', _b) == 1, 'B asked');
+        a.complete();
+        await settle(t);
+        expect(find.text('Current'), findsNothing);
+        expect(find.byType(PlanLoadFailedNotice), findsNothing);
+        expect(enabled(t), isEmpty);
+        b.complete();
+        await until(t, () => seen(find.text('Upgrade to Self-Guided')), "B's");
+      });
+    }
   });
 }

@@ -1,16 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../data/payment_service.dart' show ownerGone, signedInUid;
+import '../data/payment_service.dart' show
+    CancelOutcome, CancelSubscriptionOutcome, definitelyRefused, ownerGone;
 import '../domain/entitlements.dart';
 import '../domain/payment_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coach/data/coach_relationship_service.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
-import 'checkout_launcher.dart' show OwnedDialog;
+import 'checkout_launcher.dart' show OwnedDialog, showOwnedSnackBar;
 import 'upgrade_screen.dart'
-    show PlanLoadFailedNotice, ownedClientPlanProvider, reportPlanReadFailure;
+    show PlanLoadFailedNotice, kPlanFromLastTime, ownedClientPlanProvider,
+        reportPlanReadFailure, switchToFreeMessage;
 
 const _bg     = Color(0xFF030303);
 const _card   = Color(0xFF0E0B16);
@@ -51,7 +53,8 @@ class ManageSubscriptionScreen extends ConsumerStatefulWidget {
 
 class _ManageSubscriptionScreenState
     extends ConsumerState<ManageSubscriptionScreen> {
-  bool _portalLoading = false;
+  /// Whose billing page is being opened, if anyone's: busy for them only.
+  ({String? uid})? _portal;
 
   static int _tierRank(String? kind) => kind == 'ai_guided' ? 2 : kind == 'self_guided' ? 1 : 0;
 
@@ -91,17 +94,17 @@ class _ManageSubscriptionScreenState
         ],
       )),
     );
-    if (ok != true || gone() || !mounted) return;
+    if (gone() || ok != true || !mounted) return;
     final svc = ref.read(paymentServiceProvider);
-    var allOk = true;
+    final outcomes = <CancelOutcome>{};
     for (final m in memberships) {
       if (gone()) return;
-      final r = await svc.cancelSubscription(m['id'] as String);
-      if (!r) allOk = false;
+      outcomes.add(await svc.cancelSubscriptionOutcome(m['id'] as String));
     }
     if (gone()) return;
-    messenger.showSnackBar(SnackBar(
-        content: Text(allOk ? 'Switched to the Free plan.' : 'Could not cancel. Try again.')));
+    showOwnedSnackBar(messenger, owner,
+        SnackBar(content: Text(switchToFreeMessage(outcomes))));
+    if (!mounted) return;
     ref.invalidate(clientPlanProvider);
     ref.invalidate(membershipTierProvider);
     ref.invalidate(mySubscriptionsProvider);
@@ -145,7 +148,7 @@ class _ManageSubscriptionScreenState
         ],
       )),
     );
-    if (ok != true || gone()) return;
+    if (gone() || ok != true) return;
 
     final coachId = rel['coach_id'] as String;
     // One policy for every way of ending coaching (owner decision 2): a paid
@@ -158,24 +161,30 @@ class _ManageSubscriptionScreenState
       final end = await CoachRelationshipService()
           .cancelCoach(coachId, 'client_cancelled', null);
       message = end.describe();
-    } catch (e) {
-      reportError('ManageSubscriptionScreen.stopCoach', e);
+    } catch (e, st) {
+      reportError('ManageSubscriptionScreen.stopCoach', e, st);
       // cancelCoach's StateError says what happened ("No active coaching with
       // this coach", "You are signed out"); say it, as the marketplace does.
       message = e is StateError
           ? e.message
-          : 'Could not end coaching. Nothing was changed. Try again.';
+          : definitelyRefused(e)
+              ? 'Could not end coaching. Nothing was changed. Try again.'
+              // Not known to have failed: the reply may be all that was lost.
+              : "Couldn't confirm that coaching ended — check your coaches "
+                  'before trying again.';
     }
     if (gone()) return;
-    messenger.showSnackBar(SnackBar(content: Text(message)));
+    showOwnedSnackBar(messenger, owner, SnackBar(content: Text(message)));
+    if (!mounted) return;
     ref.invalidate(myCoachesProvider);
     ref.invalidate(mySubscriptionsProvider);
     ref.invalidate(clientPlanProvider);
   }
 
-  Future<void> _openPortal() async {
-    final owner = signedInUid();
-    setState(() => _portalLoading = true);
+  Future<void> _openPortal(String? owner) async {
+    // [owner] is who the button was drawn for.
+    if (ownerGone(owner, 'ManageSubscriptionScreen', 'open billing')) return;
+    setState(() => _portal = (uid: owner));
     String? problem;
     try {
       if (!await ref.read(paymentServiceProvider).openBillingPortal()) {
@@ -185,12 +194,12 @@ class _ManageSubscriptionScreenState
       // Recorded by the service. P0-FL-60a: a failure is not "no account".
       problem = couldntMessage('open billing', e);
     }
-    // The account changed: its spinner is already gone and this is not said.
-    if (!mounted || signedInUid() != owner) return;
-    setState(() => _portalLoading = false);
+    if (!mounted) return;
+    // Another account's own request is still running: not ours to end.
+    if (_portal?.uid == owner) setState(() => _portal = null);
     if (problem != null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(problem)));
+      showOwnedSnackBar(ScaffoldMessenger.of(context), owner,
+          SnackBar(content: Text(problem)));
     }
   }
 
@@ -233,9 +242,8 @@ class _ManageSubscriptionScreenState
   Widget build(BuildContext context) {
     final account = ref.watch(paymentAccountProvider);
     final planRead = ref.watch(ownedClientPlanProvider);
-    ref.listen<String?>(paymentAccountProvider, (_, __) {
-      if (_portalLoading) setState(() => _portalLoading = false);
-    });
+    final portal = _portal;
+    final portalLoading = portal != null && portal.uid == account;
     final subsAsync = ref.watch(ownedMySubscriptionsProvider);
     final coachesAsync = ref.watch(_ownedMyCoachesProvider);
     // P0-FL-40: these reads propagate their failures; record each once, when
@@ -249,7 +257,7 @@ class _ManageSubscriptionScreenState
     reportPlanReadFailure(ref, 'ManageSubscriptionScreen.clientPlan');
     // P0-FL-60a (A-21): this account's plan only.
     final plan = planRead.value;
-    final planError = plan == null ? planRead.error : null;
+    final planError = planRead.error;
 
     return Scaffold(
       backgroundColor: _bg,
@@ -320,6 +328,7 @@ class _ManageSubscriptionScreenState
               PlanLoadFailedNotice(
                 error: planError,
                 busy: planRead.isLoading,
+                detail: plan == null ? null : kPlanFromLastTime,
                 onRetry: () => ref.invalidate(clientPlanProvider),
               ),
             ],
@@ -421,8 +430,8 @@ class _ManageSubscriptionScreenState
             const SizedBox(height: 10),
             _ActionButton(
               icon: Icons.credit_card_rounded,
-              label: _portalLoading ? 'Opening…' : 'Manage billing & payment method',
-              onTap: _portalLoading ? null : _openPortal,
+              label: portalLoading ? 'Opening…' : 'Manage billing & payment method',
+              onTap: portalLoading ? null : () => _openPortal(account),
             ),
           ],
         ),

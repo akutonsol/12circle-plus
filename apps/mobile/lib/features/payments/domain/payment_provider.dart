@@ -29,80 +29,93 @@ class OwnedRead<T> {
   final bool isLoading;
 }
 
-/// A source read with every other account's value and failure taken out.
+/// Who each answer of one source was READ for (P0-FL-60a, A-19/A-21).
 ///
 /// When the account changes, Riverpod re-reads but HOLDS the previous value —
-/// through the loading state, and through a failure after it. That is right
-/// for a refresh by the same account and wrong for the next one, and the
-/// AsyncValue cannot tell them apart. So a value is tagged with the account it
-/// arrived for, and a held one counts only for that account.
-class OwnedReadNotifier<T> extends Notifier<OwnedRead<T>> {
-  OwnedReadNotifier(this._source, {this.origin});
+/// through the loading state, through a failure after it and, for a provider
+/// invalidated before the change was flushed, as an AsyncData that is loading.
+/// None of those states says whose the value is. So the owner is taken when a
+/// read STARTS and travels with the answer of that read; a held value keeps the
+/// owner it has, whoever is signed in when it is looked at.
+///
+/// Only listens, never watches: it is not rebuilt, so it misses no transition,
+/// and each listener runs synchronously with the flush that starts the read.
+class _ReadOwners<T> {
+  _ReadOwners(this._ref, this._origin);
 
-  final ProviderListenable<AsyncValue<T>> _source;
+  final Ref _ref;
 
   /// When set, each settled failure is recorded once under this name (leave it
   /// null where the service or the screen already records).
-  final String? origin;
+  final String? _origin;
 
-  ({String? owner, T value})? _value;
-  ({String? owner, Object error})? _failure;
-  bool _recorded = false;
+  /// Who the read now in flight (or just landed) is for; null = not known.
+  ({String? uid})? _started;
+  bool _loading = false;
 
-  @override
-  OwnedRead<T> build() {
-    final account = ref.watch(paymentAccountProvider);
-    final now = ref.watch(_source);
-    // Only a SETTLED answer is tagged. An AsyncData that is loading holds an
-    // earlier answer — and after an invalidate before an account change was
-    // flushed (no frame) that is the previous account's, so it keeps the tag
-    // it already has and is never re-tagged.
-    if (now is AsyncData<T>) {
-      _failure = null;
-      _recorded = false;
-      if (!now.isLoading) {
-        _value = (owner: account, value: now.value);
-        return OwnedRead(hasValue: true, value: now.value);
-      }
-    }
+  ({String? owner, T value})? value;
+  ({String? owner, Object error})? failure;
+
+  /// The account the sources depend on — unless the auth client is already
+  /// another one's: then the request itself is ambiguous, its answer counts for
+  /// nobody, and the sources re-read as soon as that change reaches them.
+  ({String? uid})? _account() {
+    final account = _ref.read(paymentAccountProvider);
+    final client = signedInUid();
+    return client == null || client == account ? (uid: account) : null;
+  }
+
+  /// A read in flight across an account change is re-started by its source
+  /// (which depends on the account) without a new loading state to see.
+  void onAccount(String? _, String? __) {
+    if (_loading) _started = _account();
+  }
+
+  void onSource(AsyncValue<T>? previous, AsyncValue<T> now) {
+    // Loading → settled is the end of the read that was started; anything else
+    // is a new one.
+    if (now.isLoading || !_loading) _started = _account();
+    _loading = now.isLoading;
+    if (now.isLoading) return;
+    final owner = _started;
     if (now is AsyncError<T>) {
-      final error = now.error;
-      if (now.isLoading) {
-        _recorded = false;
-      } else if (!_recorded || !identical(_failure?.error, error)) {
-        _recorded = true;
-        if (origin != null) reportError(origin!, error, now.stackTrace);
-      }
-      _failure = (owner: account, error: error);
+      failure = owner == null ? null : (owner: owner.uid, error: now.error);
+      final origin = _origin;
+      if (origin != null) reportError(origin, now.error, now.stackTrace);
+    } else {
+      failure = null;
+      value = owner == null ? null : (owner: owner.uid, value: now.requireValue);
     }
-    // `identical` too: the tag may be from before the source moved on while
-    // nothing on screen was watching this.
-    final value = _value;
-    final mine = value != null &&
-        value.owner == account &&
-        now.hasValue &&
-        identical(now.value, value.value);
-    final failure = _failure;
-    return OwnedRead(
-      hasValue: mine,
-      value: mine ? value.value : null,
-      error: failure != null &&
-              failure.owner == account &&
-              identical(failure.error, now.error)
-          ? failure.error
-          : null,
-      isLoading: now.isLoading,
-    );
   }
 }
 
-/// [OwnedReadNotifier] as a provider. Screens watch this and still invalidate
-/// [source] to refresh.
-NotifierProvider<OwnedReadNotifier<T>, OwnedRead<T>> ownedReadProvider<T>(
-        ProviderListenable<AsyncValue<T>> source,
-        {String? origin}) =>
-    NotifierProvider<OwnedReadNotifier<T>, OwnedRead<T>>(
-        () => OwnedReadNotifier<T>(source, origin: origin));
+/// [source] with every other account's value and failure taken out. Screens
+/// watch this and still invalidate [source] to refresh.
+Provider<OwnedRead<T>> ownedReadProvider<T>(
+    ProviderListenable<AsyncValue<T>> source,
+    {String? origin}) {
+  final owners = Provider<_ReadOwners<T>>((ref) {
+    final o = _ReadOwners<T>(ref, origin);
+    ref.listen<String?>(paymentAccountProvider, o.onAccount);
+    ref.listen<AsyncValue<T>>(source, o.onSource, fireImmediately: true);
+    return o;
+  });
+  return Provider<OwnedRead<T>>((ref) {
+    final o = ref.watch(owners);
+    final account = ref.watch(paymentAccountProvider);
+    final now = ref.watch(source);
+    final value = o.value;
+    final mine = value != null && value.owner == account;
+    final failure = o.failure;
+    return OwnedRead(
+      hasValue: mine,
+      value: mine ? value.value : null,
+      error:
+          failure != null && failure.owner == account ? failure.error : null,
+      isLoading: now.isLoading,
+    );
+  });
+}
 
 final ownedConnectStatusProvider = ownedReadProvider(coachConnectStatusProvider,
     origin: 'CoachPaymentsScreen.connectStatus');
@@ -115,11 +128,20 @@ final ownedCoachPlanTierProvider = ownedReadProvider(coachPlanTierProvider);
 final ownedMySubscriptionsProvider = ownedReadProvider(mySubscriptionsProvider);
 final ownedMembershipTierProvider = ownedReadProvider(membershipTierProvider);
 
+// The reads below watch the account twice, on purpose. `select` alone is not a
+// dependency Riverpod 2.6.1 counts as CHANGED when the provider is invalidated
+// before the account change is flushed (no frame): the re-read is then taken
+// for a refresh, and the provider becomes AsyncData(isLoading: true) with the
+// PREVIOUS account's value. Watching [paymentAccountProvider] makes it a
+// reload — AsyncLoading — and stays by id only. (The select is the literal
+// watch per_user_provider_scope_test asks of each provider.)
+
 final paymentServiceProvider = Provider<PaymentService>((ref) => PaymentService());
 
 final mySubscriptionsProvider =
     FutureProvider<List<Map<String, dynamic>>>((ref) async {
   ref.watch(currentUserProvider.select((u) => u?.id));
+  ref.watch(paymentAccountProvider);
   return ref.watch(paymentServiceProvider).getMySubscriptions();
 });
 
@@ -127,6 +149,7 @@ final mySubscriptionsProvider =
 final coachConnectStatusProvider =
     FutureProvider<Map<String, dynamic>>((ref) async {
   ref.watch(currentUserProvider.select((u) => u?.id));
+  ref.watch(paymentAccountProvider);
   return ref.watch(paymentServiceProvider).connectStripeStatus();
 });
 
@@ -134,12 +157,14 @@ final coachConnectStatusProvider =
 final coachRevenueServiceProvider = Provider((ref) => CoachRevenueService());
 final coachRevenueProvider = FutureProvider<Map<String, double>>((ref) async {
   ref.watch(currentUserProvider.select((u) => u?.id));
+  ref.watch(paymentAccountProvider);
   return ref.watch(coachRevenueServiceProvider).getMetrics();
 });
 
 /// Coach: connected-account balance {pending, available} (cents).
 final coachBalanceProvider = FutureProvider<Map<String, dynamic>>((ref) async {
   ref.watch(currentUserProvider.select((u) => u?.id));
+  ref.watch(paymentAccountProvider);
   return ref.watch(paymentServiceProvider).connectBalance();
 });
 
@@ -148,6 +173,7 @@ final coachBalanceProvider = FutureProvider<Map<String, dynamic>>((ref) async {
 /// why it watches the user: the server answers for `auth.uid()`.
 final membershipTierProvider = FutureProvider<String?>((ref) async {
   ref.watch(currentUserProvider.select((u) => u?.id));
+  ref.watch(paymentAccountProvider);
   return ref.watch(paymentServiceProvider).activeMembership();
 });
 
@@ -161,6 +187,7 @@ final hasMembershipProvider = Provider<bool?>((ref) {
 /// The coach's active platform plan tier ('starter'|'growth'|'elite' | null).
 final coachPlanTierProvider = FutureProvider<String?>((ref) async {
   ref.watch(currentUserProvider.select((u) => u?.id));
+  ref.watch(paymentAccountProvider);
   return ref.watch(paymentServiceProvider).coachPlanTier();
 });
 
@@ -168,5 +195,6 @@ final coachPlanTierProvider = FutureProvider<String?>((ref) async {
 final coachSubscriptionProvider =
     FutureProvider.family<Map<String, dynamic>?, String>((ref, coachId) async {
   ref.watch(currentUserProvider.select((u) => u?.id));
+  ref.watch(paymentAccountProvider);
   return ref.watch(paymentServiceProvider).activeCoachSubscription(coachId);
 });

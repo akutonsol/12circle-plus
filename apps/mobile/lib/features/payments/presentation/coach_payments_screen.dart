@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../shared/theme/app_background.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
-import '../data/payment_service.dart' show signedInUid;
+import '../data/payment_service.dart' show ownerGone;
 import '../domain/payment_provider.dart';
+import 'checkout_launcher.dart' show showOwnedSnackBar;
 
 const _card  = Color(0xFF0E0B16);
 const _brd   = Color(0xFF1A1020);
@@ -22,6 +23,7 @@ class CoachPaymentsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // P0-FL-60a (A-19): this account's status only. A failed refresh keeps
     // what this account last read, and says so.
+    final account = ref.watch(paymentAccountProvider);
     final status = ref.watch(ownedConnectStatusProvider);
     final s = status.value;
     final Widget? failure = status.error == null
@@ -117,28 +119,13 @@ class CoachPaymentsScreen extends ConsumerWidget {
                     ]),
                   ),
                   const SizedBox(height: 24),
-                  SizedBox(width: double.infinity, child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _brand, foregroundColor: _white,
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-                    icon: const Icon(Icons.link_rounded),
-                    label: Text(ready ? 'Manage Stripe account' : connected ? 'Finish Stripe setup' : 'Connect Stripe',
-                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-                    onPressed: () async {
-                      final owner = signedInUid();
-                      try {
-                        await ref.read(paymentServiceProvider).connectStripeOnboard();
-                      } catch (e) {
-                        // Recorded by the service; said to the account that
-                        // asked, nobody else (P0-FL-60a).
-                        if (!context.mounted || signedInUid() != owner) return;
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                          content: Text(couldntMessage('open Stripe', e)),
-                          backgroundColor: const Color(0xFFFFB4AB)));
-                      }
-                    },
-                  )),
+                  // Keyed by account: its spinner is the action of the account
+                  // that tapped it.
+                  _StripeButton(
+                    key: ValueKey(account),
+                    account: account,
+                    label: ready ? 'Manage Stripe account' : connected ? 'Finish Stripe setup' : 'Connect Stripe',
+                  ),
                 ],
               ),
             );
@@ -157,6 +144,62 @@ class CoachPaymentsScreen extends ConsumerWidget {
       Text(label, style: TextStyle(color: on ? _white : _muted, fontSize: 14)),
     ]),
   );
+}
+
+/// Opens the coach's Stripe pages. Busy while the link is made: a second tap
+/// asked for a second link and could open two pages (P0-FL-60a).
+class _StripeButton extends ConsumerStatefulWidget {
+  const _StripeButton({super.key, required this.account, required this.label});
+
+  /// The account this button was built for.
+  final String? account;
+  final String label;
+  @override
+  ConsumerState<_StripeButton> createState() => _StripeButtonState();
+}
+
+class _StripeButtonState extends ConsumerState<_StripeButton> {
+  bool _busy = false;
+
+  Future<void> _open() async {
+    final owner = widget.account;
+    if (ownerGone(owner, 'CoachPaymentsScreen', 'open Stripe')) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busy = true);
+    String? problem;
+    try {
+      await ref.read(paymentServiceProvider).connectStripeOnboard();
+    } catch (e) {
+      // Recorded by the service; said to the account that asked, nobody else.
+      problem = couldntMessage('open Stripe', e);
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (problem != null) {
+      showOwnedSnackBar(messenger, owner, SnackBar(
+          content: Text(problem), backgroundColor: const Color(0xFFFFB4AB)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: double.infinity,
+        child: ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: _brand, foregroundColor: _white,
+            padding: const EdgeInsets.symmetric(vertical: 15),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+          icon: _busy
+              ? const SizedBox(
+                  width: 18, height: 18,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: _white, semanticsLabel: 'Opening Stripe'))
+              : const Icon(Icons.link_rounded),
+          label: Text(widget.label,
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+          onPressed: _busy ? null : _open,
+        ),
+      );
 }
 
 class _Bullet extends StatelessWidget {
