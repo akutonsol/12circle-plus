@@ -110,8 +110,12 @@ void main() {
       arrange();
       await show(tester);
       // postgrest retries a GET that never reached the server (1 s, 2 s, 4 s).
-      await pumpUntil(tester, () => text("Couldn't load your registration").evaluate().isNotEmpty,
-          what: 'the failure', step: const Duration(milliseconds: 100));
+      await pumpUntil(
+          tester,
+          () =>
+              text("Couldn't load your registration").evaluate().isNotEmpty ||
+              text(_register).evaluate().isNotEmpty,
+          what: 'the read to end', step: const Duration(milliseconds: 100));
       expect(text(_register), findsNothing,
           reason: 'THE defect: a registered member was offered Register');
       expect(text("Couldn't load your registration"), findsOneWidget);

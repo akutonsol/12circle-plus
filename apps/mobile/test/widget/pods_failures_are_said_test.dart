@@ -134,8 +134,12 @@ void main() {
       arrange();
       await show(tester);
       // postgrest retries a GET that never reached the server (1 s, 2 s, 4 s).
-      await pumpUntil(tester, () => text("Couldn't load your pods").evaluate().isNotEmpty,
-          what: 'the failure', step: const Duration(milliseconds: 100));
+      await pumpUntil(
+          tester,
+          () =>
+              text("Couldn't load your pods").evaluate().isNotEmpty ||
+              text('No open pods yet').evaluate().isNotEmpty,
+          what: 'the read to end', step: const Duration(milliseconds: 100));
       expect(text('No open pods yet'), findsNothing,
           reason: 'THE defect: a failed load was "no pods"');
       expect(text("Couldn't load your pods"), findsOneWidget);
