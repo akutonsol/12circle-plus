@@ -31,6 +31,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../support/member_switch_server.dart';
@@ -61,6 +62,9 @@ void main() {
 
   setUp(() async {
     server.reset();
+    // FL-59a's HabitReminderService remembers its owner in SharedPreferences;
+    // give it the in-memory store so the recorded-failure lists stay exact.
+    SharedPreferences.setMockInitialValues({});
     reported.clear();
     setFailureSink(reported.add);
     await signInAs(memberA);
