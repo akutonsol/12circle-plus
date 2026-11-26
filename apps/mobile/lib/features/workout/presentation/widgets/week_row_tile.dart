@@ -6,6 +6,7 @@ import '../../data/models/workout_model.dart';
 import '../../domain/week_row.dart';
 import '../../domain/workout_provider.dart';
 import '../train_palette.dart';
+import '../zone_entry.dart';
 
 /// FIT-014 · one row of "This week".
 ///
@@ -20,6 +21,8 @@ class WeekRowTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // The account this row is drawn for: the owner of its tap.
+    final builtFor = ref.watch(restoringUserIdProvider);
     final kind   = weekRowKind(workout);
     final detail = weekRowDetail(workout);
     final chip   = weekRowChip(workout);
@@ -39,7 +42,7 @@ class WeekRowTile extends ConsumerWidget {
     // card's "Begin session"; this is the review path, including for a session
     // already done.
     void open() {
-      ref.read(selectedWorkoutProvider.notifier).state = workout;
+      if (!selectWorkout(ref, workout, builtFor: builtFor)) return;
       context.go('/workout-detail');
     }
 

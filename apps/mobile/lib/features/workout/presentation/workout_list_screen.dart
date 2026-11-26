@@ -111,14 +111,33 @@ const _sampleWorkouts = [
   ),
 ];
 
-class WorkoutListScreen extends ConsumerStatefulWidget {
+class WorkoutListScreen extends ConsumerWidget {
   const WorkoutListScreen({super.key});
 
+  // One view per member (P0-FL-59b): its rows, and a workout still being
+  // prepared for one member, are never the next member's to start.
   @override
-  ConsumerState<WorkoutListScreen> createState() => _WorkoutListScreenState();
+  Widget build(BuildContext context, WidgetRef ref) =>
+      _WorkoutListView(key: ValueKey(ref.watch(restoringUserIdProvider)));
 }
 
-class _WorkoutListScreenState extends ConsumerState<WorkoutListScreen> {
+class _WorkoutListView extends ConsumerStatefulWidget {
+  const _WorkoutListView({super.key});
+
+  @override
+  ConsumerState<_WorkoutListView> createState() => _WorkoutListViewState();
+}
+
+class _WorkoutListViewState extends ConsumerState<_WorkoutListView> {
+  /// The account this view is built for: the owner of every tap on it.
+  late final String? _builtFor;
+
+  @override
+  void initState() {
+    super.initState();
+    _builtFor = ref.read(restoringUserIdProvider);
+  }
+
   int _selectedTab = 0;
   String _searchQuery = '';
   final _searchCtrl = TextEditingController();
@@ -142,8 +161,9 @@ class _WorkoutListScreenState extends ConsumerState<WorkoutListScreen> {
   }
 
   Future<void> _startWorkout(Workout workout) async {
-    await selectWorkoutForZone(ref, workout);
-    if (!mounted) return;
+    final selected =
+        await selectWorkoutForZone(ref, workout, builtFor: _builtFor);
+    if (!mounted || !selected) return;
     context.go('/active-workout');
   }
 
@@ -161,7 +181,7 @@ class _WorkoutListScreenState extends ConsumerState<WorkoutListScreen> {
     final resolved = id == null
         ? null
         : catalogue.where((w) => w.id == id).firstOrNull;
-    ref.read(selectedWorkoutProvider.notifier).state = resolved;
+    if (!selectWorkout(ref, resolved, builtFor: _builtFor)) return;
     // `push`, not `go`: the detail screen is a review step the user comes back
     // from, so it must leave a pop-able entry. With `go` the route replaces the
     // list, `canPop()` is false, and the detail screen's Back button falls back
@@ -233,7 +253,9 @@ class _WorkoutListScreenState extends ConsumerState<WorkoutListScreen> {
 
                 // ── AI coach adjustment for today ──
                 ref.watch(coachAdjustmentProvider).maybeWhen(
-                  data: (adj) => adj == null ? const SizedBox.shrink() : _CoachAdjustmentBanner(adj: adj),
+                  data: (adj) => adj == null || adj.readFor != _builtFor
+                      ? const SizedBox.shrink()
+                      : _CoachAdjustmentBanner(adj: adj),
                   orElse: () => const SizedBox.shrink()),
 
                 // ── Search ──
@@ -297,7 +319,13 @@ class _WorkoutListScreenState extends ConsumerState<WorkoutListScreen> {
                   error: (e, __) => _AssignedErrorCard(
                       error: e,
                       onRetry: () => ref.invalidate(assignedWorkoutsProvider)),
-                  data: (workouts) => workouts.isEmpty
+                  // A list read for somebody else is not this member's: a
+                  // refresh keeps the value it is replacing.
+                  data: (workouts) => !workouts.every((w) => w.isFor(_builtFor))
+                      ? const Padding(
+                          padding: EdgeInsets.only(bottom: 24),
+                          child: _AssignedLoadingCard())
+                      : workouts.isEmpty
                       ? const SizedBox.shrink()
                       : _AssignedProgramSection(
                           workouts: workouts,

@@ -3,10 +3,18 @@ import '../../../core/observability/app_failure.dart';
 import 'models/exercise_model.dart';
 import 'models/workout_model.dart';
 import 'models/workout_log_model.dart';
+import 'workout_session_store.dart' show requireWorkoutOwner;
 import '../../dashboard/domain/workout_streak.dart';
 import '../domain/workout_day.dart';
 
 class WorkoutService {
+  /// [owner]: the member whose live workout this instance writes for. Null for
+  /// the read-only uses; a write then belongs to whoever was signed in when it
+  /// was asked for.
+  WorkoutService({this.owner});
+
+  final String? owner;
+
   // Resolved on use, not in the constructor: the sample workout/exercise
   // catalogue below needs no client, so constructing the service must not
   // require an initialised Supabase instance.
@@ -53,8 +61,9 @@ class WorkoutService {
   // ── Session management ────────────────────────────────────────────────────
 
   Future<void> logWorkout(WorkoutLog log) async {
-    final uid = _uid;
+    final uid = owner ?? _uid;
     if (uid == null) return;
+    requireWorkoutOwner(_supabase, uid, 'filing a workout');
     // Throws on failure: the caller decides whether the workout was filed, and
     // it can only do that if it hears about it.
     await _supabase.from('workout_logs').insert({
@@ -107,7 +116,9 @@ class WorkoutService {
     // merely filled in (migration 104).
     required bool completed,
   }) async {
-    final uid = _uid;
+    // Whose set this is, fixed before anything is awaited or queued behind an
+    // earlier save — never a fresh read at the moment of sending (P0-FL-59b).
+    final uid = owner ?? _uid;
     if (uid == null) return;
     if (setId.isEmpty) {
       // Refused rather than written under a guessed key. A row with no
@@ -175,14 +186,19 @@ class WorkoutService {
     // index on (session_id, set_id) cannot serve as an ON CONFLICT target.
     // ONE update expression, used for the first try and for the fallback below,
     // so this remains a single write site for the schema contract guard.
-    Future<List<dynamic>> updateRow() => _supabase
-        .from('workout_set_logs')
-        .update(payload)
-        .eq('session_id', sessionId)
-        .eq('set_id', setId)
-        .select('id');
+    Future<List<dynamic>> updateRow() {
+      requireWorkoutOwner(_supabase, uid, 'saving a set');
+      return _supabase
+          .from('workout_set_logs')
+          .update(payload)
+          .eq('session_id', sessionId)
+          .eq('set_id', setId)
+          .select('id');
+    }
+
     final existing = await updateRow();
     if (existing.isEmpty) {
+      requireWorkoutOwner(_supabase, uid, 'saving a set');
       try {
         await _supabase.from('workout_set_logs').insert({
           ...payload,
@@ -194,7 +210,11 @@ class WorkoutService {
         // Another writer (a second device, a restore) created this set's row
         // between our update and our insert. The row exists now: update it.
         if (e.code != '23505') rethrow;
-        await updateRow();
+        // ...unless it is not ours to update. Then nothing was saved, and
+        // saying otherwise loses the set.
+        if ((await updateRow()).isEmpty) {
+          throw StateError('saving a set: the row for this set was not updated');
+        }
       }
     }
   }

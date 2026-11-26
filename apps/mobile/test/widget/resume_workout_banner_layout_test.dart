@@ -93,6 +93,8 @@ Future<void> _pump(WidgetTester tester, _Harness h, double width) async {
 
   await tester.pumpWidget(ProviderScope(
     overrides: [
+      // Whose session it is: the signed-in member's (P0-FL-59b).
+      restoringUserIdProvider.overrideWithValue(_userId),
       activeSessionProvider.overrideWith((ref) async => session),
       workoutSessionStoreProvider.overrideWithValue(h.store),
       assignedWorkoutsProvider.overrideWith((ref) async => [_workout]),

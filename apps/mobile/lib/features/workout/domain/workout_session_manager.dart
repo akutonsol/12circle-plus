@@ -26,10 +26,17 @@ class WorkoutSessionManager {
   ///
   /// Any other in-progress session is abandoned first, so afterwards exactly
   /// one session is in progress for [userId].
+  ///
+  /// Refuses a workout read for another member (P0-FL-59b, A-10): running it
+  /// would abandon the session [userId] really has open. Nothing is read or
+  /// written.
   Future<WorkoutSessionRecord> startWorkout({
     required String userId,
     required Workout workout,
   }) async {
+    if (!workout.isFor(userId)) {
+      throw StateError('starting a workout: the signed-in account changed');
+    }
     final open = await _store.inProgressSessions(userId);
     final existing = _matchWorkout(open, workout);
 
@@ -70,20 +77,25 @@ class WorkoutSessionManager {
   /// Prefers the snapshot stored with the session, so a workout that is no
   /// longer in any list (AI-generated, or since edited) still resumes exactly
   /// as it was. Falls back to matching [candidates] for sessions written before
-  /// snapshots existed.
+  /// snapshots existed — never a candidate read for somebody else.
+  ///
+  /// The answer is the session owner's, whichever way it was found.
   Workout? workoutForSession(
     WorkoutSessionRecord session, {
     Iterable<Workout> candidates = const [],
   }) {
     final snapshot = session.workoutSnapshot;
     if (snapshot != null && snapshot.isNotEmpty) {
-      return programWorkoutToWorkout(snapshot);
+      return programWorkoutToWorkout(snapshot).asReadFor(session.userId);
     }
-    for (final w in candidates) {
-      if (session.workoutId.isNotEmpty && w.id == session.workoutId) return w;
+    final own = candidates.where((w) => w.isFor(session.userId));
+    for (final w in own) {
+      if (session.workoutId.isNotEmpty && w.id == session.workoutId) {
+        return w.asReadFor(session.userId);
+      }
     }
-    for (final w in candidates) {
-      if (w.title == session.workoutTitle) return w;
+    for (final w in own) {
+      if (w.title == session.workoutTitle) return w.asReadFor(session.userId);
     }
     return null;
   }
