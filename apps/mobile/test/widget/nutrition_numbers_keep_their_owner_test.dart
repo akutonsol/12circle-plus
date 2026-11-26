@@ -17,6 +17,7 @@
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
+import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/nutrition/domain/nutrition_provider.dart';
 import 'package:circle_fitness/features/nutrition/presentation/meals_dashboard_screen.dart';
 import 'package:circle_fitness/features/nutrition/presentation/nutrition_screen.dart';
@@ -97,7 +98,12 @@ void main() {
     await t.binding.setSurfaceSize(const Size(900, 3000));
     addTearDown(() => t.binding.setSurfaceSize(null));
     container = ProviderContainer(overrides: [
-      clientPlanProvider.overrideWith((ref) async => ClientPlan.selfGuided),
+      // Like the real clientPlanProvider, re-read per account: FL-60a's gate
+      // opens only on a plan read for the account signed in now.
+      clientPlanProvider.overrideWith((ref) async {
+        ref.watch(currentUserProvider);
+        return ClientPlan.selfGuided;
+      }),
     ]);
     addTearDown(container.dispose);
     await t.pumpWidget(UncontrolledProviderScope(
