@@ -1,6 +1,9 @@
+import 'dart:async' show StreamSubscription;
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthState, Supabase;
+import '../../../core/observability/app_failure.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/animations/app_animations.dart';
@@ -39,6 +42,9 @@ class _HabitScreenState extends ConsumerState<HabitScreen> {
   HabitCategory? _filterCategory;
 
   void _showAddSheet() {
+    // P0-FL-59e · the member opening it, not whoever is signed in by the time
+    // it is first built.
+    final owner = Supabase.instance.client.auth.currentUser?.id;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -46,6 +52,7 @@ class _HabitScreenState extends ConsumerState<HabitScreen> {
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
       builder: (_) => _AddHabitSheet(
+        owner: owner,
         onAdded: () => ref.read(liveHabitNotifierProvider.notifier).reload(),
       ),
     );
@@ -577,7 +584,10 @@ class _EmptyState extends StatelessWidget {
 
 class _AddHabitSheet extends StatefulWidget {
   final VoidCallback onAdded;
-  const _AddHabitSheet({required this.onAdded});
+
+  /// The member who opened it: the habit is theirs. It closes with them.
+  final String? owner;
+  const _AddHabitSheet({required this.owner, required this.onAdded});
 
   @override
   State<_AddHabitSheet> createState() => _AddHabitSheetState();
@@ -603,15 +613,49 @@ class _AddHabitSheetState extends State<_AddHabitSheet> {
     ('sleep', 'Sleep'),
   ];
 
+  StreamSubscription<AuthState>? _authSub;
+
+  static String? get _signedIn =>
+      Supabase.instance.client.auth.currentUser?.id;
+
+  @override
+  void initState() {
+    super.initState();
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+      if (_signedIn != widget.owner) _closeForOwner();
+    },
+        onError: (Object e, StackTrace s) =>
+            reportError('AddHabitSheet.onAuthStateChange', e, s));
+  }
+
+  void _closeForOwner() {
+    if (!mounted) return;
+    _nameCtrl.clear();
+    final route = ModalRoute.of(context);
+    if (route == null || !route.isActive || route.isFirst) return;
+    route.navigator?.removeRoute(route);
+  }
+
+  /// False (recorded, sheet closed) once someone else is signed in.
+  bool _stillOwner(String what) {
+    if (_signedIn == widget.owner) return true;
+    reportError('AddHabitSheet.identity',
+        StateError('$what: the signed-in account changed'));
+    _closeForOwner();
+    return false;
+  }
+
   @override
   void dispose() {
+    _authSub?.cancel();
     _nameCtrl.dispose();
     _unitCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
-    if (_nameCtrl.text.trim().isEmpty) return;
+    if (!_stillOwner('new habit')) return;
+    if (_saving || _nameCtrl.text.trim().isEmpty) return;
     setState(() => _saving = true);
     try {
       await CoachProgramService().addCustomHabit(
@@ -621,10 +665,12 @@ class _AddHabitSheetState extends State<_AddHabitSheet> {
         targetValue: _target,
         unit: _unitCtrl.text.trim().isEmpty ? 'times' : _unitCtrl.text.trim(),
       );
+      if (!_stillOwner('habit added')) return;
       widget.onAdded();
       if (mounted) Navigator.pop(context);
-    } catch (_) {
-      if (mounted) {
+    } catch (e, st) {
+      reportError('AddHabitSheet.save', e, st);
+      if (mounted && _stillOwner('new habit')) {
         ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Failed to add habit. Please try again.')));
       }
@@ -635,6 +681,11 @@ class _AddHabitSheetState extends State<_AddHabitSheet> {
 
   @override
   Widget build(BuildContext context) {
+    // Never drawn for anyone else, however late the change is heard of.
+    if (_signedIn != widget.owner) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _closeForOwner());
+      return const SizedBox.shrink();
+    }
     return Padding(
       padding: EdgeInsets.only(
         left: 24, right: 24, top: 24,

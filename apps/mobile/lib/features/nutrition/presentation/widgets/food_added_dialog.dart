@@ -1,4 +1,9 @@
+import 'dart:async' show StreamSubscription;
+
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthState, Supabase;
+
+import '../../../../core/observability/app_failure.dart';
 
 const _card     = Color(0xFF0E0B16);
 const _brand    = Color(0xFFA855F7);
@@ -18,22 +23,29 @@ class FoodAddedDialog extends StatelessWidget {
     required this.fat,
   });
 
+  /// P0-FL-59e · [owner]: the member whose meal it is. The dialog goes when
+  /// anyone else is signed in (or nobody is), and is never drawn for them.
+  /// Pushed after an await and a pop, it has no page or sheet left to do it.
   static Future<void> show(
     BuildContext context, {
+    required ({String? uid})? owner,
     required String foodName,
     required int protein,
     required int carbs,
     required int fat,
   }) {
+    final dialog = FoodAddedDialog(
+      foodName: foodName,
+      protein: protein,
+      carbs: carbs,
+      fat: fat,
+    );
     return showDialog(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.7),
-      builder: (_) => FoodAddedDialog(
-        foodName: foodName,
-        protein: protein,
-        carbs: carbs,
-        fat: fat,
-      ),
+      builder: (_) => owner == null
+          ? dialog
+          : _ForMember(uid: owner.uid, child: dialog),
     );
   }
 
@@ -183,6 +195,56 @@ class FoodAddedDialog extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// [child], in a route of its own, while [uid] is the member signed in; the
+/// route goes with them.
+class _ForMember extends StatefulWidget {
+  final String? uid;
+  final Widget child;
+  const _ForMember({required this.uid, required this.child});
+
+  @override
+  State<_ForMember> createState() => _ForMemberState();
+}
+
+class _ForMemberState extends State<_ForMember> {
+  StreamSubscription<AuthState>? _authSub;
+
+  bool get _theirs =>
+      Supabase.instance.client.auth.currentUser?.id == widget.uid;
+
+  @override
+  void initState() {
+    super.initState();
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+      if (!_theirs) _close();
+    },
+        onError: (Object e, StackTrace s) =>
+            reportError('FoodAddedDialog.onAuthStateChange', e, s));
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  void _close() {
+    if (!mounted) return;
+    final route = ModalRoute.of(context);
+    if (route != null && route.isActive && !route.isFirst) {
+      route.navigator?.removeRoute(route);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_theirs) return widget.child;
+    // Switched before it was first drawn: never drawn.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _close());
+    return const SizedBox.shrink();
   }
 }
 

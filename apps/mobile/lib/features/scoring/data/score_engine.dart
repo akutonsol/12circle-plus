@@ -7,6 +7,26 @@ import '../../../core/observability/app_failure.dart';
 /// auditable score_event via the `award_points` RPC. Points/levels/badges are
 /// computed server-side; this class never sets a score directly.
 class ScoreEngine {
+  /// P0-FL-59e · [forUid]: the member whose action this is. `award_points`
+  /// awards whoever is signed in, so, given, nothing is sent once that is
+  /// someone else (recorded). Not given, as before. Null is a member captured
+  /// while nobody was signed in: it is not whoever is by now.
+  ScoreEngine({this.forUid = signedInAtCall});
+
+  final String? forUid;
+
+  /// "[forUid] was not given", which null is not.
+  static const signedInAtCall = '<signed in at the call>';
+
+  /// Asked right before the request: there is no await in between.
+  bool _isForSignedIn(String action) {
+    if (forUid == signedInAtCall) return true;
+    if (_uid == forUid) return forUid != null; // signed out: nobody's points
+    reportError('ScoreEngine.identity',
+        StateError('$action: the signed-in account changed'));
+    return false;
+  }
+
   final _db = Supabase.instance.client;
   String? get _uid => _db.auth.currentUser?.id;
   String get _today => DateTime.now().toIso8601String().split('T').first;
@@ -20,6 +40,7 @@ class ScoreEngine {
     required String category, required String action, required int points,
     String? refType, String? refId, String? dedupKey,
   }) async {
+    if (!_isForSignedIn(action)) return;
     try {
       await _db.rpc('award_points', params: {
         'p_category': category, 'p_action': action, 'p_points': points,
@@ -38,6 +59,7 @@ class ScoreEngine {
     required String category, required String action, required int points,
     String? dedupKey,
   }) async {
+    if (!_isForSignedIn(action)) return;
     try {
       await _db.rpc('penalize_points', params: {
         'p_category': category, 'p_action': action, 'p_points': points,

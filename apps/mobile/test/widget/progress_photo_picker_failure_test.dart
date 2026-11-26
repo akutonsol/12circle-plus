@@ -12,6 +12,7 @@ import '../support/fake_image_picker.dart';
 import '../support/pump_until.dart';
 import '../support/row_checking_postgrest.dart';
 import '../support/session_switch.dart';
+import '../support/two_member_postgrest.dart' show TwoMemberPostgrest;
 
 // P0-FL-56a · Progress photos (Add Photo, and the three baseline slots).
 //
@@ -43,6 +44,9 @@ class _Server extends RowCheckingPostgrest {
   /// Reads of the weight history (one per load of the screen).
   int loads = 0;
 
+  /// The URL of every read asked with B's token (P0-FL-59e).
+  final readAsB = <String>[];
+
   /// Calls that award points: the daily score's write and the score RPC.
   final awards = <String>[];
 
@@ -58,6 +62,7 @@ class _Server extends RowCheckingPostgrest {
     listFails = pointsFail = false;
     insertGate = uploadGate = deleteGate = listGate = readGate = null;
     loads = 0;
+    readAsB.clear();
     awards.clear();
     left = const [];
     storage.clear();
@@ -68,6 +73,10 @@ class _Server extends RowCheckingPostgrest {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final path = request.url.path;
+    if ((request.method == 'GET' || path.contains('/object/sign/')) &&
+        TwoMemberPostgrest.who(request) == _uidB) {
+      readAsB.add('${request.url}');
+    }
     if (path.startsWith('/storage/v1/object/sign/')) {
       return json({'statusCode': '404', 'error': 'not_found', 'message': 'no'},
           400, request);
@@ -494,7 +503,13 @@ void main() {
       await settle(t);
       expect(server.awards, isEmpty,
           reason: "B was given the points for A's photo");
-      expect(server.loads, loads);
+      // P0-FL-59e (lead ruling) · was `server.loads == loads` ("no reload"),
+      // from before the screen was keyed to its member: it kept B's OWN read
+      // from running and told B it had failed. What must not happen is a read
+      // of A's, as B.
+      expect(server.loads, loads + 1, reason: "B's own progress");
+      expect(server.readAsB.where((u) => u.contains(_uid)), isEmpty,
+          reason: 'nothing of A is read as B');
       expect(origins(), ['progress.photo.identity']);
       expect(find.byType(SnackBar), findsNothing);
       await close(t);
@@ -534,7 +549,10 @@ void main() {
       await settle(t);
       expect(server.storage, hasLength(1), reason: 'the upload only');
       expect(origins(), [cleanup, identity]);
-      expect(server.loads, loads);
+      // P0-FL-59e (lead ruling) · was `server.loads == loads`; see Add Photo.
+      expect(server.loads, loads + 1, reason: "B's own progress");
+      expect(server.readAsB.where((u) => u.contains(_uid)), isEmpty,
+          reason: 'nothing of A is read as B');
       expect(find.byType(SnackBar), findsNothing,
           reason: 'never "Front photo updated" to B');
       await close(t);

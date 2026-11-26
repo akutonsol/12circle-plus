@@ -1,12 +1,17 @@
+import 'dart:async' show StreamSubscription;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthState, Supabase;
 import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/theme/app_background.dart';
 import '../../../core/animations/app_animations.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart'
+    show couldntMessage;
+import '../data/models/post_model.dart' show PostType;
 import '../domain/community_provider.dart';
 import '../domain/post_type_choice.dart';
 import 'widgets/create_post_sheet.dart';
@@ -17,6 +22,13 @@ class CommunityScreen extends ConsumerStatefulWidget {
 
   @override
   ConsumerState<CommunityScreen> createState() => _CommunityScreenState();
+}
+
+class _Draft {
+  const _Draft(this.uid, this.content, this.type);
+  final String uid;
+  final String content;
+  final PostType type;
 }
 
 class _StickyTabBarDelegate extends SliverPersistentHeaderDelegate {
@@ -44,23 +56,41 @@ class _StickyTabBarDelegate extends SliverPersistentHeaderDelegate {
 class _CommunityScreenState extends ConsumerState<CommunityScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  final _postController = TextEditingController();
+
+  /// P0-FL-59e · posts that could not be saved after their sheet was closed:
+  /// kept for the same member's next one, dropped when they leave.
+  List<_Draft> _drafts = [];
+  StreamSubscription<AuthState>? _authSub;
+
+  static String? get _signedIn =>
+      Supabase.instance.client.auth.currentUser?.id;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+      _drafts.removeWhere((d) => d.uid != _signedIn);
+    },
+        onError: (Object e, StackTrace s) =>
+            reportError('CommunityScreen.onAuthStateChange', e, s));
   }
 
   @override
   void dispose() {
+    _authSub?.cancel();
     _tabController.dispose();
-    _postController.dispose();
     super.dispose();
   }
 
   void _showCreatePost() {
-    showModalBottomSheet(
+    // The member opening it, not whoever is signed in when it is first built
+    // or submitted: the notifier read then is THEIR feed (W23).
+    final owner = _signedIn;
+    final mine = _drafts.where((d) => d.uid == owner);
+    final draft = mine.isEmpty ? null : mine.first;
+    var open = true;
+    showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -68,16 +98,39 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
       // needs state, and a `setState` here does not rebuild what
       // `showModalBottomSheet` has already handed to the overlay.
       builder: (_) => CreatePostSheet(
-        onPost: (content, type) {
-          // The type was never passed, so every post this app wrote went in
-          // as the default 'general' whatever the user tapped.
-          ref
-              .read(postNotifierProvider.notifier)
-              .addPost(content, postType: postTypeWire(type));
+        owner: (uid: owner),
+        draft: draft == null ? null : (content: draft.content, type: draft.type),
+        onPost: (content, type) async {
+          if (_signedIn != owner) {
+            throw StateError('post: the signed-in account changed');
+          }
+          try {
+            // The type was never passed, so every post this app wrote went in
+            // as the default 'general' whatever the user tapped.
+            await ref
+                .read(postNotifierProvider.notifier)
+                .addPost(content, postType: postTypeWire(type));
+          } catch (e) {
+            // The sheet says it and keeps the draft; with the sheet gone,
+            // both are here. (It records it either way.)
+            if (!open && mounted && owner != null && _signedIn == owner) {
+              _drafts = [
+                for (final d in _drafts)
+                  if (!identical(d, draft)) d,
+                _Draft(owner, content, type),
+              ];
+              ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(couldntMessage('post that', e))));
+            }
+            rethrow;
+          }
+          if (_signedIn != owner) return; // another member's phone by now
+          // This post's own draft; another one that failed is still unposted.
+          _drafts.remove(draft);
           AppAnimations.hapticSuccess();
         },
       ),
-    );
+    ).whenComplete(() => open = false);
   }
 
 
@@ -85,6 +138,9 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
   Widget build(BuildContext context) {
     final postsAsync = ref.watch(postNotifierProvider);
     final groupsAsync = ref.watch(groupNotifierProvider);
+    // Bound into each tile below: the member whose memberships it shows. The
+    // notifier read at a tap is that of whoever is signed in THEN.
+    final groupsOf = ref.watch(groupNotifierProvider.notifier).owner;
     // P0-FL-5: each failed feed read is recorded once, when it settles into
     // an error — not on every rebuild that shows it.
     ref.listen(postNotifierProvider, (previous, next) {
@@ -309,13 +365,14 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen>
                             final messenger = ScaffoldMessenger.of(context);
                             final ok = await ref
                                 .read(groupNotifierProvider.notifier)
-                                .toggleJoin(group);
+                                .toggleJoin(group, builtFor: (uid: groupsOf));
                             // P0-FL-10 · the result was dropped: a failed
                             // join or leave left the button as it was and said
                             // nothing. The list is unchanged on failure.
                             // Null = a repeat tap while this group's request
                             // was in flight; it was ignored, not failed.
-                            if (ok == false) {
+                            // P0-FL-59e · nor is it another member's to hear.
+                            if (ok == false && _signedIn == groupsOf) {
                               messenger.showSnackBar(SnackBar(
                                 content: Text(group.isJoined
                                     ? "Couldn't leave ${group.name}. Try again."

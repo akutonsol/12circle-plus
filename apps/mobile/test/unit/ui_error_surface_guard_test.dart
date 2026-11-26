@@ -246,7 +246,9 @@ void main() {
       for (final path in const [
         'lib/features/home/presentation/home_screen.dart',
         'lib/features/dashboard/presentation/coach_dashboard_screen.dart',
-        'lib/features/nutrition/presentation/meals_dashboard_screen.dart',
+        // (P0-FL-59e round 4: meals_dashboard_screen no longer reads one; the
+        // next heaviest recorded site stands in for it.)
+        'lib/features/ai_coach/domain/ai_insights.dart',
       ]) {
         expect(byFile[path], isNotNull,
             reason: '$path is a recorded `.valueOrNull` site. The detector no '
