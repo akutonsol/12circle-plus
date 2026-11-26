@@ -179,7 +179,9 @@ class _ClientDetailScreenState extends ConsumerState<ClientDetailScreen>
     final said = _Said(ScaffoldMessenger.of(context));
     _said.add(said);
     said.messenger.showSnackBar(SnackBar(
-      content: _SaidText(said, child: OwnedText(text, owner: _owner)),
+      content: _SaidText(said,
+          // `said` takes it down itself, and it alone knows when.
+          child: OwnedText(text, owner: _owner, takesItsBarDown: false)),
       behavior: SnackBarBehavior.floating, duration: duration))
       .closed.then((_) => _said.remove(said..over = true));
   }

@@ -17,6 +17,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/material.dart' show ScaffoldMessenger, SnackBar;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show AuthState, Supabase;
@@ -311,11 +312,22 @@ class _OpenedByAccountState extends State<OpenedByAccount> {
 }
 
 /// [text], drawn for [owner] only. It watches the account itself: it is up in a
-/// SnackBar, which outlives the page that said it.
+/// SnackBar, which outlives the page that said it. A null [owner] is nobody's,
+/// so nothing is drawn for a signed-out device either.
+///
+/// When it goes blank (another account, or nobody, is signed in) it takes its
+/// own SnackBar down after that frame, so the next account is not left an
+/// empty bar. Only its own: while it is mounted its bar is the one on screen
+/// (a queued bar is not built), and a bar that replaced it has disposed it.
+/// A bar something else takes down on the same switch (the client page's own
+/// messages) passes [takesItsBarDown] false: in the same frame that one is no
+/// longer current, though this is still mounted.
 class OwnedText extends StatefulWidget {
   final String text;
   final String? owner;
-  const OwnedText(this.text, {super.key, required this.owner});
+  final bool takesItsBarDown;
+  const OwnedText(this.text,
+      {super.key, required this.owner, this.takesItsBarDown = true});
 
   @override
   State<OwnedText> createState() => _OwnedTextState();
@@ -323,14 +335,31 @@ class OwnedText extends StatefulWidget {
 
 class _OwnedTextState extends State<OwnedText> {
   StreamSubscription<AuthState>? _auth;
+  bool _hiding = false;
 
   @override
   void initState() {
     super.initState();
+    // Its bar came up after its account left (it was queued behind another).
+    if (!isSignedIn(widget.owner)) _hideOwnBar();
     if (!hasAuthClient) return;
     _auth = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
-      if (mounted) setState(() {});
+      if (!mounted) return;
+      setState(() {});
+      if (!isSignedIn(widget.owner)) _hideOwnBar();
     }, onError: (_) {});
+  }
+
+  void _hideOwnBar() {
+    if (_hiding || !widget.takesItsBarDown) return;
+    _hiding = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Unmounted: its bar is gone already, and the one up now is another's.
+      if (!mounted || context.findAncestorWidgetOfExactType<SnackBar>() == null) {
+        return;
+      }
+      ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+    });
   }
 
   @override
@@ -340,7 +369,7 @@ class _OwnedTextState extends State<OwnedText> {
   }
 
   @override
-  Widget build(BuildContext context) => stillSignedIn(widget.owner)
+  Widget build(BuildContext context) => isSignedIn(widget.owner)
       ? Text(widget.text)
       : const SizedBox.shrink();
 }

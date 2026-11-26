@@ -1234,6 +1234,64 @@ void main() {
     await unmount(tester);
   });
 
+  // Round 6 (ux): a message of a sheet's or the price dialog's went blank on a
+  // switch but stayed up, an empty bar for the next account for up to 4 s.
+  group("what a sheet or the price dialog said to A, once A leaves", () {
+    Future<String> said(WidgetTester tester, String name) async {
+      await open(tester, name);
+      saveOf(tester, name)();
+      final text = name == 'price'
+          ? r'Custom price set to $4242/mo.'
+          : 'Program assigned!';
+      await pumpUntil(tester, () => seen(find.text(text)), what: 'said to A');
+      await frames(tester, 3);
+      return text;
+    }
+
+    for (final name in ['program', 'price']) {
+      for (final next in [memberB, null]) {
+        final who = next == null ? 'A signs out' : 'B signs in';
+        testWidgets('$name: $who, and its bar goes, not just its text',
+            (tester) async {
+          final text = await said(tester, name);
+          await tester.runAsync(
+              () => next == null ? signOut() : signInAs(next));
+          await tester.pump();
+          expect(find.text(text), findsNothing);
+          await frames(tester, 6); // well inside its 4 s
+          expect(find.byType(SnackBar), findsNothing,
+              reason: 'THE defect: an empty bar was left up for B');
+          await unmount(tester);
+        });
+      }
+
+      testWidgets("$name, control: another screen's bar queued behind it comes "
+          'up for B and stays for its time', (tester) async {
+        final text = await said(tester, name);
+        ScaffoldMessenger.of(tester.element(find.byType(Scaffold).first))
+            .showSnackBar(const SnackBar(
+                content: Text("another screen's"),
+                duration: Duration(seconds: 2)));
+        await tester.runAsync(() => signInAs(memberB));
+        await pumpUntil(tester, () => seen(find.text("another screen's")),
+            what: 'the next bar', step: const Duration(milliseconds: 100));
+        await frames(tester, 15);
+        expect(find.text("another screen's"), findsOneWidget,
+            reason: "another screen's bar was taken down with A's");
+        expect(find.text(text), findsNothing);
+        await unmount(tester);
+      });
+
+      testWidgets('$name, control: a refreshed token keeps it up, with its text',
+          (tester) async {
+        final text = await said(tester, name);
+        await tokenRefreshed(tester);
+        expect(find.text(text), findsOneWidget);
+        await unmount(tester);
+      });
+    }
+  });
+
   testWidgets("A's late prefill does not land in front of B", (tester) async {
     await page(tester);
     final hold =
