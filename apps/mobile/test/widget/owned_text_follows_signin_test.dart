@@ -207,7 +207,9 @@ void main() {
       expect(find.text('Marked done: Alma'), findsOneWidget, reason: 'premise');
       await tester.runAsync(() => signInAs(memberB));
       await pumpUntil(tester, () => seen(find.text("another screen's")),
-          what: 'the next bar', step: const Duration(milliseconds: 100));
+          what: "the next bar (THE defect if it never shows: it was taken "
+              "down with A's as it came up)",
+          step: const Duration(milliseconds: 100));
       await frames(tester, 12); // 1.2 s of its 2 s
       expect(find.text("another screen's"), findsOneWidget,
           reason: "THE defect: another screen's bar was taken down with A's");
