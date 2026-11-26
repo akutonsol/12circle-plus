@@ -6,6 +6,8 @@ import 'package:circle_fitness/features/coach/domain/package_provider.dart';
 import 'package:circle_fitness/features/scoring/domain/score_provider.dart';
 import 'package:circle_fitness/features/dashboard/presentation/client_detail_screen.dart';
 
+import '../support/two_member_postgrest.dart' show TwoMemberPostgrest, initTwoMemberSupabase, memberA, signInAs;
+
 /// EC-04 · what a coach using a SCREEN READER is told about an unassessed client.
 ///
 /// The fix distinguishes "unassessed" from "low risk" by COLOUR and by LABEL. A screen
@@ -19,7 +21,7 @@ import 'package:circle_fitness/features/dashboard/presentation/client_detail_scr
 /// real hardware: the real font at a real device pixel ratio, where Ahem's full-em
 /// squares cannot answer whether the label fits its pill.
 ///
-/// Nothing is signed in: `clientDetailProvider` is overridden with an in-memory profile.
+/// Only a fake session is signed in: `clientDetailProvider` is overridden with an in-memory profile.
 const _clientId = 'ec04-probe-client';
 
 Map<String, dynamic> _profile() => {
@@ -58,7 +60,8 @@ Future<void> _mount(WidgetTester t, {String? riskLevel}) async {
       myProgramsProvider.overrideWith((ref) async => const <Map<String, dynamic>>[]),
     ],
     child: const MaterialApp(
-      home: ClientDetailScreen(clientId: _clientId, clientName: 'Probe Client'),
+      home: ClientDetailScreen(
+          clientId: _clientId, clientName: 'Probe Client', owner: memberA),
     ),
   ));
   // The screen fans out to several live providers. They are ALLOWED to fail here — that
@@ -109,6 +112,14 @@ List<String> _semanticLabels(WidgetTester t) {
 }
 
 void main() {
+  // P0-FL-59f: the client page is drawn for the coach it was opened by only. A
+  // fake session over a fake server on an unroutable URL.
+  setUpAll(() async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    await initTwoMemberSupabase(TwoMemberPostgrest());
+    await signInAs(memberA);
+  });
+
   testWidgets('an UNASSESSED client is labelled unassessed on screen', (t) async {
     await _mount(t);
     _drain(t);

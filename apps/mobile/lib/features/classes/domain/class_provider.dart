@@ -1,12 +1,20 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../dashboard/domain/still_reading.dart' show ownedRead, ownerOfHeld;
 import '../data/class_service.dart';
 import '../data/live_class_service.dart';
 import '../data/models/class_model.dart';
 
 final classServiceProvider = Provider<ClassService>((ref) => ClassService());
 final liveClassServiceProvider = Provider<LiveClassService>((ref) => LiveClassService());
-final selectedClassProvider = StateProvider<FitnessClass?>((ref) => null);
+
+/// The class opened for detail, with the OPENER's booking flags: `isBooked` is
+/// what shows the meeting link, so it is dropped when the account changes
+/// (P0-FL-59f) — by id, so a token refresh does not close it.
+final selectedClassProvider = StateProvider<FitnessClass?>((ref) {
+  ref.watch(currentUserProvider.select((u) => u?.id));
+  return null;
+});
 final selectedClassTabProvider = StateProvider<int>((ref) => 0);
 final classFilterProvider = StateProvider<ClassCategory?>((ref) => null);
 
@@ -15,18 +23,33 @@ final classFilterProvider = StateProvider<ClassCategory?>((ref) => null);
 final refreshClassesProvider = StateProvider<int>((ref) => 0);
 
 final liveClassesFromDbProvider = FutureProvider<List<FitnessClass>>((ref) async {
-  ref.watch(currentUserProvider);
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
   ref.watch(refreshClassesProvider);
   final svc = ref.watch(liveClassServiceProvider);
-  final live = await svc.getUpcomingClasses();
   // Real classes only — no fake/sample fallback (avoids showing demo coaches
   // like "Coach Sarah" in production). Empty DB → empty list → empty state.
-  return live.where((c) => c.status != ClassStatus.completed).toList();
+  return ownedRead(uid, () async {
+    final live = await svc.getUpcomingClasses();
+    return live.where((c) => c.status != ClassStatus.completed).toList();
+  });
 });
+
+/// The classes held for the signed-in member. Riverpod keeps the previous
+/// member's through a switch and a failed read, and their booking flags with
+/// them: opening one put their meeting link in [selectedClassProvider].
+List<FitnessClass> _heldClasses(Ref ref) {
+  final classes = ref.watch(liveClassesFromDbProvider);
+  final owner = ownerOfHeld(classes);
+  if (owner != null &&
+      owner != ref.watch(currentUserProvider.select((u) => u?.id))) {
+    return const [];
+  }
+  return classes.valueOrNull ?? const [];
+}
 
 // Schedule tab: everything not yet finished, soonest first.
 final scheduleClassesProvider = Provider<List<FitnessClass>>((ref) {
-  final all = ref.watch(liveClassesFromDbProvider).valueOrNull ?? [];
+  final all = _heldClasses(ref);
   final list = all.where((c) => c.status != ClassStatus.completed).toList()
     ..sort((a, b) => a.startTime.compareTo(b.startTime));
   return list;
@@ -34,7 +57,7 @@ final scheduleClassesProvider = Provider<List<FitnessClass>>((ref) {
 
 // Live tab: classes happening right now.
 final liveNowClassesProvider = Provider<List<FitnessClass>>((ref) {
-  final all = ref.watch(liveClassesFromDbProvider).valueOrNull ?? [];
+  final all = _heldClasses(ref);
   return all.where((c) => c.status == ClassStatus.live).toList();
 });
 

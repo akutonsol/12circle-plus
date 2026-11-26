@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../dashboard/domain/still_reading.dart' show readAsClientPageOwner;
 import '../data/score_engine.dart';
 import '../../../core/realtime/realtime.dart';
 
@@ -51,8 +52,13 @@ final coachLeaderboardProvider =
 });
 
 /// A specific client's score (for coach analytics).
-final clientScoreProvider =
-    FutureProvider.family<Map<String, dynamic>?, String>((ref, clientId) async {
+///
+/// P0-FL-59f: read for the signed-in coach, and not kept after the client page
+/// that shows it: its card reads the held value, so one kept from the previous
+/// coach was this one's until (and unless) their own read answered.
+final clientScoreProvider = FutureProvider.autoDispose
+    .family<Map<String, dynamic>?, String>((ref, clientId) async {
+  readAsClientPageOwner(ref, clientId);
   ref.watch(scoreRefreshProvider);
   ref.watch(tableTickerProvider('user_scores'));
   return ref.watch(scoreEngineProvider).clientScore(clientId);

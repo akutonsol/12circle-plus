@@ -1,7 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../auth/domain/auth_provider.dart';
 import '../../challenges/domain/challenge_provider.dart';
+import '../../dashboard/domain/still_reading.dart' show hasAuthClient, heldFor;
 import 'class_provider.dart';
 import 'whats_on.dart';
 
@@ -49,8 +51,20 @@ final whatsOnSegmentProvider = StateProvider<int>((ref) => 0);
 ///
 /// A refresh keeps its previous value, so `hasValue` stays true and the list
 /// does not flash back to a spinner.
-final whatsOnProvider = Provider<AsyncValue<WhatsOn>>((ref) => combineWhatsOn(
-      classes: ref.watch(liveClassesFromDbProvider),
-      events: ref.watch(whatsOnEventsProvider),
-      challenges: ref.watch(liveChallengesProvider),
-    ));
+///
+/// ── AND NOBODY ELSE'S ANSWER COUNTS (P0-FL-59f, A-25) ──────────────────────
+/// Riverpod also keeps the PREVIOUS MEMBER's answer, and their failure, through
+/// a sign-in switch: "Booked" and "Joined" are theirs. So each personal source
+/// is judged by whose rows and whose failure it holds ([heldFor]) — by id, so a
+/// token refresh or a live re-read still holds the list steady.
+final whatsOnProvider = Provider<AsyncValue<WhatsOn>>((ref) {
+  final uid = hasAuthClient
+      ? ref.watch(currentUserProvider.select((u) => u?.id))
+      : null;
+  return combineWhatsOn(
+    classes: heldFor(uid, ref.watch(liveClassesFromDbProvider)),
+    // The same for everybody signed in.
+    events: ref.watch(whatsOnEventsProvider),
+    challenges: heldFor(uid, ref.watch(liveChallengesProvider)),
+  );
+});
