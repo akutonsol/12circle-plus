@@ -80,13 +80,17 @@ void Function() whenOwnerGone(String? owner, void Function() then) {
 /// was lost — leaves the outcome unknown (P0-FL-60a, item 7).
 ///
 ///  * a table read or write is one transaction, so the database's own answer
-///    (an SQLSTATE) or PostgREST's (PGRST…) means it was not made. When the body
-///    names neither, the code is the HTTP status: a 4xx is a refusal, and a 5xx
-///    is a gateway's (502, 504, 520, 522, 524 …), which does not know;
+///    (an SQLSTATE) or PostgREST's (PGRST…) means it was not made — except the
+///    codes that themselves say the outcome is unknown: the connection was
+///    lost during the request (PGRST001, SQLSTATE class 08) or the commit's
+///    completion is unknown (40003). When the body names neither, the code is
+///    the HTTP status: a 4xx is a refusal, and a 5xx is a gateway's (502, 504,
+///    520, 522, 524 …), which does not know;
 ///  * the payment functions refuse with a 4xx before they act, and name the
 ///    two failures after which nothing was changed.
 bool definitelyRefused(Object e) => switch (e) {
       PostgrestException(:final code) => code != null &&
+          !_outcomeUnknownCode.hasMatch(code) &&
           (_databaseCode.hasMatch(code) || _refusedStatus(int.tryParse(code))),
       FunctionException(:final status, :final details) =>
         _refusedStatus(status) ||
@@ -100,6 +104,11 @@ bool definitelyRefused(Object e) => switch (e) {
 /// ERROR is not one), or a code of PostgREST's own.
 final _databaseCode =
     RegExp(r'^((?=.*[0-9])[0-9A-Z]{5}|PGRST[0-9A-Z]{3})$');
+
+/// A database / PostgREST code that says the statement may or may not have
+/// been made: PGRST001 (connection lost during the request), class 08
+/// (connection exception) and 40003 (statement_completion_unknown).
+final _outcomeUnknownCode = RegExp(r'^(PGRST001|08[0-9A-Z]{3}|40003)$');
 
 /// A 4xx — but not 408, which is an answer that did not come.
 bool _refusedStatus(int? status) =>

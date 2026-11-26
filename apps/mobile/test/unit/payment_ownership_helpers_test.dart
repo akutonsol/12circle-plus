@@ -261,6 +261,19 @@ void main() {
         '4040', 'pgrst116', 'x42501', '425011', 'PGRST', 'ERROR', 'xPGRST116',
       ])
         (PostgrestException(message: 'x', code: c), false),
+      // Round 5: a code that itself says the statement's outcome is unknown
+      // is not a refusal — the connection went during the request (PGRST001,
+      // class 08) or the commit's completion is unknown (40003) …
+      for (final c in [
+        'PGRST001', '08000', '08001', '08003', '08004', '08006', '08007',
+        '08P01', '40003',
+      ])
+        (PostgrestException(message: 'x', code: c), false),
+      // … while their neighbours still are: a serialization failure, a
+      // deadlock, no connection at all (nothing ran), other PGRST/40 codes.
+      for (final c in ['40001', '40P01', '40002', '40000', 'PGRST000',
+          'PGRST002', 'PGRST100', '09000', '0A000'])
+        (PostgrestException(message: 'x', code: c), true),
       (const PostgrestException(message: 'x'), false),
       (http.ClientException('lost'), false),
       (TimeoutException('slow'), false),
