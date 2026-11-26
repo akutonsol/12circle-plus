@@ -71,7 +71,11 @@ void main() {
 
         expect(tester.takeException(), isNull);
         expect(svc.calls, hasLength(1));
-        expect(find.text(goalActionFailedMessage), findsOneWidget);
+        expect(
+            find.text(item == 'Delete'
+                ? "Couldn't delete your goal — try again in a moment. If it keeps happening, contact support."
+                : goalActionFailedMessage),
+            findsOneWidget);
       });
     }
 
@@ -100,6 +104,7 @@ void main() {
         expect(tester.takeException(), isNull);
         expect(svc.calls, hasLength(1));
         expect(find.text(goalActionFailedMessage), findsNothing);
+        expect(find.textContaining("Couldn't"), findsNothing);
       });
     }
   });
