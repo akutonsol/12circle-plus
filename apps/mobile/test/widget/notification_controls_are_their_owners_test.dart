@@ -230,6 +230,78 @@ void main() {
     });
   }
 
+  // Lead mutant 60c-9: `_saySo` without its owner check (`if (!ok) {`). A's
+  // change is SENT as A and held; B signs in; A's write then fails. The
+  // failure is A's: it is recorded, and B is told nothing of it — with frames
+  // between (B's list built) and with none. The control: the same failure with
+  // no switch is said, once.
+  final ops = <(String, void Function(WidgetTester), String, String)>[
+    ('mark read', (t) => tapOf(t, 'For A one')(), 'PATCH', 'markRead'),
+    ('mark all read', (t) => tapOf(t, 'Mark all read')(), 'PATCH', 'markAllRead'),
+    ('delete',
+        (t) => swipeOf(t, 'For A one')(DismissDirection.endToStart),
+        'DELETE', 'delete'),
+  ];
+  for (final (name, control, method, origin) in ops) {
+    for (final frames in [true, false]) {
+      testWidgets(
+          "A's $name sent, held, B signs in ${frames ? 'with frames' : 'with no frame'}, "
+          "then A's write fails: recorded, and B sees nothing of it",
+          (tester) async {
+        final hold = server.holds['$method $_t:$memberA'] = Completer<void>();
+        server.fails.add('$method $_t:$memberA');
+        await show(tester);
+        await press(tester, control);
+        expect(server.writes(_t).map((w) => '${w.method} ${w.who}'),
+            ['$method $memberA'], reason: 'premise: sent as A');
+        if (frames) {
+          await become(tester, memberB);
+          expect(text('For B'), findsOneWidget, reason: "premise: B's list");
+        } else {
+          await tester.runAsync(() => signInAs(memberB));
+        }
+        expect(signedIn(), memberB, reason: 'premise');
+        hold.complete();
+        if (frames) {
+          await settle(tester);
+        } else {
+          await noFrame(tester);
+          await create(tester);
+          await settle(tester);
+        }
+        expect(reported.map((f) => f.origin),
+            contains('NotificationsNotifier.$origin'),
+            reason: 'the failure is still recorded');
+        expect(find.byType(SnackBar), findsNothing,
+            reason: "THE defect: B was shown A's failure");
+        expect(find.textContaining("Couldn't"), findsNothing,
+            reason: "THE defect: B was told A's change failed");
+        expect(text('For A one'), findsNothing);
+        expect(text('For B'), findsOneWidget);
+        expect(row('b-1')['read'], isFalse);
+        expect(server.writes(_t).map((w) => w.who), [memberA]);
+        await done(tester);
+      });
+    }
+
+    testWidgets("control: A's $name held then failing, no switch, is said once",
+        (tester) async {
+      final hold = server.holds['$method $_t:$memberA'] = Completer<void>();
+      server.fails.add('$method $_t:$memberA');
+      await show(tester);
+      await press(tester, control);
+      hold.complete();
+      await settle(tester);
+      expect(reported.map((f) => f.origin),
+          contains('NotificationsNotifier.$origin'));
+      expect(find.byType(SnackBar), findsOneWidget);
+      expect(find.textContaining("Couldn't"), findsOneWidget,
+          reason: 'the same failure, for its owner, is said once');
+      expect(text('For A one'), findsOneWidget, reason: 'still there');
+      await done(tester);
+    });
+  }
+
   testWidgets("mark all: the re-count after no row changed is not asked as B",
       (tester) async {
     server.filtered.add('PATCH $_t:$memberA');
