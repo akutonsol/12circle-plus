@@ -313,7 +313,9 @@ class _OpenedByAccountState extends State<OpenedByAccount> {
 
 /// [text], drawn for [owner] only. It watches the account itself: it is up in a
 /// SnackBar, which outlives the page that said it. A null [owner] is nobody's,
-/// so nothing is drawn for a signed-out device either.
+/// so nothing is drawn for a signed-out device either. (With no auth client at
+/// all — a widget test that replaces every read — nobody can sign in, and the
+/// screens' owners are null by [boundTo]: that is the only owner drawn there.)
 ///
 /// When it goes blank (another account, or nobody, is signed in) it takes its
 /// own SnackBar down after that frame, so the next account is not left an
@@ -341,12 +343,12 @@ class _OwnedTextState extends State<OwnedText> {
   void initState() {
     super.initState();
     // Its bar came up after its account left (it was queued behind another).
-    if (!isSignedIn(widget.owner)) _hideOwnBar();
+    if (!_drawn) _hideOwnBar();
     if (!hasAuthClient) return;
     _auth = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
       if (!mounted) return;
       setState(() {});
-      if (!isSignedIn(widget.owner)) _hideOwnBar();
+      if (!_drawn) _hideOwnBar();
     }, onError: (_) {});
   }
 
@@ -368,8 +370,11 @@ class _OwnedTextState extends State<OwnedText> {
     super.dispose();
   }
 
+  bool get _drawn =>
+      hasAuthClient ? isSignedIn(widget.owner) : widget.owner == null;
+
   @override
-  Widget build(BuildContext context) => isSignedIn(widget.owner)
+  Widget build(BuildContext context) => _drawn
       ? Text(widget.text)
       : const SizedBox.shrink();
 }
