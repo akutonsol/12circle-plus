@@ -311,6 +311,96 @@ void main() {
       await close(t);
     });
 
+    // Round 6 · 59e-M12: `_logFood` refuses A's tap itself. The service it
+    // calls refuses too (nutrition_service.dart:81), so without the sheet's
+    // check nothing reaches B's rows either — but the sheet then starts a save,
+    // and records a failed meal ("AddMealSheet._logFood", the "Could not log
+    // meal." path) for a meal nobody was refused. Only the switch is recorded.
+    // The quick add (+) of a row is called as captured: a tap that lands on the
+    // undrawn sheet (the navigator absorbs real ones until it redraws).
+    group("A's quick add (+), landing once B is signed in", () {
+      setUpAll(watchAuthChanges);
+
+      VoidCallback quickAdd(WidgetTester t, String food) => (t.widget(
+              find.byWidgetPredicate((w) =>
+                  w.runtimeType.toString() == '_FoodRow' &&
+                  (w as dynamic).food.name == food)) as dynamic)
+          .onQuickAdd as VoidCallback;
+
+      void refusedAtTheSheet() {
+        expect(server.writes(), isEmpty, reason: 'a meal was logged');
+        expect(asB(), isEmpty);
+        expect(origins(), everyElement('AddMealSheet.identity'),
+            reason: 'it went on to a save: a failed meal is recorded');
+        expect(origins(), isNotEmpty, reason: 'the switch is not recorded');
+        expect(find.text('Could not log meal.'), findsNothing);
+        expect(find.text('Food Added!'), findsNothing);
+        expect(logged, 0);
+      }
+
+      testWidgets('before the sheet has heard of it (no frame): no meal, '
+          'nothing said', (t) async {
+        await open(t);
+        final add = quickAdd(t, 'Brown Rice');
+        await t.runAsync(() => switchAnd(memberB, add));
+        await settle(t);
+        refusedAtTheSheet();
+        expect(find.text('Log Meal'), findsNothing);
+        await close(t);
+      });
+
+      testWidgets('after the sheet heard of it, no frame drawn: no meal, '
+          'nothing said', (t) async {
+        await open(t);
+        final add = quickAdd(t, 'Brown Rice');
+        await switchTo(t, memberB);
+        add();
+        await settle(t);
+        refusedAtTheSheet();
+        expect(find.text('Log Meal'), findsNothing);
+        await close(t);
+      });
+
+      testWidgets('after frames (the sheet is gone): no meal, nothing thrown',
+          (t) async {
+        await open(t);
+        final add = quickAdd(t, 'Brown Rice');
+        await switchTo(t, memberB);
+        await settle(t);
+        expect(find.text('Log Meal'), findsNothing, reason: 'premise');
+        add();
+        await settle(t);
+        expect(t.takeException(), isNull);
+        refusedAtTheSheet();
+        await close(t);
+      });
+
+      testWidgets('A signed out, no frame: no meal, nothing said', (t) async {
+        await open(t);
+        final add = quickAdd(t, 'Brown Rice');
+        await t.runAsync(signOut);
+        add();
+        await settle(t);
+        refusedAtTheSheet();
+        await close(t);
+      });
+
+      testWidgets('POSITIVE CONTROL: a token refresh (heard), then the quick '
+          'add: logged once, for A, nothing recorded', (t) async {
+        await open(t);
+        final add = quickAdd(t, 'Brown Rice');
+        await t.runAsync(refreshSession);
+        add();
+        await settle(t);
+        final meal = server.writes('nutrition_logs').single;
+        expect((meal.who, meal.row['user_id'], meal.row['food_name']),
+            (memberA, memberA, 'Brown Rice'));
+        expect(logged, 1);
+        expect(reported, isEmpty);
+        await close(t);
+      });
+    });
+
     group('"Food Added!"', () {
       /// Logs a meal by [path] up to (not through) its save's answer.
       Future<Completer<void>> log(WidgetTester t, String path) async {
