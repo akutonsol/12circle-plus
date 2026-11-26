@@ -15,11 +15,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../support/pump_until.dart';
 import '../support/two_coach_postgrest.dart';
+import '../support/two_member_postgrest.dart' show TwoMemberPostgrest;
 
 // P0-FL-59f · the coach dashboard stays mounted across a sign-in switch (web),
 // and Riverpod keeps the previous coach's rows through the next one's read and
@@ -99,18 +101,42 @@ class _MemoryStore extends GotrueAsyncStorage {
 
 const _rels = 'GET coach_client_relationships';
 
+/// The fake, able to answer a write as PostgREST does when RLS (or another
+/// device) left it no row to change: 200 with `[]`.
+class _Server extends TwoCoachPostgrest {
+  /// `METHOD table:<who>` answered with no row.
+  final noRows = <String>{};
+
+  @override
+  void reset() {
+    super.reset();
+    noRows.clear();
+  }
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final answer = await super.send(request);
+    final path = request.url.path;
+    final key = '${request.method} ${path.split('/').last}:'
+        '${path.startsWith('/auth/v1/') ? '' : TwoMemberPostgrest.who(request)}';
+    if (!noRows.contains(key) || answer.statusCode != 200) return answer;
+    return http.StreamedResponse(Stream.value(utf8.encode('[]')), 200,
+        request: request, headers: {'content-type': 'application/json'});
+  }
+}
+
 /// A live change to a table: the reads that watch it run again.
 final _tick = StateProvider<int>((ref) => 0);
 
 void main() {
-  late TwoCoachPostgrest server;
+  late _Server server;
   late ProviderContainer c;
   late GoRouter router;
   final reported = <AppFailure>[];
 
   setUpAll(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
-    server = TwoCoachPostgrest();
+    server = _Server();
     await Supabase.initialize(
       url: 'http://127.0.0.1:1',
       publishableKey: 'test-publishable-key',
@@ -1305,6 +1331,63 @@ void main() {
       });
     }
 
+    // Round 7 (lead mutant m6): A's write answered "nothing changed" lands on
+    // the sheet while it closes for B (its exit animation: still mounted). Its
+    // note, and the re-read it asks for, are A's: B's list is not read again.
+    Finder sheet() => find.byWidgetPredicate(
+        (w) => w.runtimeType.toString() == '_NotificationsSheet');
+
+    testWidgets("'Mark all read' answered with no row after B signed in, as A's "
+        "sheet closes: nothing of it reaches B, nor re-reads B's list",
+        (tester) async {
+      notes();
+      await show(tester, realNotifications: true);
+      await openBell(tester);
+      const write = 'PATCH notifications:$memberA';
+      final hold = server.holds[write] = Completer<void>();
+      server.noRows.add(write);
+      await tester.tap(find.text('Mark all read'));
+      await pumpUntil(tester, () => server.writes.isNotEmpty, what: 'sent');
+      final readOfB =
+          server.holds['GET notifications:$memberB'] = Completer<void>();
+      await tester.runAsync(() => signInAs(memberB));
+      await pumpUntil(
+          tester, () => server.count('GET notifications:$memberB') == 1,
+          what: "B's own read", step: const Duration(milliseconds: 16));
+      expect(sheet(), findsOneWidget, reason: 'premise: still closing');
+      hold.complete();
+      await tester.pump();
+      expect(sheet(), findsOneWidget,
+          reason: 'premise: the answer landed on the mounted sheet');
+      await frames(tester, 10);
+      expect(sheet(), findsNothing, reason: 'premise: closed');
+      expect(server.count('GET notifications:$memberB'), 1,
+          reason: "THE defect: A's 'nothing changed' re-read B's list");
+      expect(find.textContaining('Nothing was marked read'), findsNothing);
+      expect(reported.map((f) => f.origin),
+          contains('CoachNotificationsSheet.markAllRead'));
+      expect(server.writes.map((w) => w.who), [memberA]);
+      readOfB.complete();
+      await unmount(tester, realtime: true);
+    });
+
+    testWidgets("control: A's 'Mark all read' answered with no row (A stays): "
+        "A is told nothing changed, and A's list is read again", (tester) async {
+      notes();
+      await show(tester, realNotifications: true);
+      await openBell(tester);
+      server.noRows.add('PATCH notifications:$memberA');
+      final reads = server.count('GET notifications:$memberA');
+      await tester.tap(find.text('Mark all read'));
+      await pumpUntil(
+          tester, () => seen(find.textContaining('Nothing was marked read')),
+          what: 'said');
+      await pumpUntil(
+          tester, () => server.count('GET notifications:$memberA') > reads,
+          what: "A's list read again");
+      await unmount(tester, realtime: true);
+    });
+
     testWidgets("A's failed read is not 'couldn't check' for B while B's is out",
         (tester) async {
       notes();
@@ -1696,6 +1779,86 @@ void main() {
       final w = server.writesTo('coach_invites').single;
       expect((w.who, w.body['coach_id'], w.body['invitee_email']),
           (memberA, memberA, 'prospect@client.example'));
+      await unmount(tester);
+    });
+  });
+
+  // Round 7 (lead mutant q12): the AI signals card names coach A's clients and
+  // their drop-off and injury risk. The RPC answers for `auth.uid()`, so the
+  // read must follow the account; the card is drawn with `maybeWhen`, so the
+  // re-read for B must not keep A's rows up as a "refresh".
+  group('AI coach signals', () {
+    const rpc = 'POST rpc/coach_client_ai_signals';
+    void signals() {
+      for (final (who, name) in [
+        (memberA, 'Alma Signal'),
+        (memberB, 'Boris Signal'),
+      ]) {
+        server.seed('rpc/coach_client_ai_signals', who, [
+          {
+            'client_id': 'cl-$name',
+            'client_name': name,
+            'churn_risk': 80,
+            'injury_risk': 0,
+            'workouts_7d': 1,
+          }
+        ]);
+      }
+    }
+
+    Finder ofA() => find.text('Alma Signal');
+    Finder ofB() => find.text('Boris Signal');
+
+    Future<void> ready(WidgetTester tester) async {
+      signals();
+      await show(tester);
+      await pumpUntil(tester, () => seen(ofA()), what: "A's signals");
+      await frames(tester);
+    }
+
+    // (Not covered: an INVALIDATE of this read before the switch is flushed
+    // draws A's rows for B, because `maybeWhen` keeps a refresh's previous
+    // value. Nothing in lib invalidates it today; reported to the lead.)
+    testWidgets("A's signals are not B's while B's read is in flight; then B's "
+        'own', (tester) async {
+      await ready(tester);
+      final hold = server.holds['$rpc:$memberB'] = Completer<void>();
+      await tester.runAsync(() => signInAs(memberB));
+      for (var i = 0; i < 8; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(ofA(), findsNothing,
+            reason: "THE defect: A's client's risk was shown to B (frame $i)");
+      }
+      expect(server.count('$rpc:$memberB'), 1,
+          reason: "B's signals are read for B, once");
+      hold.complete();
+      await pumpUntil(tester, () => seen(ofB()), what: "B's own");
+      expect(ofA(), findsNothing);
+      await unmount(tester);
+    });
+
+    testWidgets('A signs out: none of theirs is left', (tester) async {
+      await ready(tester);
+      await become(tester, null);
+      await frames(tester);
+      expect(ofA(), findsNothing,
+          reason: "THE defect: A's client's risk outlived A");
+      await unmount(tester);
+    });
+
+    testWidgets('control: a refreshed token (an event that fires) keeps them '
+        'and reads nothing again', (tester) async {
+      await ready(tester);
+      final calls = server.count('$rpc:$memberA');
+      final before = c.read(currentUserProvider);
+      await tester.runAsync(refreshSession);
+      await pumpUntil(tester, () => c.read(currentUserProvider) != before,
+          what: 'the same coach as a new User');
+      expect(c.read(currentUserProvider)?.id, memberA);
+      await frames(tester);
+      expect(ofA(), findsOneWidget);
+      expect(server.count('$rpc:$memberA'), calls,
+          reason: 'a refreshed token is the same coach');
       await unmount(tester);
     });
   });
