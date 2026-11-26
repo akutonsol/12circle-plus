@@ -440,6 +440,126 @@ void main() {
     });
   });
 
+  // Round 6 (lead mutants 59d-10, 59d-11) · the save goes on after its screen
+  // is closed (back while "Saving"; nothing holds the pop). Its own account
+  // listener went with the screen, so nothing clears the form any more: the
+  // videos are still listed and the draft is still a draft. While the screen
+  // is open that listener clears both first, which is why the open-screen
+  // tests above pass without these two checks.
+  group('closed while the save runs: every later step is still its coach\'s', () {
+    late ProviderContainer container;
+
+    Future<void> openPushed(WidgetTester t, {String? editing}) async {
+      t.view
+        ..devicePixelRatio = 1
+        ..physicalSize = const Size(1200, 2600);
+      addTearDown(t.view.reset);
+      await t.runAsync(() => signInAs(memberA));
+      container = ProviderContainer();
+      addTearDown(container.dispose);
+      container.read(editingExerciseProvider.notifier).state = editing;
+      await t.pumpWidget(UncontrolledProviderScope(
+          container: container,
+          child: pushedPage(Routes(), const CreateExerciseScreen())));
+      await t.tap(find.text('go'));
+      await settleReal(t);
+      expect(find.byType(CreateExerciseScreen), findsOneWidget, reason: 'premise');
+    }
+
+    Future<void> leave(WidgetTester t) async {
+      t.state<NavigatorState>(find.byType(Navigator)).pop();
+      await t.pump();
+      await t.pump(const Duration(seconds: 1)); // the route's way out
+      await settleReal(t);
+      expect(find.byType(CreateExerciseScreen), findsNothing,
+          reason: 'premise: the screen is gone');
+    }
+
+    for (final switches in [true, false]) {
+      testWidgets(
+          switches
+              ? "closed, then B signs in during the update: A's draft is not "
+                  'submitted for review as B'
+              : "control: closed, the same coach's token refresh: it is "
+                  'submitted, as A', (t) async {
+        server.tables['user_profiles'] = [
+          {'id': memberA, 'role': 'admin'}, {'id': memberB, 'role': 'admin'},
+        ];
+        server.tables['custom_exercises'] = [
+          {...server.tables['custom_exercises']!.single, 'visibility': 'global',
+            'content_status': 'draft', 'instructions': ['Press up']},
+        ];
+        await openPushed(t, editing: 'ex-a');
+        final hold = server.hold((s) => s.method == 'PATCH' && s.json.containsKey('name'));
+        saveTap(t)();
+        await settleReal(t);
+        expect(server.writes, hasLength(1), reason: 'premise: the details');
+        await leave(t);
+        if (switches) {
+          await switchTo(t, memberB);
+        } else {
+          await refreshToken(t);
+        }
+        hold.complete();
+        await settleReal(t);
+        final review = server.to('review_exercise_content');
+        if (switches) {
+          expect(review, isEmpty, reason: "A's draft was submitted for review by B");
+          expect(server.writesBy(memberB), isEmpty);
+          expect(changed(), ['CreateExerciseScreen._save']);
+        } else {
+          expect(review.single.who, memberA);
+          expect(changed(), isEmpty);
+        }
+        await unmountAll(t);
+      });
+    }
+
+    for (final switches in [true, false]) {
+      testWidgets(
+          switches
+              ? 'closed, then B signs in during the first of two videos: the '
+                  'second is not uploaded as B'
+              : "control: closed, the same coach's token refresh: both videos "
+                  'are uploaded, as A', (t) async {
+        await openPushed(t);
+        await type(t);
+        await t.tap(find.text('MEDIA'));
+        await settleReal(t);
+        for (var i = 1; i <= 2; i++) {
+          await t.tap(find.byIcon(Icons.add_circle_outline));
+          await settleReal(t);
+          await t.tap(find.text('Upload from device').first);
+          await pumpUntil(t, () => find.text('Video selected').evaluate().length == i,
+              what: 'video $i');
+        }
+        bool uploads(Sent s) => s.path.startsWith('/storage/v1/');
+        final hold = server.hold(uploads);
+        saveTap(t)();
+        await pumpUntil(t, () => server.writes.any(uploads), what: 'the first upload');
+        await leave(t);
+        if (switches) {
+          await switchTo(t, memberB);
+        } else {
+          await refreshToken(t);
+        }
+        hold.complete();
+        await settleReal(t);
+        final who = server.writes.where(uploads).map((s) => s.who);
+        if (switches) {
+          expect(who, [memberA], reason: "A's second video was uploaded by B");
+          expect(server.writesBy(memberB), isEmpty);
+          expect(changed(), ['CreateExerciseScreen._save']);
+        } else {
+          expect(who, [memberA, memberA]);
+          expect(sync().single.who, memberA, reason: 'the save went on to the end');
+          expect(changed(), isEmpty);
+        }
+        await unmountAll(t);
+      });
+    }
+  });
+
   group('a failure is recorded exactly once', () {
     testWidgets('create', (t) async {
       server.failing = (s) => s.isWrite;

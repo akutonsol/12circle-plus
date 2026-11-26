@@ -350,6 +350,62 @@ void main() {
       await unmountAll(t);
     });
 
+    // Round 6 (lead mutant 59d-4) · the tail of A's cancel, after the switch.
+    // The message it would show is also taken away by its own account watch,
+    // so "B sees no SnackBar" did not tell the guard from none: what B DOES
+    // lose is B's own message (that watch clears the whole messenger) and a
+    // second read of B's page.
+    for (final switches in [true, false]) {
+      testWidgets(
+          switches
+              ? "A's cancel answered after the switch: B's own message stays, "
+                  "B's page is not read again"
+              : "control: the same coach's token refresh meanwhile — the cancel "
+                  'is said, and the list read again', (t) async {
+        await open(t);
+        await askCancel(t);
+        final hold = server.hold((s) => s.table == 'notifications');
+        await t.tap(find.text('Cancel session'));
+        await settleReal(t);
+        expect(server.to('notifications').single.who, memberA, reason: 'premise');
+        final me = switches ? memberB : memberA;
+        if (switches) {
+          await switchTo(t, memberB);
+          expect(bobsSlot, findsOneWidget, reason: 'premise');
+        } else {
+          await refreshToken(t);
+        }
+        // The signed-in coach's own message: a slot that would not go.
+        server.zeroRows = (s) => s.who == me && s.method == 'DELETE';
+        await t.tap(find.byIcon(Icons.delete_outline_rounded));
+        await settleReal(t);
+        final own = find.textContaining("Couldn't remove this slot");
+        expect(own, findsOneWidget, reason: "premise: the coach is told of their own");
+        int reads() => server.log.where((s) => s.who == me && !s.isWrite).length;
+        final before = reads();
+        hold.complete();
+        await settleReal(t);
+        if (switches) {
+          expect(own, findsOneWidget,
+              reason: "A's late cancel took B's own message away");
+          expect(find.textContaining('Session cancelled'), findsNothing);
+          expect(reads(), before, reason: "A's cancel read B's page again");
+          expect(server.writesBy(memberB).map((s) => s.method), ['DELETE'],
+              reason: "only B's own remove is B's");
+          expect(changed(), isEmpty,
+              reason: 'every step of the cancel was sent before the switch');
+        } else {
+          // Queued behind the coach's own message, then said.
+          await t.pump(const Duration(seconds: 5));
+          await settleReal(t);
+          expect(find.text('Session cancelled — client notified.'), findsOneWidget);
+          expect(reads(), greaterThan(before), reason: 'the list is read again');
+          expect(changed(), isEmpty);
+        }
+        await unmountAll(t);
+      });
+    }
+
     testWidgets('"Reopen slot" does not wait for B, and sends nothing as B',
         (t) async {
       await open(t);
