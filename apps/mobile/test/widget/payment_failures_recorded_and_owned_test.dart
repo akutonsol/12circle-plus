@@ -6,11 +6,15 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart'
+    show AuthChangeEvent, Supabase;
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/payments/data/payment_service.dart';
 import 'package:circle_fitness/features/payments/domain/entitlements.dart';
 import 'package:circle_fitness/features/payments/domain/payment_provider.dart';
+import 'package:circle_fitness/features/payments/presentation/checkout_launcher.dart'
+    show checkoutFailedMessage;
 import 'package:circle_fitness/features/payments/presentation/coach_payments_screen.dart';
 import 'package:circle_fitness/features/payments/presentation/coach_plan_screen.dart';
 import 'package:circle_fitness/features/payments/presentation/manage_subscription_screen.dart';
@@ -2789,5 +2793,260 @@ void main() {
         await until(t, () => seen(find.text('Upgrade to Self-Guided')), "B's");
       });
     }
+  });
+
+  // R6 · the three lead mutants that survived round 5 (60a_surv.jsonl).
+  group('R6 the owner checks no other guard covers', () {
+    const subs = [
+      {'id': 'sub-1', 'kind': 'self_guided', 'status': 'active'},
+    ];
+    final cancelled = find.textContaining('Nothing was cancelled');
+
+    Future<void> plans(WidgetTester t) async {
+      for (final uid in [_a, _b]) {
+        server.answers['client_plan:$uid'] = (200, 'self_guided');
+      }
+      server.answers['subscriptions'] = (200, subs);
+      await open(t, const UpgradeScreen());
+      await until(t, () => seen(find.text('Current')), "A's plan");
+      await settle(t);
+    }
+
+    /// Frames, each checked: [never] is not drawn in any of them.
+    Future<void> framesWithout(WidgetTester t, Finder never, String why) async {
+      for (var i = 0; i < 12; i++) {
+        await t.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 10)));
+        await t.pump(const Duration(milliseconds: 50));
+        expect(never, findsNothing, reason: why);
+      }
+    }
+
+    /// A token refresh of the signed-in account, and proof that it arrived.
+    Future<void> sameAccountEvent(WidgetTester t) async {
+      final events = <AuthChangeEvent>[];
+      await t.runAsync(() async {
+        final sub = Supabase.instance.client.auth.onAuthStateChange
+            .listen((s) => events.add(s.event));
+        await refreshSession();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        await sub.cancel();
+      });
+      expect(events, contains(AuthChangeEvent.tokenRefreshed),
+          reason: 'premise: the event arrived');
+    }
+
+    // 60a-6 (checkout_launcher: showOwnedSnackBar's owner check). Billing's
+    // screen stays mounted across the change, so nothing before the call
+    // stops A's late failure. Without the check A's bar is shown to B; the
+    // owner-gone listener, added after the change, is handed the auth client's
+    // LAST event at once and clears it before a frame — and with it every bar
+    // B had up or waiting.
+    const aFailed = "Couldn't open billing";
+    const bsOwn = 'No billing account yet. Subscribe to a plan first.';
+
+    Future<void> manage(WidgetTester t) async {
+      server.answers['client_plan'] = (200, 'self_guided');
+      server.answers['subscriptions'] = (200, subs);
+      await open(t, const ManageSubscriptionScreen());
+      await until(t, () => seen(find.text('Cancel')), "A's plan");
+      await settle(t);
+    }
+
+    testWidgets("A's billing failure lands after B signed in (frames): B's own "
+        'message stays, nothing of A is said', (t) async {
+      await manage(t);
+      server.answers['create-portal-session:$_a'] = _down;
+      server.answers['create-portal-session:$_b'] =
+          (400, {'error': 'No billing account yet'});
+      final gate = server.gates['create-portal-session:$_a'] = Completer();
+      await t.tap(find.text('Manage billing & payment method'));
+      await until(
+          t, () => server.count('create-portal-session', _a) == 1, 'A asked');
+      await signIn(t, _b);
+      await until(t, () => seen(find.text('Cancel')), "B's plan");
+      await settle(t);
+      await t.tap(find.text('Manage billing & payment method'));
+      await until(t, () => seen(find.text(bsOwn)), "B's own message");
+      await settle(t);
+      gate.complete();
+      await framesWithout(t, find.textContaining(aFailed), "A's failure, to B");
+      expect(find.text(bsOwn), findsOneWidget,
+          reason: "A's failure took B's own message down");
+      expect(origins(), contains('PaymentService.openBillingPortal'));
+      expect(launched, isEmpty);
+    });
+
+    testWidgets("A's billing failure lands after B signed in (frames): B is "
+        'told nothing', (t) async {
+      await manage(t);
+      server.answers['create-portal-session:$_a'] = _down;
+      final gate = server.gates['create-portal-session:$_a'] = Completer();
+      await t.tap(find.text('Manage billing & payment method'));
+      await until(
+          t, () => server.count('create-portal-session', _a) == 1, 'A asked');
+      await signIn(t, _b);
+      await settle(t);
+      gate.complete();
+      await framesWithout(t, find.byType(SnackBar), "A's failure, to B");
+      expect(origins(), contains('PaymentService.openBillingPortal'));
+    });
+
+    testWidgets("control: the same account's billing failure, a token refresh "
+        'in between, is said once', (t) async {
+      await manage(t);
+      server.answers['create-portal-session:$_a'] = _down;
+      final gate = server.gates['create-portal-session:$_a'] = Completer();
+      await t.tap(find.text('Manage billing & payment method'));
+      await until(
+          t, () => server.count('create-portal-session', _a) == 1, 'A asked');
+      await sameAccountEvent(t);
+      gate.complete();
+      await until(t, () => seen(find.textContaining(aFailed)), 'said');
+      await settle(t);
+      expect(find.textContaining(aFailed), findsOneWidget);
+      expect(find.byType(SnackBar), findsOneWidget);
+      expect(recordedAccountChange(), isFalse);
+    });
+
+    // The lead's scenario for 60a-8, as it is: A's subscriptions read (Switch
+    // to Free) fails after B signed in. With frames the card is A's (keyed by
+    // account) and leaves; the no-frame case is in R3 above.
+    testWidgets("A's subscriptions read fails after B signed in (frames): B is "
+        'told nothing, nothing is sent', (t) async {
+      await plans(t);
+      server.answers['subscriptions:$_a'] = _down;
+      final gate = server.gates['subscriptions:$_a'] = Completer();
+      await t.tap(find.text('Switch to Free'));
+      await until(t, () => server.count('subscriptions', _a) == 1, 'A asked');
+      await signIn(t, _b);
+      await settle(t);
+      gate.complete();
+      await framesWithout(t, cancelled, "A's failure, to B");
+      expect(find.byType(SnackBar), findsNothing);
+      expect(find.text('Switch to Free?'), findsNothing);
+      expect(server.count('cancel-subscription'), 0);
+    });
+
+    testWidgets('control: the same failure with no switch (a token refresh in '
+        'between) is said once', (t) async {
+      await plans(t);
+      server.answers['subscriptions:$_a'] = _down;
+      final gate = server.gates['subscriptions:$_a'] = Completer();
+      await t.tap(find.text('Switch to Free'));
+      await until(t, () => server.count('subscriptions', _a) == 1, 'A asked');
+      await sameAccountEvent(t);
+      gate.complete();
+      await until(t, () => seen(cancelled), 'said');
+      await settle(t);
+      expect(cancelled, findsOneWidget);
+      expect(origins().where((o) => o == 'UpgradeScreen.mySubscriptions'),
+          hasLength(1));
+      expect(recordedAccountChange(), isFalse);
+    });
+
+    // 60a-8 (upgrade_screen: the owner check before `_refresh()` after the
+    // checkout). Without it A's checkout, ending after B signed in, re-reads
+    // B's plan, tier and subscriptions: A's step, taken as B.
+    for (final (answer, what, failed) in [
+      (_down, 'fails', true),
+      ((200, {'url': 'https://stripe/a'}), 'answers', false),
+    ]) {
+      testWidgets("A's checkout $what after B signed in (frames): B's plan is "
+          'not re-read for it, nothing said', (t) async {
+        await plans(t);
+        server.answers['update-subscription:$_a'] = (200, {'needsCheckout': true});
+        server.answers['create-checkout:$_a'] = answer;
+        final gate = server.gates['create-checkout:$_a'] = Completer();
+        await t.tap(find.text('Upgrade to AI-Guided'));
+        await until(t, () => server.count('create-checkout', _a) == 1, 'A asked');
+        await signIn(t, _b);
+        await until(t, () => server.count('client_plan', _b) == 1, 'B read');
+        await settle(t);
+        expect(server.count('client_plan', _b), 1, reason: 'premise');
+        gate.complete();
+        await settle(t);
+        expect(server.count('client_plan', _b), 1,
+            reason: "A's checkout re-read B's plan");
+        expect(find.byType(SnackBar), findsNothing);
+        expect(launched, isEmpty);
+        // A failure is the service's to record; a link made for A, the
+        // change's.
+        failed
+            ? expect(origins(), contains('PaymentService.startCheckout'))
+            : expect(recordedAccountChange(), isTrue);
+      });
+
+      testWidgets("no-frame: A's checkout $what after B signed in: B's plan is "
+          'read once, nothing said', (t) async {
+        await plans(t);
+        server.answers['update-subscription:$_a'] = (200, {'needsCheckout': true});
+        server.answers['create-checkout:$_a'] = answer;
+        final gate = server.gates['create-checkout:$_a'] = Completer();
+        await t.tap(find.text('Upgrade to AI-Guided'));
+        await until(t, () => server.count('create-checkout', _a) == 1, 'A asked');
+        await t.runAsync(() => signInAs(_b)); // no frame
+        gate.complete();
+        await noFrames(t);
+        await settle(t);
+        expect(server.count('client_plan', _b), 1);
+        expect(find.byType(SnackBar), findsNothing);
+        expect(launched, isEmpty);
+        failed
+            ? expect(origins(), contains('PaymentService.startCheckout'))
+            : expect(recordedAccountChange(), isTrue);
+      });
+    }
+
+    testWidgets("control: the same account's failed checkout is said once and "
+        'its plan re-read', (t) async {
+      await plans(t);
+      server.answers['update-subscription:$_a'] = (200, {'needsCheckout': true});
+      server.answers['create-checkout:$_a'] = _down;
+      final before = server.count('client_plan', _a);
+      await t.tap(find.text('Upgrade to AI-Guided'));
+      await until(t, () => seen(find.text(checkoutFailedMessage)), 'said');
+      await settle(t);
+      expect(find.text(checkoutFailedMessage), findsOneWidget);
+      expect(server.count('client_plan', _a), before + 1, reason: 're-read');
+      expect(recordedAccountChange(), isFalse);
+    });
+
+    // 60a-N4 (paywall_gate: no plan and no failure of THIS account = loading).
+    // Without it `clientPlanProvider.when` decides; a refresh asked for before
+    // the change reached the providers keeps A's plan as data that is
+    // refreshing, and `when` shows that data.
+    Future<void> gate(WidgetTester t) async {
+      for (final uid in [_a, _b]) {
+        server.answers['user_profiles:$uid'] =
+            (200, {'id': uid, 'role': 'client'});
+      }
+      server.answers['client_plan:$_a'] = (200, 'ai_guided');
+      await open(
+          t,
+          const PaywallGate(
+              required: ClientPlan.aiGuided,
+              featureName: 'AI coach',
+              child: Text('GATED')));
+      await until(t, () => seen(find.text('GATED')), "A's gate");
+    }
+
+    testWidgets("no-frame: A's plan refresh asked for, then B signs in: A's "
+        'plan never opens it for B', (t) async {
+      await gate(t);
+      server.answers['client_plan:$_b'] = (200, 'free');
+      final g = server.gates['client_plan:$_b'] = Completer();
+      container(t).invalidate(clientPlanProvider); // A's refresh, no frame
+      await t.runAsync(() => signInAs(_b)); // no frame
+      for (var i = 0; i < 12; i++) {
+        await t.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 10)));
+        await t.pump(const Duration(milliseconds: 50));
+        expect(find.text('GATED'), findsNothing, reason: "A's plan opened it");
+      }
+      expect(find.byType(PaywallLocked), findsNothing);
+      g.complete();
+      await until(t, () => seen(find.byType(PaywallLocked)), "B's Free");
+    });
   });
 }
