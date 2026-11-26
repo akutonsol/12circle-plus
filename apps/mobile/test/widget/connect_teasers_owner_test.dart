@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:circle_fitness/features/challenges/domain/challenge_provider.dart';
+import 'package:circle_fitness/features/classes/domain/class_provider.dart';
 import 'package:circle_fitness/features/community/domain/community_provider.dart';
 import 'package:circle_fitness/features/messaging/presentation/connect_sections_view.dart';
 import 'package:flutter/material.dart';
@@ -153,6 +155,62 @@ void main() {
       nothingOfA();
       await closeApp(t);
     });
+  });
+
+  // Round 4 (lead mutant N4: the view READS the uid instead of watching it).
+  // With every source that follows the account already being read again, the
+  // switch replaces one loading state with another, and riverpod 2.6.1 tells no
+  // one: the uid the view watches is then the only thing that redraws it, so
+  // without it A's feed and groups stay on B's screen while B's reads are out.
+  testWidgets('every source in flight at the switch, frames pumped: the uid '
+      'alone redraws the view, nothing of A while B is read', (t) async {
+    await open(t);
+    final holdsA = [
+      for (final table in [
+        'community_posts',
+        'community_groups',
+        'classes',
+        'challenges'
+      ])
+        server.holds['GET $table:$memberA'] = Completer<void>(),
+    ];
+    container
+      ..invalidate(livePostsProvider)
+      ..invalidate(liveGroupsProvider)
+      ..invalidate(liveClassesFromDbProvider)
+      ..invalidate(liveChallengesProvider);
+    await settleReal(t);
+    for (final p in [
+      livePostsProvider,
+      liveGroupsProvider,
+      liveClassesFromDbProvider,
+      liveChallengesProvider,
+    ]) {
+      expect(container.read(p).isLoading, isTrue, reason: 'premise: in flight');
+    }
+    expect(find.textContaining(_postA), findsOneWidget,
+        reason: 'premise: the same member keeps them meanwhile');
+    final holdsB = [
+      for (final table in [
+        'community_posts',
+        'community_groups',
+        'classes',
+        'challenges'
+      ])
+        server.holds['GET $table:$memberB'] = Completer<void>(),
+    ];
+    await switchNoFrame(t, memberB);
+    await settleReal(t);
+    nothingOfA();
+    release(holdsA);
+    await settleReal(t);
+    nothingOfA();
+    release(holdsB);
+    await settleReal(t);
+    expect(find.textContaining(_postB), findsOneWidget);
+    expect(find.textContaining(_groupB), findsOneWidget);
+    nothingOfA();
+    await closeApp(t);
   });
 
   group('no refresh in flight', () {

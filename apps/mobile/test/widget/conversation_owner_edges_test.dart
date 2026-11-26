@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/core/realtime/realtime.dart';
+import 'package:circle_fitness/features/messaging/data/chat_media_path.dart';
 import 'package:circle_fitness/features/messaging/data/messaging_service.dart';
 import 'package:circle_fitness/features/messaging/domain/messaging_provider.dart';
 import 'package:circle_fitness/features/messaging/presentation/chat_screen.dart';
@@ -467,6 +468,65 @@ void main() {
       expect(find.byType(SnackBar), findsNothing);
       await closeApp(t);
     });
+
+    // Round 4 (lead mutant 59c-7: the signed-URL cache not cleared on a drop).
+    // A's photo is signed once, as A. After A->B nothing of it is drawn, and
+    // its URL is neither reused nor asked for again — not even when A's thread
+    // reaches the screen late, before any frame. This guards the exposure; the
+    // mutant itself cannot be seen (see the round-4 report: once dropped, the
+    // conversation never draws a bubble again, and bubbles are the cache's only
+    // reader), so the clear is defence in depth.
+    for (final frame in [true, false]) {
+      testWidgets(
+          "A's signed photo URL: not drawn, reused or asked for after A->B "
+          "${frame ? '' : 'with no frame, A\'s thread landing late'}",
+          (t) async {
+        const photo = 'messages/$_conv/coach-1/1.jpg';
+        final photoMsg = {
+          'id': 'm2',
+          'conversation_id': _conv,
+          'sender_id': 'coach-1',
+          'content': '[photo]',
+          'metadata': {
+            ChatMediaPath.typeKey: ChatMediaPath.imageType,
+            ChatMediaPath.mediaPathKey: photo,
+          },
+          'is_read': false,
+          'sent_at': '2026-11-01T10:01:00Z',
+        };
+        server.rows['messages:$memberA'] = [
+          ...server.rows['messages:$memberA']!,
+          photoMsg,
+        ];
+        Iterable<Asked> signs() => server.log.where((a) =>
+            a.table == 'storage' && a.query['path']!.contains('/object/sign/'));
+        await open(t);
+        expect(signs(), hasLength(1), reason: 'premise: signed once');
+        expect(signs().single.who, memberA);
+        expect(signs().single.query['path'], contains(photo));
+        // The bubble's private image widget (by name: it is private to the
+        // screen). Whatever the fake's sign answer draws inside it, it is
+        // there for A.
+        final photoBubble = find.byWidgetPredicate(
+            (w) => w.runtimeType.toString() == '_PrivateImage');
+        expect(photoBubble, findsOneWidget,
+            reason: "premise: A's photo drawn for A");
+
+        await switchNoFrame(t, memberB);
+        if (frame) await settleReal(t);
+        // A's thread, as realtime would deliver it to the open screen.
+        svc.stream.add([...server.rows['messages:$memberA']!]);
+        await settleReal(t);
+        expect(photoBubble, findsNothing, reason: "A's photo shown to B");
+        expect(find.byType(Image), findsNothing);
+        expect(find.text('Coach says hello A'), findsNothing);
+        expect(liveRegionOver(_closed), findsOneWidget);
+        expect(signs(), hasLength(1), reason: 'signed again, or as B');
+        expect(server.log.where((a) => a.who == memberB && a.table == 'storage'),
+            isEmpty);
+        await closeApp(t);
+      });
+    }
 
     testWidgets('the spinner of a photo A was sending goes with it', (t) async {
       await open(t);

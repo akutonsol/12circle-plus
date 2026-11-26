@@ -325,6 +325,55 @@ void main() {
       await closeApp(t);
     });
 
+    // Round 4 (lead mutant 59c-10: the owner check on the "not saved" path
+    // removed). The save is refused as A's, so it answers `false`; with the
+    // switch already drawn, that refusal was said to B as B's own failure.
+    for (final frame in [true, false]) {
+      testWidgets(
+          'A->B ${frame ? 'drawn' : 'with no frame'} during the save: A\'s '
+          'refused save is not said to B as a failure', (t) async {
+        await open(t);
+        await t.enterText(notes(), 'private to A');
+        final before = server.sent('GET', 'weekly_checkins').length;
+        final hold =
+            server.holds['GET weekly_checkins:$memberA'] = Completer<void>();
+        await t.tap(submitButton());
+        await pumpUntil(
+            t, () => server.sent('GET', 'weekly_checkins').length > before,
+            what: 'the week read of the save');
+        server.holds.clear();
+        await switchNoFrame(t, memberB);
+        if (frame) {
+          await settleReal(t);
+          expect(t.widget<TextField>(notes()).controller!.text, isEmpty,
+              reason: 'premise: the form was dropped before the answer');
+        }
+        hold.complete();
+        await settleReal(t);
+        expect(server.log.where((a) => a.method != 'GET'), isEmpty);
+        expect(origins(), contains('WeeklyCheckinService.submitWeeklyCheckin'),
+            reason: 'the refusal is recorded');
+        expect(find.text('Failed to save. Please try again.'), findsNothing,
+            reason: "A's refused save said to B");
+        expect(find.byType(SnackBar), findsNothing);
+        expect(find.text('Weekly Check-In Complete!'), findsNothing);
+        expect(notes(), findsOneWidget, reason: "B's own form");
+        await closeApp(t);
+      });
+    }
+
+    testWidgets('CONTROL: the same member, a failed save is said once and the '
+        'answers stay', (t) async {
+      await open(t);
+      await t.enterText(notes(), 'mine');
+      server.fails.add('POST weekly_checkins:$memberA');
+      await t.tap(submitButton());
+      await settleReal(t);
+      expect(find.text('Failed to save. Please try again.'), findsOneWidget);
+      expect(t.widget<TextField>(notes()).controller!.text, 'mine');
+      await closeApp(t);
+    });
+
     testWidgets('sign-out during the save: the row is kept, nothing is awarded, '
         'nothing is said', (t) async {
       await open(t);
