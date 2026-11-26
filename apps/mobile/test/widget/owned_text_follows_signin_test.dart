@@ -142,6 +142,79 @@ void main() {
       await unmount(tester);
     });
 
+    // Round 7 (lead mutant N2): with no frame between the bar and the switch,
+    // it is built blank, and goes at the end of THAT frame. (Its listener
+    // would hide it too, but a frame later: the auth stream replays its last
+    // event to a new listener, after the frame that built it.)
+    testWidgets("B signs in before the first frame of A's bar (no frame): it is "
+        'on its way out at the end of that first frame', (tester) async {
+      final messenger = await host(tester);
+      SnackBarClosedReason? closed;
+      messenger
+          .showSnackBar(owned('Program assigned!', memberA))
+          .closed
+          .then((r) => closed = r);
+      await tester.runAsync(() => signInAs(memberB));
+      await tester.pump();
+      expect(find.byType(SnackBar), findsOneWidget, reason: 'premise: built');
+      expect(find.text('Program assigned!'), findsNothing);
+      expect(closed, SnackBarClosedReason.hide,
+          reason: 'THE defect: an empty bar was left up for another frame');
+      await frames(tester, 6);
+      expect(find.byType(SnackBar), findsNothing);
+      await unmount(tester);
+    });
+
+    // Round 7 (lead mutant N5): drawn on a page, not in a bar, it has no bar
+    // of its own to take down — and the bar up is another screen's.
+    testWidgets("drawn on a page, not in a bar: when it goes blank, another "
+        "screen's bar stays for its time", (tester) async {
+      final messenger =
+          await host(tester, const OwnedText('of A', owner: memberA));
+      messenger.showSnackBar(const SnackBar(
+          content: Text("another screen's"), duration: Duration(seconds: 2)));
+      await frames(tester, 3);
+      await tester.runAsync(() => signInAs(memberB));
+      await frames(tester, 3);
+      expect(find.text('of A'), findsNothing, reason: 'premise: blank for B');
+      await frames(tester, 9); // 1.5 s of its 2 s
+      expect(find.text("another screen's"), findsOneWidget,
+          reason: "THE defect: another screen's bar was taken down for it");
+      await unmount(tester);
+    });
+
+    // Round 7 (lead mutant N4): a bar its caller takes down itself on the
+    // switch passes takesItsBarDown false. When the caller's removal runs
+    // first, the bar up next is another screen's, and it stays.
+    testWidgets("takesItsBarDown false: the caller removes its own bar, and "
+        "another screen's queued behind it stays for its time", (tester) async {
+      final messenger = await host(tester);
+      // The caller listens before its bar is up (as the client page does).
+      final sub = Supabase.instance.client.auth.onAuthStateChange.listen((s) {
+        if (s.session?.user.id == memberA) return;
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => messenger.removeCurrentSnackBar());
+      });
+      addTearDown(sub.cancel);
+      await frames(tester, 1);
+      messenger
+        ..showSnackBar(SnackBar(
+            content: OwnedText('Marked done: Alma', owner: memberA,
+                takesItsBarDown: false)))
+        ..showSnackBar(const SnackBar(
+            content: Text("another screen's"), duration: Duration(seconds: 2)));
+      await frames(tester, 3);
+      expect(find.text('Marked done: Alma'), findsOneWidget, reason: 'premise');
+      await tester.runAsync(() => signInAs(memberB));
+      await pumpUntil(tester, () => seen(find.text("another screen's")),
+          what: 'the next bar', step: const Duration(milliseconds: 100));
+      await frames(tester, 12); // 1.2 s of its 2 s
+      expect(find.text("another screen's"), findsOneWidget,
+          reason: "THE defect: another screen's bar was taken down with A's");
+      expect(find.text('Marked done: Alma'), findsNothing);
+      await unmount(tester);
+    });
+
     testWidgets('control: a refreshed token (an event that fires) keeps it up '
         'with its text', (tester) async {
       final messenger = await host(tester);
