@@ -9,6 +9,7 @@ import 'package:circle_fitness/features/auth/presentation/widgets/auth_design.da
 import 'package:circle_fitness/features/payments/domain/entitlements.dart';
 import 'package:circle_fitness/main.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -385,6 +386,63 @@ void main() {
     });
   });
 
+  // Round 5 (59a-m18): the redirect forces only the account the recovery is
+  // for, judged by the account requests are made as. The one session in which
+  // that check is the only guard is a mixed one — A's user on B's token, as
+  // another web tab tells this one of it: the router's listener ignores it (it
+  // says nothing about who is signed in), so A's recovery is still held, while
+  // every request is made as B. The real router, WITHOUT AccountScope (which
+  // would put the session right, given a frame).
+  group('the redirect, without AccountScope', () {
+    for (final mixed in [true, false]) {
+      testWidgets(
+          mixed
+              ? "A's user on B's token, heard from another tab: B is not forced "
+                  "onto A's reset form"
+              : "control: A, recovering, is kept on A's form", (t) async {
+        t.view.physicalSize = const Size(900, 2600);
+        t.view.devicePixelRatio = 1;
+        addTearDown(t.view.reset);
+        await t.runAsync(signOut);
+        await t.runAsync(() => signInAs(acctA));
+        startPasswordRecovery(acctA);
+        final container = ProviderContainer(overrides: [
+          clientPlanProvider.overrideWith((ref) async => ClientPlan.coachGuided),
+        ]);
+        final router = container.read(routerProvider);
+        String path() => router.routerDelegate.currentConfiguration.uri.path;
+        await t.pumpWidget(UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp.router(routerConfig: router)));
+        router.go('/home');
+        await settleApp(t);
+        expect(path(), '/reset-password', reason: "premise: A's form");
+        if (mixed) {
+          hearMixedFromAnotherTab(user: acctA, subject: acctB);
+          await settleApp(t);
+          expect(signedInUid(), acctB, reason: 'premise: requests are B\'s');
+          expect(passwordRecoveryNotifier.value, acctA,
+              reason: "premise: A's recovery still held");
+        }
+        router.go('/home');
+        await settleApp(t);
+        if (mixed) {
+          expect(path(), '/home',
+              reason: "THE defect: B forced onto A's reset form");
+          expect(find.byType(ResetPasswordScreen), findsNothing);
+        } else {
+          expect(path(), '/reset-password');
+          expect(find.text('Set a new password'), findsOneWidget);
+        }
+        expect(_passwordWrites, isEmpty);
+        await t.pumpWidget(const SizedBox());
+        container.dispose();
+        await t.runAsync(signOut);
+        await t.pump(const Duration(seconds: 5));
+      });
+    }
+  });
+
   group('the recovery, under the real app root', () {
     Future<void> pumpRoot(WidgetTester t) async {
       t.view.physicalSize = const Size(900, 2600);
@@ -632,12 +690,12 @@ void main() {
       });
     }
 
-    // Round 5 (59a-m18). The redirect's own uid check is the only guard while
-    // the recovery this process holds is A's and the session is already B's,
-    // before the router has heard of B: the first redirect of a launch runs
-    // when the router is built, and the auth stream answers it only after.
-    // Here: A's form reloaded (the note is A's, A signed in: A's recovery),
-    // and B's session arrives from another tab before the app has drawn.
+    // Round 5 (59a-m18, the launch path). A's form reloaded (the note is A's,
+    // A signed in: A's recovery), and B's session arrives from another tab
+    // before the app has drawn. The router's auth listener ends A's recovery
+    // before its first redirect (app_router.dart, _RouterNotifier), so this
+    // passes also without the redirect's uid check; the mixed-session test
+    // ('the redirect, without AccountScope') is the one that needs it.
     for (final (who, dest) in [(acctB, '/home'), (acctA, '/reset-password')]) {
       rootTest(
           "a reload of A's form, with "
