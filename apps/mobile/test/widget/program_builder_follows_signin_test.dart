@@ -909,6 +909,39 @@ void main() {
       await unmount(tester);
     });
 
+    // Round 7 (lead mutant N8): a read that is asked for again while it is out
+    // is still out — busy, holding the last failure — and is no new failure.
+    for (final how in ['read again by A', 'B signs in']) {
+      testWidgets("the library: A's failure, its retry out and then $how: no "
+          'record until a read fails', (tester) async {
+        server.fails.add('$_lists:$memberA');
+        await library(tester, what: "Couldn't load your programs");
+        expect(records(lib), 1, reason: 'premise');
+        final hold = server.holds['$_lists:$memberA'] = Completer<void>();
+        press(tester, 'Try again')();
+        await pumpUntil(tester, () => server.count('$_lists:$memberA') == 2,
+            what: 'the retry');
+        await frames(tester, 2);
+        if (how == 'B signs in') {
+          await become(tester, memberB);
+          await pumpUntil(tester, () => seen(find.text('Plan of B')),
+              what: "B's own");
+        } else {
+          c.invalidate(myProgramsProvider);
+          await pumpUntil(tester, () => server.count('$_lists:$memberA') == 3,
+              what: 'read again');
+        }
+        await frames(tester);
+        expect(records(lib), 1,
+            reason: 'THE defect: a read still out was recorded as a failure');
+        hold.complete();
+        await frames(tester);
+        expect(records(lib), how == 'B signs in' ? 1 : 2,
+            reason: "A's read that fails is one record; B's read fine");
+        await unmount(tester);
+      });
+    }
+
     testWidgets("the library: B's read failing after A's is B's one record",
         (tester) async {
       await library(tester);
