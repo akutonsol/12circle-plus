@@ -2437,6 +2437,23 @@ void main() {
       ('the gateway gives up (524)', (524, 'error code: 524'), unsureEnd),
       ('a bare 500', (500, 'Internal Server Error'), unsureEnd),
       ('a bare 503', (503, {'message': 'offline'}), unsureEnd),
+      // Round 5: the connection went during the request, or the commit's
+      // completion is unknown — the database cannot say nothing was changed.
+      (
+        'the connection is lost during the request (PGRST001)',
+        (503, {'message': 'lost', 'code': 'PGRST001'}),
+        unsureEnd
+      ),
+      (
+        'the commit\'s completion is unknown (40003)',
+        (500, {'message': 'unknown', 'code': '40003'}),
+        unsureEnd
+      ),
+      (
+        'control: no connection to the database at all (PGRST000)',
+        (503, {'message': 'down', 'code': 'PGRST000'}),
+        'Could not end coaching. Nothing was changed. Try again.'
+      ),
       (
         'control: the database refuses',
         (403, {'message': 'SECRET denied', 'code': '42501'}),
