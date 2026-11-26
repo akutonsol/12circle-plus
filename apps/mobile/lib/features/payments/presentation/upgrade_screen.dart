@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../data/payment_service.dart' show CancelOutcome, CancelSubscriptionOutcome, ownerGone, signedInUid;
 import '../domain/entitlements.dart';
 import '../domain/payment_provider.dart';
 import '../../coach/domain/coach_provider.dart';
@@ -8,6 +9,7 @@ import '../../coach/presentation/coach_packages_view_sheet.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
 import '../../../core/widgets/named_icon_button.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import 'checkout_launcher.dart';
 
 const _bg     = Color(0xFF030303);
@@ -54,12 +56,14 @@ class UpgradeScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final currentAsync = ref.watch(clientPlanProvider);
+    final account = ref.watch(paymentAccountProvider);
+    final read = ref.watch(ownedClientPlanProvider);
     reportPlanReadFailure(ref, 'UpgradeScreen.clientPlan');
     // P0-FL-17: an unread plan is not Free. Until client_plan() has answered,
     // no card is "Current" and nothing can be bought or switched — a coached
     // client was offered the plan they already had as if it were new.
-    final current = knownPlan(currentAsync);
+    // P0-FL-60a: nor is another account's plan this one's (A-21).
+    final current = read.hasValue ? read.value : null;
 
     return Scaffold(
       backgroundColor: _bg,
@@ -94,18 +98,31 @@ class UpgradeScreen extends ConsumerWidget {
                 style: TextStyle(color: _muted, fontSize: 14)),
             const SizedBox(height: 20),
             if (current == null) ...[
-              if (currentAsync.hasError)
+              if (read.error != null)
                 PlanLoadFailedNotice(
-                  error: currentAsync.error!,
-                  busy: currentAsync.isLoading,
+                  error: read.error!,
+                  busy: read.isLoading,
                   detail: "Plans can't be changed until it loads.",
                   onRetry: () => ref.invalidate(clientPlanProvider),
                 )
               else
                 const PlanLoadingRow(),
               const SizedBox(height: 16),
+            ] else if (read.error != null) ...[
+              // P0-FL-60a: a failed refresh keeps the plan, and says so.
+              PlanLoadFailedNotice(
+                error: read.error!,
+                busy: read.isLoading,
+                detail: kPlanFromLastTime,
+                onRetry: () => ref.invalidate(clientPlanProvider),
+              ),
+              const SizedBox(height: 16),
             ],
+            // Keyed by account: a card's spinner is the action of the account
+            // that tapped it (P0-FL-60a).
             ..._plans.map((p) => _PlanCard(
+                  key: ValueKey((account, p.plan)),
+                  account: account,
                   plan: p,
                   isCurrent: current != null && p.plan == current,
                   current: current,
@@ -118,12 +135,18 @@ class UpgradeScreen extends ConsumerWidget {
 }
 
 class _PlanCard extends ConsumerStatefulWidget {
+  /// The account this card was built for (P0-FL-60a).
+  final String? account;
   final _Plan plan;
   final bool isCurrent;
   /// Null while the plan is unknown: every action is disabled.
   final ClientPlan? current;
   const _PlanCard(
-      {required this.plan, required this.isCurrent, required this.current});
+      {super.key,
+      required this.account,
+      required this.plan,
+      required this.isCurrent,
+      required this.current});
   @override
   ConsumerState<_PlanCard> createState() => _PlanCardState();
 }
@@ -139,7 +162,23 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
   }
 
   Future<void> _onCta() async {
+    try {
+      await _act();
+    } finally {
+      // Whatever ended it — also the account leaving, after which the same
+      // card is A's again once A is back (A → B → A): not stuck on its spinner.
+      if (mounted && _loading) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _act() async {
     final p = widget.plan;
+    // P0-FL-60a (W26): every step below is this account's. When it is gone
+    // nothing more is sent, opened or said — it is not the next one's action.
+    // The owner is who the card was drawn for, not who is signed in at the tap.
+    final owner = widget.account;
+    bool gone(String what) => ownerGone(owner, 'UpgradeScreen', what);
+    if (gone('plan card')) return;
     // Capture ancestors up front so we never touch a defunct context after an
     // await (embedded checkout can navigate this screen away mid-flow).
     final messenger = ScaffoldMessenger.of(context);
@@ -159,11 +198,16 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
       final List<Map<String, dynamic>> subs;
       try {
         subs = await ref.read(mySubscriptionsProvider.future);
-      } catch (_) {
-        messenger.showSnackBar(
-            const SnackBar(content: Text('Could not cancel. Try again.')));
+      } catch (e, st) {
+        // P0-FL-60a: the cause was lost, and nothing said that it was the
+        // read that failed and that nothing had been cancelled.
+        reportError('UpgradeScreen.mySubscriptions', e, st);
+        showOwnedSnackBar(messenger, owner, SnackBar(
+            content: Text('${couldntMessage('load your subscriptions', e)} '
+                'Nothing was cancelled.')));
         return;
       }
+      if (gone('switch to Free')) return;
       if (!mounted) return;
       final memberships = subs
           .where((s) => ['self_guided', 'ai_guided'].contains(s['kind']) &&
@@ -171,18 +215,20 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
           .toList();
       if (memberships.isEmpty) return;
       final confirmed = await _confirmDowngradeToFree();
-      if (confirmed != true) return;
+      if (gone('switch to Free') || confirmed != true) return;
       if (mounted) setState(() => _loading = true);
       // The message follows what happened, as /manage-subscription's does: a
       // failed cancellation left the client billed and was announced as Free.
-      var allOk = true;
+      final outcomes = <CancelOutcome>{};
       for (final m in memberships) {
-        if (!await paymentSvc.cancelSubscription(m['id'] as String)) allOk = false;
+        if (gone('switch to Free')) return;
+        outcomes.add(
+            await paymentSvc.cancelSubscriptionOutcome(m['id'] as String));
       }
-      if (mounted) setState(() => _loading = false);
+      if (gone('switch to Free')) return;
       _refresh();
-      messenger.showSnackBar(SnackBar(content: Text(
-          allOk ? 'Switched to the Free plan.' : 'Could not cancel. Try again.')));
+      showOwnedSnackBar(messenger, owner,
+          SnackBar(content: Text(switchToFreeMessage(outcomes))));
       return;
     }
 
@@ -192,10 +238,10 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
     // and skipping this sent them to buy a SECOND membership.
     if (mounted) setState(() => _loading = true);
     final result = await paymentSvc.changeMembership(p.kind!);
+    if (gone('plan change')) return;
     if (result == 'changed') {
-      if (mounted) setState(() => _loading = false);
       _refresh();
-      messenger.showSnackBar(
+      showOwnedSnackBar(messenger, owner,
           SnackBar(content: Text('Your plan is now ${p.name}.')));
       return;
     }
@@ -204,11 +250,15 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
     // swap had gone through at Stripe and only the reply was lost: two
     // memberships, both billed.
     if (result != 'needs_checkout') {
-      if (mounted) setState(() => _loading = false);
-      messenger.showSnackBar(SnackBar(content: Text(result == 'payment_issue'
-          ? 'Your current membership has a payment problem. Update your '
-              'payment method in Billing, then change your plan.'
-          : "Couldn't change your plan. Try again.")));
+      showOwnedSnackBar(messenger, owner, SnackBar(content: Text(switch (result) {
+        'payment_issue' =>
+          'Your current membership has a payment problem. Update your '
+              'payment method in Billing, then change your plan.',
+        // Not known to have failed: never "try again" before looking.
+        'unconfirmed' => "Couldn't confirm your plan change — check your plan "
+            'before trying again.',
+        _ => "Couldn't change your plan. Try again.",
+      })));
       _refresh();
       return;
     }
@@ -231,15 +281,17 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
     if (!mounted) return;
     // launchCheckout reports its own failure (one message, the server's reason
     // when it refused a duplicate).
-    await launchCheckout(context, ref, kind: p.kind!);
+    await launchCheckout(context, ref, kind: p.kind!, owner: owner);
     if (!mounted) return; // embedded checkout navigated away; success screen refreshes
-    setState(() => _loading = false);
+    if (signedInUid() != owner) return;
     _refresh();
   }
 
   Future<bool?> _confirmDowngradeToFree() => showDialog<bool>(
         context: context,
-        builder: (dctx) => AlertDialog(
+        builder: (dctx) => OwnedDialog(
+            owner: widget.account,
+            child: AlertDialog(
           backgroundColor: _card,
           title: const Text('Switch to Free?',
               style: TextStyle(color: _white, fontWeight: FontWeight.w800)),
@@ -257,7 +309,7 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
                 child: const Text('Switch to Free',
                     style: TextStyle(color: Color(0xFFFFB4AB), fontWeight: FontWeight.w700))),
           ],
-        ),
+        )),
       );
 
   String _ctaLabel() {
@@ -366,7 +418,18 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
           if (isCurrent && p.plan == ClientPlan.coachGuided) ...[
             const SizedBox(height: 14),
             Builder(builder: (context) {
-              final coach = ref.watch(assignedCoachProvider).valueOrNull;
+              // P0-FL-60a (A-21): this account's coach only, and a failed
+              // read is said — it looked like having no coach.
+              final coachRead = ref.watch(_ownedAssignedCoachProvider);
+              if (!coachRead.hasValue && coachRead.error != null) {
+                return SectionLoadFailure(
+                  what: 'your coach',
+                  error: coachRead.error,
+                  busy: coachRead.isLoading,
+                  onRetry: () => ref.invalidate(assignedCoachProvider),
+                );
+              }
+              final coach = coachRead.value;
               if (coach == null) return const SizedBox.shrink();
               final coachName =
                   '${coach['first_name'] ?? ''} ${coach['last_name'] ?? ''}'.trim();
@@ -386,8 +449,18 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
                   icon: const Icon(Icons.inventory_2_outlined, size: 16),
                   label: Text(label,
                       style: const TextStyle(fontWeight: FontWeight.w700)),
-                  onPressed: () => showCoachPackagesSheet(
-                      context, coach['id'] as String, coachName),
+                  onPressed: () {
+                    // This account's coach, to this account only.
+                    if (ownerGone(widget.account, 'UpgradeScreen',
+                        "the coach's packages")) {
+                      return;
+                    }
+                    openOwnedRoute(
+                        context,
+                        widget.account,
+                        () => showCoachPackagesSheet(
+                            context, coach['id'] as String, coachName));
+                  },
                 ),
               );
             }),
@@ -435,11 +508,24 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
 // package that added them was limited to those five screens; nothing here
 // depends on the rest of the file.
 
-/// The plan client_plan() answered, or null while it is unknown (the first
-/// read in flight, or it failed). A refresh that fails after a successful read
-/// keeps the last real answer, as Riverpod does.
-ClientPlan? knownPlan(AsyncValue<ClientPlan> plan) =>
-    plan.hasValue ? plan.value : null;
+/// client_plan()'s answer for the account signed in now — never one held from
+/// another (P0-FL-60a). `clientPlanProvider` is what to invalidate.
+final ownedClientPlanProvider = ownedReadProvider(clientPlanProvider);
+
+final _ownedAssignedCoachProvider = ownedReadProvider(assignedCoachProvider,
+    origin: 'UpgradeScreen.assignedCoach');
+
+/// Said with a failed refresh whose plan is still shown.
+const kPlanFromLastTime = 'This is the plan from the last time it loaded.';
+
+/// What switching to Free came to. The message follows what happened.
+String switchToFreeMessage(Set<CancelOutcome> outcomes) =>
+    outcomes.contains(CancelOutcome.unconfirmed)
+        ? "Couldn't confirm the cancellation — check your plan before trying "
+            'again.'
+        : outcomes.contains(CancelOutcome.refused)
+            ? 'Could not cancel. Try again.'
+            : 'Switched to the Free plan.';
 
 /// "Couldn't load your plan — check your connection and try again."
 const kPlanLoadOfflineMessage =
@@ -571,15 +657,16 @@ class PlanChipState extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final planAsync = ref.watch(clientPlanProvider);
-    final plan = knownPlan(planAsync);
+    final read = ref.watch(ownedClientPlanProvider);
+    final plan = read.value;
     if (plan != null) return chip(plan.label.toUpperCase());
-    if (!planAsync.hasError) {
+    final error = read.error;
+    if (error == null) {
       return Semantics(
           label: 'Loading your plan',
           child: ExcludeSemantics(child: chip('…')));
     }
-    final busy = planAsync.isLoading;
+    final busy = read.isLoading;
     // While busy the tap is swallowed (not passed to the row, which would
     // navigate away mid-read) and does nothing: no second read.
     final VoidCallback onTap =
@@ -591,7 +678,7 @@ class PlanChipState extends ConsumerWidget {
       enabled: !busy,
       label: busy
           ? 'Loading your plan'
-          : '${planLoadFailedMessage(planAsync.error!)} Try again',
+          : '${planLoadFailedMessage(error)} Try again',
       // ExcludeSemantics drops the InkWell's tap action, so the node carries
       // it itself: TalkBack / VoiceOver users can retry too (UX-N1).
       onTap: onTap,

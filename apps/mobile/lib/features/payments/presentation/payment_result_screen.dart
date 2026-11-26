@@ -11,6 +11,10 @@ const _mint  = Color(0xFF6FFBBE);
 const _white = Colors.white;
 const _muted = Color(0xFFCFC2D6);
 
+/// This account's coach only (P0-FL-60a, A-21).
+final _ownedCoachProvider = ownedReadProvider(assignedCoachProvider,
+    origin: 'PaymentResultScreen.assignedCoach');
+
 /// Landing page Stripe Checkout returns to. On success we refresh entitlements
 /// (the webhook has usually written the row by now) and send the user home.
 class PaymentResultScreen extends ConsumerStatefulWidget {
@@ -42,7 +46,7 @@ class _PaymentResultScreenState extends ConsumerState<PaymentResultScreen> {
     final ok = widget.success;
     final accent = ok ? _mint : _muted;
     // If this purchase connected them to a coach, send them to book sessions.
-    final hasCoach = ref.watch(assignedCoachProvider).valueOrNull != null;
+    final hasCoach = ref.watch(_ownedCoachProvider).value != null;
     return Scaffold(
       backgroundColor: _bg,
       body: Center(

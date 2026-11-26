@@ -94,7 +94,12 @@ class _Server extends http.BaseClient {
     final path = request.url.path;
     if (request.method != 'GET') writes.add('${request.method} $path');
     if (path.endsWith('/subscriptions')) {
-      if (subscriptionsFail) return _json({'message': 'offline'}, 500, request);
+      // As PostgREST fails (P0-FL-60a r4): with its code. A codeless 5xx is a
+      // gateway's, which cannot say nothing changed (see
+      // payment_failures_recorded_and_owned_test, "End coaching (unpaid)").
+      if (subscriptionsFail) {
+        return _json({'message': 'offline', 'code': 'XX000'}, 500, request);
+      }
       return _json(_filtered([
         {'id': 'sub-m', 'user_id': _uid, 'kind': 'ai_guided', 'status': 'active', 'coach_id': null},
         if (paid) {'id': 'sub-c', 'user_id': _uid, 'kind': 'coach', 'coach_id': 'coach-a', 'status': 'active',

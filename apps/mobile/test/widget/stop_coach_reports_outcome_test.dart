@@ -110,7 +110,10 @@ class _Server extends http.BaseClient {
     if (request.method == 'PATCH' && path.endsWith('/coach_client_relationships')) {
       // cancelCoach checks the update matched a row (P0-FL-1).
       return relationshipFails
-          ? _json({'message': 'offline'}, 503, request)
+          // As PostgREST fails (P0-FL-60a r4): PGRST000, no database
+          // connection, so nothing was written. A codeless 503 is a gateway's
+          // and is "couldn't confirm" (payment_failures_recorded_and_owned_test).
+          ? _json({'message': 'offline', 'code': 'PGRST000'}, 503, request)
           : _json(relationshipMatches ? [{'id': 'rel-a'}] : [], 200, request);
     }
     if (path.endsWith('/notifications')) {
