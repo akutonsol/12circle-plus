@@ -206,6 +206,44 @@ void main() {
       await end(t);
     });
 
+    // Round 5 (59a-m17): the update that answers after the switch sets no
+    // password for B, and is recorded as not done for A, where it was caught.
+    // The control is the same account, through an event that really fires.
+    for (final switched in [true, false]) {
+      testWidgets(
+          switched
+              ? 'A -> B while the update is out: the answer is recorded as '
+                  "the account's change, at the submit"
+              : 'control: the same account renewed while the update is out: '
+                  'nothing recorded, the done page', (t) async {
+        await mountForm(t);
+        await type(t, 'alba-new-pw');
+        final hold = _server.holds['PUT user:$acctA'] = Completer<void>();
+        await t.tap(find.text('Update Password'));
+        await settleApp(t, 2);
+        expect(_passwordWrites.map((s) => s.who), [acctA], reason: 'premise');
+        await t.runAsync(switched ? () => signInAs(acctB) : renewToken);
+        await settleApp(t, 2);
+        _failures.clear(); // only what the answer brings
+        hold.complete();
+        await settleApp(t);
+        final atSubmit = _failures.where((f) =>
+            f.origin == 'ResetPasswordScreen._submit' &&
+            '${f.error}'.contains('set new password: the signed-in account '
+                'changed'));
+        if (switched) {
+          expect(atSubmit, hasLength(1),
+              reason: 'THE defect: an update answered for nobody it may be '
+                  'said to, and recorded nowhere');
+          expect(find.text('Password updated'), findsNothing);
+        } else {
+          expect(_failures, isEmpty);
+          expect(find.text('Password updated'), findsOneWidget);
+        }
+        await end(t);
+      });
+    }
+
     testWidgets("the done page: B arrives, and A's Back to Sign In cannot sign "
         'B out', (t) async {
       await mountForm(t);
@@ -591,6 +629,46 @@ void main() {
         appRouter(t).go('/home');
         await settleApp(t);
         expect(appPath(t), bound == null ? '/home' : '/reset-password');
+      });
+    }
+
+    // Round 5 (59a-m18). The redirect's own uid check is the only guard while
+    // the recovery this process holds is A's and the session is already B's,
+    // before the router has heard of B: the first redirect of a launch runs
+    // when the router is built, and the auth stream answers it only after.
+    // Here: A's form reloaded (the note is A's, A signed in: A's recovery),
+    // and B's session arrives from another tab before the app has drawn.
+    for (final (who, dest) in [(acctB, '/home'), (acctA, '/reset-password')]) {
+      rootTest(
+          "a reload of A's form, with "
+          '${who == acctB ? "B's session there before the router heard of it: "
+              'B is not forced onto the form' : "control: A still A's: A's form"}',
+          (t) async {
+        t.binding.platformDispatcher.defaultRouteNameTestValue = '/home';
+        addTearDown(
+            t.binding.platformDispatcher.clearDefaultRouteNameTestValue);
+        SharedPreferences.setMockInitialValues(
+            {passwordRecoveryStorageKey: acctA});
+        await t.runAsync(() => signInAs(acctA));
+        await t.runAsync(_openLink); // the code is spent: refused
+        await t.runAsync(() => bindPasswordRecoveryAtLaunch(_link));
+        expect(passwordRecoveryNotifier.value, acctA, reason: 'premise');
+        if (who == acctB) await t.runAsync(() => signInAs(acctB));
+        expect(passwordRecoveryNotifier.value, acctA,
+            reason: 'premise: no router has heard of B yet');
+        await pumpRoot(t);
+        await settleApp(t);
+        expect(appPath(t), dest);
+        if (who == acctB) {
+          expect(find.byType(ResetPasswordScreen), findsNothing,
+              reason: 'THE defect: B forced onto a reset form it never asked '
+                  'for, with no link');
+          expect(passwordRecoveryNotifier.value, isNull);
+        } else {
+          expect(find.text('Set a new password'), findsOneWidget);
+          expect(passwordRecoveryNotifier.value, acctA);
+        }
+        expect(_passwordWrites, isEmpty);
       });
     }
 
