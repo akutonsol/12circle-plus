@@ -845,4 +845,102 @@ void main() {
       });
     }
   }
+
+  // Round 6 (ux): the bar of what A was told went blank on a switch but stayed
+  // up, empty, for the rest of its 4 s.
+  for (final next in [memberB, null]) {
+    final who = next == null ? 'A signs out' : 'B signs in';
+    testWidgets("add a workout refused, then $who: the bar goes, not just its "
+        'text', (tester) async {
+      await addSheet(tester);
+      server.fails.add('POST program_workouts:$memberA');
+      press(tester, 'Save workout')();
+      await pumpUntil(
+          tester, () => seen(find.textContaining("Couldn't save the workout")),
+          what: 'A is told');
+      await frames(tester, 3);
+      await switchTo(tester, next);
+      await frames(tester, 6);
+      expect(find.byType(SnackBar), findsNothing,
+          reason: 'THE defect: an empty bar was left up for the next account');
+      await unmount(tester);
+    });
+  }
+
+  testWidgets('control: what A was told stays up through a refreshed token',
+      (tester) async {
+    await addSheet(tester);
+    server.fails.add('POST program_workouts:$memberA');
+    press(tester, 'Save workout')();
+    await pumpUntil(
+        tester, () => seen(find.textContaining("Couldn't save the workout")),
+        what: 'A is told');
+    await tokenRefreshed(tester);
+    expect(find.textContaining("Couldn't save the workout"), findsOneWidget);
+    await unmount(tester);
+  });
+
+  // Round 6 (ux): a failed read was said and retried but never recorded.
+  group('a failed read is recorded once', () {
+    int records(String origin) =>
+        reported.where((f) => f.origin == origin).length;
+    const lib = 'ProgramLibraryScreen.programs';
+    const days = 'ProgramBuilderScreen.workouts';
+
+    testWidgets("the library: once; not again on a rebuild; a retry that fails "
+        'is its own read, recorded once', (tester) async {
+      server.fails.add('$_lists:$memberA');
+      await library(tester, what: "Couldn't load your programs");
+      expect(records(lib), 1, reason: 'THE defect: it was not recorded');
+      expect(reported.firstWhere((f) => f.origin == lib).error.toString(),
+          isNot(contains('account changed')));
+      await tokenRefreshed(tester); // redraws; reads nothing
+      await frames(tester);
+      expect(records(lib), 1, reason: 'recorded again on a rebuild');
+      press(tester, 'Try again')();
+      await pumpUntil(tester, () => server.count('$_lists:$memberA') == 2,
+          what: 'the retry');
+      await frames(tester);
+      expect(records(lib), 2, reason: 'one record for the retry, not two');
+      server.fails.clear();
+      press(tester, 'Try again')();
+      await pumpUntil(tester, () => seen(find.text('Plan of A')), what: 'read');
+      expect(records(lib), 2, reason: 'a read that succeeds records nothing');
+      await unmount(tester);
+    });
+
+    testWidgets("the library: B's read failing after A's is B's one record",
+        (tester) async {
+      await library(tester);
+      expect(records(lib), 0, reason: 'premise: A read fine');
+      server.fails.add('$_lists:$memberB');
+      await become(tester, memberB);
+      await pumpUntil(tester,
+          () => seen(find.text("Couldn't load your programs")), what: 'failed');
+      await frames(tester);
+      expect(records(lib), 1);
+      await unmount(tester);
+    });
+
+    testWidgets('the builder: a failed refresh, once; its failed retry, once',
+        (tester) async {
+      await builder(tester);
+      expect(records(days), 0, reason: 'premise');
+      server.fails.add('$_days:$memberA');
+      c.invalidate(programWorkoutsProvider('prog-1'));
+      await pumpUntil(
+          tester,
+          () => seen(find.text("Couldn't load this program's workouts")),
+          what: 'said');
+      await frames(tester);
+      expect(records(days), 1, reason: 'THE defect: it was not recorded');
+      press(tester, 'Try again')();
+      await pumpUntil(tester, () => server.count('$_days:$memberA') == 3,
+          what: 'the retry');
+      await frames(tester);
+      expect(records(days), 2, reason: 'one record for the retry, not two');
+      expect(records(lib), 0, reason: "the library's read did not fail");
+      await unmount(tester);
+    });
+  });
 }

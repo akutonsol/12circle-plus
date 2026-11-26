@@ -119,6 +119,14 @@ Widget _listBody(
   ]);
 }
 
+/// Whether a read has just settled into a failure: recorded then, once, and
+/// not again on a rebuild (as the coach dashboard's leaderboard does). A retry
+/// that fails again is a read of its own, recorded once.
+bool _settledFailure(AsyncValue<Object?>? previous, AsyncValue<Object?> next) =>
+    next.hasError &&
+    !next.isLoading &&
+    (previous == null || previous.isLoading || !previous.hasError);
+
 /// A menu entry, drawn for [owner] only; the menu closes when they leave.
 PopupMenuItem<String> _menuItem(String? owner, String value, Text label) =>
     PopupMenuItem(
@@ -133,6 +141,11 @@ class ProgramLibraryScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final uid = _watchedUid(ref);
+    ref.listen(myProgramsProvider, (previous, next) {
+      if (_settledFailure(previous, next)) {
+        reportError('ProgramLibraryScreen.programs', next.error!, next.stackTrace);
+      }
+    });
     final programs = heldFor(uid, ref.watch(myProgramsProvider));
     // P0-FL-59f: the coach whose programs these are, captured as they are built.
     final owner = boundTo(ownerOfHeld(programs));
@@ -312,6 +325,11 @@ class ProgramBuilderScreen extends ConsumerWidget {
       );
     }
     final programId = program['id'] as String;
+    ref.listen(programWorkoutsProvider(programId), (previous, next) {
+      if (_settledFailure(previous, next)) {
+        reportError('ProgramBuilderScreen.workouts', next.error!, next.stackTrace);
+      }
+    });
     final workouts =
         heldFor(owner, ref.watch(programWorkoutsProvider(programId)));
     final weeks = (program['duration_weeks'] as int?) ?? 12;
