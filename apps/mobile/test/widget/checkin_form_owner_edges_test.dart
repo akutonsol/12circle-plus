@@ -362,6 +362,127 @@ void main() {
       });
     }
 
+    // Round 5 (lead mutant on daily_checkin_screen.dart:170, the owner check
+    // inside `on StateError catch` — PD8: the coach reviewed the week while the
+    // form was open). The save's own last read is the week's row; it is held,
+    // the coach's review is already in it, and B signs in around its answer.
+    //
+    // What these show about :170: the service asks the screen's own
+    // `stillHolds` (the same `_holds(epoch)`) as its last act before it throws
+    // PD8, and an async function's throw reaches its awaiting caller's catch in
+    // the same synchronous run. So a switch either lands before that check (the
+    // service refuses: the "not saved" path, :178) or after the catch has run
+    // as A (A was told, then the switch drops it). Swept over every microtask
+    // of the answer below, both with and without the :170 line: identical
+    // outcomes. :170 is kept as defence in depth; these pin what B can see.
+    group('PD8 (the coach reviewed the week meanwhile)', () {
+      Future<Completer<void>> reviewedWhileOpen(WidgetTester t) async {
+        await open(t);
+        await t.enterText(notes(), 'private to A');
+        // The review lands after the form was read as not done.
+        server.rows['weekly_checkins:$memberA'] = [
+          {
+            'id': 'w1',
+            'status': 'reviewed',
+            'week_start_date': DateTime(DateTime.now().year,
+                    DateTime.now().month,
+                    DateTime.now().day - (DateTime.now().weekday - 1))
+                .toIso8601String()
+                .split('T')[0],
+          }
+        ];
+        final hold = Completer<void>();
+        var asked = false;
+        server.gate = (a) {
+          if (a.method == 'GET' &&
+              a.table == 'weekly_checkins' &&
+              a.who == memberA &&
+              a.query['select'] == 'id,status') {
+            asked = true;
+            return hold;
+          }
+          return null;
+        };
+        await t.tap(submitButton());
+        await pumpUntil(t, () => asked, what: "the save's read of the week");
+        return hold;
+      }
+
+      Iterable<Asked> bWeekReads() => server
+          .sent('GET', 'weekly_checkins', memberB)
+          .where((a) => a.query['select'] == 'status');
+
+      testWidgets('CONTROL: the same member, the PD8 refusal is said once and '
+          'the week shows as done', (t) async {
+        final hold = await reviewedWhileOpen(t);
+        hold.complete();
+        await settleReal(t);
+        expect(find.text(WeeklyCheckinService.alreadyReviewedMessage),
+            findsOneWidget);
+        expect(find.text(_done), findsOneWidget,
+            reason: 'the week, re-read, is the done week it now is');
+        expect(server.log.where((a) => a.method != 'GET'), isEmpty);
+        expect(reported, isEmpty, reason: 'a refusal by rule, not a failure');
+        await closeApp(t);
+      });
+
+      testWidgets('A->B drawn while the reviewed answer is on its way: B is '
+          "not told A's week was reviewed, sees no done week, nothing is "
+          'written', (t) async {
+        final hold = await reviewedWhileOpen(t);
+        await switchNoFrame(t, memberB);
+        await settleReal(t);
+        expect(t.widget<TextField>(notes()).controller!.text, isEmpty,
+            reason: 'premise: the form was dropped before the answer');
+        hold.complete();
+        await t.pump();
+        expect(find.text(WeeklyCheckinService.alreadyReviewedMessage),
+            findsNothing);
+        await settleReal(t);
+        expect(find.text(WeeklyCheckinService.alreadyReviewedMessage),
+            findsNothing, reason: "A's PD8 refusal said to B");
+        expect(find.byType(SnackBar), findsNothing);
+        expect(find.text(_done), findsNothing, reason: "A's done week for B");
+        expect(notes(), findsOneWidget, reason: "B's own form");
+        expect(bWeekReads(), hasLength(1), reason: "B's week, read once");
+        expect(server.log.where((a) => a.method != 'GET'), isEmpty);
+        expect(server.log.where((a) => a.who == memberB && a.method != 'GET'),
+            isEmpty);
+        expect(origins(), ['WeeklyCheckinService.submitWeeklyCheckin'],
+            reason: 'the refusal is recorded');
+        await closeApp(t);
+      });
+
+      // With no frame: B signs in k microtasks after the answer is released,
+      // through the whole window (refused before :198 for small k; told to A
+      // and then dropped for larger k).
+      for (var k = 0; k <= 12; k++) {
+        testWidgets('A->B with no frame, $k microtasks into the answer: '
+            "nothing of A's reviewed week reaches B", (t) async {
+          final hold = await reviewedWhileOpen(t);
+          void after(int n, void Function() f) =>
+              n == 0 ? f() : scheduleMicrotask(() => after(n - 1, f));
+          hold.complete();
+          after(k, () => unawaited(signInAs(memberB)));
+          await t.pump();
+          expect(Supabase.instance.client.auth.currentUser?.id, memberB,
+              reason: 'premise: the switch happened');
+          expect(find.text(WeeklyCheckinService.alreadyReviewedMessage),
+              findsNothing, reason: "the first frame B sees says A's refusal");
+          await settleReal(t);
+          expect(find.text(WeeklyCheckinService.alreadyReviewedMessage),
+              findsNothing);
+          expect(find.byType(SnackBar), findsNothing);
+          expect(find.text(_done), findsNothing, reason: "A's done week for B");
+          expect(notes(), findsOneWidget);
+          expect(t.widget<TextField>(notes()).controller!.text, isEmpty);
+          expect(bWeekReads(), hasLength(1));
+          expect(server.log.where((a) => a.method != 'GET'), isEmpty);
+          await closeApp(t);
+        });
+      }
+    });
+
     testWidgets('CONTROL: the same member, a failed save is said once and the '
         'answers stay', (t) async {
       await open(t);
