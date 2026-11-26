@@ -139,7 +139,7 @@ void main() {
     ),
     "the coach's notes": (clientNotesProvider(_client), 'GET coach_notes'),
     "the coach's programs": (myProgramsProvider, 'GET workout_programs'),
-    'my action items': (myActionItemsProvider, 'GET action_items'),
+    // `myActionItemsProvider` (the member's own list) is P0-FL-59e's.
   };
 
   for (final e in families.entries) {

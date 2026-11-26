@@ -11,7 +11,7 @@ final actionItemServiceProvider =
 /// latest task — was the answer until the app restarted.
 final myActionItemsProvider =
     FutureProvider.autoDispose<List<ActionItem>>((ref) async {
-  ref.watch(currentUserProvider.select((u) => u?.id));
+  ref.watch(currentUserProvider);
   return ref.watch(actionItemServiceProvider).getMyActionItems();
 });
 
