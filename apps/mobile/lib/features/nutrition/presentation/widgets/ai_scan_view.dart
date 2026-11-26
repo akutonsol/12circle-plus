@@ -17,7 +17,8 @@ const _redChip = Color(0xFFFFB4AB);
 
 class ScanItem {
   final String name;
-  final double calories, protein, carbs, fat;
+  /// Null = the analysis did not give it (not 0).
+  final double? calories, protein, carbs, fat;
   const ScanItem({required this.name, required this.calories,
     required this.protein, required this.carbs, required this.fat});
 }
@@ -28,7 +29,8 @@ class ScanResult {
   final double protein;
   final double carbs;
   final double fat;
-  final int confidence;
+  /// Null = the analysis did not give it. Not part of the saved meal.
+  final int? confidence;
   final List<ScanItem> items;
 
   const ScanResult({
@@ -47,6 +49,50 @@ class ScanResult {
         calories: calories * f, protein: protein * f,
         carbs: carbs * f, fat: fat * f,
       );
+}
+
+/// What the analysis answered. A value it did not give is null — not 0, which
+/// is an answer of its own (P0-FL-61). Only [whole] makes a [ScanResult], so a
+/// meal with an invented 0 cannot reach `onAccept`.
+class _Estimate {
+  final String name;
+  final double? calories, protein, carbs, fat;
+  final int? confidence;
+  final List<ScanItem> items;
+
+  const _Estimate({
+    required this.name,
+    required this.calories,
+    required this.protein,
+    required this.carbs,
+    required this.fat,
+    required this.confidence,
+    this.items = const [],
+  });
+
+  _Estimate.of(ScanResult r) : this(
+        name: r.name, calories: r.calories, protein: r.protein,
+        carbs: r.carbs, fat: r.fat, confidence: r.confidence, items: r.items);
+
+  /// The values it did not give, as one phrase; null when it gave all of them.
+  String? get missing {
+    final names = [
+      if (calories == null) 'calories',
+      if (protein == null) 'protein',
+      if (carbs == null) 'carbs',
+      if (fat == null) 'fat',
+    ];
+    if (names.length < 2) return names.firstOrNull;
+    return '${names.take(names.length - 1).join(', ')} and ${names.last}';
+  }
+
+  /// The meal to save; null while any of its values is not known.
+  ScanResult? get whole {
+    final cal = calories, p = protein, c = carbs, f = fat;
+    if (cal == null || p == null || c == null || f == null) return null;
+    return ScanResult(name: name, calories: cal, protein: p, carbs: c, fat: f,
+        confidence: confidence, items: items);
+  }
 }
 
 /// FIT-020 · the scan result's portion control — `Smaller` / `As shown` /
@@ -130,7 +176,9 @@ class _AiScanViewState extends State<AiScanView> {
   final _descCtrl = TextEditingController();
   XFile? _image;
   _ScanStage _stage = _ScanStage.idle;
-  ScanResult? _result;
+  _Estimate? _result;
+  /// The member [_result] was read for, and the one who typed the description.
+  String? _resultUid, _descUid;
   double _portion = 1.0; // serving multiplier applied before logging
   /// A picker is open (or its file is being read): no second one opens.
   bool _picking = false;
@@ -146,34 +194,51 @@ class _AiScanViewState extends State<AiScanView> {
     super.dispose();
   }
 
-  ScanResult _parse(Map<String, dynamic> r) {
-    double d(dynamic v) => (v as num?)?.toDouble() ?? 0;
+  _Estimate _parse(Map<String, dynamic> r) {
+    double? d(dynamic v) => (v as num?)?.toDouble();
     final rawItems = (r['items'] as List?) ?? const [];
-    return ScanResult(
+    final estimate = _Estimate(
       name: (r['name'] as String?)?.trim().isNotEmpty == true
           ? r['name'] as String : 'Scanned meal',
       calories: d(r['calories']),
       protein: d(r['protein_g']),
       carbs: d(r['carbs_g']),
       fat: d(r['fat_g']),
-      confidence: (r['confidence'] as num?)?.toInt() ?? 0,
+      confidence: (r['confidence'] as num?)?.toInt(),
       items: rawItems.whereType<Map>().map((m) => ScanItem(
         name: (m['name'] as String?) ?? 'Item',
         calories: d(m['calories']), protein: d(m['protein_g']),
         carbs: d(m['carbs_g']), fat: d(m['fat_g']),
       )).toList(),
     );
+    final missing = estimate.missing;
+    if (missing != null) {
+      reportError('nutrition.scan.incomplete',
+          StateError('the analysis gave no $missing'));
+    }
+    return estimate;
   }
 
   String? _signedInUid() => Supabase.instance.client.auth.currentUser?.id;
 
-  /// True (recorded; the view goes back to its start, nothing is said) when
-  /// [uid] — whose meal this is — is no longer the member signed in.
+  /// True (recorded; the view goes back to its start without that member's
+  /// photo, words or result, and nothing is said) when [uid] — whose meal this
+  /// is — is no longer the member signed in.
   bool _memberChanged(String? uid) {
     if (_signedInUid() == uid) return false;
     reportError('nutrition.scan.identity',
         StateError('the member changed during a scan'));
-    if (mounted) setState(() { _image = null; _stage = _ScanStage.idle; });
+    if (mounted) {
+      _descCtrl.clear();
+      setState(() {
+        _image = null;
+        _result = null;
+        _resultUid = null;
+        _descUid = null;
+        _notice = null;
+        _stage = _ScanStage.idle;
+      });
+    }
     return true;
   }
 
@@ -182,12 +247,19 @@ class _AiScanViewState extends State<AiScanView> {
     final text = _descCtrl.text.trim();
     if (text.isEmpty) return;
     FocusScope.of(context).unfocus();
-    final uid = _signedInUid();
+    // Whoever typed it: another member's tap does not send it.
+    final uid = _descUid;
+    if (_memberChanged(uid)) return;
     setState(() { _image = null; _notice = null; _stage = _ScanStage.scanning; });
     try {
       final r = await NutritionService().analyzeFood(description: text);
       if (!mounted || _memberChanged(uid)) return;
-      setState(() { _result = _parse(r); _portion = 1.0; _stage = _ScanStage.result; });
+      setState(() {
+        _result = _parse(r);
+        _resultUid = uid;
+        _portion = 1.0;
+        _stage = _ScanStage.result;
+      });
     } catch (e, st) {
       reportError('nutrition.scan.describe', e, st);
       if (!mounted || _memberChanged(uid)) return;
@@ -252,6 +324,8 @@ class _AiScanViewState extends State<AiScanView> {
   }
 
   Future<void> _analyze(XFile file, Uint8List bytes, String? uid) async {
+    // Again: awaits lie between the last check and here.
+    if (_memberChanged(uid)) return;
     try {
       final ext = file.name.toLowerCase().split('.').last;
       final mime = ext == 'png' ? 'image/png'
@@ -262,6 +336,7 @@ class _AiScanViewState extends State<AiScanView> {
       if (!mounted || _memberChanged(uid)) return;
       setState(() {
         _result = _parse(r);
+        _resultUid = uid;
         _portion = 1.0;
         _stage = _ScanStage.result;
       });
@@ -276,10 +351,18 @@ class _AiScanViewState extends State<AiScanView> {
     }
   }
 
+  void _save(ScanResult meal) {
+    // Another member signed in with it on screen: not their meal to log.
+    // (`initialResult`, the tests' seam, was read for nobody.)
+    if (widget.initialResult == null && _memberChanged(_resultUid)) return;
+    widget.onAccept(meal);
+  }
+
   void _retake() {
     setState(() {
       _image = null;
       _result = null;
+      _resultUid = null;
       _stage = _ScanStage.idle;
     });
   }
@@ -289,7 +372,7 @@ class _AiScanViewState extends State<AiScanView> {
     super.initState();
     final seed = widget.initialResult;
     if (seed != null) {
-      _result = seed;
+      _result = _Estimate.of(seed);
       _portion = portionAsShown;
       _stage = _ScanStage.result;
     }
@@ -323,30 +406,53 @@ class _AiScanViewState extends State<AiScanView> {
             child: ExcludeSemantics(child: child))),
       );
 
+  Widget _failureNotice(String message) => Semantics(
+        liveRegion: true,
+        container: true,
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const ExcludeSemantics(child: Icon(
+            Icons.error_outline, color: _redChip, size: 18)),
+          const SizedBox(width: 10),
+          Expanded(child: Text(message,
+            style: const TextStyle(
+              color: _redChip, fontSize: 13, height: 1.4))),
+        ]),
+      );
+
+  /// Equal widths in a row; one under the other when [stacked].
+  Widget _sideBySide(List<Widget> children,
+      {required bool stacked, required double gap}) {
+    if (stacked) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        for (final (i, c) in children.indexed) ...[
+          if (i > 0) SizedBox(height: gap),
+          c,
+        ],
+      ]);
+    }
+    return Row(children: [
+      for (final (i, c) in children.indexed) ...[
+        if (i > 0) SizedBox(width: gap),
+        Expanded(child: c),
+      ],
+    ]);
+  }
+
   Widget _buildIdle() {
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
       child: Column(
         children: [
           if (_notice != null) ...[
-            Semantics(
-              liveRegion: true,
-              container: true,
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const ExcludeSemantics(child: Icon(
-                  Icons.error_outline, color: _redChip, size: 18)),
-                const SizedBox(width: 10),
-                Expanded(child: Text(_notice!,
-                  style: const TextStyle(
-                    color: _redChip, fontSize: 13, height: 1.4))),
-              ]),
-            ),
+            _failureNotice(_notice!),
             const SizedBox(height: 16),
           ],
           // ── Camera placeholder ─────────────────────────────────────
           Container(
             width: double.infinity,
-            height: 230,
+            // Grows with the text (it overflowed at large sizes).
+            constraints: const BoxConstraints(minHeight: 230),
+            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: _card,
               borderRadius: BorderRadius.circular(24),
@@ -415,7 +521,8 @@ class _AiScanViewState extends State<AiScanView> {
             source: kIsWeb ? ImageSource.gallery : ImageSource.camera,
             child: Container(
               width: double.infinity,
-              height: 54,
+              constraints: const BoxConstraints(minHeight: 54),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
                   colors: [Color(0xFF7C3AED), Color(0xFFB44CF0)],
@@ -436,15 +543,16 @@ class _AiScanViewState extends State<AiScanView> {
                 children: const [
                   Icon(Icons.camera_alt_rounded, color: _white, size: 20),
                   SizedBox(width: 10),
-                  Text(
+                  Flexible(child: Text(
                     'Scan Meal',
+                    textAlign: TextAlign.center,
                     style: TextStyle(
                       color: _white,
                       fontSize: 15,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 0.3,
                     ),
-                  ),
+                  )),
                 ],
               ),
             ),
@@ -456,7 +564,8 @@ class _AiScanViewState extends State<AiScanView> {
             source: ImageSource.gallery,
             child: Container(
               width: double.infinity,
-              height: 50,
+              constraints: const BoxConstraints(minHeight: 50),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
                 color: Colors.transparent,
                 borderRadius: BorderRadius.circular(999),
@@ -467,29 +576,36 @@ class _AiScanViewState extends State<AiScanView> {
                 children: [
                   Icon(Icons.photo_library_outlined, color: _muted, size: 20),
                   const SizedBox(width: 10),
-                  Text(
+                  Flexible(child: Text(
                     'Choose from Gallery',
+                    textAlign: TextAlign.center,
                     style: TextStyle(
                       color: _muted,
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
                     ),
-                  ),
+                  )),
                 ],
               ),
             ),
           ),
           const SizedBox(height: 20),
           // ── Or describe your meal in words ─────────────────────────
-          Row(children: [
+          LayoutBuilder(builder: (_, box) => Row(children: [
             Expanded(child: Divider(color: _muted.withValues(alpha: 0.15))),
-            Padding(padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: Text('or describe it', style: TextStyle(color: _muted.withValues(alpha: 0.5), fontSize: 12))),
+            Container(
+              constraints: BoxConstraints(maxWidth: box.maxWidth - 32),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Text('or describe it', textAlign: TextAlign.center,
+                style: TextStyle(color: _muted.withValues(alpha: 0.5), fontSize: 12))),
             Expanded(child: Divider(color: _muted.withValues(alpha: 0.15))),
-          ]),
+          ])),
           const SizedBox(height: 14),
-          TextField(
+          // Named: the hint is its only name, and goes once something is typed.
+          Semantics(label: 'Describe your meal', child: TextField(
             controller: _descCtrl,
+            onChanged: (text) => _descUid =
+                text.isEmpty ? null : _descUid ?? _signedInUid(),
             style: const TextStyle(color: _white, fontSize: 14),
             minLines: 1, maxLines: 2,
             textInputAction: TextInputAction.send,
@@ -499,6 +615,7 @@ class _AiScanViewState extends State<AiScanView> {
               hintStyle: TextStyle(color: _muted.withValues(alpha: 0.5), fontSize: 13),
               filled: true, fillColor: _card,
               suffixIcon: IconButton(
+                tooltip: 'Analyze description',
                 icon: const Icon(Icons.auto_awesome, color: _brand, size: 20),
                 onPressed: _describe),
               enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14),
@@ -506,14 +623,14 @@ class _AiScanViewState extends State<AiScanView> {
               focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14),
                 borderSide: const BorderSide(color: _brand)),
             ),
-          ),
+          )),
         ],
       ),
     );
   }
 
   Widget _buildScanning() {
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
       child: Column(
         children: [
@@ -532,7 +649,8 @@ class _AiScanViewState extends State<AiScanView> {
           const SizedBox(height: 20),
           Container(
             width: double.infinity,
-            height: 54,
+            constraints: const BoxConstraints(minHeight: 54),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
                 colors: [Color(0xFF7C3AED), Color(0xFFB44CF0)],
@@ -550,14 +668,15 @@ class _AiScanViewState extends State<AiScanView> {
                   child: CircularProgressIndicator(color: _white, strokeWidth: 2),
                 ),
                 SizedBox(width: 12),
-                Text(
+                Flexible(child: Text(
                   'Analyzing your meal...',
+                  textAlign: TextAlign.center,
                   style: TextStyle(
                     color: _white,
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
                   ),
-                ),
+                )),
               ],
             ),
           ),
@@ -568,7 +687,13 @@ class _AiScanViewState extends State<AiScanView> {
 
   Widget _buildResult() {
     final r = _result!;
-    final disp = r.scaled(_portion); // values after the portion multiplier
+    final meal = r.whole?.scaled(_portion); // after the portion multiplier
+    final missing = r.missing;
+    final cal = r.calories;
+    // A macro after the portion multiplier; null stays null (not known).
+    int? g(double? v) => v == null ? null : (v * _portion).toInt();
+    // Large text: the side-by-side controls go one under the other.
+    final stacked = MediaQuery.textScalerOf(context).scale(13) > 13 * 1.3;
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
       child: Column(
@@ -599,8 +724,11 @@ class _AiScanViewState extends State<AiScanView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                SizedBox(width: double.infinity, child: Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 8,
+                  runSpacing: 6,
                   children: [
                     Text(
                       r.name,
@@ -618,7 +746,8 @@ class _AiScanViewState extends State<AiScanView> {
                         border: Border.all(color: _green.withValues(alpha: 0.3)),
                       ),
                       child: Text(
-                        '${r.confidence}% match',
+                        r.confidence == null
+                            ? 'Match not known' : '${r.confidence}% match',
                         style: const TextStyle(
                           color: _green,
                           fontSize: 10,
@@ -627,51 +756,56 @@ class _AiScanViewState extends State<AiScanView> {
                       ),
                     ),
                   ],
-                ),
+                )),
                 const SizedBox(height: 4),
                 Text(
-                  '${disp.calories.toInt()} kcal',
+                  cal == null
+                      ? 'Calories not known' : '${(cal * _portion).toInt()} kcal',
                   style: const TextStyle(color: _white, fontSize: 22, fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 14),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                SizedBox(width: double.infinity, child: Wrap(
+                  alignment: WrapAlignment.spaceAround,
+                  spacing: 8,
+                  runSpacing: 10,
                   children: [
-                    _MacroChip('Protein', disp.protein.toInt(), _brand),
-                    _MacroChip('Carbs', disp.carbs.toInt(), _green),
-                    _MacroChip('Fat', disp.fat.toInt(), _redChip),
+                    _MacroChip('Protein', g(r.protein), _brand),
+                    _MacroChip('Carbs', g(r.carbs), _green),
+                    _MacroChip('Fat', g(r.fat), _redChip),
                   ],
-                ),
+                )),
                 const SizedBox(height: 12),
                 // ── Portion adjuster ────────────────────────────────
-                Row(children: [
-                  Icon(Icons.tune_rounded, color: _muted.withValues(alpha: 0.7), size: 16),
-                  const SizedBox(width: 6),
-                  Text('Portion', style: TextStyle(color: _muted.withValues(alpha: 0.7), fontSize: 12)),
-                  const Spacer(),
+                SizedBox(width: double.infinity, child: Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                  Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.tune_rounded, color: _muted.withValues(alpha: 0.7), size: 16),
+                    const SizedBox(width: 6),
+                    Flexible(child: Text('Portion', style: TextStyle(color: _muted.withValues(alpha: 0.7), fontSize: 12))),
+                  ]),
                   Text('${_portion.toStringAsFixed(2)}×',
                     style: const TextStyle(color: _brand, fontSize: 13, fontWeight: FontWeight.w700)),
-                ]),
+                ])),
                 // FIT-020's three declared portion controls. The slider stays
                 // below them: the anchor does not draw it, but removing a
                 // finer control would take capability away, and a locked
                 // screen not drawing something is not the design saying to
                 // delete it (the OD-15 / OD-17 rule).
-                Row(children: [
-                  Expanded(child: _PortionChoice(
+                _sideBySide(stacked: stacked, gap: 8, [
+                  _PortionChoice(
                     label: 'Smaller',
                     selected: false,
-                    onTap: () => setState(() => _portion = portionSmaller(_portion)))),
-                  const SizedBox(width: 8),
-                  Expanded(child: _PortionChoice(
+                    onTap: () => setState(() => _portion = portionSmaller(_portion))),
+                  _PortionChoice(
                     label: 'As shown',
                     selected: (_portion - portionAsShown).abs() < 0.001,
-                    onTap: () => setState(() => _portion = portionAsShown))),
-                  const SizedBox(width: 8),
-                  Expanded(child: _PortionChoice(
+                    onTap: () => setState(() => _portion = portionAsShown)),
+                  _PortionChoice(
                     label: 'Larger',
                     selected: false,
-                    onTap: () => setState(() => _portion = portionLarger(_portion)))),
+                    onTap: () => setState(() => _portion = portionLarger(_portion))),
                 ]),
                 const SizedBox(height: 4),
                 SliderTheme(
@@ -679,9 +813,12 @@ class _AiScanViewState extends State<AiScanView> {
                     activeTrackColor: _brand, inactiveTrackColor: _brand.withValues(alpha: 0.2),
                     thumbColor: _brand, overlayColor: _brand.withValues(alpha: 0.15),
                     trackHeight: 3),
-                  child: Slider(
-                    value: _portion, min: 0.25, max: 3.0, divisions: 11,
-                    onChanged: (v) => setState(() => _portion = v)),
+                  child: MergeSemantics(child: Semantics(
+                    label: 'Portion',
+                    child: Slider(
+                      value: _portion, min: 0.25, max: 3.0, divisions: 11,
+                      semanticFormatterCallback: (v) => '${v.toStringAsFixed(2)}×',
+                      onChanged: (v) => setState(() => _portion = v)))),
                 ),
                 // ── Per-item breakdown ──────────────────────────────
                 if (r.items.length > 1) ...[
@@ -692,79 +829,66 @@ class _AiScanViewState extends State<AiScanView> {
                   const SizedBox(height: 6),
                   ...r.items.map((it) => Padding(
                     padding: const EdgeInsets.only(bottom: 4),
-                    child: Row(children: [
-                      Expanded(child: Text(it.name,
-                        maxLines: 1, overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: _muted.withValues(alpha: 0.85), fontSize: 12))),
-                      Text('${(it.calories * _portion).toInt()} kcal',
+                    child: SizedBox(width: double.infinity, child: Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      spacing: 8,
+                      children: [
+                      Text(it.name,
+                        style: TextStyle(color: _muted.withValues(alpha: 0.85), fontSize: 12)),
+                      Text(it.calories == null
+                          ? 'kcal not known' : '${(it.calories! * _portion).toInt()} kcal',
                         style: TextStyle(color: _muted.withValues(alpha: 0.6), fontSize: 12)),
-                    ]),
+                    ])),
                   )),
                 ],
               ],
             ),
           ),
           const SizedBox(height: 16),
+          // A value the analysis did not give is never saved as 0: say which,
+          // and what to do instead (P0-FL-61).
+          if (missing != null) ...[
+            _failureNotice("Couldn't read the $missing for this meal — retake it"
+                // The control below, by its own words, when it is there.
+                "${widget.onSearchInstead == null ? '' : ', or tap Search instead to add it yourself'}. "
+                'Saving is off for this scan.'),
+            const SizedBox(height: 16),
+          ],
           // ── Retake / Accept ──────────────────────────────────────
-          Row(
-            children: [
-              Expanded(
-                child: GestureDetector(
-                  onTap: _retake,
-                  child: Container(
-                    height: 50,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: _brand.withValues(alpha: 0.3), width: 1.5),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      'Retake',
-                      style: TextStyle(
-                        color: _muted,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
+          _sideBySide(stacked: stacked, gap: 12, [
+            _ResultButton(
+              label: 'Retake',
+              color: _muted,
+              weight: FontWeight.w600,
+              onTap: _retake,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: _brand.withValues(alpha: 0.3), width: 1.5),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => widget.onAccept(disp),
-                  child: Container(
-                    height: 50,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF7C3AED), Color(0xFFB44CF0)],
-                        begin: Alignment.centerLeft,
-                        end: Alignment.centerRight,
-                      ),
-                      borderRadius: BorderRadius.circular(999),
-                      boxShadow: [
-                        BoxShadow(
-                          color: _brand.withValues(alpha: 0.3),
-                          blurRadius: 16,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    alignment: Alignment.center,
-                    // FIT-020 names this after the meal being saved to.
-                    child: Text(
-                      scanSaveLabel(widget.mealType),
-                      style: const TextStyle(
-                        color: _white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
+            ),
+            _ResultButton(
+              // FIT-020 names this after the meal being saved to.
+              label: scanSaveLabel(widget.mealType),
+              color: _white,
+              weight: FontWeight.w700,
+              onTap: meal == null ? null : () => _save(meal),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF7C3AED), Color(0xFFB44CF0)],
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
                 ),
+                borderRadius: BorderRadius.circular(999),
+                boxShadow: [
+                  BoxShadow(
+                    color: _brand.withValues(alpha: 0.3),
+                    blurRadius: 16,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ]),
           // FIT-020 · "Search instead" — leave the scan and look the food up
           // by name. Null hides it rather than drawing a control that does
           // nothing.
@@ -833,6 +957,7 @@ class _PortionChoice extends StatelessWidget {
                     : Colors.white.withValues(alpha: 0.10)),
             ),
             child: Text(label,
+              textAlign: TextAlign.center,
               style: TextStyle(
                 color: selected ? _white : _muted,
                 fontSize: 13,
@@ -842,9 +967,51 @@ class _PortionChoice extends StatelessWidget {
       );
 }
 
+/// `Retake` / `Save to …`. Null [onTap] = dimmed and announced as disabled.
+class _ResultButton extends StatelessWidget {
+  final String label;
+  final Color color;
+  final FontWeight weight;
+  final BoxDecoration decoration;
+  final VoidCallback? onTap;
+  const _ResultButton({
+    required this.label,
+    required this.color,
+    required this.weight,
+    required this.decoration,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        container: true,
+        button: true,
+        enabled: onTap != null,
+        label: label,
+        excludeSemantics: true,
+        onTap: onTap,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Opacity(
+            opacity: onTap == null ? 0.45 : 1,
+            child: Container(
+              constraints: const BoxConstraints(minHeight: 50),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              alignment: Alignment.center,
+              decoration: decoration,
+              child: Text(label,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: color, fontSize: 14, fontWeight: weight)),
+            ),
+          ),
+        ),
+      );
+}
+
 class _MacroChip extends StatelessWidget {
   final String label;
-  final int value;
+  /// Null = not known.
+  final int? value;
   final Color color;
   const _MacroChip(this.label, this.value, this.color);
 
@@ -852,7 +1019,7 @@ class _MacroChip extends StatelessWidget {
   Widget build(BuildContext context) => Column(
         children: [
           Text(
-            '${value}g',
+            value == null ? 'Not known' : '${value}g',
             style: TextStyle(
               color: color,
               fontSize: 17,

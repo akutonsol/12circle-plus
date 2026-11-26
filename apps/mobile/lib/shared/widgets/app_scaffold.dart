@@ -13,12 +13,14 @@
 //
 // The one client bottom nav is `app_shell.dart`, and it is FIT-001's five.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../core/widgets/app_top_nav.dart' show SignedInUnread, unreadDetail;
 import '../../features/auth/domain/auth_provider.dart';
-import '../../features/notifications/domain/notification_provider.dart';
 import '../theme/app_background.dart';
 
 class _C {
@@ -87,8 +89,12 @@ class _AppHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final top = MediaQuery.of(context).padding.top;
     return Container(
-      padding: EdgeInsets.only(left: showBackButton ? 8 : 20, right: 20, top: top),
-      height: top + 64,
+      // The right margin is 20: the last 18 of it are the bell's own target.
+      // The left margin is 20 before the avatar; 2 of it are the avatar's
+      // own target, as the bell's is on the right.
+      padding: EdgeInsets.only(left: showBackButton ? 8 : 18, right: 2, top: top),
+      // Grows with large text, which was cut off at a fixed 64 (P0-FL-61).
+      constraints: BoxConstraints(minHeight: top + 64),
       decoration: BoxDecoration(
         color: _C.surface.withValues(alpha: 0.85),
         border: Border(
@@ -110,17 +116,31 @@ class _AppHeader extends StatelessWidget {
               },
             )
           else
-            GestureDetector(
+            // A named button with a 44px target; the 40px avatar is drawn
+            // where it was, 2 into the target on each side (P0-FL-61 r3).
+            Semantics(
+              container: true,
+              button: true,
+              label: 'Profile',
+              excludeSemantics: true,
               onTap: () => context.go('/profile'),
-              child: _UserAvatar(avatarUrl: avatarUrl),
+              child: GestureDetector(
+                onTap: () => context.go('/profile'),
+                behavior: HitTestBehavior.opaque,
+                child: SizedBox.square(
+                  dimension: 44,
+                  child: Center(child: _UserAvatar(avatarUrl: avatarUrl)),
+                ),
+              ),
             ),
-          const SizedBox(width: 12),
+          SizedBox(width: showBackButton ? 12 : 10),
           Expanded(
-            child: title != null
+            // Off the header's edges once the text is what makes it grow.
+            child: Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: title != null
                 ? Text(title!,
                     style: const TextStyle(color: _C.primary, fontSize: 18,
                       fontWeight: FontWeight.w800, letterSpacing: 2))
-                : _HomeGreeting(firstName: firstName),
+                : _HomeGreeting(firstName: firstName)),
           ),
           const _ShakingBellIcon(),
         ],
@@ -177,9 +197,9 @@ class _HomeGreeting extends StatelessWidget {
           style: const TextStyle(color: _C.primary, fontSize: 10,
             fontWeight: FontWeight.w600, letterSpacing: 2)),
         Row(children: [
-          Text(displayName,
+          Flexible(child: Text(displayName,
             style: const TextStyle(color: _C.onSurface, fontSize: 20,
-              fontWeight: FontWeight.w800, letterSpacing: -0.5)),
+              fontWeight: FontWeight.w800, letterSpacing: -0.5))),
           const SizedBox(width: 4),
           Icon(Icons.bolt, color: _C.primary, size: 20),
         ]),
@@ -195,9 +215,11 @@ class _ShakingBellIcon extends ConsumerStatefulWidget {
 }
 
 class _ShakingBellIconState extends ConsumerState<_ShakingBellIcon>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, SignedInUnread {
   late final AnimationController _ctrl;
   late final Animation<double> _shake;
+  /// The next shake; null while animations are off.
+  Timer? _next;
 
   @override
   void initState() {
@@ -210,53 +232,83 @@ class _ShakingBellIconState extends ConsumerState<_ShakingBellIcon>
       TweenSequenceItem(tween: Tween(begin: 0.15, end: -0.1), weight: 2),
       TweenSequenceItem(tween: Tween(begin: -0.1, end: 0.0), weight: 1),
     ]).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
-    Future.delayed(const Duration(seconds: 1), _startShake);
+  }
+
+  /// Reduce motion: nothing moves and nothing is scheduled; a bell caught
+  /// mid-shake stops level (P0-FL-61).
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _next?.cancel();
+      _next = null;
+      _ctrl.reset();
+    } else {
+      _next ??= Timer(const Duration(seconds: 1), _startShake);
+    }
   }
 
   void _startShake() {
-    if (!mounted) return;
     _ctrl.forward(from: 0).then((_) {
-      Future.delayed(const Duration(seconds: 3), _startShake);
+      if (!mounted) return;
+      _next = Timer(const Duration(seconds: 3), _startShake);
     });
   }
 
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  void dispose() { _next?.cancel(); _ctrl.dispose(); super.dispose(); }
 
   @override
   Widget build(BuildContext context) {
     // Real unread count drives the badge; tap opens the notifications screen.
-    final unread = ref.watch(unreadCountProvider).valueOrNull ?? 0;
-    return GestureDetector(
-      onTap: () => context.go('/notifications'),
-      behavior: HitTestBehavior.opaque,
-      child: AnimatedBuilder(
-        animation: _shake,
-        builder: (_, child) => Transform.rotate(
-          angle: unread > 0 ? _shake.value : 0, child: child),
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            const Icon(Icons.notifications, color: _C.primary, size: 26),
-            if (unread > 0)
-              Positioned(
-                top: -3, right: -3,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                  constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
-                  decoration: BoxDecoration(
-                    shape: unread > 9 ? BoxShape.rectangle : BoxShape.circle,
-                    borderRadius: unread > 9 ? BorderRadius.circular(8) : null,
-                    color: _C.error,
-                    boxShadow: [BoxShadow(color: _C.error.withValues(alpha: 0.6), blurRadius: 6)],
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(unread > 9 ? '9+' : '$unread',
-                    style: const TextStyle(color: Color(0xFF3A0A06), fontSize: 9,
-                      fontWeight: FontWeight.w800, height: 1)),
+    final known = watchUnread();
+    final unread = known ?? 0;
+    final bell = AnimatedBuilder(
+      animation: _shake,
+      builder: (_, child) => Transform.rotate(
+        angle: unread > 0 ? _shake.value : 0, child: child),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          const Icon(Icons.notifications, color: _C.primary, size: 26),
+          if (unread > 0)
+            Positioned(
+              top: -3, right: -3,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
+                decoration: BoxDecoration(
+                  shape: unread > 9 ? BoxShape.rectangle : BoxShape.circle,
+                  borderRadius: unread > 9 ? BorderRadius.circular(8) : null,
+                  color: _C.error,
+                  boxShadow: [BoxShadow(color: _C.error.withValues(alpha: 0.6), blurRadius: 6)],
                 ),
+                alignment: Alignment.center,
+                child: Text(unread > 9 ? '9+' : '$unread',
+                  style: const TextStyle(color: Color(0xFF3A0A06), fontSize: 9,
+                    fontWeight: FontWeight.w800, height: 1)),
               ),
-          ],
+            ),
+        ],
+      ),
+    );
+    final detail = unreadDetail(known);
+    void open() => context.go('/notifications');
+    return Semantics(
+      container: true,
+      button: true,
+      label: detail == null ? 'Notifications' : 'Notifications, $detail',
+      excludeSemantics: true,
+      onTap: open,
+      child: GestureDetector(
+        onTap: open,
+        behavior: HitTestBehavior.opaque,
+        // The icon stays where it was: the target grows to 44 into the
+        // header's right margin, not into the title's width.
+        child: Container(
+          width: 44, height: 44,
+          alignment: Alignment.centerLeft,
+          child: bell,
         ),
       ),
     );

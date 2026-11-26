@@ -27,6 +27,38 @@ String initialsFrom(String first, String last) {
   return (s.isEmpty ? f.substring(0, 1) : s).toUpperCase();
 }
 
+/// The unread count a header's bell shows and says (P0-FL-61).
+///
+/// `unreadCountProvider` carries the previous account's number through the
+/// next one's read, and through its failure. So a number is kept here under
+/// the uid it was read for, dropped as soon as another uid (or nobody) is
+/// signed in, and replaced only by a settled read: the uid and the read are
+/// watched in the same build, and an account change restarts the read, so what
+/// is settled then is that uid's.
+mixin SignedInUnread<T extends ConsumerStatefulWidget> on ConsumerState<T> {
+  int? _count;
+  String? _countUid;
+
+  /// Null while nobody has read the signed-in account's count, so it is never
+  /// said as "none". A failed or pending re-read for the same account keeps
+  /// the last one. Call it in `build`.
+  int? watchUnread() {
+    final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+    final read = ref.watch(unreadCountProvider);
+    if (uid == null || uid != _countUid) _count = null;
+    _countUid = uid;
+    if (uid != null && !read.isLoading && !read.hasError) _count = read.value;
+    return _count;
+  }
+}
+
+/// What a bell says about [count] after its name; null = nothing is known.
+String? unreadDetail(int? count) => switch (count) {
+      null => null,
+      0 => 'none unread',
+      _ => '$count unread',
+    };
+
 /// The shared top nav content (avatar + greeting/name on the left, chat + bell
 /// on the right). Used both by the app shell (wrapped in [AppTopNav]) and the
 /// Home screen header, so the design stays consistent platform-wide.
@@ -70,7 +102,6 @@ class AppTopNavRow extends ConsumerWidget {
       meta['avatar_url'] as String?,
       meta['picture'] as String?,
     ]);
-    final unread = ref.watch(unreadCountProvider).valueOrNull ?? 0;
 
     return Row(children: [
       // Avatar — gradient ring with initials.
@@ -143,13 +174,28 @@ class AppTopNavRow extends ConsumerWidget {
         label: 'Messages',
         onTap: () => context.go('/messages'),
       ),
-      _NavIconButton(
-        icon: Icons.notifications_none_rounded,
-        label: 'Notifications',
-        showDot: unread > 0,
-        onTap: () => context.push('/notifications'),
-      ),
+      const _NavBell(),
     ]);
+  }
+}
+
+class _NavBell extends ConsumerStatefulWidget {
+  const _NavBell();
+  @override
+  ConsumerState<_NavBell> createState() => _NavBellState();
+}
+
+class _NavBellState extends ConsumerState<_NavBell> with SignedInUnread {
+  @override
+  Widget build(BuildContext context) {
+    final unread = watchUnread();
+    return _NavIconButton(
+      icon: Icons.notifications_none_rounded,
+      label: 'Notifications',
+      detail: unreadDetail(unread),
+      showDot: (unread ?? 0) > 0,
+      onTap: () => context.push('/notifications'),
+    );
   }
 }
 
@@ -176,8 +222,12 @@ class _NavIconButton extends StatelessWidget {
   /// the wording for all three ("Directory", "Messages", "Notifications"), so
   /// none of it is invented here.
   final String label;
+
+  /// Said after [label]: what the dot shows, which is drawn only.
+  final String? detail;
   const _NavIconButton({
     required this.icon,
+    this.detail,
     this.showDot = false,
     required this.onTap,
     required this.label,
@@ -186,7 +236,7 @@ class _NavIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Semantics(
         button: true,
-        label: label,
+        label: detail == null ? label : '$label, $detail',
         child: GestureDetector(
           onTap: onTap,
           behavior: HitTestBehavior.opaque,
