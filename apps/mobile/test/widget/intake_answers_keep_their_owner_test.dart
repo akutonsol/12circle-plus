@@ -924,6 +924,74 @@ void main() {
     });
   });
 
+  // Round 6 · 59e-N4: `_finish` clears `_arrivedBySwitch`. That flag stops a
+  // hidden tab from saving a member who arrived by a switch and has not
+  // answered yet (a save marks them incomplete). Tapping Finish IS answering.
+  // When Finish's answer is lost on the way back, the upsert may have landed
+  // (`onboarding_complete: true`, with no points and no plan generated), while
+  // the member is told "We could not save your answers… tap Retry". Hiding the
+  // tab then stores where they are, as it does for the member who opened the
+  // flow, so the row says what they were told. Without the clear, the member
+  // who arrived by a switch is the only one for whom nothing is sent.
+  group("Finish's answer lost, then the tab hidden", () {
+    Future<void> lostFinish(WidgetTester t, String who) async {
+      server.offline.add('POST user_profiles:$who');
+      await t.tap(find.text('Enter 12 Circle'));
+      await settle(t);
+      expect(server.writes('user_profiles').single.key,
+          'POST user_profiles:$who', reason: 'premise: the upsert went out');
+      expect(find.textContaining('We could not save your answers'),
+          findsOneWidget, reason: 'premise: they are told');
+      expect(find.textContaining('SECRET'), findsNothing);
+      server.seen.clear();
+    }
+
+    void savedWhereTheyAre(String who, String first) {
+      final w = server.writes('user_profiles').toList();
+      expect(w, isNotEmpty,
+          reason: "told Finish failed, but the row may say they're done");
+      expect(w.map((r) => (r.method, r.who, r.query['id'])).toSet(),
+          {('PATCH', who, 'eq.$who')});
+      expect(w.first.row['onboarding_complete'], false);
+      expect(w.last.row['first_name'], first);
+    }
+
+    testWidgets('B, who arrived by a switch: stored as theirs, as for anyone',
+        (t) async {
+      members(b: _finalPage);
+      await open(t);
+      await switchTo(t, memberB);
+      await settle(t);
+      expect(find.text('Enter 12 Circle'), findsOneWidget, reason: 'premise');
+      await lostFinish(t, memberB);
+      await hide(t);
+      savedWhereTheyAre(memberB, 'Bob');
+      nothingOfAlice();
+      await close(t);
+    });
+
+    testWidgets('POSITIVE CONTROL: the member who opened the flow', (t) async {
+      members(a: _finalPage);
+      await open(t);
+      await lostFinish(t, memberA);
+      await hide(t);
+      savedWhereTheyAre(memberA, 'Alice');
+      await close(t);
+    });
+
+    testWidgets('NEGATIVE CONTROL: B, arrived by a switch, Finish not tapped: '
+        'hiding the tab still writes nothing', (t) async {
+      members(b: _finalPage);
+      await open(t);
+      await switchTo(t, memberB);
+      await settle(t);
+      expect(find.text('Enter 12 Circle'), findsOneWidget, reason: 'premise');
+      await hide(t);
+      expect(server.writes(), isEmpty);
+      await close(t);
+    });
+  });
+
   group('the not-saved notice of a member who comes back', () {
     testWidgets('"you are not signed in" is gone: they are', (t) async {
       members(a: _finalPage);
