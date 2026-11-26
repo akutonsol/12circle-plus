@@ -52,6 +52,34 @@ ConnectSection<T> teaserFrom<T>(AsyncValue<List<T>> source,
   };
 }
 
+/// What one teaser last showed, and to whom (P0-FL-59c).
+///
+/// The lists behind the teasers do not say who read them, and riverpod keeps the
+/// last member's through the next one's read. So a list is taken only from a
+/// read that has FINISHED, kept under the member it was taken for, and dropped
+/// before anything is drawn for anyone else. A refresh by the same member keeps
+/// it, and one that fails keeps it under the failure.
+class KeptTeaser<T> {
+  String? _uid;
+  ConnectSection<T>? _kept;
+
+  /// What to draw for [uid]. [reading]: a read behind [section] is in flight.
+  /// Nobody signed in is shown nothing.
+  ConnectSection<T> draw(String? uid, ConnectSection<T> section,
+      {required bool reading}) {
+    if (uid != _uid) {
+      _uid = uid;
+      _kept = null;
+    }
+    if (uid != null && !reading) {
+      _kept = section.state == ConnectSectionState.failed
+          ? (state: section.state, items: _kept?.items ?? section.items)
+          : section;
+    }
+    return _kept ?? (state: ConnectSectionState.loading, items: const []);
+  }
+}
+
 /// The "What's on" teaser, built from FIT-027's merged list rather than from a
 /// second pipeline over the same three tables.
 ///

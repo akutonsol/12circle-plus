@@ -13,6 +13,7 @@ import 'package:circle_fitness/features/classes/domain/class_provider.dart';
 import 'package:circle_fitness/features/classes/domain/whats_on_provider.dart';
 import 'package:circle_fitness/features/community/data/models/post_model.dart';
 import 'package:circle_fitness/features/community/domain/community_provider.dart';
+import 'package:circle_fitness/features/messaging/domain/messaging_provider.dart';
 import 'package:circle_fitness/features/messaging/presentation/connect_sections_view.dart';
 
 /// FIT-005 · the relationship layer's three teasers, mounted.
@@ -63,6 +64,8 @@ void main() {
     addTearDown(() => t.binding.setSurfaceSize(null));
     await t.pumpWidget(ProviderScope(
       overrides: [
+        // P0-FL-59c: the teasers are drawn for the member signed in.
+        messagingUidProvider.overrideWithValue('member-1'),
         pin(livePostsProvider, posts),
         pin(liveGroupsProvider, groups),
         pin(liveClassesFromDbProvider, classes),

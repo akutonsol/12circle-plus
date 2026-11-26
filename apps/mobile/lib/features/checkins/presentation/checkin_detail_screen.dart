@@ -37,8 +37,12 @@ class CheckinDetailScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final checkin = latestOf(
-        ref.watch(selectedCheckinProvider), ref.watch(checkinHistoryProvider));
+    final selected = ref.watch(selectedCheckinProvider);
+    // Never another member's, whatever put it there (P0-FL-59c).
+    final mine = selected != null &&
+        isCheckinOf(selected, () => ref.watch(checkinUidProvider));
+    final checkin =
+        latestOf(mine ? selected : null, ref.watch(checkinHistoryProvider));
 
     return Scaffold(
       backgroundColor: _bg,
@@ -76,8 +80,11 @@ WeeklyCheckin? latestOf(
     WeeklyCheckin? selected, AsyncValue<List<WeeklyCheckin>> history) {
   if (selected == null) return null;
   final weeks = history.hasError ? null : history.valueOrNull;
+  // The history can still hold the rows of the account that read it, so a week
+  // is this one only if it is also the same member's.
+  String? member(WeeklyCheckin c) => c is MemberCheckin ? c.memberId : null;
   for (final w in weeks ?? const <WeeklyCheckin>[]) {
-    if (w.id == selected.id) return w;
+    if (w.id == selected.id && member(w) == member(selected)) return w;
   }
   return selected;
 }
