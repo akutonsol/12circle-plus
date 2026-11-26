@@ -223,29 +223,46 @@ void main() {
       await close(t);
     });
 
-    testWidgets("B's program being read, A's card still up: nothing is started", (t) async {
+    // P0-FL-C13 · since P0-FL-60b the card reads `forMember(...)`: once the
+    // switch is seen, A's held list and statuses are not B's, so A's card is
+    // never drawn for B and A's Resume cannot be tapped (the guard behind it is
+    // still reached by 'no frame since the switch' above). The old premise "A's
+    // card still up" is asserted as that stronger fact instead, and the card's
+    // remaining action is tapped: still nothing of A's is selected, started or
+    // abandoned. No tap reached A's workout, so no refusal is recorded
+    // (`recorded: false`).
+    void expectACardNotDrawn() {
+      expect(resume, findsNothing, reason: "A's Resume drawn for B");
+      expect(find.text(_a), findsNothing, reason: "A's workout drawn for B");
+    }
+
+    testWidgets("B's program being read: A's card is not drawn, nothing is started", (t) async {
       server.holds['GET workout_program_assignments:$memberB'] = Completer<void>();
       server.holds['GET workout_sessions:$memberB'] = Completer<void>();
       await mount(t, const DirectoryScreen());
+      expect(resume, findsOneWidget, reason: "control: A's card, for A");
       await switchSeen(t);
-      expect(resume, findsOneWidget, reason: 'premise: the card still holds A\'s');
-      await t.tap(resume);
+      expectACardNotDrawn();
+      await t.tap(find.text('Start Workout'));
       server.holds['GET workout_sessions:$memberB']!.complete();
       await settle(t);
-      expectNothingStarted();
+      expectNothingStarted(recorded: false);
+      expectACardNotDrawn();
       await close(t);
     });
 
-    testWidgets("B's program read failed, A's card still up: nothing is started", (t) async {
+    testWidgets("B's program read failed: A's card is not drawn, nothing is started", (t) async {
       server.fails.add('GET workout_program_assignments:$memberB');
       server.fails.add('GET workout_sessions:$memberB');
       await mount(t, const DirectoryScreen());
+      expect(resume, findsOneWidget, reason: "control: A's card, for A");
       await switchSeen(t);
-      expect(resume, findsOneWidget, reason: 'premise: the card still holds A\'s');
+      expectACardNotDrawn();
       server.fails.remove('GET workout_sessions:$memberB');
-      await t.tap(resume);
+      await t.tap(find.text('Start Workout'));
       await settle(t);
-      expectNothingStarted();
+      expectNothingStarted(recorded: false);
+      expectACardNotDrawn();
       await close(t);
     });
 
