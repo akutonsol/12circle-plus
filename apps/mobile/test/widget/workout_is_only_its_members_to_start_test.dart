@@ -102,7 +102,7 @@ void main() {
       tableTickerProvider.overrideWith((ref, t) => Stream.value(0)),
       memberPrefersMetricProvider.overrideWithValue(true),
       // The screens' own chrome.
-      notificationsStreamProvider.overrideWith((ref) => Stream.value(const [])),
+      notificationsStreamProvider.overrideWith((ref) => const AsyncData([])),
       assignedCoachProvider.overrideWith((ref) async => null),
     ]);
     c.listen(restoringUserIdProvider, (_, __) {});
@@ -568,7 +568,7 @@ void main() {
       c = ProviderContainer(overrides: [
         tableTickerProvider.overrideWith((ref, t) => Stream.value(0)),
         memberPrefersMetricProvider.overrideWithValue(true),
-        notificationsStreamProvider.overrideWith((ref) => Stream.value(const [])),
+        notificationsStreamProvider.overrideWith((ref) => const AsyncData([])),
         assignedCoachProvider.overrideWith((ref) async => null),
         ...overrides(),
       ]);

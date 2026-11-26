@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
-import 'package:circle_fitness/features/checkins/domain/checkin_provider.dart';
+import 'package:circle_fitness/features/checkins/domain/checkin_provider.dart' hide heldFor, ownedRead;
 import 'package:circle_fitness/features/coach/data/coach_relationship_service.dart';
 import 'package:circle_fitness/features/coach/data/score_service.dart';
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';

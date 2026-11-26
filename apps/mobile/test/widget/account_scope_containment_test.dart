@@ -54,7 +54,7 @@ final _cases = [
         t.element(find.byType(CoachDashboardScreen)),
         MaterialPageRoute<void>(
             builder: (_) => const ClientDetailScreen(
-                clientId: _client, clientName: 'Clara OfA'))));
+                clientId: _client, clientName: 'Clara OfA', owner: acctA))));
     await settleApp(t, 20);
     await t.tap(find.text('PAR-Q'));
     await settleApp(t, 10);

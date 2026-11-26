@@ -8,7 +8,7 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../../core/realtime/realtime.dart';
-import '../../checkins/domain/checkin_provider.dart';
+import '../../checkins/domain/checkin_provider.dart' hide heldFor, ownedRead;
 import '../../messaging/data/messaging_service.dart';
 import '../../messaging/domain/messaging_provider.dart';
 import '../../coach/domain/coach_ecosystem_provider.dart';
