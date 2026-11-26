@@ -260,7 +260,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
         // Their own answers, read for them — the same member's too: they may
         // have finished elsewhere meanwhile, and a save here would undo it.
         _step = 0;
-        // "You are not signed in" was said to nobody: they are by now. Their
+        // The signed-out notice was said to nobody: they are signed in now. Their
         // own failed save comes back with their answers.
         _saveError = null;
         _done = finished;
