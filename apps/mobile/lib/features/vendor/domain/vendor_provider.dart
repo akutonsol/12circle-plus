@@ -32,8 +32,6 @@ class VendorReadFailure implements Exception {
   const VendorReadFailure(this.owner, this.error);
   final String? owner;
   final Object error;
-  @override
-  String toString() => 'VendorReadFailure($error)';
 }
 
 /// The account [error] (a provider's) was a failure for; null if unknown.
