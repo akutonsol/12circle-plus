@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
+import 'package:circle_fitness/features/vendor/data/vendor_service.dart';
 import 'package:circle_fitness/features/vendor/presentation/vendor_portal_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -168,6 +169,10 @@ void main() {
       await settleApp(t);
       expect(find.text('Ada Attendee'), findsNothing,
           reason: "A's late answer is not drawn either");
+      // Round 5 (59a-M4): nor drawn as A's event having nobody, and recorded.
+      expect(find.text('No registrations yet.'), findsNothing);
+      expect(_changed.map((f) => f.origin),
+          contains('eventRegistrationsProvider'));
       expect(_server.of('event_registrations', by: acctB), isEmpty);
       expect(_server.of('event_attendee_profiles', by: acctB), isEmpty);
       await end(t);
@@ -206,6 +211,57 @@ void main() {
       await end(t);
     });
   });
+
+  // Round 5 (59a-M4). On the screen, the provider's own check after the read
+  // (vendor_provider.dart, _ownedRead) throws for a changed account whatever
+  // the service answers, so the screen tests above cannot tell the service's
+  // throw from an empty list. The service's contract is its own: an empty list
+  // means "no attendees", and A's event answered after B signed in is not that.
+  for (final switched in [true, false]) {
+    testWidgets(
+        switched
+            ? "getRegistrations: A's read answering after B signed in throws — "
+                "never 'no attendees', and nothing is asked as B"
+            : 'getRegistrations, control: the same vendor through a token '
+                'refresh gets its attendees', (t) async {
+      await t.runAsync(signOut);
+      await t.runAsync(() => signInAs(acctA));
+      final hold =
+          _server.holds['GET event_registrations:$acctA'] = Completer<void>();
+      Object? thrown;
+      List<Map<String, dynamic>>? answer;
+      var done = false;
+      unawaited(VendorService()
+          .getRegistrations('ev-a', owner: acctA)
+          .then<void>((r) {
+        answer = r;
+      }, onError: (Object e) {
+        thrown = e;
+      })
+          .whenComplete(() => done = true));
+      await settleApp(t, 2);
+      expect(_server.of('event_registrations', method: 'GET', by: acctA),
+          hasLength(1), reason: "premise: A's read is out");
+      await t.runAsync(switched ? () => signInAs(acctB) : renewToken);
+      hold.complete();
+      for (var i = 0; i < 40 && !done; i++) {
+        await settleApp(t, 1);
+      }
+      expect(done, isTrue, reason: 'premise: the read answered');
+      if (switched) {
+        expect(answer, isNull,
+            reason: "THE defect: A's event answered as having no attendees");
+        expect('$thrown', contains('getRegistrations: the signed-in account '
+            'changed'));
+        expect(_server.of('event_attendee_profiles'), isEmpty,
+            reason: "A's attendees not asked about on B's token");
+      } else {
+        expect(thrown, isNull);
+        expect(answer!.single['user_profiles']['first_name'], 'Ada');
+      }
+      await t.runAsync(signOut);
+    });
+  }
 
   testWidgets('attendees, control: a token refresh keeps the rows, with no '
       're-read', (t) async {
@@ -558,6 +614,56 @@ void main() {
         await end(t);
       });
     }
+
+    // Round 5 (59a-M8): the sheet is pushed for A, and B signs in before its
+    // first frame. Its listener registers in that frame, after the change, so
+    // it never fires: only the check in the sheet's build keeps A's event out
+    // of B's frame.
+    testWidgets("Edit, pushed for A and first built after B signed in: A's "
+        'event is never drawn in it', (t) async {
+      await mount(t);
+      await openMenu(t);
+      await t.tap(find.text('Edit')); // pushed; nothing built yet
+      await t.runAsync(() async {
+        await signInAs(acctB);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      });
+      final inEditor = find.descendant(
+          of: find.byType(TextField), matching: find.text('Alba Bootcamp'));
+      for (var frame = 0; frame < 12; frame++) {
+        await t.pump(const Duration(milliseconds: 50));
+        if (frame == 0) {
+          expect(find.byType(BottomSheet), findsOneWidget,
+              reason: 'premise: the sheet A opened is built');
+        }
+        expect(inEditor, findsNothing,
+            reason: "THE defect: A's event drawn in an editor for B "
+                '(frame $frame)');
+        expect(find.text('Save changes'), findsNothing);
+      }
+      await settleApp(t);
+      // Not asserted: on a5061a6 the emptied sheet's route stays open over
+      // B's portal and nothing is recorded (its listener never fired).
+      // Reported as a lib finding, not pinned here.
+      expect(_writes, isEmpty);
+      await end(t);
+    });
+
+    testWidgets('Edit, control: the same vendor through a token refresh sees '
+        'its event in the editor', (t) async {
+      await mount(t);
+      await openMenu(t);
+      await t.tap(find.text('Edit'));
+      await t.runAsync(renewToken);
+      await settleApp(t, 10);
+      expect(
+          find.descendant(
+              of: find.byType(TextField), matching: find.text('Alba Bootcamp')),
+          findsOneWidget);
+      expect(find.text('Save changes'), findsOneWidget);
+      expect(_failures, isEmpty);
+      await end(t);
+    });
 
     testWidgets('Delete answering after B signed in: nothing said to B',
         (t) async {
