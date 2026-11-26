@@ -1,12 +1,16 @@
+import 'dart:async' show Timer;
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../dashboard/domain/dashboard_provider.dart';
+import '../../workout/data/models/workout_model.dart' show Workout;
 import '../../workout/domain/workout_provider.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../../workout/presentation/zone_entry.dart';
 
 // ── Colors (matches Stitch design system) ────────────────────────────────────
@@ -67,6 +71,23 @@ const _listModules = [
   _Module(title: 'Weekly Check-ins', route: '/daily-checkin', description: 'Reflect on your week and get coach feedback.',        icon: Icons.calendar_today_rounded, iconColor: Color(0xFFDDB7FF), iconBg: Color(0x33842BD2)),
 ];
 
+/// Text is scaled past 1.3× (as Activity's, P0-FL-58).
+bool _largeText(BuildContext context) =>
+    MediaQuery.textScalerOf(context).scale(12) > 12 * 1.3;
+
+/// How wide [text] is on one line, as it will be drawn (style and scale).
+double _lineWidth(BuildContext context, String text, TextStyle style) {
+  final p = TextPainter(
+    // bodyMedium: what a Scaffold's Text inherits.
+    text: TextSpan(text: text,
+      style: Theme.of(context).textTheme.bodyMedium?.merge(style) ?? style),
+    textDirection: TextDirection.ltr,
+    textScaler: MediaQuery.textScalerOf(context))..layout();
+  final w = p.width;
+  p.dispose();
+  return w;
+}
+
 // ── Directory Screen ──────────────────────────────────────────────────────────
 class DirectoryScreen extends ConsumerStatefulWidget {
   const DirectoryScreen({super.key});
@@ -80,6 +101,21 @@ class _DirectoryScreenState extends ConsumerState<DirectoryScreen> {
     SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light.copyWith(statusBarColor: Colors.transparent));
     final topPad = MediaQuery.of(context).padding.top;
     final userName = ref.watch(currentFirstNameProvider);
+    // P0-FL-60b · as Activity (P0-FL-58): the bar is 64px, between the buttons.
+    // A greeting that does not fit it on one line each moves to the top of the
+    // page, where it wraps. The buttons stay.
+    final helloStyle = TextStyle(color: _C.onSurfVar.withValues(alpha: 0.6),
+        fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 1.5);
+    const nameStyle = TextStyle(color: _C.onSurface, fontSize: 20, fontWeight: FontWeight.w700);
+    const barTaken = 20 + 40 + 12 + 8 + 44 + 4 + 44 + 20; // padding, buttons, gaps
+    final barRoom = MediaQuery.sizeOf(context).width - barTaken;
+    final greetingInBar = !_largeText(context) &&
+        _lineWidth(context, 'Good Morning', helloStyle) <= barRoom &&
+        _lineWidth(context, userName, nameStyle) <= barRoom;
+    final greeting = Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('Good Morning', style: helloStyle),
+      Text(userName, style: nameStyle),
+    ]);
 
     return Scaffold(
       backgroundColor: _C.bg,
@@ -90,6 +126,7 @@ class _DirectoryScreenState extends ConsumerState<DirectoryScreen> {
             SingleChildScrollView(
               padding: EdgeInsets.only(top: topPad + 64 + 16, left: 20, right: 20, bottom: 24),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                if (!greetingInBar) ...[greeting, const SizedBox(height: 16)],
                 _PageTitle(),
                 const SizedBox(height: 20),
                 _FeaturedCard(module: _featured),
@@ -144,13 +181,10 @@ class _DirectoryScreenState extends ConsumerState<DirectoryScreen> {
                               color: _C.surfContHigh,
                               child: const Icon(Icons.person_rounded, color: _C.primary, size: 20)))))),
                       const SizedBox(width: 12),
-                      Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text('Good Morning', style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.6), fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 1.5)),
-                        Text(userName, style: const TextStyle(color: _C.onSurface, fontSize: 20, fontWeight: FontWeight.w700)),
-                      ]),
-                      const Spacer(),
-                      _IconBtn(icon: Icons.chat_bubble_outline_rounded, onTap: () => context.go('/messages')),
+                      Expanded(child: greetingInBar ? greeting : const SizedBox.shrink()),
                       const SizedBox(width: 8),
+                      _IconBtn(label: 'Open messages', icon: Icons.chat_bubble_outline_rounded, onTap: () => context.go('/messages')),
+                      const SizedBox(width: 4), // the 44px targets add the rest
                       _BellBtn(),
                     ]),
                   ),
@@ -166,16 +200,26 @@ class _DirectoryScreenState extends ConsumerState<DirectoryScreen> {
 
 // ── Header helpers ────────────────────────────────────────────────────────────
 class _IconBtn extends StatelessWidget {
+  final String label;
   final IconData icon;
   final VoidCallback onTap;
-  const _IconBtn({required this.icon, required this.onTap});
+  const _IconBtn({required this.label, required this.icon, required this.onTap});
   @override
-  Widget build(BuildContext context) => GestureDetector(
+  Widget build(BuildContext context) => Semantics(
+    container: true,
+    button: true,
+    label: label,
     onTap: onTap,
-    child: Container(
+    excludeSemantics: true,
+    child: GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onTap: onTap,
+    child: ConstrainedBox(
+    constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+    child: Center(widthFactor: 1, heightFactor: 1, child: Container(
       width: 40, height: 40,
       decoration: BoxDecoration(shape: BoxShape.circle, color: const Color(0x08FFFFFF), border: Border.all(color: const Color(0x0DFFFFFF))),
-      child: Icon(icon, color: _C.onSurfVar, size: 20)));
+      child: Icon(icon, color: _C.onSurfVar, size: 20))))));
 }
 
 class _BellBtn extends StatefulWidget {
@@ -196,20 +240,48 @@ class _BellBtnState extends State<_BellBtn> with SingleTickerProviderStateMixin 
       TweenSequenceItem(tween: Tween(begin: 0.15, end: -0.1), weight: 2),
       TweenSequenceItem(tween: Tween(begin: -0.1, end: 0.0), weight: 1),
     ]).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
-    Future.delayed(const Duration(seconds: 1), _loop);
   }
-  void _loop() { if (!mounted) return; _ctrl.forward(from: 0).then((_) => Future.delayed(const Duration(seconds: 3), _loop)); }
+
+  /// P0-FL-60b · the next shake. None while animations are turned off.
+  Timer? _next;
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _next?.cancel();
+      _next = null;
+      _ctrl.reset();
+    } else {
+      _next ??= Timer(const Duration(seconds: 1), _loop);
+    }
+  }
+  void _loop() {
+    _ctrl.forward(from: 0);
+    _next = Timer(const Duration(milliseconds: 3500), _loop);
+  }
   @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: () => showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _DirectoryNotificationsPanel(),
-    ),
-    child: AnimatedBuilder(
+  void dispose() { _next?.cancel(); _ctrl.dispose(); super.dispose(); }
+
+  void _showNotifications() => showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (_) => _DirectoryNotificationsPanel(),
+  );
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    container: true,
+    button: true,
+    label: 'Show upcoming classes and events',
+    onTap: _showNotifications,
+    excludeSemantics: true,
+    child: GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onTap: _showNotifications,
+    child: ConstrainedBox(
+    constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+    child: Center(widthFactor: 1, heightFactor: 1, child: AnimatedBuilder(
       animation: _shake,
       builder: (_, child) => Transform.rotate(angle: _shake.value, child: child),
       child: Container(
@@ -220,15 +292,15 @@ class _BellBtnState extends State<_BellBtn> with SingleTickerProviderStateMixin 
           Positioned(top: 8, right: 8, child: Container(width: 7, height: 7,
             decoration: BoxDecoration(shape: BoxShape.circle, color: _C.error,
               boxShadow: [BoxShadow(color: _C.error.withValues(alpha: 0.6), blurRadius: 4)]))),
-        ]))));
+        ])))))));
 }
 
 // ── Directory Notifications Panel ─────────────────────────────────────────────
 class _DirectoryNotificationsPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final classesAsync = ref.watch(upcomingClassesProvider);
-    final eventsAsync  = ref.watch(upcomingEventsProvider);
+    final classesAsync = ref.watch(memberUpcomingClassesProvider);
+    final eventsAsync  = ref.watch(memberUpcomingEventsProvider);
     final bottom = MediaQuery.of(context).padding.bottom;
 
     return Container(
@@ -264,11 +336,12 @@ class _DirectoryNotificationsPanel extends ConsumerWidget {
             padding: EdgeInsets.fromLTRB(20, 0, 20, bottom + 24),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               // Upcoming classes
-              classesAsync.when(
-                loading: () => const Center(child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2)),
-                error: (_, __) => const SizedBox.shrink(),
-                data: (classes) {
-                  if (classes.isEmpty) return const SizedBox.shrink();
+              ..._upcomingSection(
+                classesAsync,
+                what: 'upcoming classes',
+                onRetry: () => ref.invalidate(upcomingClassesProvider),
+                loading: const Center(child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2)),
+                rows: (classes) {
                   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     _NotifSectionLabel(label: 'Upcoming Classes'),
                     const SizedBox(height: 10),
@@ -287,11 +360,12 @@ class _DirectoryNotificationsPanel extends ConsumerWidget {
               ),
               const SizedBox(height: 16),
               // Upcoming events
-              eventsAsync.when(
-                loading: () => const SizedBox.shrink(),
-                error: (_, __) => const SizedBox.shrink(),
-                data: (events) {
-                  if (events.isEmpty) return const SizedBox.shrink();
+              ..._upcomingSection(
+                eventsAsync,
+                what: 'upcoming events',
+                onRetry: () => ref.invalidate(upcomingEventsProvider),
+                loading: const SizedBox.shrink(),
+                rows: (events) {
                   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     _NotifSectionLabel(label: 'Upcoming Events'),
                     const SizedBox(height: 10),
@@ -313,6 +387,28 @@ class _DirectoryNotificationsPanel extends ConsumerWidget {
     );
   }
 
+  /// P0-FL-60b · a failed read was a section that vanished. The failure is
+  /// said in its place; rows already read stay under it. Read and empty still
+  /// shows nothing.
+  static List<Widget> _upcomingSection(
+    MemberRead<List<Map<String, dynamic>>> read, {
+    required String what,
+    required VoidCallback onRetry,
+    required Widget loading,
+    required Widget Function(List<Map<String, dynamic>> rows) rows,
+  }) => [
+    if (read.error != null)
+      SectionLoadFailure(
+        what: what, error: read.error, busy: read.busy, onRetry: onRetry,
+        accent: _C.primary, textColor: _C.onSurface, mutedColor: _C.onSurfVar)
+    else if (read.value == null)
+      loading,
+    if (read.value case final kept? when kept.isNotEmpty) ...[
+      if (read.error != null) const SizedBox(height: 10),
+      rows(kept),
+    ],
+  ];
+
   String _fmtDate(String? iso) {
     if (iso == null) return '';
     try {
@@ -322,7 +418,11 @@ class _DirectoryNotificationsPanel extends ConsumerWidget {
       final m = d.minute.toString().padLeft(2, '0');
       final ampm = d.hour < 12 ? 'AM' : 'PM';
       return '${months[d.month - 1]} ${d.day} • $h:$m $ampm';
-    } catch (_) { return ''; }
+    } catch (e, st) {
+      // Was blank, as if the class or event had no time.
+      reportError('directory.upcoming.date', e, st);
+      return 'Date unavailable';
+    }
   }
 }
 
@@ -419,6 +519,11 @@ class _SectionLabel extends StatelessWidget {
   ]);
 }
 
+// P0-FL-60b · this member's workouts and their status (see [forMember]).
+final _memberWorkouts = forMember<List<Workout>>(assignedWorkoutsProvider);
+final _memberStatuses = forMember<Map<String, Map<String, dynamic>>>(
+    programSessionStatusProvider);
+
 // ── Featured Card ─────────────────────────────────────────────────────────────
 class _FeaturedCard extends ConsumerWidget {
   final _Module module;
@@ -426,8 +531,8 @@ class _FeaturedCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final workouts = ref.watch(assignedWorkoutsProvider).valueOrNull ?? const [];
-    final statusMap = ref.watch(programSessionStatusProvider).valueOrNull ?? const {};
+    final workouts = ref.watch(_memberWorkouts).value ?? const [];
+    final statusMap = ref.watch(_memberStatuses).value ?? const {};
 
     // Find an in-progress workout, plus program-level completion.
     dynamic inProgress;

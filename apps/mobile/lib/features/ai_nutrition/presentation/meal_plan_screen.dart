@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../features/nutrition/domain/nutrition_provider.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../domain/ai_nutrition_provider.dart';
 import '../domain/meal_plan.dart';
 
@@ -38,9 +39,31 @@ class _MealPlanScreenState extends ConsumerState<MealPlanScreen> {
     });
   }
 
+  /// P0-FL-60b · the notifier this screen was BUILT with: the targets on it are
+  /// that member's. Read again at the tap it can be the next member's already.
+  late MealPlanNotifier _plan;
+
+  /// P0-FL-60b · bumped when the account changes.
+  int _epoch = 0;
+
+  /// The targets, restrictions and days were the member's who left — and the
+  /// next build would have sent them as the new member's own.
+  void _forget() => setState(() {
+    _epoch++;
+    _calories = 1800;
+    _protein = 140;
+    _carbs = 180;
+    _fat = 60;
+    _days = 7;
+    _restrictions.clear();
+    _goalsLoaded = false;
+    _isLoading = false;
+  });
+
   Future<void> _generatePlan() async {
+    final epoch = _epoch;
     setState(() => _isLoading = true);
-    await ref.read(mealPlanNotifierProvider.notifier).generateMealPlan(
+    await _plan.generateMealPlan(
       calories: _calories,
       protein: _protein,
       carbs: _carbs,
@@ -48,15 +71,24 @@ class _MealPlanScreenState extends ConsumerState<MealPlanScreen> {
       restrictions: _restrictions,
       days: _days,
     );
-    if (!mounted) return;
+    if (!mounted || epoch != _epoch) return;
     setState(() => _isLoading = false);
   }
 
   @override
   Widget build(BuildContext context) {
+    // A new notifier is a new account (see `_OneMember`).
+    ref.listen(mealPlanNotifierProvider.notifier, (was, now) {
+      if (!identical(was, now)) _forget();
+    });
+    _plan = ref.watch(mealPlanNotifierProvider.notifier);
     final outcome = mealPlanOutcome(ref.watch(mealPlanNotifierProvider));
+    final rebuildError = _plan.rebuildError;
     final goals    = ref.watch(nutritionGoalsProvider);
-    goals.whenData(_loadGoalsOnce);
+    // P0-FL-60b · a finished read only: invalidated before a change of account
+    // is flushed, this is `AsyncData(isLoading)` of the last member's targets,
+    // and the form takes the first ones it is given.
+    if (!goals.isLoading) goals.whenData(_loadGoalsOnce);
 
     return Scaffold(
       backgroundColor: AppColors.bgDark,
@@ -184,17 +216,23 @@ class _MealPlanScreenState extends ConsumerState<MealPlanScreen> {
                     const Icon(Icons.warning_amber_rounded,
                         color: AppColors.textTertiary, size: 40),
                     const SizedBox(height: 12),
-                    const Text(mealPlanFailedTitle,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            color: AppColors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 8),
-                    const Text(mealPlanFailedBody,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            color: AppColors.textTertiary, fontSize: 14)),
+                    Semantics(
+                      liveRegion: true,
+                      container: true,
+                      child: const Column(children: [
+                        Text(mealPlanFailedTitle,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                color: AppColors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600)),
+                        SizedBox(height: 8),
+                        Text(mealPlanFailedBody,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                color: AppColors.textTertiary, fontSize: 14)),
+                      ]),
+                    ),
                     const SizedBox(height: 16),
                     OutlinedButton(
                       onPressed: _isLoading ? null : _generatePlan,
@@ -214,6 +252,16 @@ class _MealPlanScreenState extends ConsumerState<MealPlanScreen> {
             ],
             if (outcome is MealPlanReady) ...[
               const SizedBox(height: 32),
+              if (rebuildError != null) ...[
+                SectionLoadFailure(
+                  what: 'a different plan',
+                  error: rebuildError,
+                  busy: _isLoading,
+                  onRetry: _generatePlan,
+                  detail: 'The plan below has not changed.',
+                ),
+                const SizedBox(height: 16),
+              ],
               const Text('Your Meal Plan', style: TextStyle(color: AppColors.white, fontSize: 18, fontWeight: FontWeight.w600)),
               const SizedBox(height: 16),
               Container(

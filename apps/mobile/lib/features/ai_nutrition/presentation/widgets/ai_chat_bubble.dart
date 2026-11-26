@@ -76,38 +76,52 @@ class AiChatBubble extends StatelessWidget {
         ]));
   }
 
-  Widget _failed(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 16),
-        child: Semantics(
-          container: true,
-          label: message.content,
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: AppColors.surfaceDark,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.surfaceDarkElevated),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.warning_amber_rounded,
-                    color: AppColors.textTertiary, size: 18),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(message.content,
-                      style: const TextStyle(
-                          color: AppColors.textTertiary, fontSize: 13)),
-                ),
-                if (onRetry != null)
-                  TextButton(
-                    onPressed: onRetry,
-                    child: const Text(sendItAgainLabel,
-                        style:
-                            TextStyle(color: AppColors.purple, fontSize: 13)),
-                  ),
-              ],
-            ),
-          ),
+  Widget _failed(BuildContext context) {
+    // P0-FL-60b · announced when it appears (the sentence only: the button is
+    // its own node), and the retry is a 44px target. At larger text it goes
+    // under the notice: beside it, it leaves the sentence no room at 320dp.
+    final stacked = MediaQuery.textScalerOf(context).scale(13) > 13 * 1.15;
+    final notice = Semantics(
+      container: true,
+      liveRegion: true,
+      label: message.content,
+      excludeSemantics: true,
+      child: Text(message.content,
+          style: const TextStyle(color: AppColors.textTertiary, fontSize: 13)),
+    );
+    final retry = onRetry == null
+        ? null
+        : TextButton(
+            onPressed: onRetry,
+            style: TextButton.styleFrom(minimumSize: const Size(48, 44)),
+            child: const Text(sendItAgainLabel,
+                style: TextStyle(color: AppColors.purple, fontSize: 13)),
+          );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceDark,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.surfaceDarkElevated),
         ),
-      );
+        child: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded,
+                color: AppColors.textTertiary, size: 18),
+            const SizedBox(width: 10),
+            Expanded(
+              child: stacked && retry != null
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [notice, retry])
+                  : notice,
+            ),
+            if (!stacked && retry != null) retry,
+          ],
+        ),
+      ),
+    );
+  }
 }
