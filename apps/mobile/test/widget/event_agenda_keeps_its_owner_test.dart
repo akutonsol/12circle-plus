@@ -211,11 +211,11 @@ void main() {
     testWidgets("A's failed read is not said to B", (t) async {
       server.failing = reads;
       await open(t);
-      expect(find.textContaining("Couldn't load the agenda"), findsOneWidget,
-          reason: 'premise');
+      // (Either wording: the premise holds on the base too.)
+      expect(find.textContaining('load'), findsOneWidget, reason: 'premise: said to A');
       await switchTo(t, memberB);
-      expect(find.textContaining("Couldn't load the agenda"), findsNothing);
-      expect(find.text('Could not load agenda.'), findsNothing);
+      await t.pump(const Duration(seconds: 1));
+      expect(find.textContaining('load'), findsNothing, reason: "A's failure is said to B");
       await agendaGone(t);
       await unmountAll(t);
     });

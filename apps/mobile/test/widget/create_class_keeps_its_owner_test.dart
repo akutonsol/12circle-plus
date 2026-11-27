@@ -218,17 +218,31 @@ void main() {
           findsOneWidget);
       await unmountAll(t);
     });
+
+    testWidgets('a second Publish landing before the busy button was drawn creates nothing more',
+        (t) async {
+      await open(t);
+      await type(t);
+      final publish = tapOf(t, 'Publish Class');
+      final hold = server.hold((s) => s.isWrite);
+      publish();
+      publish(); // two taps in one frame
+      await settleReal(t);
+      hold.complete();
+      await settleReal(t);
+      expect(inserts(), hasLength(1), reason: 'the class was created twice');
+      await unmountAll(t);
+    });
   });
 
   group('positive controls: the same coach', () {
     testWidgets('Publish creates the class once, as A, and closes as created', (t) async {
       await open(t);
       await type(t);
-      final publish = tapOf(t, 'Publish Class');
       final hold = server.hold((s) => s.isWrite);
-      publish();
+      await t.tap(find.text('Publish Class'));
       await t.pump();
-      publish(); // a second tap while it saves
+      expect(find.text('Publish Class'), findsNothing, reason: 'busy while it saves');
       await settleReal(t);
       hold.complete();
       await settleReal(t);
