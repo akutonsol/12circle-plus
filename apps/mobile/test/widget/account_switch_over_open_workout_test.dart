@@ -6,7 +6,6 @@ import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/core/router/app_router.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/payments/domain/entitlements.dart';
-import 'package:circle_fitness/features/workout/data/models/workout_model.dart';
 import 'package:circle_fitness/features/workout/data/workout_service.dart';
 import 'package:circle_fitness/features/workout/domain/load_format.dart';
 import 'package:circle_fitness/features/workout/domain/workout_provider.dart';
@@ -41,8 +40,17 @@ import '../support/workout_members_server.dart';
 // bearer's uid, an insert checked on `user_id` alone, 204 to a write that asks
 // for no rows).
 //
-// HOW TO SEE IT FAIL: these pass on a446926 (no lib change was needed). Each
-// test names, above it, the hand-applied mutation it fails under.
+// HOW TO SEE IT FAIL: `git checkout a446926 --
+// lib/features/workout/presentation/active_workout_screen.dart`. Two defects:
+//  * a set row flushes its pending save from its own dispose; when the owner
+//    check passed (End Workout inside the debounce; A -> B -> A, torn down
+//    while A is current again) the flush read `ref` on the deactivated Zone
+//    and threw mid-teardown ("Looking up a deactivated widget's ancestor");
+//  * an edit arriving after Finish/End (the focused field's blur when the
+//    finish dialog takes focus, a row's flush) opened a NEW in-progress
+//    session for the finished workout and wrote the set into it.
+// The A -> B and sign-out tests pass on a446926 (FL-59b already holds there);
+// each names, above it, the hand-applied mutation it fails under.
 
 final _workout = WorkoutService().getSampleWorkouts().first;
 
