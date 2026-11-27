@@ -211,14 +211,41 @@ Widget _riskPill(String label, Color color) => Container(
   child: Text(label, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w700)));
 
 // AI coaching signals for the coach's active clients (risk/adherence/last brief).
+//
+// Server-side signals only (the `coach_client_ai_signals` RPC): nothing here
+// predicts, evaluates or builds anything.
 final coachAiSignalsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: the RPC answers for `auth.uid()`; recompute for whoever is
   // signed in now, not the coach whose clients' risk this last showed.
   ref.watch(currentUserProvider.select((u) => u?.id));
   ref.watch(tableTickerProvider('coach_client_relationships'));
-  final data = await _supabase.rpc('coach_client_ai_signals');
-  return List<Map<String, dynamic>>.from(data as List);
+  // P0-FL-62c: the rows (and a failure) are marked as the coach's whose token
+  // asked — the auth client's id as the request goes out, which a provider
+  // that has not heard of a switch yet would get wrong. Riverpod keeps them
+  // through the next coach's read and its failure; the card draws them for
+  // their own coach only.
+  final asker = _supabase.auth.currentUser?.id;
+  try {
+    return await ownedRead(asker, () async {
+      final data = await _supabase.rpc('coach_client_ai_signals');
+      return List<Map<String, dynamic>>.from(data as List);
+    });
+  } catch (e, st) {
+    reportError('coachAiSignalsProvider', e, st);
+    rethrow;
+  }
 });
+
+/// What of [read] the AI signals card may draw for [uid] (the watched id):
+/// rows, or a failure, of [uid]'s own read only ([heldFor]) — and nothing
+/// while the auth client already names someone else, before [uid] has heard.
+AsyncValue<List<Map<String, dynamic>>> _aiSignalsFor(
+    String? uid, AsyncValue<List<Map<String, dynamic>>> read) {
+  if (hasAuthClient && !stillSignedIn(uid)) {
+    return const AsyncLoading<List<Map<String, dynamic>>>();
+  }
+  return heldFor(uid, read);
+}
 
 final clientCheckinsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
@@ -938,7 +965,24 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                   ])),
 
               // ── AI Coach signals (risk + adherence from the AI engine) ──
-              ref.watch(coachAiSignalsProvider).maybeWhen(
+              // P0-FL-62c: drawn for the coach the rows were read for only.
+              // `maybeWhen(data:)` drew a refresh's previous value, so coach
+              // A's flagged clients (names, risk) were up for coach B until
+              // B's answer landed. And a failure is said, not drawn as the
+              // card's absence ("nothing flagged").
+              _aiSignalsFor(_watchedUid(), ref.watch(coachAiSignalsProvider)).when(
+                skipLoadingOnReload: true,
+                loading: () => const SizedBox.shrink(),
+                error: (e, _) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: SectionLoadFailure(
+                    what: 'your AI coach signals',
+                    error: e,
+                    busy: ref.watch(coachAiSignalsProvider).isLoading,
+                    onRetry: () => ref.invalidate(coachAiSignalsProvider),
+                    accent: _primary,
+                    textColor: _white,
+                    mutedColor: _muted)),
                 data: (sigs) {
                   final flagged = sigs.where((s) =>
                     ((s['churn_risk'] as num?) ?? 0) >= 50 ||
@@ -979,8 +1023,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                           ]));
                       }),
                     ]));
-                },
-                orElse: () => const SizedBox.shrink()),
+                }),
 
               // AI Recommendations list
               if (aiRecs.isNotEmpty) ...[
