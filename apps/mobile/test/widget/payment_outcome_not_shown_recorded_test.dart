@@ -496,8 +496,11 @@ void main() {
             (200, {'ok': true, 'endsAt': '2027-03-03T12:00:00Z'});
       }
 
-      testWidgets("Stop coach ($kind): B signs in while A's is being ended: "
-          'recorded once as not shown, nothing named to B', (t) async {
+      // The switch lands during the read, before any write: nothing was
+      // changed, so there is no outcome - the stop is the service's record,
+      // once (FL-62b), and none is added here.
+      testWidgets("Stop coach ($kind): B signs in during A's read, before "
+          'anything was sent: no outcome recorded, the stop once', (t) async {
         await tapStop(t);
         final gate = server.gates['subscriptions:$_a'] = Completer();
         final before = server.count('subscriptions', _a);
@@ -508,8 +511,13 @@ void main() {
         gate.complete();
         await settle(t);
         saidNothing();
-        recordedOnce('ManageSubscriptionScreen.stopCoach', 'stop coaching');
-        expect('${notShown().single.error}', isNot(contains('Anna')));
+        expect(server.count('cancel-subscription'), 0);
+        expect(server.writes, isEmpty);
+        expect(notShown(), isEmpty);
+        expect(
+            reported.where(
+                (f) => '${f.error}'.contains('the signed-in account changed')),
+            hasLength(1));
       });
 
       testWidgets("Stop coach ($kind): B signs in after it ended, before it is "
@@ -526,6 +534,7 @@ void main() {
         await settle(t);
         saidNothing();
         recordedOnce('ManageSubscriptionScreen.stopCoach', 'stop coaching');
+        expect('${notShown().single.error}', isNot(contains('Anna')));
       });
 
       testWidgets('control: Stop coach ($kind) by the same account is said, '

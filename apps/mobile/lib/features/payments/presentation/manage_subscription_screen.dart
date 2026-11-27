@@ -11,7 +11,7 @@ import '../../dashboard/domain/still_reading.dart' show boundTo, stillSignedIn;
 import '../../../core/observability/app_failure.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
 import 'checkout_launcher.dart'
-    show OwnedDialog, outcomeOwnerGone, recordOutcomeNotShown, showOwnedSnackBar;
+    show OwnedDialog, outcomeOwnerGone, showOwnedSnackBar;
 import 'upgrade_screen.dart'
     show PlanLoadFailedNotice, kPlanFromLastTime, ownedClientPlanProvider,
         reportPlanReadFailure, switchToFreeMessage;
@@ -174,9 +174,9 @@ class _ManageSubscriptionScreenState
       message = end.describe();
     } on AccountChangedError {
       // Recorded by the service; nothing of it is for whoever is signed in
-      // now. (Back as the same member: what is left is read again.) What
-      // was done before the stop is not known to [owner] (P0-FL-63b).
-      recordOutcomeNotShown(outcomeOrigin, 'stop coaching');
+      // now. (Back as the same member: what is left is read again.) Not
+      // recorded again here: the stop may have come before anything was
+      // sent, and this error does not say which (P0-FL-63b follow-up).
       if (stillSignedIn(owner) && mounted) {
         ref.invalidate(myCoachesProvider);
         ref.invalidate(mySubscriptionsProvider);
