@@ -25,6 +25,18 @@ String _fmtTime(String? iso) {
   return '$h:${d.minute.toString().padLeft(2, '0')} $ap';
 }
 
+/// For the record only (never shown): a write that failed after its account
+/// left — the stop and the failure, in one record (P0-FL-62a2 round 2).
+class _FailedAfterSwitch implements Exception {
+  const _FailedAfterSwitch(this.what, this.cause);
+  final String what;
+  final Object cause;
+
+  @override
+  String toString() =>
+      '$what: the signed-in account changed; it had failed: $cause';
+}
+
 /// Module 14 — an event's agenda. [canManage] is true for the owning vendor
 /// (add/edit/delete sessions); false renders a read-only schedule for clients.
 ///
@@ -222,11 +234,7 @@ class _EventAgendaScreenState extends ConsumerState<EventAgendaScreen> {
       // Recorded once. When the account left meanwhile, that one record says
       // both: the stop, and how the write had failed. Nothing is said.
       if (!stillSignedIn(owner)) {
-        reportError(
-            origin,
-            StateError('$what (answered): the signed-in account changed; '
-                'the write had failed: $e'),
-            st);
+        reportError(origin, _FailedAfterSwitch('$what (answered)', e), st);
         return;
       }
       reportError(origin, e, st);

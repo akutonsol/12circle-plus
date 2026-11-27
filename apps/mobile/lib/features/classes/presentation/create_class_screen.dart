@@ -18,6 +18,18 @@ import '../../workout/presentation/widgets/section_load_failure.dart'
     show couldntMessage;
 import '../domain/class_provider.dart';
 
+/// For the record only (never shown): a save that failed after its account
+/// left — the stop and the failure, in one record (P0-FL-62a2 round 2).
+class _FailedAfterSwitch implements Exception {
+  const _FailedAfterSwitch(this.what, this.cause);
+  final String what;
+  final Object cause;
+
+  @override
+  String toString() =>
+      '$what: the signed-in account changed; it had failed: $cause';
+}
+
 /// Coach: publish a group class — either an online group call or an in-person
 /// class. Writes to the `classes` table (RLS: coaches manage their own).
 class CreateClassScreen extends ConsumerStatefulWidget {
@@ -137,11 +149,8 @@ class _CreateClassScreenState extends ConsumerState<CreateClassScreen> {
       // both: the stop, and how the insert had failed (a refusal, no row, or
       // the service's own refusal for another account). Nothing is said.
       if (!stillSignedIn(owner)) {
-        reportError(
-            'CreateClassScreen._save',
-            StateError('create the class (answered): the signed-in account '
-                'changed; the insert had failed: $e'),
-            st);
+        reportError('CreateClassScreen._save',
+            _FailedAfterSwitch('create the class (answered)', e), st);
         if (mounted) setState(_clearForm);
         return;
       }
