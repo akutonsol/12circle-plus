@@ -18,16 +18,20 @@ final currentUserProvider = Provider<User?>((ref) {
       Supabase.instance.client.auth.currentUser;
 });
 
+/// The account that owned this notifier's container can leave (AccountScope)
+/// while one of these is out: its own sign-out answering, two sign-ins racing.
+/// Its state is nobody's then, and setting it throws.
 class AuthNotifier extends StateNotifier<AsyncValue<void>> {
   final AuthService _authService;
 
   AuthNotifier(this._authService) : super(const AsyncValue.data(null));
 
   Future<void> signIn(String email, String password) async {
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(
+    if (mounted) state = const AsyncValue.loading();
+    final result = await AsyncValue.guard(
       () => _authService.signIn(email: email, password: password),
     );
+    if (mounted) state = result;
   }
 
   Future<void> signUp({
@@ -37,8 +41,8 @@ class AuthNotifier extends StateNotifier<AsyncValue<void>> {
     required String lastName,
     required String role,
   }) async {
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(
+    if (mounted) state = const AsyncValue.loading();
+    final result = await AsyncValue.guard(
       () => _authService.signUp(
         email: email,
         password: password,
@@ -47,26 +51,31 @@ class AuthNotifier extends StateNotifier<AsyncValue<void>> {
         role: role,
       ),
     );
+    if (mounted) state = result;
   }
 
   Future<void> signOut() async {
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() => _authService.signOut());
+    if (mounted) state = const AsyncValue.loading();
+    final result = await AsyncValue.guard(() => _authService.signOut());
+    if (mounted) state = result;
   }
 
   Future<void> resetPassword(String email) async {
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() => _authService.resetPassword(email));
+    if (mounted) state = const AsyncValue.loading();
+    final result = await AsyncValue.guard(() => _authService.resetPassword(email));
+    if (mounted) state = result;
   }
 
   Future<void> signInWithGoogle() async {
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() => _authService.signInWithGoogle());
+    if (mounted) state = const AsyncValue.loading();
+    final result = await AsyncValue.guard(() => _authService.signInWithGoogle());
+    if (mounted) state = result;
   }
 
   Future<void> signInWithApple() async {
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() => _authService.signInWithApple());
+    if (mounted) state = const AsyncValue.loading();
+    final result = await AsyncValue.guard(() => _authService.signInWithApple());
+    if (mounted) state = result;
   }
 }
 

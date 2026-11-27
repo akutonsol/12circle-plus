@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../domain/auth_provider.dart';
 import '../../../core/errors/auth_error_text.dart';
+import '../../../core/identity/account_scope.dart'
+    show signOutFailedText, signOutOfDevice;
 import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
 import '../../../core/router/app_router.dart'
@@ -163,16 +165,17 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Future<void> _signOutAfterFailure() async {
     if (_signingOut) return;
     setState(() => _signingOut = true);
-    await ref.read(authNotifierProvider.notifier).signOut();
+    // The service, not authNotifierProvider: signing out ends this account's
+    // provider container (AccountScope) before the server answers, and the
+    // notifier would set state on a disposed one. A new sign-in form (empty)
+    // takes this one's place then; without AccountScope the fields are cleared
+    // below.
+    final error = await signOutOfDevice('LoginScreen._signOutAfterFailure',
+        ref.read(authServiceProvider).signOut);
     if (!mounted) return;
-    final result = ref.read(authNotifierProvider);
-    final stillSignedIn = Supabase.instance.client.auth.currentSession != null;
-    if (result.hasError) {
-      reportError('LoginScreen._signOutAfterFailure', result.error!, result.stackTrace);
-    }
     setState(() {
       _signingOut = false;
-      if (!stillSignedIn) {
+      if (error == null) {
         _accountReadError = null;
         _awaitingFirstRead = false;
         // The next person at the sign-in form should not find this
@@ -181,11 +184,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         _passwordCtrl.clear();
       }
     });
-    if (stillSignedIn) {
-      _showError(isNetworkFailure(result.error)
-          ? "Couldn't sign you out — check your connection and try again."
-          : "Couldn't sign you out — try again in a moment. If it keeps happening, contact support.");
-    }
+    if (error != null) _showError(signOutFailedText(error));
   }
 
   // OAuth uses Supabase's redirect flow: the page navigates to the provider and

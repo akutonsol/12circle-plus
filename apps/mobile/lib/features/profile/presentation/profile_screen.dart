@@ -1,11 +1,12 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'dart:math' as math;
 import '../../../core/utils/web_logout.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../../core/identity/account_scope.dart'
+    show signOutFailedText, signOutOfDevice, signedInUid;
 import '../../../core/observability/app_failure.dart';
 import '../../coach/data/coach_relationship_service.dart';
 import '../../coach/domain/coach_provider.dart';
@@ -641,6 +642,8 @@ class _SignOutButton extends ConsumerWidget {
         // which can swap this button for the one in the other Profile state,
         // and the go('/login') must still happen.
         final router = GoRouter.maybeOf(context);
+        final messenger = ScaffoldMessenger.maybeOf(context);
+        final owner = signedInUid();
         final confirmed = await showDialog<bool>(
           context: context,
           useRootNavigator: true,
@@ -660,10 +663,26 @@ class _SignOutButton extends ConsumerWidget {
                 child: const Text("Sign Out", style: TextStyle(color: Color(0xFFFFB4AB)))),
             ]));
         if (confirmed == true && context.mounted) {
-          await ref.read(authNotifierProvider.notifier).signOut();
-          if (kIsWeb) {
+          if (signedInUid() != owner) {
+            // Not the account that asked.
+            reportError('ProfileScreen.signOut',
+                StateError('sign out: the signed-in account changed'));
+            return;
+          }
+          // The service, not authNotifierProvider: signing out ends this
+          // account's provider container (AccountScope) before the server
+          // answers, and the notifier would set state on a disposed one.
+          final error = await signOutOfDevice(
+              'ProfileScreen.signOut', ref.read(authServiceProvider).signOut);
+          if (error != null) {
+            if (messenger?.mounted ?? false) {
+              messenger!.showSnackBar(
+                  SnackBar(content: Text(signOutFailedText(error))));
+            }
+          } else if (kIsWeb) {
             reloadForLogout();
-          } else {
+          } else if (router?.configuration.navigatorKey.currentState != null) {
+            // Still the router on screen (no AccountScope above).
             router?.go('/login');
           }
         }
@@ -937,6 +956,10 @@ class MyCoachSection extends ConsumerWidget {
   Future<void> _showCancelDialog(BuildContext context, WidgetRef ref, String coachId) async {
     // Captured before any await, so the outcome can be reported afterwards.
     final messenger = ScaffoldMessenger.maybeOf(context);
+    // The client whose coach this is, for as long as the sheet is open.
+    final owner = signedInUid();
+    void accountChanged() => reportError('MyCoachSection.cancelCoach',
+        StateError('end coaching: the signed-in account changed'));
     String? selectedReason;
     final customCtrl = TextEditingController();
 
@@ -1033,8 +1056,9 @@ class MyCoachSection extends ConsumerWidget {
         ]),
       )));
 
-    final clientId = Supabase.instance.client.auth.currentUser?.id;
-    if (confirmed == true && clientId != null) {
+    if (confirmed == true && owner != null && signedInUid() != owner) {
+      accountChanged();
+    } else if (confirmed == true && owner != null) {
       // The coach on the card, not the newest relationship: a client may hold
       // several, and a later request to another coach is newer than this one.
       //
@@ -1042,7 +1066,7 @@ class MyCoachSection extends ConsumerWidget {
       // used to end only the relationship, leaving a paid coaching subscription
       // billing; now a paid subscription is cancelled at the end of the paid
       // period (coaching lasts until then) and an unpaid relationship ends now.
-      String message;
+      String? message;
       try {
         final end = await CoachRelationshipService().cancelCoach(
           coachId,
@@ -1058,9 +1082,19 @@ class MyCoachSection extends ConsumerWidget {
         message = e is StateError
             ? e.message
             : 'Could not end coaching. Nothing was changed. Try again.';
+        // It stopped because the account changed: nothing to say to anyone.
+        if (e is StateError && e.message.endsWith('the signed-in account changed')) {
+          message = null;
+        }
       }
-      messenger?.showSnackBar(SnackBar(content: Text(message)));
-      onCoachCancelled();
+      if (signedInUid() != owner) {
+        accountChanged();
+      } else {
+        if (message != null) {
+          messenger?.showSnackBar(SnackBar(content: Text(message)));
+        }
+        onCoachCancelled();
+      }
     }
     customCtrl.dispose();
   }

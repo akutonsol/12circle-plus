@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/identity/account_scope.dart'
+    show signOutFailedText, signOutOfDevice, signedInUid;
+import '../../../core/observability/app_failure.dart';
+import '../../auth/domain/auth_provider.dart';
 import '../domain/admin_provider.dart';
 import '../data/platform_settings_service.dart';
 
@@ -24,6 +28,9 @@ class AdminDashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final statsAsync = ref.watch(platformStatsProvider);
     final usersAsync = ref.watch(recentUsersProvider);
+    // Sign out is for the account this was drawn for (P0-FL-59a, S3).
+    ref.watch(currentUserProvider.select((u) => u?.id));
+    final drawnFor = signedInUid();
 
     return Scaffold(
       backgroundColor: _bg,
@@ -82,7 +89,7 @@ class AdminDashboardScreen extends ConsumerWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _header(context),
+                        _header(context, drawnFor),
                         const SizedBox(height: 20),
                         _CommissionCard(),
                         const SizedBox(height: 16),
@@ -182,7 +189,7 @@ class AdminDashboardScreen extends ConsumerWidget {
     );
   }
 
-  Widget _header(BuildContext context) {
+  Widget _header(BuildContext context, String? drawnFor) {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -229,8 +236,22 @@ class AdminDashboardScreen extends ConsumerWidget {
           ),
           IconButton(
             onPressed: () async {
-              await Supabase.instance.client.auth.signOut();
-              if (context.mounted) context.go('/login');
+              // Drawn for another account, with no frame since: not this one's
+              // sign-out.
+              if (signedInUid() != drawnFor) {
+                reportError('AdminDashboardScreen.signOut',
+                    StateError('sign out: the signed-in account changed'));
+                return;
+              }
+              final error = await signOutOfDevice('AdminDashboardScreen.signOut',
+                  Supabase.instance.client.auth.signOut);
+              if (!context.mounted) return;
+              if (error == null) {
+                context.go('/login');
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(signOutFailedText(error))));
+              }
             },
             icon: const Icon(Icons.logout_rounded, color: _muted),
           ),

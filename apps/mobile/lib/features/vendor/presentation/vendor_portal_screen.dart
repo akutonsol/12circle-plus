@@ -2,6 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/identity/account_scope.dart'
+    show signOutFailedText, signOutOfDevice, signedInUid;
+import '../../../core/observability/app_failure.dart';
+import '../../auth/domain/auth_provider.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../domain/vendor_provider.dart';
 import 'event_agenda_screen.dart';
 
@@ -24,6 +29,72 @@ String _fmtDate(String? iso) {
   return '${months[d.month - 1]} ${d.day} · $h:${d.minute.toString().padLeft(2, '0')} $ap';
 }
 
+// ── Whose it is (P0-FL-59a) ─────────────────────────────────────────────────
+//
+// Every row here was read for one account, and every action was drawn for one.
+// The screens watch the signed-in uid themselves and draw only what was read
+// for it: riverpod does not tell a screen when a refresh already in flight is
+// restarted for another account, so the rows it held stay drawn otherwise. An
+// action checks its account right before it writes, and again before it says
+// anything; a tap can land after a switch with no frame between.
+
+/// What [value] holds for [uid]: rows, and a failure, each only if its read was
+/// started for [uid]. Neither: that account's read is still to answer.
+({List<Map<String, dynamic>>? rows, Object? failure}) _heldFor(
+    AsyncValue<VendorRows> value, String? uid) {
+  final held = value.hasValue ? value.requireValue : null;
+  return (
+    rows: held != null && held.owner == uid ? held.rows : null,
+    failure: value.hasError && vendorFailureOwner(value.error) == uid
+        ? vendorFailureCause(value.error)
+        : null,
+  );
+}
+
+/// [owner] is still the account signed in; else records that [what] was not
+/// done for the one that is.
+bool _stillFor(String? owner, String origin, String what) {
+  if (owner != null && signedInUid() == owner) return true;
+  reportError(origin, StateError('$what: the signed-in account changed'));
+  return false;
+}
+
+/// One write for [owner], started from [context]. What it needs afterwards is
+/// taken before the first await: the widget may be gone by the answer, and
+/// with an account change its container too.
+class _OwnedWrite {
+  _OwnedWrite(BuildContext context, this.owner, this.origin, this.what)
+      : _messenger = ScaffoldMessenger.maybeOf(context),
+        _container = ProviderScope.containerOf(context, listen: false);
+  final String owner;
+  final String origin;
+  final String what;
+  final ScaffoldMessengerState? _messenger;
+  final ProviderContainer _container;
+
+  /// Right before the write, with no await after it.
+  bool get mayWrite => _stillFor(owner, origin, what);
+
+  /// The write answered ([error]: it failed, and is recorded). Reads [refresh]
+  /// again — the stored state, also after a failure — and says a failure, to
+  /// [owner] only.
+  void answered(ProviderOrFamily refresh, [Object? error]) {
+    if (signedInUid() != owner) {
+      reportError(origin,
+          StateError('$what: answered after the signed-in account changed'));
+      return;
+    }
+    final messenger = _messenger;
+    // Its tree is still up, so its container is not disposed.
+    if (messenger == null || !messenger.mounted) return;
+    _container.invalidate(refresh);
+    if (error != null) {
+      messenger.showSnackBar(
+          SnackBar(content: Text(couldntMessage(what, error))));
+    }
+  }
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Vendor Portal — a vendor's events + attendees (Module 15)
 // ════════════════════════════════════════════════════════════════════════════
@@ -32,7 +103,25 @@ class VendorPortalScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(currentUserProvider.select((u) => u?.id));
+    final uid = signedInUid();
     final eventsAsync = ref.watch(myEventsProvider);
+    final held = _heldFor(eventsAsync, uid);
+    final events = held.rows;
+    final failure = held.failure;
+    final failureCard = failure == null
+        ? null
+        : Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: SectionLoadFailure(
+              what: 'your events',
+              error: failure,
+              busy: eventsAsync.isLoading,
+              onRetry: () => ref.invalidate(myEventsProvider),
+              accent: _brand,
+              mutedColor: _muted,
+            ),
+          );
 
     return Scaffold(
       backgroundColor: _bg,
@@ -45,8 +134,22 @@ class VendorPortalScreen extends ConsumerWidget {
           IconButton(
             icon: const Icon(Icons.logout_rounded, color: _muted),
             onPressed: () async {
-              await Supabase.instance.client.auth.signOut();
-              if (context.mounted) context.go('/login');
+              // Drawn for another account, with no frame since: not this
+              // one's sign-out.
+              if (signedInUid() != uid) {
+                reportError('VendorPortalScreen.signOut',
+                    StateError('sign out: the signed-in account changed'));
+                return;
+              }
+              final error = await signOutOfDevice('VendorPortalScreen.signOut',
+                  Supabase.instance.client.auth.signOut);
+              if (!context.mounted) return;
+              if (error == null) {
+                context.go('/login');
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(signOutFailedText(error))));
+              }
             },
           ),
         ],
@@ -55,17 +158,16 @@ class VendorPortalScreen extends ConsumerWidget {
         backgroundColor: _brand,
         icon: const Icon(Icons.add, color: _white),
         label: const Text('New Event', style: TextStyle(color: _white)),
-        onPressed: () => _openEventEditor(context, ref),
+        onPressed: () => _openEventEditor(context, ref, uid),
       ),
-      body: eventsAsync.when(
-        loading: () =>
-            const Center(child: CircularProgressIndicator(color: _brand)),
-        error: (e, _) => Center(
-            child: Text('Could not load events.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: _muted))),
-        data: (events) {
+      body: Builder(builder: (_) {
+          if (events == null) {
+            return failureCard ??
+                const Center(
+                    child: CircularProgressIndicator(color: _brand));
+          }
           if (events.isEmpty) {
+            if (failureCard != null) return failureCard;
             return const Center(
               child: Padding(
                 padding: EdgeInsets.all(32),
@@ -77,44 +179,105 @@ class VendorPortalScreen extends ConsumerWidget {
               ),
             );
           }
-          return RefreshIndicator(
+          // A failed refresh keeps what was shown, and says so above it.
+          final list = RefreshIndicator(
             color: _brand,
             backgroundColor: _card,
             onRefresh: () async => ref.invalidate(myEventsProvider),
             child: ListView.builder(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
               itemCount: events.length,
-              itemBuilder: (_, i) => _EventCard(event: events[i]),
+              itemBuilder: (_, i) => _EventCard(event: events[i], owner: uid!),
             ),
           );
-        },
-      ),
+          return failureCard == null
+              ? list
+              : Column(children: [failureCard, Expanded(child: list)]);
+        }),
     );
   }
 
 }
 
+/// The editor, for [owner] (the account the portal was drawn for). Its draft
+/// is saved for [owner] only, stamped with [owner], and never for an account
+/// that signed in while it was open.
 Future<void> _openEventEditor(BuildContext context, WidgetRef ref,
-    {Map<String, dynamic>? existing}) async {
+    String? owner, {Map<String, dynamic>? existing}) async {
+  final origin = existing == null
+      ? 'VendorPortalScreen.createEvent'
+      : 'VendorPortalScreen.updateEvent';
+  if (!_stillFor(owner, origin, 'open the event editor')) return;
+  final write = _OwnedWrite(context, owner!, origin,
+      existing == null ? 'create the event' : 'save the event');
+  final svc = ref.read(vendorServiceProvider);
   final result = await showModalBottomSheet<Map<String, dynamic>>(
     context: context,
     backgroundColor: Colors.transparent,
     isScrollControlled: true,
-    builder: (_) => _EventEditorSheet(existing: existing),
+    builder: (_) =>
+        _OwnedSheet(owner: owner, child: _EventEditorSheet(existing: existing)),
   );
   if (result == null) return;
-  final svc = ref.read(vendorServiceProvider);
-  if (existing == null) {
-    await svc.createEvent(result);
-  } else {
-    await svc.updateEvent(existing['id'] as String, result);
+  if (!write.mayWrite) return;
+  try {
+    if (existing == null) {
+      await svc.createEvent(result, vendorId: owner);
+    } else {
+      await svc.updateEvent(existing['id'] as String, result);
+    }
+  } catch (e, st) {
+    reportError(origin, e, st);
+    write.answered(myEventsProvider, e);
+    return;
   }
-  ref.invalidate(myEventsProvider);
+  write.answered(myEventsProvider);
+}
+
+/// [child], drawn only while [owner] is signed in, and closed when another
+/// account (or none) is: what [owner] typed is not the next account's.
+class _OwnedSheet extends ConsumerWidget {
+  const _OwnedSheet({required this.owner, required this.child});
+  final String owner;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final route = ModalRoute.of(context);
+    ref.listen(currentUserProvider.select((u) => u?.id), (_, __) {
+      if (signedInUid() != owner && route != null && route.isActive) {
+        reportError('VendorPortalScreen.eventEditor',
+            StateError('event editor closed: the signed-in account changed'));
+        Navigator.of(context).removeRoute(route);
+      }
+    });
+    if (signedInUid() != owner) return const SizedBox.shrink();
+    return child;
+  }
+}
+
+Future<void> _deleteEvent(BuildContext context, WidgetRef ref, String owner,
+    Map<String, dynamic> event) async {
+  const origin = 'VendorPortalScreen.deleteEvent';
+  final write = _OwnedWrite(context, owner, origin, 'delete the event');
+  final svc = ref.read(vendorServiceProvider);
+  if (!write.mayWrite) return;
+  try {
+    await svc.deleteEvent(event['id'] as String);
+  } catch (e, st) {
+    reportError(origin, e, st);
+    write.answered(myEventsProvider, e);
+    return;
+  }
+  write.answered(myEventsProvider);
 }
 
 class _EventCard extends ConsumerWidget {
   final Map<String, dynamic> event;
-  const _EventCard({required this.event});
+
+  /// The account this event was listed for.
+  final String owner;
+  const _EventCard({required this.event, required this.owner});
 
   int get _regCount {
     final r = event['event_registrations'];
@@ -132,10 +295,17 @@ class _EventCard extends ConsumerWidget {
 
     return InkWell(
       borderRadius: BorderRadius.circular(16),
-      onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-              builder: (_) => EventAttendeesScreen(event: event))),
+      onTap: () {
+        if (!_stillFor(owner, 'VendorPortalScreen.openAttendees',
+            'open attendees')) {
+          return;
+        }
+        Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) =>
+                    EventAttendeesScreen(event: event, owner: owner)));
+      },
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(16),
@@ -163,18 +333,20 @@ class _EventCard extends ConsumerWidget {
                   icon: const Icon(Icons.more_horiz, color: _muted),
                   onSelected: (v) async {
                     if (v == 'edit') {
-                      await _openEventEditor(context, ref, existing: event);
+                      await _openEventEditor(context, ref, owner,
+                          existing: event);
                     } else if (v == 'agenda') {
+                      if (!_stillFor(owner, 'VendorPortalScreen.openAgenda',
+                          'open the agenda')) {
+                        return;
+                      }
                       Navigator.push(
                           context,
                           MaterialPageRoute(
                               builder: (_) => EventAgendaScreen(
                                   event: event, canManage: true)));
                     } else if (v == 'delete') {
-                      await ref
-                          .read(vendorServiceProvider)
-                          .deleteEvent(event['id'] as String);
-                      ref.invalidate(myEventsProvider);
+                      await _deleteEvent(context, ref, owner, event);
                     }
                   },
                   itemBuilder: (_) => const [
@@ -245,12 +417,43 @@ class _EventCard extends ConsumerWidget {
 // ── Attendees screen ─────────────────────────────────────────────────────────
 class EventAttendeesScreen extends ConsumerWidget {
   final Map<String, dynamic> event;
-  const EventAttendeesScreen({super.key, required this.event});
+
+  /// The account the event was listed for: the page is its, and nobody else's
+  /// — another account signed in sees none of it, and nothing is read for it.
+  final String owner;
+  const EventAttendeesScreen(
+      {super.key, required this.event, required this.owner});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final eventId = event['id'] as String;
-    final regsAsync = ref.watch(eventRegistrationsProvider(eventId));
+    ref.watch(currentUserProvider.select((u) => u?.id));
+    if (signedInUid() != owner) {
+      return Scaffold(
+        backgroundColor: _bg,
+        appBar: AppBar(
+            backgroundColor: _bg,
+            elevation: 0,
+            iconTheme: const IconThemeData(color: _white)),
+      );
+    }
+    final key = (eventId: event['id'] as String, owner: owner);
+    final regsAsync = ref.watch(eventRegistrationsProvider(key));
+    final held = _heldFor(regsAsync, owner);
+    final regs = held.rows;
+    final failure = held.failure;
+    final failureCard = failure == null
+        ? null
+        : Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: SectionLoadFailure(
+              what: 'attendees',
+              error: failure,
+              busy: regsAsync.isLoading,
+              onRetry: () => ref.invalidate(eventRegistrationsProvider(key)),
+              accent: _brand,
+              mutedColor: _muted,
+            ),
+          );
 
     return Scaffold(
       backgroundColor: _bg,
@@ -261,18 +464,17 @@ class EventAttendeesScreen extends ConsumerWidget {
         title: Text(event['title'] ?? 'Attendees',
             style: const TextStyle(color: _white, fontWeight: FontWeight.w700)),
       ),
-      body: regsAsync.when(
-        loading: () =>
-            const Center(child: CircularProgressIndicator(color: _brand)),
-        error: (e, _) => Center(
-            child: Text('Could not load attendees.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: _muted))),
-        data: (regs) {
+      body: Builder(builder: (_) {
+          if (regs == null) {
+            return failureCard ??
+                const Center(
+                    child: CircularProgressIndicator(color: _brand));
+          }
           final checkedIn =
               regs.where((r) => r['checked_in_at'] != null).length;
           return Column(
             children: [
+              if (failureCard != null) failureCard,
               Container(
                 margin: const EdgeInsets.all(16),
                 padding: const EdgeInsets.all(16),
@@ -301,20 +503,36 @@ class EventAttendeesScreen extends ConsumerWidget {
                         itemCount: regs.length,
                         itemBuilder: (_, i) => _AttendeeRow(
                           reg: regs[i],
-                          onToggle: (checked) async {
-                            await ref
-                                .read(vendorServiceProvider)
-                                .setCheckedIn(regs[i]['id'] as String, checked);
-                            ref.invalidate(eventRegistrationsProvider(eventId));
-                          },
+                          onToggle: (checked) => _setCheckedIn(
+                              context, ref, key, regs[i], checked),
                         ),
                       ),
               ),
             ],
           );
-        },
-      ),
+        }),
     );
+  }
+
+  /// For the account the row was read for ([key]'s owner) only.
+  static Future<void> _setCheckedIn(
+      BuildContext context,
+      WidgetRef ref,
+      ({String eventId, String owner}) key,
+      Map<String, dynamic> reg,
+      bool checked) async {
+    const origin = 'EventAttendeesScreen.setCheckedIn';
+    final write = _OwnedWrite(context, key.owner, origin, 'save the check-in');
+    final svc = ref.read(vendorServiceProvider);
+    if (!write.mayWrite) return;
+    try {
+      await svc.setCheckedIn(reg['id'] as String, checked);
+    } catch (e, st) {
+      reportError(origin, e, st);
+      write.answered(eventRegistrationsProvider(key), e);
+      return;
+    }
+    write.answered(eventRegistrationsProvider(key));
   }
 
   Widget _stat(String label, String value, Color color) => Column(
