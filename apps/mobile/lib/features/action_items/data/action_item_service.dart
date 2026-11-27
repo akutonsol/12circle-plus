@@ -37,6 +37,9 @@ class ActionItemService {
   }
 
   /// Coach: items assigned to a specific client.
+  ///
+  /// Throws on a failed read (P0-FL-63d): the `[]` this returned read as "no
+  /// action items" for that client, and [completionStats] as "0 of 0 assigned".
   Future<List<ActionItem>> getClientActionItems(String clientId) async {
     try {
       final data = await _db
@@ -47,8 +50,9 @@ class ActionItemService {
       return (data as List)
           .map((m) => ActionItem.fromMap(m as Map<String, dynamic>))
           .toList();
-    } catch (_) {
-      return [];
+    } catch (e, st) {
+      reportError('ActionItemService.getClientActionItems', e, st);
+      rethrow;
     }
   }
 
