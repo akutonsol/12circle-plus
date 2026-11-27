@@ -953,6 +953,81 @@ Mutant test lists were taken from each package's test diff. One lead mutant from
 - **Shared components:** `SectionLoadFailure` Try again has no screen-reader tap action. The `coach_voice.dart` recorder and player are unnamed and long-press only.
 - **Coach Business:** the invite email `catch (_)` is unrecorded.
 
+### Cycle 13: P0-FL-59a–f, P0-FL-60a–c, P0-FL-61 (2026-11-25/26)
+
+**Base.** Verified before any branch was cut: `origin/integration/p0-flutter-stack-c12` = `a82f993`, and `-c13` did not exist. #214–#218 are open and unmerged. All ten packages start from `a82f993` and **target `integration/p0-flutter-stack-c12`**, so each PR's diff shows one package. Main, PR #14 and the earlier cycle branches were not touched.
+
+**Mission.** Remove identity leakage and wrong-user writes first (FL-59: account switch A→B, coach A→B, sign-out→sign-in, delayed answers, failed and pending reads, switch during a save, autosave, workout, timer or conversation), then the remaining silent failures (FL-60) and shared accessibility (FL-61). The read-only FL-59 inventory at `a82f993` and its closure map are in `docs/IDENTITY_INVENTORY_CYCLE13.md`.
+
+**Shared mechanism.** FL-59a gives every account generation its own `ProviderContainer` and router (`AccountScope`). Every package still carries its own owner checks, because a switch can land with no frame drawn (a hidden web tab, or the same turn). The owner travels with each value: it is captured when the read starts and checked against the raw signed-in user before every write, after every await, and before anything is said. Riverpod 2.6.1 does not notify a screen when `AsyncData(isLoading)` becomes `AsyncLoading`, so a screen that must drop A's rows watches the uid itself.
+
+**Combined evidence branch.** `integration/p0-flutter-stack-c13` is `a82f993` plus the ten final heads merged `--no-ff` in package order (59a, 59b, 59c, 59d, 59e, 59f, 60a, 60b, 60c, 61), then four integration commits. All ten merge without textual conflict; only `settings_screen.dart` (59a/59e) and `action_item_provider.dart` (59e/59f, aligned byte-for-byte in advance) are touched by two packages.
+- The first combined build **did not pass**: analyze 320, 74 failing test files. Every package passed alone; the breaks came from packages meeting. Four integration commits fix them, tests and one import only, no behaviour change:
+  - `35627bd`: FL-59c and FL-59f both define `heldFor` / `ownedRead`; the dashboard and two tests import `checkin_provider.dart` with `hide`. FL-59a's containment test passes `owner:` to FL-59f's `ClientDetailScreen`. FL-59b's workout test overrides FL-60c's `notificationsStreamProvider` with a value.
+  - `77f4620`: FL-59e's habit and award tests mock SharedPreferences, which FL-59a's reminder service now uses.
+  - `90ef499`: FL-59e's nutrition test overrides the plan read per account, as the real provider does, so FL-60a's PaywallGate sees B's plan.
+  - `a446926`: FL-59b's two Directory tests assert that A's card is never drawn for B, which FL-60b now guarantees. Lead negative control: with the pre-60b Directory screen both tests fail ("Resume Workout" found).
+- Integration review: security **APPROVE-WITH-NOTES** (no weakened check, no cross-account path in the merged lib) · QA **VERIFIED**.
+- @ `a446926` (tree `68aaf93`, identical to the tree security and QA verified at the trial commit `ad3f1cc`), from QA's local run: analyze **281**, **8902** tests pass, 7 skipped, 0 failed; contract exit 0 (unseen 31); coordinator 268/268; `reportFailure(` has 0 callers outside `core/observability`; `valueOrNull` in lib is 78 (111 at base). Static guards and CI's negative controls on this head: the push CI run below.
+- CI (push): **7/7 success**, run `45926493582` on `a446926` (Flutter analyze/test/QA web build, static guards, negative control, live QA suites, EC-04, UIX-1, I-WRK-01).
+
+| PR | Package | Final head | Independent verdicts | Lead mutants | Tests (full) | CI (exact head) |
+|---|---|---|---|---|---|---|
+| #228 | **P0-FL-59a**: `AccountScope` (one container and router per account generation); role read re-checked after its await; the reset link binds only to the session it established, and the form cannot sign B out; reminders cancelled for every owner that leaves; the notification watcher follows auth; vendor portal reads, writes and sign-out owned, 0-row writes are failures | `2e74c54` | security APPROVE-WITH-NOTES (R3 REJECT: vendor item missing) · UX FAIL → PASS-WITH-NOTES · QA NOT VERIFIED → **VERIFIED** | 23/24 (M7 traced) | 5815 | 7/7 `45925087333` |
+| #227 | **P0-FL-59b**: the live workout, sets, rest timer and finish carry their owner; the session store refuses writes for another account; assigned/restored workouts carry `readFor`; a swap is stored as shown; Finish/End clear only their own state | `5bafd65` | security R2 REJECT (swap revert) → **APPROVE-WITH-NOTES** · UX PASS-WITH-NOTES · QA NOT VERIFIED → **VERIFIED** | 16/19 (N1–N3 traced) | 5769 | 7/7 `45764984730` |
+| #222 | **P0-FL-59c**: conversations, chat, inbox, check-ins, coach review and connect sections keyed by uid; owner and epoch checked before every write and late answer; signed photo links cleared on a switch; PD8 refusal said | `0335ee6` | security R2 REJECT → **APPROVE-WITH-NOTES** · UX FAIL ×2 → **PASS-WITH-NOTES** · QA NOT VERIFIED → **VERIFIED** | 15/20 + rounds 4–5 kill N4 and prove 59c-10; 4 traced | 5775 | 7/7 `45753991323` |
+| #221 | **P0-FL-59d**: pricing, availability, integrations, coach focus, voice notes, video responses and create/edit exercise act only for the coach they were opened for; A→B→A caught by a sign-in counter; `cancelCoach(expectedUid:)`; the voice player shows only real states | `d3dc7ea` | security REJECT ×3 → **APPROVE-WITH-NOTES** · UX FAIL → **PASS-WITH-NOTES** · QA NOT VERIFIED → no blocking defect | **19/19** | 5941 | 7/7 `45750577959` |
+| #225 | **P0-FL-59e**: intake, progress, booking, meals and nutrition, habits, community, coaching mode, Action Center, settings and score awards keep their owner; nutrition totals read through `readForMember`; refused writes said | `cc46fe1` | security REJECT ×3 → **APPROVE-WITH-NOTES** · UX PASS-WITH-NOTES · QA NOT VERIFIED → **VERIFIED** | 18/19 (N4 traced) | 5959 | 7/7 `45760125222` |
+| #224 | **P0-FL-59f**: coach client data, held rows (`still_reading.dart`), sheets (`OpenedByAccount`), drafts, notes and messages (`OwnedText`) follow the signed-in coach | `ffc4b32` | security REJECT ×3 → **APPROVE-WITH-NOTES** · UX FAIL ×2 → **PASS-WITH-NOTES** · QA NOT VERIFIED → **VERIFIED** | 22/25 (N6–N8 traced) | 6072 | 7/7 `45758267187` |
+| #226 | **P0-FL-60a**: payment failures recorded and said truthfully; launches and writes only for the account that asked; owned payment reads; `definitelyRefused` (SQLSTATE/PGRST/4xx refused; 5xx, PGRST001, 08xxx, 40003 unconfirmed) | `491c286` | security REJECT → **APPROVE** · UX PASS-WITH-NOTES · QA NOT VERIFIED → **VERIFIED** | 27/29 (60a-8, N4 traced) | 5859 | 7/7 `45761820719` |
+| #219 | **P0-FL-60b**: streak, classes, events, nutrition AI and invite email say their failures; Activity and Directory cards read through `forMember`; nutrition cards show "—", never A's numbers or a false 0 | `97c3de1` | security REJECT → **APPROVE-WITH-NOTES** · UX PASS-WITH-NOTES · QA NOT VERIFIED → **VERIFIED** | 29/30 (photo-path check traced) | 412 files, 0 failures | 7/7 `45748953980` |
+| #220 | **P0-FL-60c**: goals, pods, event tickets and notifications say their failures and act only for their member; coach link reads rethrow | `2a8e471` | security REJECT → **APPROVE-WITH-NOTES** · UX PASS-WITH-NOTES · QA NOT VERIFIED → **VERIFIED** | 24/25 (8eq equivalent) | 5775 | 7/7 `45746293433` |
+| #223 | **P0-FL-61**: header avatar 44px and named; bells show only the signed-in member's count and stop under reduce motion; shared retry busy-aware; food scan owned, no invented zeros, no overflow at 1–3× | `b083f35` | security **APPROVE-WITH-NOTES** ×3 · UX PASS-WITH-NOTES ×3 · QA **VERIFIED** | **8/8** | 5988 | 7/7 `45755909830` |
+
+**Mutation method.** Mutants came from each QA report, each old string checked unique at the final head. Every survivor was re-run in the package's own worktree (shared-worktree runs under load gave one false survival, 60c-9) and then either killed by a test-only round, proven with the mutant applied by hand, or traced to the guard that stops the same case first. Test-only rounds: 60c r4, 59d r6, 59c r4–r5, 59f r7, 59e r6, 60a r6, 59a r5. The runner's "did not compile" check matched a pub-get banner and was fixed.
+
+**Negative control caught before CI.** FL-59e's head failed CI's EC-03 negative control: a comment repeated the sentence the control checks is gone. The comment was reworded (`507cb2e`); no code changed.
+
+**What the evidence covers:** automated only. No device, simulator, two-tab web, hidden-tab, screen-reader or live-QA run; nothing here counts as manual or live verification. **Journeys 2/14, beta-ready conditions 0/4, unchanged.**
+
+**Scope held:**
+- Women's Health code untouched; `home_screen.dart:817` stays out of scope.
+- SEC-R3: Copilot screen, `coach_program_service`, `predictClient`, `evaluateWeek`, `regenerateProgram`, the `reportFailure()` sink and the AI workout-build path untouched.
+- No migration, QA or production write, Edge Function deploy, secret, Vault, Stripe, email-provider, app-URL or hosting change. No storage cleanup sweep. No merge, no auto-merge. PR #14 untouched.
+- Action Center layout unchanged (density decision pending).
+
+**Accessibility:** no 44px target was reduced, and no `FittedBox`, `scaleDown` or text shrinking was added.
+
+**Lead decisions (engineering, not product rules):**
+- `action_item_provider.dart`: FL-59e owns `myActionItemsProvider`; FL-59f's coach providers carried byte-identical.
+- The vendor folder belongs to FL-59a alone.
+- Unknown-outcome database codes (PGRST001, 08xxx, 40003) are "Couldn't confirm", not "Nothing was changed".
+- Defence-in-depth guards that no test can reach alone are kept and named in each PR.
+- The latent AI-signals card defect (FL-59f) and the empty vendor sheet (FL-59a) are follow-ups, not new lib rounds.
+
+**Remaining identity risks (not closed this cycle):**
+- **Unowned screens:** Rate your coach (A-15/W13, Home outside line 817), the AI coach screen (W15/E6), Manage Agenda (`event_agenda_screen.dart`), `create_class_screen` (part of W22).
+- **Callers:** `cancelCoach` callers in profile, manage subscription, settings and intake do not pass `expectedUid`; coach dashboard approve/decline take the owner at the tap.
+- **Latent:** the coach AI-signals card draws with `maybeWhen` (no invalidator today); `clientActionItemsProvider` / `actionCompletionProvider` have no owner tag (not drawn today).
+- **Partial / unmapped inventory IDs:** A-14, W22, W28, A-20, A-25, E13 partly closed; W32, E14, E17, A-33 not named by any package (see the closure map).
+- **Coverage gaps (QA, combined):** Stop coach paid with a single subscription across a switch; AccountScope teardown over an open active workout.
+- **Server-side (migration-class):** messages INSERT participant check (QAX-SEC-04); set-log and habit ownership; `p_expected_uid` on RPCs; `workout_logs.session_id` uniqueness; server-side PD8; atomic availability cancel; server-side challenge award.
+
+**New decisions for Julia (cycle 13):**
+- **Wording:** expired session and expired link; both refused-reset lines; "Loading your account"; intake "Nothing was lost"; the three "Couldn't confirm…" sentences; the 59c review-queue refusal sentence; habit celebration and deactivated-habit wording; booking copy; photo wording; invite wording when the outcome is unknown; barcode incomplete-product copy; "You're already in that pod."; 0-kcal "No food found".
+- **Behaviour:** reminders with no owner; A-30 remembered invites; whether a mounted chat stays closed after a switch; the Done landing; OAuth stored as connected on open; voice released during the permission prompt; partial availability cancel (needs an RPC); whether a rest timer survives re-authentication; PD8 reading (queue vs server); Plans vs Coach plan after a failed refresh; a ticket with no code and offline; bells' red dot and a visible "count unknown"; water starting at 3 glasses; a spinner instead of 0 kcal while totals load; mid-word title breaks at 2–3×; R3-3 (exercise detail AI content path).
+
+**Engineering follow-ups:**
+- Activity: classes and events are read once at sign-out if the Upcoming panel is open; A's last totals stay in memory after sign-out (shown only to A).
+- Payments: a dropped bar is not itself recorded; a proxy 499 counts as a refusal; `event_ticket` checkout has no owner.
+- Notifications: a failed unread count looks like "no unread".
+- Workout: `resume_workout_banner` hides on a failed lookup; Directory and Home ignore `selectWorkoutForZone`'s refusal.
+- Exercise: "Published to the Global Library!" / "Couldn't submit…" not tied to their account.
+- Vendor: failed New Event loses the draft; Delete has no confirmation; check-in toggle has no busy state and is under 44px; an editor sheet built after a switch stays open empty.
+- Reset: B's own recovery arriving during A's sign-out takes B off their form.
+- Client Action Center has no retry on a failed first load; the coach-side action-item read turns a failure into an empty list.
+- `home_week_follows_calls_test` waits a fixed 50 ms and fails intermittently under load (base test).
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
@@ -1027,6 +1102,29 @@ exists.
 - Nutrition sync verified (2026-11-16): every meal-logging path calls `refreshAfterMealLogged`; no defect.
 
 ## Next autonomous action
+
+**Cycle 14 recommendation (2026-11-26).** Cycle 13 is done:
+- FL-59a is #228, FL-59b #227, FL-59c #222, FL-59d #221, FL-59e #225, FL-59f #224, FL-60a #226, FL-60b #219, FL-60c #220 and FL-61 #223, all targeting `-c12`.
+- Combined `-c13` @ `a446926`, CI 7/7 (run 45926493582). Merging the Cycle 13 PRs together needs the four integration commits on `-c13` (listed in each PR).
+
+Decision-free work, identity first:
+
+1. **P0-FL-62: remaining identity surfaces (unowned this cycle).**
+   - Rate your coach (A-15/W13) and its error card, outside `home_screen.dart:817`;
+   - the AI coach screen (W15/E6), if it is outside SEC-R3;
+   - Manage Agenda (`event_agenda_screen.dart`, `eventSessionsProvider`) and `create_class_screen`;
+   - `cancelCoach(expectedUid:)` at its four callers, and coach dashboard approve/decline owner taken from the built row;
+   - the AI-signals card through `heldFor` / `ownedRead`; owner tags on `clientActionItemsProvider` / `actionCompletionProvider`;
+   - tests QA asked for on the combined tree: Stop coach paid with one subscription across a switch, and AccountScope teardown over an open active workout.
+2. **P0-FL-63: small honesty fixes found in Cycle 13.**
+   - The vendor editor sheet built after a switch closes itself and records it; the reset form ignores B's own recovery during A's sign-out;
+   - a dropped owned bar is recorded; a failed unread count is not shown as "no unread";
+   - `resume_workout_banner` failure state; Directory/Home say a refused workout selection;
+   - Client Action Center retry on a failed first load; the coach-side action-item read throws instead of returning [];
+   - "Published to the Global Library!" / "Couldn't submit…" tied to their account; Activity's anonymous Upcoming read at sign-out.
+3. **Test hygiene:** `home_week_follows_calls_test` waits for the event instead of a fixed 50 ms.
+
+**Blocked on Julia (read-only):** everything listed under Cycle 12 still stands, plus the cycle 13 wording and behaviour questions above.
 
 **Cycle 13 recommendation (2026-11-24).** Cycle 12 is done:
 - P0-FL-57a is #214, FL-56b #215, FL-56a #216, FL-57b #218 and FL-58 #217, all targeting `-c11`.

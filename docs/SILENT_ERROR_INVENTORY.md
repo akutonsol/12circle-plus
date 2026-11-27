@@ -165,3 +165,13 @@ Combined branch `integration/p0-flutter-stack-c12` @ `a82f993`: 5557 tests, CI 7
   - `progress_screen` signed-URL catches.
 - **Needs a ruling:** observability PGRST202 reading (unchanged).
 - **Still blocked (SEC-R3):** staff-screen "Assign failed." lives in `coach_copilot_screen.dart`; the `predictClient` / `evaluateWeek` / `regenerateProgram` trio.
+
+### Cycle 13 (2026-11-26): P0-FL-60a–c, plus the failure states inside FL-59
+- **#226 (P0-FL-60a):** every `PaymentService` catch records its cause; a failed plan read no longer offers every plan; a failed billing portal is not "No billing account yet"; launch failures are caught. `definitelyRefused` says "Nothing was changed" only for a definite refusal (SQLSTATE, `PGRST…`, 4xx except 408); a gateway 5xx, `PGRST001`, class 08 and `40003` say "Couldn't confirm".
+- **#219 (P0-FL-60b):** streak, upcoming classes and events record and rethrow (no more 0 or `[]`); `AiNutritionNotifier` records (never the token or prompt); the invite email failure is recorded by status; a failed nutrition read shows "—", not "0 kcal".
+- **#220 (P0-FL-60c):** goals, pods, event tickets and notifications record and say their failures; a 0-row update is a failure; the coach link reads rethrow instead of answering "no coach".
+- **FL-59 packages:** four of the five `coach_voice.dart` `catch (_)` blocks now record, and `create_exercise_screen` records each failure once (FL-59d); the progress signed-URL catch records and tells a `StorageException` apart (FL-59e); vendor 0-row writes are failures (FL-59a); refused community, habit and Action Center writes are said (FL-59e).
+- Combined `integration/p0-flutter-stack-c13`: 8902 tests, 0 failures; see the ledger's Cycle 13 section.
+- **Still open (decision-free):** a dropped owned SnackBar is not itself recorded; a failed unread count reads as "no unread"; `resume_workout_banner` hides on a failed lookup; the coach-side action-item read returns `[]` on failure; a proxy 499 counts as a refusal.
+- **Needs a ruling:** observability PGRST202 reading (unchanged).
+- **Still blocked (SEC-R3):** unchanged.
