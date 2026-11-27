@@ -287,6 +287,45 @@ Runtime (device/simulator/live QA): **not performed**; journey completion unchan
 
 **Runtime evidence:** none (no device, simulator or live QA). Journeys stay at 2 of 14 and beta conditions at 0 of 4.
 
+## Cycle 14 log (2026-11-27): P0-FL-62a–e (remaining identity-isolation surfaces)
+
+**How the cycle ran.**
+- **Base check first:** `origin/integration/p0-flutter-stack-c13` = `a446926` (tree `68aaf93`), and no `-c14` branch existed. Every package started from `a446926` and targets `-c13`.
+- **Five engineers, each in its own worktree.** Only `coach_dashboard_screen.dart` was shared: 62b owned the request methods and 62c owned the cards, in separate regions.
+- **Reviews:** each package got independent UX, security and QA review, with narrow re-checks after each round, until QA was VERIFIED at the final head.
+- **Lead mutants:** the lead ran mutants from every QA report in each package's own worktree. A survivor was either killed by a test round, with the mutant applied by hand, or traced to the guard that stops the same case first. The runner now reports NOT-COMPILED and non-unique targets instead of counting them as caught.
+- **Local checks:** static guards and CI's negative controls were run locally on every final head. One WRK-02 parse failure (a `printf: Broken pipe`) passed on two reruns at the same head.
+- **FL-62e:** a read-only investigation, with nothing applied: `docs/MIGRATION_CLASS_IDENTITY_RISKS_C14.md` (C14-MIG-01..07) on the ledger branch.
+- **Blocker register:** `docs/BLOCKER_REGISTER_C14_C15.md` (ledger branch).
+- **Combined branch `integration/p0-flutter-stack-c14`** @ `7b9ce5c` (tree `f969c20`): the five heads merged `--no-ff` in package order, with no conflicts and no integration commits.
+  - Local result: analyze 281, **9084** tests pass, 7 skipped, 0 failed.
+  - CI **7/7 success**, run `46065115113`.
+
+| Package | Branch, final head, PR | Tests (full) | Independent review (final head) | Lead mutants | CI (exact head) |
+|---|---|---|---|---|---|
+| P0-FL-62a1 Rate your coach + member AI coach screen | `fix/rate-coach-and-ai-coach-keep-their-owner` `dabb64f` → **#231** | 8940 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED (r3) | 14/16 (2 traced) | 7/7 `46054572407` |
+| P0-FL-62a2 Manage Agenda + Create Class | `fix/agenda-and-class-keep-their-owner` `63530e0` → **#230** | 8945 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 15/15 | 7/7 `46049578462` |
+| P0-FL-62b Stop coach / approve / decline callers (+ FL-62d part 1, paid Stop coach across a switch) | `fix/coach-actions-act-for-their-owner` `3a07c04` → **#229** | 8952 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 13/13 | 7/7 `46040951114` |
+| P0-FL-62c AI-signals + NEEDS YOU TODAY cards, coach action-item owner tags | `fix/ai-signals-and-action-items-owned` `d0de96a` → **#233** | 8934 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 15/16 (1 traced) | 7/7 `46059568043` |
+| P0-FL-62d account switch over an open workout (combined test; 2+2 workout defects fixed) | `test/account-switch-over-open-workout` `2e09e73` → **#232** | 8921 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 11 caught + 4 traced | 7/7 `46057307694` (2nd attempt; 1st failed an unrelated flake, C14-FLAKE-01) |
+
+**Runtime evidence:** none (no device, simulator or live QA). Journeys stay at 2 of 14 and beta conditions at 0 of 4.
+
+### Backlog after cycle 14
+- **Cycle 15 (FL-63, in progress on `-c14`):**
+  - 63a: empty vendor sheet, plus passing `owner:` to the agenda.
+  - 63b: dropped outcome messages recorded; chat send honesty.
+  - 63c: a failed unread count is not "no unread".
+  - 63d: Action Center first-load retry; the coach action-item false empty.
+  - 63e: deterministic Home week and payment control tests.
+- **Engineering follow-ups:**
+  - `assignedCoachProvider` keyed by the whole User (C14-62b-03).
+  - `AccountChangedError` raw text (C14-62b-04).
+  - `AICoachService.generate` swallow (C14-62a1-02).
+  - `beginSession` clears held sets (C14-62d-02).
+  - Unmapped inventory IDs W32, E14, E17, A-33.
+- **Migration-class (authorization needed):** C14-MIG-01..07.
+
 ## Cycle 13 log (2026-11-25/26): P0-FL-59a–f, P0-FL-60a–c, P0-FL-61
 
 **How the cycle ran.**
