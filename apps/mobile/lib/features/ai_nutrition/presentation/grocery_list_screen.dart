@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../domain/ai_nutrition_provider.dart';
 import '../domain/grocery_list.dart';
 import 'widgets/grocery_item_card.dart';
@@ -23,21 +24,39 @@ class GroceryListScreen extends ConsumerStatefulWidget {
 class _GroceryListScreenState extends ConsumerState<GroceryListScreen> {
   bool _isLoading = false;
 
+  /// P0-FL-60b · bumped when the account changes.
+  int _epoch = 0;
+
+  /// P0-FL-60b · what this screen was BUILT with: one member's notifier, and
+  /// that member's plan (see `_OneMember`).
+  late GroceryListNotifier _list;
+  String? _mealPlan;
+
   Future<void> _generateList() async {
-    final mealPlan = ref.read(mealPlanNotifierProvider).content;
+    final epoch = _epoch;
+    final mealPlan = _mealPlan;
     if (mealPlan == null) return;
     setState(() => _isLoading = true);
-    await ref
-        .read(groceryListNotifierProvider.notifier)
-        .generateGroceryList(mealPlan);
-    if (mounted) setState(() => _isLoading = false);
+    await _list.generateGroceryList(mealPlan);
+    if (mounted && epoch == _epoch) setState(() => _isLoading = false);
   }
 
   @override
   Widget build(BuildContext context) {
+    // A new notifier is a new account (see `_OneMember`).
+    ref.listen(groceryListNotifierProvider.notifier, (was, now) {
+      if (identical(was, now)) return;
+      setState(() {
+        _epoch++;
+        _isLoading = false;
+      });
+    });
     final list = ref.watch(groceryListNotifierProvider);
+    _list = ref.watch(groceryListNotifierProvider.notifier);
+    _mealPlan = ref.watch(mealPlanNotifierProvider).content;
+    final rebuildError = _list.rebuildError;
     final outcome = groceryOutcome(
-      mealPlan: ref.watch(mealPlanNotifierProvider).content,
+      mealPlan: _mealPlan,
       rawList: list.content,
       listFailed: list.failed,
     );
@@ -70,6 +89,7 @@ class _GroceryListScreenState extends ConsumerState<GroceryListScreen> {
             body: groceryFailedBody,
             action: groceryTryAgainLabel,
             onAction: _isLoading ? null : _generateList,
+            failure: true,
           ),
         GroceryNotBuilt() => Center(
             child: Column(
@@ -127,6 +147,16 @@ class _GroceryListScreenState extends ConsumerState<GroceryListScreen> {
                   ),
                 ],
               ),
+              if (rebuildError != null) ...[
+                const SizedBox(height: 8),
+                SectionLoadFailure(
+                  what: 'a new list',
+                  error: rebuildError,
+                  busy: _isLoading,
+                  onRetry: _generateList,
+                  detail: 'The list below has not changed.',
+                ),
+              ],
               const SizedBox(height: 16),
               ...categories.map((c) => Padding(
                     padding: const EdgeInsets.only(bottom: 16),
@@ -155,12 +185,16 @@ class _Blocked extends StatelessWidget {
   final String action;
   final VoidCallback? onAction;
 
+  /// The request failed (announced), as opposed to nothing to build from yet.
+  final bool failure;
+
   const _Blocked({
     required this.icon,
     required this.title,
     required this.body,
     required this.action,
     required this.onAction,
+    this.failure = false,
   });
 
   @override
@@ -172,15 +206,21 @@ class _Blocked extends StatelessWidget {
             children: [
               Icon(icon, color: AppColors.textTertiary, size: 64),
               const SizedBox(height: 16),
-              Text(title,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      color: AppColors.textSecondary, fontSize: 16)),
-              const SizedBox(height: 8),
-              Text(body,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      color: AppColors.textTertiary, fontSize: 14)),
+              Semantics(
+                liveRegion: failure,
+                container: failure,
+                child: Column(children: [
+                  Text(title,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          color: AppColors.textSecondary, fontSize: 16)),
+                  const SizedBox(height: 8),
+                  Text(body,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          color: AppColors.textTertiary, fontSize: 14)),
+                ]),
+              ),
               const SizedBox(height: 24),
               ElevatedButton(onPressed: onAction, child: Text(action)),
             ],

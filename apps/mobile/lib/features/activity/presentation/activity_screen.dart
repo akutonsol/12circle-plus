@@ -1,9 +1,12 @@
+import 'dart:async' show Timer;
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
+import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../nutrition/domain/nutrition_provider.dart';
@@ -13,6 +16,7 @@ import '../../challenges/domain/challenge_provider.dart';
 import '../../challenges/data/models/challenge_model.dart';
 import '../../community/domain/community_provider.dart';
 import '../../home/domain/home_session_card.dart';
+import '../../workout/data/models/workout_model.dart' show Workout;
 import '../../workout/domain/workout_provider.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
 
@@ -30,6 +34,21 @@ class _C {
   static const blue         = Color(0xFF93C5FD);
   static const error        = Color(0xFFFFB4AB);
 }
+
+// ── This member's reads (P0-FL-60b) ───────────────────────────────────────────
+// See [forMember]: none of these says whose its value is.
+final _memberChallenges = forMember<List<Challenge>>(liveChallengesProvider);
+final _memberWorkouts = forMember<List<Workout>>(assignedWorkoutsProvider);
+final _memberMonth =
+    forMember<List<Map<String, dynamic>>>(monthScoresProvider);
+final _memberWeek = forMember<List<Map<String, dynamic>>>(weekScoresProvider);
+// P0-FL-60b round 4 · today's totals were `valueOrNull`: A's kcal and macros,
+// drawn as B's while B's read was pending or after it failed.
+final _memberToday = forMember<Map<String, double>>(todayNutritionProvider);
+
+/// What a total not known for this member is drawn as. Never '0': 0 is only
+/// for a read that said 0.
+const _unknown = '—';
 
 // ── Fit and touch helpers (P0-FL-58) ──────────────────────────────────────────
 
@@ -208,6 +227,10 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
         SystemUiOverlayStyle.light.copyWith(statusBarColor: Colors.transparent));
     final topPad = MediaQuery.of(context).padding.top;
     final userName = ref.watch(currentFirstNameProvider);
+    final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+    // P0-FL-60b · a failure and its Try again need the whole width.
+    final streakFailed =
+        ref.watch(memberStreakProvider.select((s) => s.error != null));
     // P0-FL-58 · the bar is 64px, between the buttons: a greeting that does
     // not fit it on one line each (past 1.3×, or a long name on a narrow
     // phone) moves to the top of the page, where it wraps. The buttons stay.
@@ -241,7 +264,7 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
                 const SizedBox(height: 16),
 
                 // ── Streak + Water row ─────────────────────────────────────────
-                if (large) ...[
+                if (large || streakFailed) ...[
                   SizedBox(width: double.infinity, child: _StreakCard()),
                   const SizedBox(height: 12),
                   SizedBox(width: double.infinity, child: _WaterTrackerCard()),
@@ -255,7 +278,8 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
                 const SizedBox(height: 16),
 
                 // ── Performance ring card ──────────────────────────────────────
-                _PerformanceCard(),
+                // Keyed: its animation holds figures, one member's only.
+                _PerformanceCard(key: ValueKey(uid)),
                 const SizedBox(height: 16),
 
                 // ── Daily steps + Macros row ───────────────────────────────────
@@ -335,7 +359,13 @@ class _DailyWorkoutCard extends ConsumerWidget {
     // has none of them (`title`, `estimated_minutes`, and no energy figure), so
     // every client — with a plan, on a rest day, or with no coach — was shown
     // "Full Body Strength · 45 min · ~380 kcal". That is F-20 again.
-    final session = homeSession(ref.watch(assignedWorkoutsProvider));
+    //
+    // P0-FL-60b · a read still going may hold another member's plan: what THIS
+    // one was last given stands until it ends.
+    final read = ref.watch(_memberWorkouts);
+    final session = read.busy
+        ? homeSession(read.answer)
+        : homeSession(ref.watch(assignedWorkoutsProvider));
     final badges = homeSessionBadges(session.workout);
     final title = session.title ?? session.emptyLine;
     final large = _largeText(context);
@@ -440,8 +470,10 @@ class _WorkoutBadge extends StatelessWidget {
 class _StreakCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final streakAsync = ref.watch(streakProvider);
-    final streak = streakAsync.valueOrNull ?? 0;
+    // P0-FL-60b · a failed read was "0 day streak"; it is said instead, and a
+    // number already read for this member stays beside it.
+    final read = ref.watch(memberStreakProvider);
+    final streak = read.value;
     return _GlassCard(
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -456,7 +488,7 @@ class _StreakCard extends ConsumerWidget {
               shape: BoxShape.circle,
               color: _C.brand.withValues(alpha: 0.2)),
             child: const Icon(Icons.local_fire_department_rounded, color: _C.primary, size: 18)),
-          Container(
+          if (streak != null) Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
               color: _C.brand.withValues(alpha: 0.15),
@@ -465,12 +497,28 @@ class _StreakCard extends ConsumerWidget {
               style: TextStyle(color: _C.primary, fontSize: 9, fontWeight: FontWeight.w700))),
         ])),
         const SizedBox(height: 12),
+        if (streak != null) ...[
         Text('$streak',
           style: const TextStyle(color: _C.onSurface, fontSize: 36, fontWeight: FontWeight.w800, height: 1)),
         Text('day streak', style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.7), fontSize: 12)),
         const SizedBox(height: 10),
         Text(streak == 0 ? 'Start today!' : streak >= 7 ? 'Keep it up!' : 'Building momentum',
           style: TextStyle(color: _C.primary.withValues(alpha: 0.8), fontSize: 11, fontWeight: FontWeight.w600)),
+        ] else if (read.error == null)
+          // Loading: no claim either way about the streak.
+          Semantics(
+            label: 'Loading your streak',
+            child: const SizedBox(width: 20, height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2, color: _C.primary))),
+        if (read.error != null) ...[
+          if (streak != null) const SizedBox(height: 10),
+          SectionLoadFailure(
+            what: 'your streak',
+            error: read.error,
+            busy: read.busy,
+            onRetry: () => ref.invalidate(streakProvider),
+            accent: _C.primary, textColor: _C.onSurface, mutedColor: _C.onSurfVar),
+        ],
       ]),
     );
   }
@@ -543,6 +591,7 @@ class _WaterTrackerCard extends ConsumerWidget {
 
 // ── Performance Card ──────────────────────────────────────────────────────────
 class _PerformanceCard extends ConsumerStatefulWidget {
+  const _PerformanceCard({super.key});
   @override
   ConsumerState<_PerformanceCard> createState() => _PerformanceCardState();
 }
@@ -578,8 +627,8 @@ class _PerformanceCardState extends ConsumerState<_PerformanceCard>
 
   @override
   Widget build(BuildContext context) {
-    final monthAsync = ref.watch(monthScoresProvider);
-    final weekAsync = ref.watch(weekScoresProvider);
+    final monthAsync = ref.watch(_memberMonth).answer;
+    final weekAsync = ref.watch(_memberWeek).answer;
 
     return monthAsync.when(
       loading: () => _GlassCard(
@@ -767,9 +816,18 @@ class _StepsCard extends ConsumerWidget {
 class _CaloriesCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final totals = ref.watch(todayNutritionProvider).valueOrNull;
+    // Unknown (B's first read pending, or failed with nothing held) is a dash,
+    // not 0. A failure is said once, on the macros section.
+    final totals = ref.watch(_memberToday).value;
     final calories = ((totals?['calories'] ?? 0.0) as num).toInt();
     const goal = 2000;
+    final bar = ClipRRect(
+      borderRadius: BorderRadius.circular(3),
+      child: LinearProgressIndicator(
+        value: (calories / goal).clamp(0.0, 1.0),
+        minHeight: 4,
+        backgroundColor: Colors.white.withValues(alpha: 0.07),
+        valueColor: const AlwaysStoppedAnimation<Color>(_C.error)));
     return _GlassCard(
       padding: const EdgeInsets.all(14),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -780,17 +838,15 @@ class _CaloriesCard extends ConsumerWidget {
             color: _C.error.withValues(alpha: 0.15)),
           child: const Icon(Icons.local_fire_department_rounded, color: _C.error, size: 18)),
         const SizedBox(height: 10),
-        Text(calories == 0 ? '0' : '$calories',
-          style: const TextStyle(color: _C.onSurface, fontSize: 24, fontWeight: FontWeight.w800, height: 1)),
+        Semantics(
+          label: totals == null ? "Today's calories not loaded" : null,
+          excludeSemantics: totals == null,
+          child: Text(totals == null ? _unknown : '$calories',
+            style: const TextStyle(color: _C.onSurface, fontSize: 24, fontWeight: FontWeight.w800, height: 1))),
         const Text('kcal', style: TextStyle(color: _C.error, fontSize: 12)),
         const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(3),
-          child: LinearProgressIndicator(
-            value: (calories / goal).clamp(0.0, 1.0),
-            minHeight: 4,
-            backgroundColor: Colors.white.withValues(alpha: 0.07),
-            valueColor: const AlwaysStoppedAnimation<Color>(_C.error))),
+        // Unknown: the bar is drawn empty, and says no "0%".
+        totals == null ? ExcludeSemantics(child: bar) : bar,
         const SizedBox(height: 4),
         Text('Goal: $goal kcal', style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.5), fontSize: 10)),
       ]),
@@ -802,17 +858,21 @@ class _CaloriesCard extends ConsumerWidget {
 class _NutritionGrid extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final totals   = ref.watch(todayNutritionProvider).valueOrNull;
+    // P0-FL-60b round 4 · this member's totals only; unknown is a dash. A
+    // failure is said here (once for the screen), with what is held beside it.
+    final read     = ref.watch(_memberToday);
+    final totals   = read.value;
     final calories = ((totals?['calories'] ?? 0.0) as num).toInt();
     final protein  = ((totals?['protein']  ?? 0.0) as num).toInt();
     final carbs    = ((totals?['carbs']    ?? 0.0) as num).toInt();
     final fat      = ((totals?['fat']      ?? 0.0) as num).toInt();
+    String or(String known) => totals == null ? _unknown : known;
 
     final items = [
-      (Icons.local_fire_department_outlined, 'CALORIES', calories == 0 ? '0 kcal' : '$calories kcal', _C.error),
-      (Icons.egg_outlined,                   'PROTEIN',  '${protein}g', _C.teal),
-      (Icons.grain_rounded,                  'CARBS',    '${carbs}g',   _C.primary),
-      (Icons.water_drop_outlined,            'FAT',      '${fat}g',     _C.blue),
+      (Icons.local_fire_department_outlined, 'CALORIES', or('$calories kcal'), _C.error),
+      (Icons.egg_outlined,                   'PROTEIN',  or('${protein}g'), _C.teal),
+      (Icons.grain_rounded,                  'CARBS',    or('${carbs}g'),   _C.primary),
+      (Icons.water_drop_outlined,            'FAT',      or('${fat}g'),     _C.blue),
     ];
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -826,6 +886,15 @@ class _NutritionGrid extends ConsumerWidget {
           label: "Log food for today's macros",
           onTap: () => context.go('/nutrition'),
           child: Text('Log food', style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.5), fontSize: 11)))),
+      if (read.error != null) ...[
+        SectionLoadFailure(
+          what: "today's nutrition",
+          error: read.error,
+          busy: read.busy,
+          onRetry: () => ref.invalidate(todayNutritionProvider),
+          accent: _C.primary, textColor: _C.onSurface, mutedColor: _C.onSurfVar),
+        const SizedBox(height: 8),
+      ],
       // P0-FL-58 · a fixed 2.4:1 grid cell cut its text off at large text. The
       // same cell is now a MINIMUM: it grows; past 1.3× there is one per line.
       LayoutBuilder(builder: (context, box) {
@@ -844,8 +913,11 @@ class _NutritionGrid extends ConsumerWidget {
                 Expanded(child: Text(item.$2, style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.6),
                   fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 1))),
               ]),
-              Text(item.$3,
-                style: TextStyle(color: item.$4, fontSize: 14, fontWeight: FontWeight.w700)),
+              Semantics(
+                label: totals == null ? "Today's ${item.$2.toLowerCase()} not loaded" : null,
+                excludeSemantics: totals == null,
+                child: Text(item.$3,
+                  style: TextStyle(color: item.$4, fontSize: 14, fontWeight: FontWeight.w700))),
             ]),
           ))).toList());
       }),
@@ -894,21 +966,17 @@ class _MotivationalQuoteCard extends ConsumerWidget {
 }
 
 // ── Challenge Section ─────────────────────────────────────────────────────────
-class _ChallengeSection extends ConsumerStatefulWidget {
-  @override
-  ConsumerState<_ChallengeSection> createState() => _ChallengeSectionState();
-}
-
-class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
-  // P0-FL-53b · the last list this section showed, and for whom. A failed
-  // refresh keeps it on screen under the failure notice; a list read for
-  // another member (Riverpod holds A's value while B's read fails) is never
-  // shown.
-  List<Challenge>? _held;
-  String? _heldFor;
+class _ChallengeSection extends ConsumerWidget {
+  /// Whether [owner], whose rows are on screen, has left (recorded).
+  static bool _left(String? owner) {
+    if (Supabase.instance.client.auth.currentUser?.id == owner) return false;
+    reportError('activity.challenges.join',
+        StateError('join a challenge: the signed-in account changed'));
+    return true;
+  }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     // P0-FL-49 · the preference of the member signed in NOW. Riverpod keeps the
     // previous member's row through a re-read, so the held value showed (or
     // hid) the prompt on A's `notif_challenges` while B's read was in flight
@@ -917,13 +985,11 @@ class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
     final profile       = ref.watch(confirmedCurrentProfileProvider);
     final showPrompt    =
         profile != null && (profile['notif_challenges'] as bool?) != true;
-    final challengesAsync = ref.watch(liveChallengesProvider);
-    final uid = ref.watch(currentUserProvider)?.id;
-    if (challengesAsync is AsyncData<List<Challenge>>) {
-      _held = challengesAsync.value;
-      _heldFor = uid;
-    }
-    final held = _heldFor == uid ? _held : null;
+    // P0-FL-60b · the list read for THIS member. A failed refresh keeps it
+    // under the failure notice.
+    final read = ref.watch(_memberChallenges);
+    final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+    final held = read.value;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _SectionHeader(
@@ -951,7 +1017,7 @@ class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
               label: 'Enable challenge alerts',
               onTap: () => context.push('/notification-preferences'),
               child: const _Pill(text: 'Enable', color: _C.primary, tint: 0.15))))
-      else if (challengesAsync.hasError) ...[
+      else if (read.error != null) ...[
         // P0-FL-53b · a failed read said "No active challenges": a claim about
         // what exists that the app could not make. The failure is recorded
         // once, by LiveChallengeService.getActiveChallenges. What this member
@@ -960,8 +1026,8 @@ class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
           padding: const EdgeInsets.all(18),
           child: SectionLoadFailure(
             what: 'challenges',
-            error: challengesAsync.error,
-            busy: challengesAsync.isLoading,
+            error: read.error,
+            busy: read.busy,
             onRetry: () => ref.invalidate(liveChallengesProvider),
             textColor: _C.onSurface,
             mutedColor: _C.onSurfVar,
@@ -970,23 +1036,22 @@ class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
                 : null)),
         if (held != null && held.any((c) => c.status == ChallengeStatus.active)) ...[
           const SizedBox(height: 10),
-          _challengeList(context, held),
+          _challengeList(context, ref, uid, held),
         ],
       ]
+      else if (held == null)
+        _GlassCard(
+          padding: const EdgeInsets.symmetric(vertical: 28),
+          child: const Center(
+            child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2)))
       else
-        challengesAsync.when(
-          loading: () => _GlassCard(
-            padding: const EdgeInsets.symmetric(vertical: 28),
-            child: const Center(
-              child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2))),
-          // Unreachable: `hasError` is handled above.
-          error: (_, __) => const SizedBox.shrink(),
-          data: (all) => _challengeList(context, all),
-        ),
+        _challengeList(context, ref, uid, held),
     ]);
   }
 
-  Widget _challengeList(BuildContext context, List<Challenge> all) {
+  /// [owner]: whose rows these are.
+  Widget _challengeList(BuildContext context, WidgetRef ref, String? owner,
+      List<Challenge> all) {
             final active = all
                 .where((c) => c.status == ChallengeStatus.active)
                 .take(3)
@@ -1056,16 +1121,17 @@ class _ChallengeSectionState extends ConsumerState<_ChallengeSection> {
                           : _TapTarget(
                             label: 'Join ${c.title}',
                             onTap: () async {
-                              final ok = await ref.read(challengeNotifierProvider.notifier)
-                                  .joinChallenge(c.id);
-                              if (!context.mounted) return;
+                              if (_left(owner)) return;
+                              final challenges =
+                                  ref.read(challengeNotifierProvider.notifier);
+                              final ok = await challenges.joinChallenge(c.id);
+                              if (_left(owner) || !context.mounted) return;
                               if (ok) {
                                 ref.invalidate(liveChallengesProvider);
                               } else {
                                 // P0-FL-53b · recorded by the notifier; said in
                                 // the one voice, announced.
-                                final err = ref.read(challengeNotifierProvider.notifier)
-                                    .lastJoinError;
+                                final err = challenges.lastJoinError;
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Semantics(liveRegion: true,
@@ -1296,14 +1362,27 @@ class _ShakingBellState extends ConsumerState<_ShakingBell> with SingleTickerPro
       TweenSequenceItem(tween: Tween(begin: 0.15, end: -0.1), weight: 2),
       TweenSequenceItem(tween: Tween(begin: -0.1, end: 0.0), weight: 1),
     ]).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
-    Future.delayed(const Duration(seconds: 1), _loop);
+  }
+
+  /// P0-FL-60b · the next shake. None while animations are turned off.
+  Timer? _next;
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _next?.cancel();
+      _next = null;
+      _ctrl.reset();
+    } else {
+      _next ??= Timer(const Duration(seconds: 1), _loop);
+    }
   }
   void _loop() {
-    if (!mounted) return;
-    _ctrl.forward(from: 0).then((_) => Future.delayed(const Duration(seconds: 3), _loop));
+    _ctrl.forward(from: 0);
+    _next = Timer(const Duration(milliseconds: 3500), _loop);
   }
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  void dispose() { _next?.cancel(); _ctrl.dispose(); super.dispose(); }
 
   void _showNotifications() {
     showModalBottomSheet(
@@ -1340,8 +1419,8 @@ class _ShakingBellState extends ConsumerState<_ShakingBell> with SingleTickerPro
 class _NotificationsPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final classesAsync = ref.watch(upcomingClassesProvider);
-    final eventsAsync  = ref.watch(upcomingEventsProvider);
+    final classesAsync = ref.watch(memberUpcomingClassesProvider);
+    final eventsAsync  = ref.watch(memberUpcomingEventsProvider);
     final bottom = MediaQuery.of(context).padding.bottom;
 
     return Container(
@@ -1375,11 +1454,12 @@ class _NotificationsPanel extends ConsumerWidget {
             padding: EdgeInsets.fromLTRB(20, 0, 20, bottom + 24),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               // Classes
-              classesAsync.when(
-                loading: () => const SizedBox(height: 60, child: Center(child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2))),
-                error: (_, __) => const SizedBox.shrink(),
-                data: (classes) {
-                  if (classes.isEmpty) return const SizedBox.shrink();
+              ..._upcomingSection(
+                classesAsync,
+                what: 'upcoming classes',
+                onRetry: () => ref.invalidate(upcomingClassesProvider),
+                loading: const SizedBox(height: 60, child: Center(child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2))),
+                rows: (classes) {
                   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     _PanelSectionLabel(label: 'Classes'),
                     const SizedBox(height: 10),
@@ -1398,11 +1478,12 @@ class _NotificationsPanel extends ConsumerWidget {
               ),
               const SizedBox(height: 16),
               // Events
-              eventsAsync.when(
-                loading: () => const SizedBox.shrink(),
-                error: (_, __) => const SizedBox.shrink(),
-                data: (events) {
-                  if (events.isEmpty) return const SizedBox.shrink();
+              ..._upcomingSection(
+                eventsAsync,
+                what: 'upcoming events',
+                onRetry: () => ref.invalidate(upcomingEventsProvider),
+                loading: const SizedBox.shrink(),
+                rows: (events) {
                   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     _PanelSectionLabel(label: 'Events'),
                     const SizedBox(height: 10),
@@ -1424,6 +1505,28 @@ class _NotificationsPanel extends ConsumerWidget {
     );
   }
 
+  /// P0-FL-60b · a failed read was a section that vanished. The failure is
+  /// said in its place; rows already read stay under it. Read and empty still
+  /// shows nothing.
+  static List<Widget> _upcomingSection(
+    MemberRead<List<Map<String, dynamic>>> read, {
+    required String what,
+    required VoidCallback onRetry,
+    required Widget loading,
+    required Widget Function(List<Map<String, dynamic>> rows) rows,
+  }) => [
+    if (read.error != null)
+      SectionLoadFailure(
+        what: what, error: read.error, busy: read.busy, onRetry: onRetry,
+        accent: _C.primary, textColor: _C.onSurface, mutedColor: _C.onSurfVar)
+    else if (read.value == null)
+      loading,
+    if (read.value case final kept? when kept.isNotEmpty) ...[
+      if (read.error != null) const SizedBox(height: 10),
+      rows(kept),
+    ],
+  ];
+
   String _formatDate(String? iso) {
     if (iso == null) return '';
     try {
@@ -1433,8 +1536,10 @@ class _NotificationsPanel extends ConsumerWidget {
       final m = d.minute.toString().padLeft(2, '0');
       final ampm = d.hour < 12 ? 'AM' : 'PM';
       return '${months[d.month - 1]} ${d.day} • $h:$m $ampm';
-    } catch (_) {
-      return '';
+    } catch (e, st) {
+      // Was blank, as if the class or event had no time.
+      reportError('activity.upcoming.date', e, st);
+      return 'Date unavailable';
     }
   }
 }
