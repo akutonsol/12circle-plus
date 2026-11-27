@@ -1,5 +1,8 @@
+import 'dart:async' show StreamSubscription;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthState, Supabase;
+import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../data/nutrition_service.dart';
 import '../data/models/food_model.dart';
@@ -8,6 +11,7 @@ import 'widgets/coach_insight_card.dart';
 import 'widgets/food_added_dialog.dart';
 import '../../../core/widgets/named_icon_button.dart';
 import 'widgets/nutrition_load_failed.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 const _bg       = Color(0xFF030303);
 const _card     = Color(0xFF0E0B16);
@@ -23,8 +27,7 @@ final _svcProvider = Provider<NutritionService>((ref) => NutritionService());
 final _totalsProvider = todayNutritionProvider;
 // Read again on each visit: a meal logged on another screen appears here.
 final _logsProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
-  ref.watch(currentUserProvider);
-  return ref.watch(_svcProvider).getTodayLogs();
+  return readForMember(ref, ref.watch(_svcProvider).getTodayLogs);
 });
 
 class NutritionScreen extends ConsumerStatefulWidget {
@@ -34,21 +37,33 @@ class NutritionScreen extends ConsumerStatefulWidget {
 }
 
 class _NutritionScreenState extends ConsumerState<NutritionScreen> {
-  int _water = 3;
+  /// Glasses tapped on this screen, by the member who tapped them. Not saved.
+  ({String? uid, int glasses}) _water = (uid: null, glasses: _firstGlasses);
+  static const _firstGlasses = 3;
+
+  static String? get _signedIn =>
+      Supabase.instance.client.auth.currentUser?.id;
 
   @override
   Widget build(BuildContext context) {
-    final totals  = ref.watch(_totalsProvider);
-    final logs    = ref.watch(_logsProvider);
-    final goals   = ref.watch(nutritionGoalsProvider);
-    final cal     = totals.valueOrNull?['calories'] ?? 0.0;
-    final protein = totals.valueOrNull?['protein']  ?? 0.0;
-    final carbs   = totals.valueOrNull?['carbs']    ?? 0.0;
-    final fat     = totals.valueOrNull?['fat']      ?? 0.0;
-    final calGoal     = goals.valueOrNull?['calories'] ?? 2000.0;
-    final proteinGoal = goals.valueOrNull?['protein']  ?? 120.0;
-    final carbGoal    = goals.valueOrNull?['carbs']    ?? 220.0;
-    final fatGoal     = goals.valueOrNull?['fat']      ?? 65.0;
+    // Drawn for the member signed in, and only what was read for them.
+    ref.watch(currentUserProvider.select((u) => u?.id));
+    final totals  = ownRead(ref.watch(_totalsProvider));
+    final logs    = ownRead(ref.watch(_logsProvider));
+    final goals   = ownRead(ref.watch(nutritionGoalsProvider));
+    final today   = totals.value;
+    final targets = goals.value;
+    final meals   = logs.value;
+    final owner   = _signedIn;
+    final glasses = _water.uid == owner ? _water.glasses : _firstGlasses;
+    final cal     = today?['calories'] ?? 0.0;
+    final protein = today?['protein']  ?? 0.0;
+    final carbs   = today?['carbs']    ?? 0.0;
+    final fat     = today?['fat']      ?? 0.0;
+    final calGoal     = targets?['calories'] ?? 2000.0;
+    final proteinGoal = targets?['protein']  ?? 120.0;
+    final carbGoal    = targets?['carbs']    ?? 220.0;
+    final fatGoal     = targets?['fat']      ?? 65.0;
 
     return Scaffold(
       backgroundColor: _bg,
@@ -90,11 +105,38 @@ class _NutritionScreenState extends ConsumerState<NutritionScreen> {
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
               child: Column(children: [
+                // Totals that could not be read are said, and are not zeros (nor
+                // anyone else's); a refresh that failed keeps this member's up.
+                if (totals.error != null) ...[
+                  SectionLoadFailure(
+                    what: "today's totals",
+                    error: totals.error,
+                    busy: totals.busy,
+                    detail: today == null
+                      ? "Everything you've already logged is saved."
+                      : 'Showing what was last loaded.',
+                    onRetry: () => ref.invalidate(_totalsProvider)),
+                  const SizedBox(height: 16),
+                ],
+                if (targets != null && goals.error != null) ...[
+                  SectionLoadFailure(
+                    what: 'your targets',
+                    error: goals.error,
+                    busy: goals.busy,
+                    detail: 'Showing what was last loaded.',
+                    onRetry: () => ref.invalidate(nutritionGoalsProvider)),
+                  const SizedBox(height: 16),
+                ],
                 // Targets that could not be read are not shown -- not replaced by
                 // defaults that read as the client's plan (nor advice built on them).
-                if (goals is AsyncError) ...[
+                if (targets == null && goals.error != null) ...[
                   const NutritionTargetsLoadFailed(),
                   const SizedBox(height: 16),
+                ] else if (today == null || targets == null) ...[
+                  if (totals.error == null)
+                    const Padding(
+                      padding: EdgeInsets.all(32),
+                      child: CircularProgressIndicator(color: _brand)),
                 ] else ...[
                 // Calorie card
                 Container(
@@ -166,7 +208,7 @@ class _NutritionScreenState extends ConsumerState<NutritionScreen> {
                         Text("Water", style: TextStyle(color: _white,
                           fontSize: 15, fontWeight: FontWeight.w600)),
                       ]),
-                      Text("$_water / 8 glasses",
+                      Text("$glasses / 8 glasses",
                         style: TextStyle(color: _muted.withValues(alpha: 0.5), fontSize: 12)),
                     ]),
                     const SizedBox(height: 12),
@@ -174,22 +216,29 @@ class _NutritionScreenState extends ConsumerState<NutritionScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: List.generate(8, (i) =>
                         GestureDetector(
-                          onTap: () => setState(() =>
-                            _water = i + 1 == _water ? i : i + 1),
+                          onTap: () {
+                            if (_signedIn != owner) {
+                              reportError('NutritionScreen.water.identity',
+                                  StateError('water: the signed-in account changed'));
+                              return;
+                            }
+                            setState(() => _water = (uid: owner,
+                                glasses: i + 1 == glasses ? i : i + 1));
+                          },
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 200),
                             width: 28, height: 36,
                             decoration: BoxDecoration(
-                              color: i < _water
+                              color: i < glasses
                                 ? const Color(0xFFADC6FF).withValues(alpha: 0.2)
                                 : Colors.white.withValues(alpha: 0.04),
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
-                                color: i < _water
+                                color: i < glasses
                                   ? const Color(0xFFADC6FF).withValues(alpha: 0.5)
                                   : Colors.white.withValues(alpha: 0.06))),
                             child: Icon(Icons.water_drop,
-                              color: i < _water
+                              color: i < glasses
                                 ? const Color(0xFFADC6FF)
                                 : Colors.white.withValues(alpha: 0.1),
                               size: 16)))),
@@ -207,12 +256,19 @@ class _NutritionScreenState extends ConsumerState<NutritionScreen> {
                       fontSize: 13, fontWeight: FontWeight.w600))),
                 ]),
                 const SizedBox(height: 12),
-                logs.when(
-                  loading: () => const Padding(
+                if (logs.error != null)
+                  SectionLoadFailure(
+                    what: 'your meals',
+                    error: logs.error,
+                    busy: logs.busy,
+                    detail: meals == null ? null : 'Showing what was last loaded.',
+                    onRetry: () => ref.invalidate(_logsProvider))
+                else if (meals == null)
+                  const Padding(
                     padding: EdgeInsets.all(32),
                     child: CircularProgressIndicator(color: _brand)),
-                  error: (_, __) => const SizedBox.shrink(),
-                  data: (meals) => meals.isEmpty
+                if (meals != null)
+                  meals.isEmpty
                     ? Container(
                         padding: const EdgeInsets.all(24),
                         decoration: BoxDecoration(
@@ -233,7 +289,6 @@ class _NutritionScreenState extends ConsumerState<NutritionScreen> {
                                 fontWeight: FontWeight.w600))),
                         ]))
                     : Column(children: meals.map((m) => _MealTile(meal: m)).toList()),
-                ),
               ])))),
       ])));
   }
@@ -262,7 +317,7 @@ class _AddMealSheet extends ConsumerStatefulWidget {
 }
 
 class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
-  final _svc = NutritionService();
+  late final _svc = NutritionService(forUid: _owner);
   final _searchCtrl = TextEditingController();
   Food? _selected;
   String _mealType = "breakfast";
@@ -271,16 +326,54 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
   List<Food> _filtered = [];
   final _meals = ["breakfast", "lunch", "dinner", "snack", "protein_shake"];
 
+  /// P0-FL-59e · the member who opened this sheet: the food picked or scanned
+  /// in it is theirs, and so is the meal. It closes with them.
+  final String? _owner = _signedIn;
+  StreamSubscription<AuthState>? _authSub;
+
+  static String? get _signedIn =>
+      Supabase.instance.client.auth.currentUser?.id;
+
+  void _followAccount() {
+    if (!mounted || _signedIn == _owner) return;
+    setState(() => _selected = null);
+    final route = ModalRoute.of(context);
+    final navigator = route?.navigator;
+    if (route == null || navigator == null || !route.isActive) return;
+    // With whatever this member opened over it.
+    final root = Navigator.of(context, rootNavigator: true);
+    if (!identical(root, navigator)) root.popUntil((r) => r is! PopupRoute);
+    navigator.popUntil((r) => identical(r, route));
+    if (!route.isFirst) navigator.removeRoute(route);
+  }
+
+  /// False (recorded, sheet closed) once someone else is signed in.
+  bool _stillOwner(String what) {
+    if (_signedIn == _owner) return true;
+    reportError('NutritionScreen.addMeal.identity',
+        StateError('$what: the signed-in account changed'));
+    _followAccount();
+    return false;
+  }
+
   @override
   void initState() {
     super.initState();
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
+        (_) => _followAccount(),
+        onError: (Object e, StackTrace s) =>
+            reportError('NutritionScreen.addMeal.onAuthStateChange', e, s));
     _filtered = _svc.getSampleFoods();
     _searchCtrl.addListener(() =>
       setState(() => _filtered = _svc.searchFoods(_searchCtrl.text)));
   }
 
   @override
-  void dispose() { _searchCtrl.dispose(); super.dispose(); }
+  void dispose() {
+    _authSub?.cancel();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   String _mealTypeLabel(String m) {
     switch (m) {
@@ -290,7 +383,7 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
   }
 
   Future<void> _log() async {
-    if (_selected == null) return;
+    if (_selected == null || !_stillOwner('meal')) return;
     setState(() => _saving = true);
     final food = _selected!;
     final servings = _servings;
@@ -304,7 +397,7 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
         fat: food.fat * servings,
         servingSize: food.servingSize * servings,
         servingUnit: food.servingUnit);
-      if (!mounted) return;
+      if (!mounted || !_stillOwner('meal logged')) return;
       setState(() => _saving = false);
       widget.onLogged();
       // The context is captured as the NAVIGATOR's, not this sheet's. Popping
@@ -322,13 +415,15 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
       navigator.pop();
       FoodAddedDialog.show(
         navigator.context,
+        owner: (uid: _owner),
         foodName: food.name,
         protein: (food.protein * servings).toInt(),
         carbs: (food.carbs * servings).toInt(),
         fat: (food.fat * servings).toInt(),
       );
-    } catch (e) {
-      if (!mounted) return;
+    } catch (e, st) {
+      reportError('NutritionScreen.addMeal._log', e, st);
+      if (!mounted || !_stillOwner('meal')) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Could not log meal.'),
@@ -340,6 +435,8 @@ class _AddMealSheetState extends ConsumerState<_AddMealSheet> {
 
   @override
   Widget build(BuildContext context) {
+    // Nothing picked by one member is drawn for another.
+    if (_signedIn != _owner) return const SizedBox.shrink();
     return DraggableScrollableSheet(
       initialChildSize: 0.85,
       maxChildSize: 0.95,

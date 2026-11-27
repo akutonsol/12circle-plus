@@ -1,4 +1,5 @@
-import 'dart:async' show unawaited;
+import 'dart:async' show StreamSubscription, unawaited;
+import 'dart:convert' show jsonEncode;
 import 'dart:typed_data';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -153,7 +154,7 @@ class IntakeFlowScreen extends StatefulWidget {
 class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     with WidgetsBindingObserver {
   late PageController _pageController;
-  final _data = IntakeData();
+  IntakeData _data = IntakeData();
   int _step = 0; // 0 = welcome, 1–11 = steps
 
   // Step 7 multi-select
@@ -164,12 +165,127 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
 
   static const int _totalSteps = 26;
 
+  /// P0-FL-59e · whose answers are in this flow (null = nobody signed in).
+  /// Every save is stamped with, and refused unless the signed-in member is,
+  /// this one: these are PAR-Q answers, conditions, injuries and consent, and
+  /// a save asks nothing of the person — hiding the tab is enough.
+  String? _owner = _signedIn;
+
+  /// Bumped whenever [_owner] changes: everything started under the previous
+  /// one (a read, a save, a picker, a page's callback) is dropped after it.
+  int _generation = 0;
+  StreamSubscription<AuthState>? _authSub;
+
+  /// The answers of a member who was signed OUT mid-flow: not shown, not sent,
+  /// and given back only if that same member signs in again ("Nothing was lost
+  /// on this device", EC-03). Another member signing in drops them.
+  ({
+    String uid, IntakeData data, Set<String> challenges, int step, String base,
+    String? saveError,
+  })? _held;
+
+  /// The flow was opened by someone else and this member's answers were read
+  /// into it. They are saved once they answer or move on, not for merely
+  /// hiding the tab: a save marks their onboarding incomplete.
+  bool _arrivedBySwitch = false;
+
+  /// What is stored, as far as known: the last read or save that succeeded
+  /// (see [_arrivedBySwitch]). These are health answers too: '' whenever the
+  /// flow holds nobody's.
+  String _base = '';
+
+  /// The member whose intake was finished in this flow. Back on it they are
+  /// still finished: the questions again would mark them incomplete.
+  String? _doneOf;
+
+  static String? get _signedIn =>
+      Supabase.instance.client.auth.currentUser?.id;
+
+  String _snapshot() => jsonEncode([
+        _data.toSupabasePartial(_totalSteps)..remove('consent_date'),
+        _challenges.toList(),
+      ]);
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _pageController = PageController();
     _loadProgress();
+    // The same stream every write's session comes from; unlike a rebuild it is
+    // heard in a hidden tab too. A token refresh is the same member: nothing.
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
+        (_) => _followAccount(),
+        onError: (Object e, StackTrace s) =>
+            reportError('intake.onAuthStateChange', e, s));
+  }
+
+  /// The answers shown become those of the member signed in now. The previous
+  /// member's leave the screen and are never sent.
+  void _followAccount() {
+    if (!mounted) return;
+    final uid = _signedIn;
+    if (uid == _owner) return;
+    final left = _owner;
+    _generation++;
+    if (left != null && !_loading && !_done && _resumeError == null) {
+      _held = (
+        uid: left, data: _data, challenges: {..._challenges}, step: _step,
+        base: _base, saveError: _saveError,
+      );
+    }
+    if (uid != null && _held?.uid != uid) _held = null;
+    _owner = uid;
+
+    // Pickers and sheets this flow opened go with the member.
+    for (final navigator in {
+      Navigator.of(context),
+      Navigator.of(context, rootNavigator: true),
+    }) {
+      navigator.popUntil((r) => r is! PopupRoute);
+    }
+    ScaffoldMessenger.maybeOf(context)?.clearSnackBars();
+
+    final old = _pageController;
+    WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
+    final finished = uid != null && uid == _doneOf;
+    setState(() {
+      _data = IntakeData();
+      _challenges.clear();
+      _base = '';
+      _saving = false;
+      _progressNoticeShown = false;
+      _retryingResume = false;
+      if (uid != null) {
+        // Their own answers, read for them — the same member's too: they may
+        // have finished elsewhere meanwhile, and a save here would undo it.
+        _step = 0;
+        // The signed-out notice was said to nobody: they are signed in now. Their
+        // own failed save comes back with their answers.
+        _saveError = null;
+        _done = finished;
+        _resumeError = null;
+        _arrivedBySwitch = true;
+        _loading = !finished;
+      } else {
+        // Signed out: the step stays, its answers do not. A read that failed
+        // is still the failure it was.
+        _done = false;
+        _loading = false;
+      }
+      _pageController = PageController(initialPage: _step);
+    });
+    if (uid != null && !finished) _readProgress(uid);
+  }
+
+  /// False (recorded, the previous member's answers withdrawn) once [owner],
+  /// whose [what] this is, is no longer the member signed in.
+  bool _stillOwner(String? owner, String what) {
+    if (owner == _owner && _signedIn == owner) return true;
+    reportError('intake.identity',
+        StateError('$what: the signed-in account changed'));
+    _followAccount();
+    return false;
   }
 
   @override
@@ -180,12 +296,13 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
         (state == AppLifecycleState.paused ||
             state == AppLifecycleState.inactive ||
             state == AppLifecycleState.hidden)) {
+      if (_arrivedBySwitch && _snapshot() == _base) return;
       _saveProgress();
     }
   }
 
   Future<void> _loadProgress() async {
-    final uid = Supabase.instance.client.auth.currentUser?.id;
+    final uid = _owner;
     if (uid == null) {
       if (mounted) setState(() => _loading = false);
       return;
@@ -194,7 +311,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
     // routes back here (covers closing before advancing past the first step).
     // Best effort and silent to the person (P0-FL-19 item 4), but a refused or
     // 0-row write is recorded rather than swallowed.
-    unawaited(() async {
+    _track(() async {
       try {
         final rows = await Supabase.instance.client
             .from('user_profiles')
@@ -223,7 +340,9 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
 
   Future<void> _retryResume() async {
     if (_retryingResume) return;
-    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (_signedIn != _owner) _followAccount();
+    final uid = _owner;
+    if (uid != null && _loading) return; // their own read is already out
     setState(() => _retryingResume = true);
     if (uid == null) {
       // No session, so nothing can be read. This is NOT "no stored answers":
@@ -234,16 +353,22 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
       setState(() => _retryingResume = false);
       return;
     }
+    final generation = _generation;
     await _readProgress(uid);
-    if (mounted) setState(() => _retryingResume = false);
+    if (mounted && generation == _generation) {
+      setState(() => _retryingResume = false);
+    }
   }
 
   Future<void> _readProgress(String uid) async {
+    // Late: another member's by the time it answers. Dropped, unseen.
+    final generation = _generation;
+    bool stale() => generation != _generation || _signedIn != uid;
     try {
       final profile = await Supabase.instance.client
           .from('user_profiles')
           .select(
-            'onboarding_step, first_name, last_name, gender, date_of_birth, '
+            'onboarding_step, onboarding_complete, first_name, last_name, gender, date_of_birth, '
             'fitness_goal, activities, activity_level, '
             'training_days_per_week, training_location, nutrition_goal, '
             'protein_confidence, biggest_challenges, height_cm, '
@@ -256,7 +381,38 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
           )
           .eq('id', uid)
           .maybeSingle();
-      if (profile != null && mounted) {
+      if (!mounted || stale()) return;
+      final held = _held?.uid == uid ? _held : null;
+      _held = null;
+      if (_arrivedBySwitch && profile?['onboarding_complete'] == true) {
+        // Finished already, and they did not come here to start again: nothing
+        // is asked, so nothing marks them incomplete.
+        setState(() {
+          _doneOf = uid;
+          _done = true;
+          _saveError = null;
+          _loading = false;
+          _resumeError = null;
+        });
+        return;
+      }
+      if (held != null) {
+        // Signed out and back in: the draft they left. Not sent for merely
+        // hiding the tab unless it differs from what was last stored.
+        _pageController.dispose();
+        _pageController = PageController(initialPage: held.step);
+        setState(() {
+          _data = held.data;
+          _challenges.addAll(held.challenges);
+          _step = held.step;
+          _base = held.base;
+          _saveError = held.saveError;
+          _loading = false;
+          _resumeError = null;
+        });
+        return;
+      }
+      if (profile != null) {
         final savedStep = (profile['onboarding_step'] as num?)?.toInt() ?? 0;
         final saved = IntakeData.fromSupabase(profile);
         _pageController.dispose();
@@ -295,12 +451,14 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
           _data.consentAgreed           = saved.consentAgreed;
           _challenges.addAll(saved.biggestChallenges);
           _step = savedStep;
+          _base = _snapshot();
           _loading = false;
           _resumeError = null;
         });
-      } else if (mounted) {
+      } else {
         // A read that worked and found no row: a fresh start, as before.
         setState(() {
+          _base = _snapshot();
           _loading = false;
           _resumeError = null;
         });
@@ -311,22 +469,44 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
       // blank answers over the stored ones. Now the failure is said, with
       // Try again, and nothing is saved until a read succeeds.
       reportError('intake.loadProgress.read', e, st);
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          _resumeError = e;
-        });
-      }
+      if (!mounted || stale()) return; // not the signed-in member's failure
+      setState(() {
+        _loading = false;
+        _resumeError = e;
+      });
     }
   }
 
-  Future<void> _saveProgress() async {
+  /// Writes of `onboarding_complete: false` that have not answered yet, and
+  /// whose. The final save waits for that member's: one that landed after it
+  /// would leave a member who was told they are done marked incomplete.
+  final _progressWrites = <Future<void>, String?>{};
+
+  void _track(Future<void> write) {
+    _progressWrites[write] = _owner;
+    unawaited(write.whenComplete(() => _progressWrites.remove(write)));
+  }
+
+  void _saveProgress() => _track(_writeProgress());
+
+  Future<void> _writeProgress() async {
     // Never while the stored answers are unknown (loading, or the resume read
     // failed): what is in memory is blank and would overwrite them.
     if (_loading || _resumeError != null) return;
-    final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (uid == null) return;
+    // Nor over a finish, done or on its way: it stores everything, and a save
+    // of progress marks the member incomplete again.
+    if (_saving || _done) return;
+    final uid = _owner;
+    if (uid == null && _signedIn == null) return;
+    if (uid == null || !_stillOwner(uid, 'progress save')) {
+      _followAccount();
+      return;
+    }
+    final generation = _generation;
     final db = Supabase.instance.client;
+    // From here on they have answered: every later correction is saved too.
+    _arrivedBySwitch = false;
+    final sent = _snapshot();
 
     // P0-FL-9. Both phases used to be `catch (_) {}` with no row check, so a
     // refused or 0-row write lost the person's resume point in silence. Each
@@ -353,7 +533,11 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
       reportError('intake.saveProgress.step', e, st);
     }
 
-    // Phase 2: persist the collected intake data.
+    // Phase 2: persist the collected intake data — of the same member, still.
+    // (After a switch `_data` is already someone else's, and so is the notice
+    // below.)
+    if (!_stillOwner(uid, 'progress save') || generation != _generation) return;
+    if (_saving || _done) return; // finished meanwhile: that stored it all
     try {
       _data.biggestChallenges = _challenges.toList();
       final rows = await db
@@ -370,8 +554,10 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
       saved = false;
       reportError('intake.saveProgress.data', e, st);
     }
+    if (generation != _generation || _signedIn != uid) return;
 
     if (saved) {
+      _base = sent;
       _progressNoticeShown = false;
     } else if (!_progressNoticeShown && mounted) {
       _progressNoticeShown = true;
@@ -395,6 +581,8 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
   bool _progressNoticeShown = false;
 
   void _next() {
+    if (_signedIn != _owner) return _followAccount();
+    _arrivedBySwitch = false;
     if (_step < _totalSteps) {
       setState(() => _step++);
       _pageController.nextPage(
@@ -410,6 +598,8 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
   // Jump directly to a specific page — used to skip coach selection for
   // Self Guided and AI Guided modes.
   void _jumpToPage(int page) {
+    if (_signedIn != _owner) return _followAccount();
+    _arrivedBySwitch = false;
     setState(() => _step = page);
     _pageController.animateToPage(
       page,
@@ -461,8 +651,15 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
   /// built a program from answers the database never received. Neither should run over
   /// a failed save.
   Future<void> _finish() async {
+    // As for a save: what is in memory is not known to be this member's.
+    if (_loading || _resumeError != null) return;
+    // Someone else is signed in: not their answers, so nothing is sent.
+    if (_signedIn != null && !_stillOwner(_owner, 'intake')) return;
+    if (_signedIn != _owner) _followAccount(); // signed out meanwhile
+    _arrivedBySwitch = false;
     setState(() { _saving = true; _saveError = null; });
-    final uid = Supabase.instance.client.auth.currentUser?.id;
+    final uid = _owner;
+    final generation = _generation;
     // EC-03 · THE ARM THE ORIGINAL FIX LEFT OPEN. The guard above used to be
     // `if (uid != null) { …save… }` with the completion state set unconditionally after
     // it — so a NULL uid skipped the save entirely and the flow still rendered
@@ -486,22 +683,41 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
       if (mounted) {
         setState(() {
           _saving = false;
-          _saveError = 'We could not save your answers because you are not signed in. '
-              'Nothing was lost on this device — sign in on another tab or app and tap '
-              'Retry.';
+          // A member's own answers wait for them (`_held`). Answers given with
+          // nobody signed in are nobody's to save: whoever signs in gets their
+          // own, so this cannot promise that nothing is lost.
+          _saveError = _held != null
+              ? 'We could not save your answers because you are not signed in. '
+                  'Nothing was lost on this device — sign in on another tab or app and tap '
+                  'Retry.'
+              : 'We could not save your answers because you are not signed in. '
+                  'Sign in, then answer these questions again.';
         });
       }
       return;
     }
     {
+      // (None is started meanwhile: `_saving`.)
+      for (final MapEntry(key: write, value: whose)
+          in [..._progressWrites.entries]) {
+        if (whose == uid) await write.catchError((Object _) {}); // recorded there
+      }
+      if (generation != _generation || _signedIn != uid) {
+        reportError('intake.identity',
+            StateError('intake: the signed-in account changed'));
+        _followAccount();
+        return;
+      }
       _data.biggestChallenges = _challenges.toList();
+      final coachingMode = _data.coachingMode;
       try {
         await Supabase.instance.client
             .from('user_profiles')
             .upsert({'id': uid, ..._data.toSupabase()});
-      } catch (e) {
+      } catch (e, st) {
+        reportError('intake.finish', e, st);
         // NOT marked complete. The intake is not finished, because it was not saved.
-        if (mounted) {
+        if (mounted && generation == _generation && _signedIn == uid) {
           setState(() {
             _saving = false;
             _saveError = 'We could not save your answers. Nothing was lost on this '
@@ -510,25 +726,39 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
         }
         return;
       }
-      ScoreEngine().assessmentComplete(); // +25 (once)
+      // The answers are saved; what follows reads the session, so it would be
+      // the next member's points and the next member's plan.
+      if (_signedIn != uid) {
+        reportError('intake.identity',
+            StateError('intake follow-up: the signed-in account changed'));
+        _followAccount();
+        return;
+      }
+      unawaited(ScoreEngine(forUid: uid).assessmentComplete()); // +25 (once)
       // Self/AI-Guided clients have no coach, so the system generates their plan
       // (workout program + nutrition targets + water goal + habits) from the
       // onboarding answers just saved. Coach-Guided clients get a coach-assigned
       // plan instead, so we skip generation for them.
-      if (_data.coachingMode == 'self_guided' || _data.coachingMode == 'ai_guided') {
+      if (coachingMode == 'self_guided' || coachingMode == 'ai_guided') {
         try {
           await Supabase.instance.client.rpc('generate_client_plan');
-        } catch (_) {/* generation must never block finishing onboarding */}
+        } catch (e, st) {
+          // Generation must never block finishing onboarding; it is recorded.
+          reportError('intake.finish.generatePlan', e, st);
+        }
       }
     }
     // FIT-009 is a state, not a redirect. The board's note is explicit:
     // "Success is quiet: a mark, a sentence, what happens next. No confetti,
     // no celebration animation."
-    if (mounted) setState(() { _saving = false; _done = true; });
+    if (mounted && generation == _generation && _signedIn == uid) {
+      setState(() { _saving = false; _done = true; _doneOf = uid; });
+    }
   }
 
   @override
   void dispose() {
+    _authSub?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _pageController.dispose();
     super.dispose();
@@ -536,7 +766,12 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
+    final changed = _signedIn != _owner;
+    // Never drawn for anyone else, however late the change is heard of.
+    if (changed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _followAccount());
+    }
+    if (_loading || changed) {
       return const Scaffold(
         backgroundColor: _bg,
         body: Center(
@@ -566,6 +801,18 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
 
     if (_done) return IntakeCompletePage(onGoHome: () => context.go('/home'));
 
+    // A page's callback (a picker that answers late, a timer, a tap in a tab
+    // that has not redrawn) is only for the member it was built for.
+    final generation = _generation;
+    bool live() => mounted && generation == _generation;
+    void edit(VoidCallback change) {
+      if (!live() || _signedIn != _owner) return;
+      setState(change);
+    }
+    void next() { if (live()) _next(); }
+    void back() { if (live()) _back(); }
+    void finish() { if (live()) _finish(); }
+
     return Scaffold(
       backgroundColor: _bg,
       body: Stack(
@@ -577,217 +824,220 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
             child: _Glow(color: _terCont.withValues(alpha: 0.10), size: 420)),
 
           PageView(
+            // Fresh pages, with their fields and photos, for each member.
+            key: ValueKey(generation),
             controller: _pageController,
             physics: const NeverScrollableScrollPhysics(),
             children: [
               // 0 — Welcome
-              _WelcomePage(onStart: _next),
+              _WelcomePage(onStart: next),
               // 1 — Profile Info (name, gender, dob)
               ProfileInfoPage(
                 firstName: _data.firstName,
                 lastName: _data.lastName,
                 gender: _data.gender,
                 dateOfBirth: _data.dateOfBirth,
-                onChanged: (fn, ln, g, dob) { setState(() {
+                onChanged: (fn, ln, g, dob) { edit(() {
                   _data.firstName   = fn;
                   _data.lastName    = ln;
                   _data.gender      = g;
                   _data.dateOfBirth = dob;
                 }); },
-                onContinue: _next,
-                onBack: _back,
+                onContinue: next,
+                onBack: back,
               ),
               // 2 — PAR-Q Health Screening
               _PARQPage(
                 answers: _data.parqAnswers,
-                onChanged: (v) { setState(() => _data.parqAnswers = v); },
-                onContinue: _next,
-                onBack: _back,
+                onChanged: (v) { edit(() => _data.parqAnswers = v); },
+                onContinue: next,
+                onBack: back,
               ),
               // 3 — Medical History
               _MedicalHistoryPage(
                 selected: _data.medicalConditions,
-                onChanged: (v) { setState(() => _data.medicalConditions = v); },
-                onContinue: _next,
-                onBack: _back,
+                onChanged: (v) { edit(() => _data.medicalConditions = v); },
+                onContinue: next,
+                onBack: back,
               ),
               // 4 — Injuries & Limitations
               _InjuriesPage(
                 hasInjuries: _data.hasInjuries,
                 locations: _data.injuryLocations,
                 description: _data.injuryDescription,
-                onChanged: (hasI, locs, desc) { setState(() {
+                onChanged: (hasI, locs, desc) { edit(() {
                   _data.hasInjuries       = hasI;
                   _data.injuryLocations   = locs;
                   _data.injuryDescription = desc;
                 }); },
-                onContinue: _next,
-                onBack: _back,
+                onContinue: next,
+                onBack: back,
               ),
               // 5 — Primary Goal
               _Step1Page(
                 selected: _data.primaryGoal,
-                onSelect: (v) { setState(() => _data.primaryGoal = v); },
-                onContinue: _next,
-                onBack: _back,
+                onSelect: (v) { edit(() => _data.primaryGoal = v); },
+                onContinue: next,
+                onBack: back,
               ),
               // 6 — Activities (multi-select)
               _ActivitiesPage(
                 selected: _data.activities,
-                onToggle: (v) => setState(() {
+                onToggle: (v) => edit(() {
                   final next = _data.activities.toList();
                   next.contains(v) ? next.remove(v) : next.add(v);
                   _data.activities = next;
                 }),
-                onContinue: _next,
-                onBack: _back,
+                onContinue: next,
+                onBack: back,
               ),
               // 7 — Target Timeline
               _TargetTimelinePage(
                 selected: _data.targetTimeline,
-                onSelect: (v) { setState(() => _data.targetTimeline = v); },
-                onContinue: _next,
-                onBack: _back,
+                onSelect: (v) { edit(() => _data.targetTimeline = v); },
+                onContinue: next,
+                onBack: back,
               ),
               // 7 — Experience Level
               _ExperiencePage(
                 experienceLevel: _data.experienceLevel,
                 workedWithCoach: _data.workedWithCoachBefore,
-                onChanged: (lvl, worked) { setState(() {
+                onChanged: (lvl, worked) { edit(() {
                   _data.experienceLevel       = lvl;
                   _data.workedWithCoachBefore = worked;
                 }); },
-                onContinue: _next,
-                onBack: _back,
+                onContinue: next,
+                onBack: back,
               ),
               // 8 — Height
               _HeightPage(
                 heightCm: _data.heightCm,
-                onHeightChanged: (v) { setState(() => _data.heightCm = v); },
-                onContinue: _next,
-                onSkip: _next,
-                onBack: _back,
+                onHeightChanged: (v) { edit(() => _data.heightCm = v); },
+                onContinue: next,
+                onSkip: next,
+                onBack: back,
               ),
               // 9 — Weight
               _WeightPage(
                 weightKg: _data.weightKg,
                 heightCm: _data.heightCm,
-                onWeightChanged: (v) { setState(() => _data.weightKg = v); },
-                onContinue: _next,
-                onSkip: _next,
-                onBack: _back,
+                onWeightChanged: (v) { edit(() => _data.weightKg = v); },
+                onContinue: next,
+                onSkip: next,
+                onBack: back,
               ),
               // 10 — Target Weight
               _TargetWeightPage(
                 currentWeightKg: _data.weightKg,
                 goalWeightKg: _data.weightGoalKg,
                 primaryGoal: _data.primaryGoal,
-                onGoalChanged: (v) { setState(() => _data.weightGoalKg = v); },
-                onContinue: _next,
-                onSkip: _next,
-                onBack: _back,
+                onGoalChanged: (v) { edit(() => _data.weightGoalKg = v); },
+                onContinue: next,
+                onSkip: next,
+                onBack: back,
               ),
               // 11 — Weight Goal Summary
               _WeightGoalPage(
                 weightKg: _data.weightKg,
                 weightGoalKg: _data.weightGoalKg,
                 primaryGoal: _data.primaryGoal,
-                onContinue: _next,
-                onBack: _back,
+                onContinue: next,
+                onBack: back,
               ),
               // 12 — Activity Level
               _Step2Page(
                 selected: _data.activityLevel,
-                onSelect: (v) { setState(() => _data.activityLevel = v); },
-                onContinue: _next,
-                onBack: _back,
+                onSelect: (v) { edit(() => _data.activityLevel = v); },
+                onContinue: next,
+                onBack: back,
               ),
               // 13 — Training Frequency
               _Step3Page(
                 selected: _data.trainingDays,
-                onSelect: (v) => setState(() => _data.trainingDays = v),
-                onContinue: _next,
-                onBack: _back,
+                onSelect: (v) => edit(() => _data.trainingDays = v),
+                onContinue: next,
+                onBack: back,
               ),
               // 14 — Training Location
               _Step4Page(
                 selected: _data.trainingLocation,
-                onSelect: (v) { setState(() => _data.trainingLocation = v); },
-                onContinue: _next,
-                onBack: _back,
+                onSelect: (v) { edit(() => _data.trainingLocation = v); },
+                onContinue: next,
+                onBack: back,
               ),
               // 15 — Lifestyle
               _LifestylePage(
                 sleepHours: _data.sleepHours,
                 stressLevel: _data.stressLevel,
                 occupation: _data.occupation,
-                onChanged: (sleep, stress, occ) { setState(() {
+                onChanged: (sleep, stress, occ) { edit(() {
                   _data.sleepHours  = sleep;
                   _data.stressLevel = stress;
                   _data.occupation  = occ;
                 }); },
-                onContinue: _next,
-                onBack: _back,
+                onContinue: next,
+                onBack: back,
               ),
               // 16 — Nutrition Goal
               _Step5Page(
                 selected: _data.nutritionGoal,
-                onSelect: (v) { setState(() => _data.nutritionGoal = v); },
-                onContinue: _next,
-                onBack: _back,
+                onSelect: (v) { edit(() => _data.nutritionGoal = v); },
+                onContinue: next,
+                onBack: back,
               ),
               // 17 — Dietary Restrictions & Allergies
               _DietaryRestrictionsPage(
                 selected: _data.dietaryRestrictions,
                 allergies: _data.foodAllergies,
-                onChanged: (restr, allerg) { setState(() {
+                onChanged: (restr, allerg) { edit(() {
                   _data.dietaryRestrictions = restr;
                   _data.foodAllergies       = allerg;
                 }); },
-                onContinue: _next,
-                onSkip: _next,
-                onBack: _back,
+                onContinue: next,
+                onSkip: next,
+                onBack: back,
               ),
               // 18 — Protein Confidence
               _Step6Page(
                 selected: _data.proteinConfidence,
-                onSelect: (v) { setState(() => _data.proteinConfidence = v); },
-                onContinue: _next,
-                onBack: _back,
+                onSelect: (v) { edit(() => _data.proteinConfidence = v); },
+                onContinue: next,
+                onBack: back,
               ),
               // 19 — Biggest Challenges
               _Step7Page(
                 selected: _challenges,
-                onToggle: (v) => setState(() {
+                onToggle: (v) => edit(() {
                   _challenges.contains(v) ? _challenges.remove(v) : _challenges.add(v);
                 }),
-                onContinue: _next,
-                onBack: _back,
+                onContinue: next,
+                onBack: back,
               ),
               // 20 — Progress Photos
-              _Step8Page(onContinue: _next, onSkip: _next, onBack: _back),
+              _Step8Page(
+                  owner: _owner, onContinue: next, onSkip: next, onBack: back),
               // 21 — Coaching Mode
               _CoachingModePage(
                 selected: _data.coachingMode,
-                onSelect: (v) => setState(() => _data.coachingMode = v),
-                onContinue: _next,
-                onSkipCoach: () => _jumpToPage(24),
-                onBack: _back,
+                onSelect: (v) => edit(() => _data.coachingMode = v),
+                onContinue: next,
+                onSkipCoach: () { if (live()) _jumpToPage(24); },
+                onBack: back,
               ),
               // 22 — Choose Coach
-              _Step9Page(onContinue: _next, onBack: _back),
+              _Step9Page(owner: _owner, onContinue: next, onBack: back),
               // 23 — Generating Plan
-              _Step10Page(onContinue: _next, onBack: _back),
+              _Step10Page(onContinue: next, onBack: back),
               // 24 — Consent
               _ConsentPage(
                 onContinue: () {
-                  setState(() => _data.consentAgreed = true);
-                  _next();
+                  edit(() => _data.consentAgreed = true);
+                  next();
                 },
-                onBack: _back,
+                onBack: back,
               ),
               // 25 — Final
-              _Step11Page(data: _data, saving: _saving, onEnter: _finish),
+              _Step11Page(data: _data, saving: _saving, onEnter: finish),
             ],
           ),
 
@@ -816,7 +1066,7 @@ class _IntakeFlowScreenState extends State<IntakeFlowScreen>
                       const SizedBox(height: 12),
                       Row(mainAxisAlignment: MainAxisAlignment.end, children: [
                         TextButton(
-                          onPressed: _saving ? null : _finish,
+                          onPressed: _saving ? null : finish,
                           child: Text(_saving ? 'Saving…' : 'Retry',
                               style: const TextStyle(
                                   color: Color(0xFFF07A8C),
@@ -3771,7 +4021,10 @@ class _Step8Page extends StatefulWidget {
   final VoidCallback onContinue;
   final VoidCallback onSkip;
   final VoidCallback onBack;
-  const _Step8Page({required this.onContinue, required this.onSkip, required this.onBack});
+  /// P0-FL-59e · whose photos these are.
+  final String? owner;
+  const _Step8Page({required this.owner, required this.onContinue,
+    required this.onSkip, required this.onBack});
 
   @override
   State<_Step8Page> createState() => _Step8PageState();
@@ -3804,8 +4057,25 @@ class _Step8PageState extends State<_Step8Page> {
     return n;
   }
 
+  /// False (recorded) once someone else is signed in: nothing more is stored,
+  /// read or shown for this step, which is rebuilt for them.
+  bool _stillOwner(String what) {
+    if (Supabase.instance.client.auth.currentUser?.id == widget.owner) {
+      return true;
+    }
+    reportError('intake.photos.identity',
+        StateError('$what: the signed-in account changed'));
+    return false;
+  }
+
+  /// A pick answers late; it is for the member whose step this is.
+  void _setPick(VoidCallback pick) {
+    if (!mounted || !_stillOwner('photo pick')) return;
+    setState(pick);
+  }
+
   Future<void> _loadExistingPhotos() async {
-    final uid = Supabase.instance.client.auth.currentUser?.id;
+    final uid = widget.owner;
     if (uid == null) {
       if (mounted) setState(() => _loadingExisting = false);
       return;
@@ -3818,10 +4088,12 @@ class _Step8PageState extends State<_Step8Page> {
     const exts  = ['jpg', 'jpeg', 'png', 'heic', 'webp'];
     for (final side in sides) {
       for (final ext in exts) {
+        if (Supabase.instance.client.auth.currentUser?.id != uid) return;
         try {
           final url = await Supabase.instance.client.storage
               .from('progress-photos')
               .createSignedUrl('$uid/$side.$ext', 3600);
+          if (Supabase.instance.client.auth.currentUser?.id != uid) return;
           if (mounted) {
             setState(() {
               if (side == 'front') _frontUrl = url;
@@ -3890,12 +4162,15 @@ class _Step8PageState extends State<_Step8Page> {
     final pending = _pendingSlots;
     // Nothing new to upload — just proceed
     if (pending.isEmpty) { widget.onContinue(); return; }
+    final uid = widget.owner;
+    if (!_stillOwner('photo upload')) return;
     setState(() => _uploading = true);
-    final uid = Supabase.instance.client.auth.currentUser?.id;
     final failed = <String>[];
     Object? firstError;
+    final files = {for (final slot in pending) slot: _picks[slot]!};
     for (final slot in pending) {
-      final file = _picks[slot]!;
+      if (!_stillOwner('photo upload')) return;
+      final file = files[slot]!;
       try {
         // No session: this slot counts as failed and is reported. (The
         // wording avoids the phrase the EC-03 negative control keys on.)
@@ -3903,6 +4178,8 @@ class _Step8PageState extends State<_Step8Page> {
           throw StateError('no session; photo not uploaded');
         }
         final bytes = await file.readAsBytes();
+        // This member's folder, as this member, or not at all.
+        if (!_stillOwner('photo upload')) return;
         // On web file.path is a blob: URL with no extension — derive from the
         // file name / mime instead so the stored path matches the reload probe.
         final ext = _photoExt(file);
@@ -3924,7 +4201,7 @@ class _Step8PageState extends State<_Step8Page> {
         firstError ??= e;
       }
     }
-    if (!mounted) return;
+    if (!mounted || !_stillOwner('photo upload')) return;
     setState(() {
       _uploading = false;
       _failedSlots = failed;
@@ -4027,7 +4304,7 @@ class _Step8PageState extends State<_Step8Page> {
                   existingUrl: _frontUrl,
                   uploaded: _front != null &&
                       identical(_uploadedFiles['front'], _front),
-                  onPicked: (f) => setState(() => _front = f),
+                  onPicked: (f) => _setPick(() => _front = f),
                 ),
                 const SizedBox(height: 12),
                 _PhotoUploadCard(
@@ -4038,7 +4315,7 @@ class _Step8PageState extends State<_Step8Page> {
                   existingUrl: _sideUrl,
                   uploaded: _side != null &&
                       identical(_uploadedFiles['side'], _side),
-                  onPicked: (f) => setState(() => _side = f),
+                  onPicked: (f) => _setPick(() => _side = f),
                 ),
                 const SizedBox(height: 12),
                 _PhotoUploadCard(
@@ -4049,7 +4326,7 @@ class _Step8PageState extends State<_Step8Page> {
                   existingUrl: _backUrl,
                   uploaded: _back != null &&
                       identical(_uploadedFiles['back'], _back),
-                  onPicked: (f) => setState(() => _back = f),
+                  onPicked: (f) => _setPick(() => _back = f),
                 ),
                 if (_failedSlots.isNotEmpty) ...[
                   const SizedBox(height: 16),
@@ -4187,7 +4464,8 @@ class _PhotoUploadCardState extends State<_PhotoUploadCard> {
       _failPick("Couldn't use that photo — ${_intakeNextStep(e)}");
       return false;
     }
-    if (mounted) setState(() => _previewBytes = bytes);
+    if (!mounted) return true; // the step is gone, with the member it was for
+    setState(() => _previewBytes = bytes);
     widget.onPicked(file);
     return true;
   }
@@ -4212,7 +4490,7 @@ class _PhotoUploadCardState extends State<_PhotoUploadCard> {
   }
 
   Future<void> _pick(BuildContext context, ImageSource source) async {
-    if (_picking) return;
+    if (!mounted || _picking) return;
     setState(() {
       _picking = true;
       _pickFailure = null;
@@ -4292,7 +4570,10 @@ class _PhotoUploadCardState extends State<_PhotoUploadCard> {
                   icon: Icons.delete_outline,
                   label: 'Remove Photo',
                   color: const Color(0xFFCF6679),
-                  onTap: () { Navigator.pop(ctx); widget.onPicked(null); },
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    if (mounted) widget.onPicked(null);
+                  },
                 ),
               ],
             ],
@@ -4724,7 +5005,10 @@ class _CoachingModePageState extends State<_CoachingModePage> {
 class _Step9Page extends ConsumerStatefulWidget {
   final VoidCallback onContinue;
   final VoidCallback onBack;
-  const _Step9Page({required this.onContinue, required this.onBack});
+  /// P0-FL-59e · the member choosing.
+  final String? owner;
+  const _Step9Page({required this.owner, required this.onContinue,
+    required this.onBack});
 
   @override
   ConsumerState<_Step9Page> createState() => _Step9PageState();
@@ -4734,7 +5018,20 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
   Map<String, dynamic>? _selectedCoach;
   bool _selecting = false;
 
+  /// False (recorded) once someone else is signed in: the rest of this choice
+  /// (ending a coach, telling one) would be done as them.
+  bool _stillOwner(String what) {
+    if (Supabase.instance.client.auth.currentUser?.id == widget.owner) {
+      return true;
+    }
+    reportError('IntakeFlow.selectCoach.identity',
+        StateError('$what: the signed-in account changed'));
+    return false;
+  }
+
   Future<void> _selectCoach(Map<String, dynamic> coach) async {
+    if (!_stillOwner('coach choice')) return;
+    final owner = widget.owner;
     setState(() => _selecting = true);
     // "Meet Coach …" only for a coach who IS linked. One `catch (_) {}` around
     // the whole chain welcomed a client to a coach whose link had failed.
@@ -4744,7 +5041,7 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
     // coach IS linked (P0-FL-1 follow-up F1).
     String? previousNotEnded;
     try {
-      final uid = Supabase.instance.client.auth.currentUser?.id;
+      final uid = owner;
       if (uid != null) {
         await Supabase.instance.client
             .from('coach_client_relationships')
@@ -4756,7 +5053,8 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
               'activated_at':  DateTime.now().toUtc().toIso8601String(),
             }, onConflict: 'coach_id,client_id');
         linked = true;
-        ref.invalidate(assignedCoachProvider);
+        if (!_stillOwner('coach choice')) return;
+        if (mounted) ref.invalidate(assignedCoachProvider);
         // Intake yields a single coach: cancel any other active relationship
         // (e.g. a coach picked earlier then changed) so re-selecting replaces
         // rather than accumulates. Multi-coach is added later via marketplace.
@@ -4775,6 +5073,8 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
               .eq('status', 'active')
               .neq('coach_id', coach['id'] as String);
           for (final o in (others as List)) {
+            // `cancelCoach` ends the coaching of whoever is signed in.
+            if (!_stillOwner('end previous coach')) return;
             try {
               await CoachRelationshipService()
                   .cancelCoach(o['coach_id'] as String, 'switched_during_intake', null);
@@ -4792,6 +5092,7 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
         }
         // Notify coach. Best-effort, and reported: the link above is saved, and
         // a failed notification must not read as a failed link (N3).
+        if (!_stillOwner('coach notification')) return;
         try {
           await Supabase.instance.client.from('notifications').insert({
             'recipient_id': coach['id'],
@@ -4808,7 +5109,7 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
     } catch (e) {
       reportError('IntakeFlow.selectCoach', e);
     }
-    if (!mounted) return;
+    if (!mounted || !_stillOwner('coach choice')) return;
     setState(() {
       if (linked) _selectedCoach = coach;
       _selecting = false;

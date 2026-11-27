@@ -111,7 +111,12 @@ void main() {
         reason: 'a failed totals read must render FIT-022\'s state');
     expect(code, contains('totalsFailed'),
         reason: 'the failure has to reach the builder to be renderable');
-    expect(code, contains('totals is AsyncError'),
+    // P0-FL-59e round 4: the state matched is the signed-in member's own read
+    // (`ownRead`): `totals is AsyncError` also matched the previous member's
+    // failure, and missed this member's carried over the previous one's value.
+    expect(code, contains('ownRead(ref.watch(nutritionTotalsProvider))'),
+        reason: 'the failure matched is this member\'s');
+    expect(code, contains('totals.error != null'),
         reason: 'matching on the STATE, not on a null value — an error\'s null '
             'and an empty result\'s null are the same null');
   });

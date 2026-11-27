@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
+import '../../../core/observability/app_failure.dart';
 import '../../../shared/theme/app_background.dart';
+import '../../auth/domain/auth_provider.dart';
+import '../../nutrition/domain/nutrition_provider.dart' show ownRead;
+import '../../workout/presentation/widgets/section_load_failure.dart'
+    show couldntMessage;
 import '../data/models/action_item.dart';
 import '../domain/action_item_provider.dart';
 import '../../../core/widgets/back_leading.dart';
@@ -12,7 +18,17 @@ class ActionCenterScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final itemsAsync = ref.watch(myActionItemsProvider);
+    // The rows are redrawn for whoever is signed in, whatever the read is doing.
+    ref.watch(currentUserProvider.select((u) => u?.id));
+    final own = ownRead(ref.watch(myActionItemsProvider));
+    // Theirs is kept through a refresh that fails, and that is said.
+    ref.listen(myActionItemsProvider, (_, next) {
+      final now = ownRead(next);
+      final e = now.error;
+      if (e == null || now.value == null || now.busy || !context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(couldntMessage('refresh your action items', e))));
+    });
     return AppGradientBackground(
       child: Scaffold(
       backgroundColor: Colors.transparent,
@@ -24,13 +40,13 @@ class ActionCenterScreen extends ConsumerWidget {
             style: TextStyle(color: AppColors.white, fontWeight: FontWeight.bold)),
         iconTheme: const IconThemeData(color: AppColors.white),
       ),
-      body: itemsAsync.when(
-        loading: () => const Center(
+      body: switch (own.value) {
+        null when own.error == null => const Center(
             child: CircularProgressIndicator(color: AppColors.purple)),
-        error: (_, __) => const Center(
+        null => const Center(
             child: Text('Could not load your action items',
                 style: TextStyle(color: AppColors.textTertiary))),
-        data: (items) {
+        final items => Builder(builder: (_) {
           if (items.isEmpty) return const _EmptyState();
           final pending = items.where((i) => !i.isCompleted).toList();
           final completed = items.where((i) => i.isCompleted).toList();
@@ -61,8 +77,8 @@ class ActionCenterScreen extends ConsumerWidget {
               ],
             ),
           );
-        },
-      ),
+        }),
+      },
     ));
   }
 }
@@ -216,13 +232,44 @@ class _ActionTile extends ConsumerWidget {
   }
 
   Future<void> _toggle(BuildContext context, WidgetRef ref) async {
+    final auth = Supabase.instance.client.auth;
     final svc = ref.read(actionItemServiceProvider);
-    if (item.isCompleted) {
-      await svc.reopen(item.id);
-    } else {
-      await svc.completeActionItem(item.id);
+    final messenger = ScaffoldMessenger.of(context);
+    // The tile can be gone (the list re-read, or another member's) by the time
+    // this answers; the container is not.
+    final container = ProviderScope.containerOf(context, listen: false);
+    // The member whose task this is. A tile still up is not anyone else's.
+    final owner = item.clientId;
+    if (auth.currentUser?.id != owner) {
+      reportError('ActionCenter.identity',
+          StateError('action item: the signed-in account changed'));
+      return;
     }
-    ref.invalidate(myActionItemsProvider);
+    final reopening = item.isCompleted;
+    String? failed;
+    try {
+      final saved = reopening
+          ? await svc.reopen(item.id)
+          : await svc.completeActionItem(item.id);
+      if (!saved) {
+        failed = "Couldn't ${reopening ? 'reopen that action item' : 'mark that '
+            'action item done'} — it may already have changed. Pull down to "
+            'refresh.';
+      }
+    } catch (e, st) {
+      reportError('ActionCenter.toggle', e, st);
+      failed = couldntMessage(
+          reopening ? 'reopen that action item' : 'mark that action item done',
+          e);
+    }
+    // Another member's by now: theirs to read, and nothing to say to them.
+    if (auth.currentUser?.id != owner) return;
+    // (A no-op on a container disposed meanwhile: the same member signed out
+    // and in again. Its messenger is gone too.)
+    container.invalidate(myActionItemsProvider);
+    if (failed != null && messenger.mounted) {
+      messenger.showSnackBar(SnackBar(content: Text(failed)));
+    }
   }
 }
 

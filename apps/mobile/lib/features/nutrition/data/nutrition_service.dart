@@ -1,11 +1,30 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'models/food_model.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../coach/data/score_service.dart';
 import '../../scoring/data/score_engine.dart';
 
 class NutritionService {
+  /// P0-FL-59e · [forUid]: the member whose meals these are. Given, a meal is
+  /// logged for that member or not at all. Null is a member captured while
+  /// nobody was signed in: nobody's meal, so not the next member's either.
+  NutritionService({this.forUid = signedInAtCall});
+
+  final String? forUid;
+
+  /// "[forUid] was not given", which null is not.
+  static const signedInAtCall = '<signed in at the call>';
+
+  bool _stillSignedIn(String? owner, String what) {
+    if (_supabase.auth.currentUser?.id == owner) return true;
+    reportError('NutritionService.identity',
+        StateError('$what: the signed-in account changed'));
+    return false;
+  }
+
   final _supabase = Supabase.instance.client;
   final _customFoods = <Food>[];
   // OpenFoodFacts is a free, key-less food database (barcodes + search).
@@ -14,6 +33,14 @@ class NutritionService {
     connectTimeout: const Duration(seconds: 8),
     receiveTimeout: const Duration(seconds: 8),
   ));
+
+  /// For tests: the food database, without its network.
+  @visibleForTesting
+  static Dio get openFoodFacts => _off;
+
+  /// A value as given; null when it was not (never 0, which is an answer).
+  static double? _known(Object? v) =>
+      v is num && v.isFinite ? v.toDouble() : null;
 
   void addCustomFood(Food food) => _customFoods.add(food);
 
@@ -48,7 +75,12 @@ class NutritionService {
     required double servingSize,
     required String servingUnit,
   }) async {
-    final userId = _supabase.auth.currentUser?.id;
+    // One member for the meal and every award that follows it.
+    final userId =
+        forUid == signedInAtCall ? _supabase.auth.currentUser?.id : forUid;
+    if (!_stillSignedIn(userId, 'meal')) {
+      throw StateError('meal: the signed-in account changed'); // nothing sent
+    }
     if (userId == null) throw Exception('Not logged in');
     await _supabase.from('nutrition_logs').insert({
       'user_id': userId,
@@ -67,20 +99,21 @@ class NutritionService {
       'logged_at': DateTime.now().toUtc().toIso8601String(),
     });
     // 12 Circle Score: +5 for the meal log, then re-check goal/day bonuses.
-    await ScoreEngine().mealLogged(DateTime.now().microsecondsSinceEpoch.toString());
+    await ScoreEngine(forUid: userId)
+        .mealLogged(DateTime.now().microsecondsSinceEpoch.toString());
     // Award 12 Circle Score nutrition points based on adherence to coach goals.
     // Idempotent (ScoreService sets, not increments) so re-logging never double-counts.
-    await _awardNutritionScore();
+    await _awardNutritionScore(userId);
   }
 
   /// Recomputes today's macro adherence vs the active plan and updates the
   /// nutrition portion of the daily score. Never throws — scoring failures
   /// must not break meal logging.
-  Future<void> _awardNutritionScore() async {
+  Future<void> _awardNutritionScore(String userId) async {
+    if (!_stillSignedIn(userId, 'nutrition points')) return;
     try {
-      final userId = _supabase.auth.currentUser?.id;
-      if (userId == null) return;
-      final totals = await getTodayTotals();
+      final totals = await _todayTotalsOf(userId);
+      if (!_stillSignedIn(userId, 'nutrition points')) return;
       // Pull active coach-assigned goals; fall back to sensible defaults.
       double calTarget = 2000, proTarget = 120;
       final plan = await _supabase
@@ -96,13 +129,14 @@ class NutritionService {
       final calPct = calTarget > 0 ? (totals['calories']! / calTarget).clamp(0.0, 1.0) : 0.0;
       final proPct = proTarget > 0 ? (totals['protein']! / proTarget).clamp(0.0, 1.0) : 0.0;
       final completionPct = (calPct + proPct) / 2;
-      await ScoreService().addNutritionPoints(completionPct);
+      await ScoreService(forUid: userId).addNutritionPoints(completionPct);
       // 12 Circle Score goal bonuses (each once-per-day via server dedup).
-      final engine = ScoreEngine();
+      final engine = ScoreEngine(forUid: userId);
       if (proPct >= 1.0) await engine.proteinGoalHit();
       if (calPct >= 0.9) await engine.nutritionDayComplete();
-    } catch (_) {
-      // ignore scoring errors
+    } catch (e, st) {
+      // Scoring never breaks meal logging; it is recorded.
+      reportError('NutritionService._awardNutritionScore', e, st);
     }
   }
 
@@ -116,6 +150,10 @@ class NutritionService {
   Future<Map<String, double>> getTodayTotals() async {
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) return {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0};
+    return _todayTotalsOf(userId);
+  }
+
+  Future<Map<String, double>> _todayTotalsOf(String userId) async {
     {
       final today = DateTime.now();
       final start = DateTime(today.year, today.month, today.day);
@@ -207,7 +245,10 @@ class NutritionService {
 
   /// Caches an OpenFoodFacts hit into the local `foods` table (dedup by the
   /// UNIQUE barcode) so repeat lookups are instant/offline. Fire-and-forget.
-  Future<void> _cacheFoods(List<Map<String, dynamic>> rows) async {
+  Future<void> _cacheFoods(
+      String? searcher, List<Map<String, dynamic>> rows) async {
+    // P0-FL-59e · what one member looked up is not sent by another.
+    if (_supabase.auth.currentUser?.id != searcher) return;
     final withCode = rows.where((r) => (r['barcode'] as String?)?.isNotEmpty == true).toList();
     if (withCode.isEmpty) return;
     try {
@@ -217,8 +258,10 @@ class NutritionService {
 
   /// Barcode → nutrition. Checks the local `foods` table first, then falls back
   /// to OpenFoodFacts (and caches the hit). Returns {name, calories, protein,
-  /// carbs, fat} per 100g, or null if not found anywhere.
+  /// carbs, fat} per 100g, or null if not found anywhere. A value the product
+  /// does not give is null: it was 0, and was logged (and cached) as 0.
   Future<Map<String, dynamic>?> lookupBarcode(String code) async {
+    final searcher = _supabase.auth.currentUser?.id;
     try {
       final row = await _supabase
           .from('foods')
@@ -228,10 +271,10 @@ class NutritionService {
       if (row != null) {
         return {
           'name': row['name'],
-          'calories': (row['calories_per_100g'] as num?)?.toDouble() ?? 0,
-          'protein': (row['protein_per_100g'] as num?)?.toDouble() ?? 0,
-          'carbs': (row['carbs_per_100g'] as num?)?.toDouble() ?? 0,
-          'fat': (row['fat_per_100g'] as num?)?.toDouble() ?? 0,
+          'calories': _known(row['calories_per_100g']),
+          'protein': _known(row['protein_per_100g']),
+          'carbs': _known(row['carbs_per_100g']),
+          'fat': _known(row['fat_per_100g']),
         };
       }
     } catch (_) {}
@@ -243,15 +286,14 @@ class NutritionService {
       if (data is Map && data['status'] == 1 && data['product'] is Map) {
         final p = data['product'] as Map;
         final n = (p['nutriments'] as Map?) ?? {};
-        double nv(String k) => (n[k] as num?)?.toDouble() ?? 0;
         final name = (p['product_name'] as String?)?.trim();
         if (name == null || name.isEmpty) return null;
-        final cal = nv('energy-kcal_100g');
-        final protein = nv('proteins_100g');
-        final carbs = nv('carbohydrates_100g');
-        final fat = nv('fat_100g');
+        final cal = _known(n['energy-kcal_100g']);
+        final protein = _known(n['proteins_100g']);
+        final carbs = _known(n['carbohydrates_100g']);
+        final fat = _known(n['fat_100g']);
         // Cache for instant/offline future lookups.
-        _cacheFoods([{
+        _cacheFoods(searcher, [{
           'barcode': code, 'name': name,
           'brand': (p['brands'] as String?)?.split(',').first.trim(),
           'calories_per_100g': cal, 'protein_per_100g': protein,
@@ -291,6 +333,7 @@ class NutritionService {
   /// Searches the OpenFoodFacts database (per-100g values) for `query`.
   Future<List<Food>> searchFoodsOnline(String query) async {
     if (query.trim().length < 2) return [];
+    final searcher = _supabase.auth.currentUser?.id;
     try {
       final res = await _off.get(
         'https://world.openfoodfacts.org/cgi/search.pl',
@@ -302,6 +345,7 @@ class NutritionService {
       final data = res.data is String ? jsonDecode(res.data as String) : res.data;
       final products = (data is Map ? data['products'] as List? : null) ?? const [];
       final out = <Food>[];
+      final cache = <Map<String, dynamic>>[];
       for (final p in products) {
         if (p is! Map) continue;
         final name = (p['product_name'] as String?)?.trim();
@@ -320,13 +364,19 @@ class NutritionService {
           servingSize: 100, servingUnit: 'g',
           barcode: p['code'] as String?,
         ));
+        // As given: a barcode scanned later reads these, and a value not given
+        // is not 0.
+        final f = out.last;
+        cache.add({
+          'barcode': f.barcode, 'name': f.name, 'brand': f.brand,
+          'calories_per_100g': f.calories,
+          'protein_per_100g': _known(n['proteins_100g']),
+          'carbs_per_100g': _known(n['carbohydrates_100g']),
+          'fat_per_100g': _known(n['fat_100g']),
+        });
       }
       // Cache the barcoded results for instant future lookups.
-      _cacheFoods(out.map((f) => {
-        'barcode': f.barcode, 'name': f.name, 'brand': f.brand,
-        'calories_per_100g': f.calories, 'protein_per_100g': f.protein,
-        'carbs_per_100g': f.carbs, 'fat_per_100g': f.fat,
-      }).toList());
+      _cacheFoods(searcher, cache);
       return out;
     } catch (_) {
       return [];

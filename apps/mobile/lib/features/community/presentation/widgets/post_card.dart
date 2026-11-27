@@ -1,9 +1,14 @@
+import 'dart:async' show StreamSubscription;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthState, Supabase;
+import '../../../../core/observability/app_failure.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/animations/app_animations.dart';
 import '../../data/models/post_model.dart';
+import '../../../workout/presentation/widgets/section_load_failure.dart'
+    show couldntMessage;
 import '../../domain/community_provider.dart';
 import 'reaction_bar.dart';
 
@@ -20,11 +25,90 @@ class PostCard extends ConsumerStatefulWidget {
 class _PostCardState extends ConsumerState<PostCard> {
   bool _showComments = false;
   final _commentController = TextEditingController();
+  bool _commenting = false;
+
+  /// P0-FL-59e · whose comment is being written: the notifier read at the tap
+  /// is the feed of whoever is signed in THEN. The draft goes with them. Taken
+  /// on at a redraw only: what is still up was drawn for the one before.
+  String? _owner = _signedIn;
+  StreamSubscription<AuthState>? _authSub;
+
+  static String? get _signedIn =>
+      Supabase.instance.client.auth.currentUser?.id;
+
+  @override
+  void initState() {
+    super.initState();
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
+        (_) => _followAccount(),
+        onError: (Object e, StackTrace s) =>
+            reportError('PostCard.onAuthStateChange', e, s));
+  }
 
   @override
   void dispose() {
+    _authSub?.cancel();
     _commentController.dispose();
     super.dispose();
+  }
+
+  void _followAccount() {
+    if (!mounted || _signedIn == _owner) return;
+    setState(_forget);
+  }
+
+  void _forget() {
+    _commentController.clear();
+    _commenting = false;
+    _showComments = false;
+  }
+
+  /// False (recorded, the draft cleared) once someone else is signed in.
+  bool _stillOwner(String? owner, String what) {
+    if (owner == _owner && _signedIn == owner) return true;
+    reportError('PostCard.identity',
+        StateError('$what: the signed-in account changed'));
+    _followAccount();
+    return false;
+  }
+
+  Future<void> _comment() async {
+    final text = _commentController.text.trim();
+    final owner = _owner;
+    if (_commenting || text.isEmpty || !_stillOwner(owner, 'comment')) return;
+    setState(() => _commenting = true);
+    try {
+      await ref
+          .read(postNotifierProvider.notifier)
+          .addComment(widget.post.id, text);
+    } catch (e, st) {
+      reportError('PostCard.comment', e, st);
+      if (!mounted || !_stillOwner(owner, 'comment')) return;
+      setState(() => _commenting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(couldntMessage('post that comment', e))));
+      return;
+    }
+    if (_signedIn != owner) return; // another member's phone by now
+    AppAnimations.hapticLight();
+    if (!mounted || _owner != owner) return;
+    // What was typed meanwhile is not the comment that was sent.
+    if (_commentController.text.trim() == text) _commentController.clear();
+    setState(() => _commenting = false);
+  }
+
+  Future<void> _react(Future<void> Function(PostNotifier feed) send) async {
+    final owner = _owner;
+    if (!_stillOwner(owner, 'reaction')) return;
+    AppAnimations.hapticLight();
+    try {
+      await send(ref.read(postNotifierProvider.notifier));
+    } catch (e, st) {
+      reportError('PostCard.reaction', e, st);
+      if (!mounted || !_stillOwner(owner, 'reaction')) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(couldntMessage('save your reaction', e))));
+    }
   }
 
   Color get _postTypeColor {
@@ -49,6 +133,10 @@ class _PostCardState extends ConsumerState<PostCard> {
 
   @override
   Widget build(BuildContext context) {
+    if (_signedIn != _owner) {
+      _owner = _signedIn;
+      _forget(); // whether or not the change was heard of yet
+    }
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -134,16 +222,9 @@ class _PostCardState extends ConsumerState<PostCard> {
           ),
           ReactionBar(
             post: widget.post,
-            onLike: () {
-              AppAnimations.hapticLight();
-              ref.read(postNotifierProvider.notifier).toggleLike(widget.post.id);
-            },
-            onReact: (type) {
-              AppAnimations.hapticLight();
-              ref
-                  .read(postNotifierProvider.notifier)
-                  .toggleReaction(widget.post.id, type);
-            },
+            onLike: () => _react((feed) => feed.toggleLike(widget.post.id)),
+            onReact: (type) =>
+                _react((feed) => feed.toggleReaction(widget.post.id, type)),
             onComment: () => setState(() => _showComments = !_showComments),
             onShare: () => AppAnimations.hapticLight(),
           ),
@@ -211,12 +292,7 @@ class _PostCardState extends ConsumerState<PostCard> {
                             contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                             suffixIcon: IconButton(
                               icon: const Icon(Icons.send, color: AppColors.purple, size: 18),
-                              onPressed: () {
-                                if (_commentController.text.trim().isEmpty) return;
-                                ref.read(postNotifierProvider.notifier).addComment(widget.post.id, _commentController.text.trim());
-                                _commentController.clear();
-                                AppAnimations.hapticLight();
-                              },
+                              onPressed: _comment,
                             ),
                           ),
                         ),

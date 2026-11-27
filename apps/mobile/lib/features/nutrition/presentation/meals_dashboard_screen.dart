@@ -6,6 +6,8 @@ import 'widgets/nutrition_load_failed.dart';
 import 'widgets/pill_tab.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthState, Supabase;
+import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../data/nutrition_service.dart';
 import '../data/models/food_model.dart';
@@ -16,6 +18,7 @@ import 'widgets/ai_scan_view.dart';
 import 'widgets/barcode_scan_view.dart';
 import 'nutrition_palette.dart';
 import 'widgets/meal_row_tile.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 // ── Colors ─────────────────────────────────────────────────────────────────
 // The palette moved to `nutrition_palette.dart` so `MealRowTile` could be
@@ -39,8 +42,8 @@ final nutritionTotalsProvider = todayNutritionProvider;
 // Read again on each visit: a meal logged on another screen appears here.
 final _logsForDateProvider =
     FutureProvider.autoDispose.family<List<Map<String, dynamic>>, DateTime>((ref, date) async {
-  ref.watch(currentUserProvider);
-  return ref.watch(_svcProvider).getLogsForDate(date);
+  final svc = ref.watch(_svcProvider);
+  return readForMember(ref, () => svc.getLogsForDate(date));
 });
 
 // ── Screen ─────────────────────────────────────────────────────────────────
@@ -57,7 +60,12 @@ class _MealsDashboardScreenState
   String _mealFilter = 'breakfast';
   // Glasses tapped on this screen. It began at 3, so every visit showed
   // "3 / 8" glasses drunk before the member had tapped anything. Not saved.
-  int    _water      = 0;
+  // Theirs alone: whoever taps next starts from none.
+  ({String? uid, int glasses}) _water = (uid: null, glasses: 0);
+
+  static String? get _signedIn =>
+      Supabase.instance.client.auth.currentUser?.id;
+
   @override
   void initState() {
     super.initState();
@@ -72,20 +80,24 @@ class _MealsDashboardScreenState
         _selectedDate.day == now.day;
   }
 
-  List<Widget> _innerChildren(
-    double cal, double protein, double carbs, double fat,
-    double calGoal, double proteinGoal, double carbGoal, double fatGoal,
-    AsyncValue<List<Map<String, dynamic>>> logsAsync,
-    BuildContext context, {
-    required bool totalsFailed,
-    required bool targetsFailed,
-  }) {
+  List<Widget> _innerChildren(BuildContext context) {
+    // Drawn for the member signed in, and only what was read for them.
+    ref.watch(currentUserProvider.select((u) => u?.id));
+    final logs    = ownRead(ref.watch(_logsForDateProvider(_selectedDate)));
+    final totals  = ownRead(ref.watch(nutritionTotalsProvider));
+    final goals   = ownRead(ref.watch(nutritionGoalsProvider));
+    final today   = totals.value;
+    final targets = goals.value;
+    final owner   = _signedIn;
+    final glasses = _water.uid == owner ? _water.glasses : 0;
     final items = <Widget>[
       _MealTabs(
         active: _mealFilter,
         onSelect: (t) => setState(() => _mealFilter = t)),
       const SizedBox(height: 16),
     ];
+    // This member's read failed, and nothing of theirs was read before it.
+    final totalsFailed = today == null && totals.error != null;
     if (_isToday && totalsFailed) {
       // FIT-022 · "Loading & failure". Until now a failed totals read rendered
       // `?? 0.0` — a client who had logged three meals was shown **zero
@@ -100,62 +112,94 @@ class _MealsDashboardScreenState
       ]);
     } else if (_isToday) {
       items.addAll([
+        // A refresh that failed: what was read for them stays up, and it is said.
+        if (totals.error != null)
+          SectionLoadFailure(
+            what: "today's totals",
+            error: totals.error,
+            busy: totals.busy,
+            detail: 'Showing what was last loaded.',
+            onRetry: () => ref.invalidate(nutritionTotalsProvider)),
+        if (targets != null && goals.error != null)
+          SectionLoadFailure(
+            what: 'your targets',
+            error: goals.error,
+            busy: goals.busy,
+            detail: 'Showing what was last loaded.',
+            onRetry: () => ref.invalidate(nutritionGoalsProvider)),
         // Targets that could not be read are not shown -- not replaced by
         // defaults that read as the client's plan (nor advice built on them).
-        if (targetsFailed) ...[
+        if (targets == null && goals.error != null) ...[
           const NutritionTargetsLoadFailed(),
           const SizedBox(height: 12),
-        ] else ...[
-          _CalorieCard(cal: cal, protein: protein, carbs: carbs, fat: fat,
-            calGoal: calGoal, proteinGoal: proteinGoal, carbGoal: carbGoal, fatGoal: fatGoal),
+        ] else if (today == null || targets == null)
+          const Padding(
+            padding: EdgeInsets.all(40),
+            child: Center(child: CircularProgressIndicator(color: _brand)))
+        else ...[
+          _CalorieCard(
+            cal:     today['calories'] ?? 0.0,
+            protein: today['protein']  ?? 0.0,
+            carbs:   today['carbs']    ?? 0.0,
+            fat:     today['fat']      ?? 0.0,
+            calGoal:     targets['calories'] ?? 2000.0,
+            proteinGoal: targets['protein']  ?? 120.0,
+            carbGoal:    targets['carbs']    ?? 220.0,
+            fatGoal:     targets['fat']      ?? 65.0),
           const SizedBox(height: 12),
-          _CoachCard(protein: protein, cal: cal, proteinGoal: proteinGoal, calGoal: calGoal),
+          _CoachCard(
+            protein: today['protein']  ?? 0.0,
+            cal:     today['calories'] ?? 0.0,
+            proteinGoal: targets['protein']  ?? 120.0,
+            calGoal:     targets['calories'] ?? 2000.0),
           const SizedBox(height: 12),
         ],
         _WaterCard(
-          glasses: _water,
-          onTap: (i) => setState(() =>
-            _water = i + 1 == _water ? i : i + 1)),
+          glasses: glasses,
+          onTap: (i) {
+            if (_signedIn != owner) {
+              reportError('MealsDashboard.water.identity',
+                  StateError('water: the signed-in account changed'));
+              return;
+            }
+            setState(() => _water =
+                (uid: owner, glasses: i + 1 == glasses ? i : i + 1));
+          }),
         const SizedBox(height: 12),
       ]);
     }
-    items.add(logsAsync.when(
-      loading: () => const Padding(
+    final all = logs.value;
+    if (logs.error != null) {
+      items.add(SectionLoadFailure(
+        what: 'your meals',
+        error: logs.error,
+        busy: logs.busy,
+        detail: all == null ? null : 'Showing what was last loaded.',
+        onRetry: () => ref.invalidate(_logsForDateProvider(_selectedDate))));
+    } else if (all == null) {
+      items.add(const Padding(
         padding: EdgeInsets.all(40),
-        child: Center(child: CircularProgressIndicator(color: _brand))),
-      error: (_, __) => const SizedBox.shrink(),
-      data: (all) {
-        final logs = all
-          .where((m) => (m['meal_type'] as String?) == _mealFilter)
-          .toList();
-        if (logs.isEmpty) {
-          return _EmptyMeals(
+        child: Center(child: CircularProgressIndicator(color: _brand))));
+    }
+    if (all != null) {
+      final meals = all
+        .where((m) => (m['meal_type'] as String?) == _mealFilter)
+        .toList();
+      items.add(meals.isEmpty
+        ? _EmptyMeals(
             mealType: _mealFilter,
-            onAdd: () => _showAddSheet(context));
-        }
-        return Column(
-          children: logs.map((m) => Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: MealRowTile(meal: m))).toList());
-      }));
+            onAdd: () => _showAddSheet(context))
+        : Column(
+            children: meals.map((m) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: MealRowTile(meal: m))).toList()));
+    }
     items.add(const SizedBox(height: 16));
     return items;
   }
 
   @override
   Widget build(BuildContext context) {
-    final logsAsync = ref.watch(_logsForDateProvider(_selectedDate));
-    final totals    = ref.watch(nutritionTotalsProvider);
-    final goals     = ref.watch(nutritionGoalsProvider);
-    final cal     = totals.valueOrNull?['calories'] ?? 0.0;
-    final protein = totals.valueOrNull?['protein']  ?? 0.0;
-    final carbs   = totals.valueOrNull?['carbs']    ?? 0.0;
-    final fat     = totals.valueOrNull?['fat']      ?? 0.0;
-    final calGoal     = goals.valueOrNull?['calories'] ?? 2000.0;
-    final proteinGoal = goals.valueOrNull?['protein']  ?? 120.0;
-    final carbGoal    = goals.valueOrNull?['carbs']    ?? 220.0;
-    final fatGoal     = goals.valueOrNull?['fat']      ?? 65.0;
-
     return Scaffold(
       backgroundColor: _bg,
       body: SafeArea(
@@ -231,12 +275,7 @@ class _MealsDashboardScreenState
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
-                          children: _innerChildren(
-                            cal, protein, carbs, fat,
-                            calGoal, proteinGoal, carbGoal, fatGoal,
-                            logsAsync, context,
-                            totalsFailed: totals is AsyncError,
-                            targetsFailed: goals is AsyncError))),
+                          children: _innerChildren(context))),
                     ])))),
           ])));
   }
@@ -735,21 +774,70 @@ class AddMealSheet extends ConsumerStatefulWidget {
 }
 
 class AddMealSheetState extends ConsumerState<AddMealSheet> {
-  late final NutritionService _svc = widget.service ?? NutritionService();
+  late final NutritionService _svc =
+      widget.service ?? NutritionService(forUid: _owner);
   final _searchCtrl = TextEditingController();
   late String _inputMode = widget.initialMode;
   Food?  _selected;
   String _mealType  = 'breakfast';
   bool   _saving    = false;
+
+  /// The product last scanned, when it does not give all its values: not
+  /// logged (a value not given is not 0), said, and offered for manual entry.
+  ({Food known, String missing})? _incomplete;
   List<Food> _filtered = [];
   bool   _searchingOnline = false;
   Timer? _debounce;
   final _meals = ['breakfast', 'lunch', 'dinner', 'snack', 'protein_shake'];
   final _logged = <String>{};   // names of items logged this session
 
+  /// P0-FL-59e · the member who opened this sheet: the food picked or scanned
+  /// in it is theirs, and so is the meal. It closes with them.
+  late final String? _owner;
+  StreamSubscription<AuthState>? _authSub;
+
+  // An injected service (tests of the sheet alone) comes with no session.
+  String? get _signedIn => widget.service != null
+      ? null
+      : Supabase.instance.client.auth.currentUser?.id;
+
+  /// Whose meal the "Food Added!" dialog is (nobody's to follow, injected).
+  ({String? uid})? get _dialogOwner =>
+      widget.service != null ? null : (uid: _owner);
+
+  void _followAccount() {
+    if (!mounted || _signedIn == _owner) return;
+    _debounce?.cancel();
+    setState(() => _selected = _incomplete = null);
+    final route = ModalRoute.of(context);
+    final navigator = route?.navigator;
+    if (route == null || navigator == null || !route.isActive) return;
+    // With whatever this member opened over it.
+    final root = Navigator.of(context, rootNavigator: true);
+    if (!identical(root, navigator)) root.popUntil((r) => r is! PopupRoute);
+    navigator.popUntil((r) => identical(r, route));
+    if (!route.isFirst) navigator.removeRoute(route);
+  }
+
+  /// False (recorded, sheet closed) once someone else is signed in.
+  bool _stillOwner(String what) {
+    if (_signedIn == _owner) return true;
+    reportError('AddMealSheet.identity',
+        StateError('$what: the signed-in account changed'));
+    _followAccount();
+    return false;
+  }
+
   @override
   void initState() {
     super.initState();
+    if (widget.service == null) {
+      _authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
+          (_) => _followAccount(),
+          onError: (Object e, StackTrace s) =>
+              reportError('AddMealSheet.onAuthStateChange', e, s));
+    }
+    _owner = _signedIn;
     _filtered = _svc.getSampleFoods();
     _searchCtrl.addListener(_onSearchChanged);
   }
@@ -767,12 +855,15 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
     // OpenFoodFacts network results — each merged in without duplicates.
     setState(() => _searchingOnline = true);
     _debounce = Timer(const Duration(milliseconds: 350), () async {
+      // What one member typed is never searched for as another.
+      if (!_stillOwner('food search')) return;
       void merge(List<Food> more) {
-        if (!mounted || _searchCtrl.text != q) return;
+        if (!mounted || _signedIn != _owner || _searchCtrl.text != q) return;
         final seen = _filtered.map((f) => f.name.toLowerCase()).toSet();
         setState(() => _filtered = [..._filtered, ...more.where((f) => seen.add(f.name.toLowerCase()))]);
       }
       merge(await _svc.searchFoodsCached(q));
+      if (!mounted || !_stillOwner('food search')) return;
       final online = await _svc.searchFoodsOnline(q);
       merge(online);
       if (mounted && _searchCtrl.text == q) setState(() => _searchingOnline = false);
@@ -780,7 +871,12 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
   }
 
   @override
-  void dispose() { _debounce?.cancel(); _searchCtrl.dispose(); super.dispose(); }
+  void dispose() {
+    _authSub?.cancel();
+    _debounce?.cancel();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   String _label(String m) =>
     m == 'protein_shake' ? 'Protein Shake'
@@ -798,7 +894,7 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
   Future<void> _logFood(Food f, double servings) async {
     // One tap, one meal (QAX-COR-05): _saving is set synchronously below, so a
     // second tap while the first save is in flight is ignored.
-    if (_saving) return;
+    if (_saving || !_stillOwner('meal')) return;
     setState(() => _saving = true);
     try {
       await _svc.logMeal(
@@ -810,16 +906,17 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
         fat:         f.fat      * servings,
         servingSize: f.servingSize * servings,
         servingUnit: f.servingUnit);
-      if (!mounted) return;
+      if (!mounted || !_stillOwner('meal logged')) return;
       widget.onLogged();
       setState(() { _saving = false; _selected = null; _logged.add(f.name); });
-      await FoodAddedDialog.show(context,
+      await FoodAddedDialog.show(context, owner: _dialogOwner,
         foodName: f.name,
         protein:  (f.protein * servings).toInt(),
         carbs:    (f.carbs   * servings).toInt(),
         fat:      (f.fat     * servings).toInt());
-    } catch (e) {
-      if (!mounted) return;
+    } catch (e, st) {
+      reportError('AddMealSheet._logFood', e, st);
+      if (!mounted || !_stillOwner('meal')) return;
       setState(() { _saving = false; _selected = null; });
       _showMealError('Could not log meal.');
     }
@@ -828,7 +925,7 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
   Future<void> _logFromScan(ScanResult r) async {
     // One tap, one meal (QAX-COR-05): _saving is set synchronously below, so a
     // second tap while the first save is in flight is ignored.
-    if (_saving) return;
+    if (_saving || !_stillOwner('meal')) return;
     setState(() => _saving = true);
     try {
       await _svc.logMeal(
@@ -840,7 +937,7 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
         fat:         r.fat,
         servingSize: 1,
         servingUnit: 'serving');
-      if (!mounted) return;
+      if (!mounted || !_stillOwner('meal logged')) return;
       widget.onLogged();
       setState(() => _saving = false);
       // Navigator's context, not this route's — see nutrition_screen.dart for
@@ -849,13 +946,14 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
       // inherited widget through the context it is handed.
       final navigator = Navigator.of(context);
       navigator.pop();
-      FoodAddedDialog.show(navigator.context,
+      FoodAddedDialog.show(navigator.context, owner: _dialogOwner,
         foodName: r.name,
         protein:  r.protein.toInt(),
         carbs:    r.carbs.toInt(),
         fat:      r.fat.toInt());
-    } catch (e) {
-      if (!mounted) return;
+    } catch (e, st) {
+      reportError('AddMealSheet._logScanned', e, st);
+      if (!mounted || !_stillOwner('meal')) return;
       setState(() => _saving = false);
       _showMealError('Could not log meal.');
     }
@@ -864,13 +962,37 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
   Future<void> _logFromBarcode(Map<String, dynamic> food) async {
     // One tap, one meal (QAX-COR-05): _saving is set synchronously below, so a
     // second tap while the first save is in flight is ignored.
-    if (_saving) return;
-    setState(() => _saving = true);
+    if (_saving || !_stillOwner('meal')) return;
     final name    = food['name'] as String? ?? 'Scanned Food';
-    final cal     = (food['calories'] as num?)?.toDouble() ?? 0;
-    final protein = (food['protein'] as num?)?.toDouble() ?? 0;
-    final carbs   = (food['carbs'] as num?)?.toDouble()  ?? 0;
-    final fat     = (food['fat'] as num?)?.toDouble()    ?? 0;
+    double? given(String key) => (food[key] as num?)?.toDouble();
+    final cal     = given('calories');
+    final protein = given('protein');
+    final carbs   = given('carbs');
+    final fat     = given('fat');
+    // A value the product does not give was logged as 0: a 0 kcal meal.
+    if (cal == null || protein == null || carbs == null || fat == null) {
+      final missing = [
+        if (cal == null) 'calories',
+        if (protein == null) 'protein',
+        if (carbs == null) 'carbs',
+        if (fat == null) 'fat',
+      ];
+      reportError('nutrition.barcode.incomplete',
+          StateError('the product gives no ${missing.join(', ')}'));
+      setState(() => _incomplete = (
+            known: Food(
+                id: 'barcode', name: name, brand: 'Custom',
+                calories: cal ?? double.nan, protein: protein ?? double.nan,
+                carbs: carbs ?? double.nan, fat: fat ?? double.nan,
+                fiber: 0, sugar: 0, servingSize: 100, servingUnit: 'g'),
+            missing: missing.length == 1
+                ? missing.single
+                : '${missing.sublist(0, missing.length - 1).join(', ')} and '
+                    '${missing.last}',
+          ));
+      return;
+    }
+    setState(() => _saving = true);
     try {
       await _svc.logMeal(
         mealType:    _mealType,
@@ -881,7 +1003,7 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
         fat:         fat,
         servingSize: 1,
         servingUnit: 'serving');
-      if (!mounted) return;
+      if (!mounted || !_stillOwner('meal logged')) return;
       widget.onLogged();
       setState(() => _saving = false);
       // Navigator's context, not this route's — see nutrition_screen.dart for
@@ -890,35 +1012,49 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
       // inherited widget through the context it is handed.
       final navigator = Navigator.of(context);
       navigator.pop();
-      FoodAddedDialog.show(navigator.context,
+      FoodAddedDialog.show(navigator.context, owner: _dialogOwner,
         foodName: name,
         protein:  protein.toInt(),
         carbs:    carbs.toInt(),
         fat:      fat.toInt());
-    } catch (e) {
-      if (!mounted) return;
+    } catch (e, st) {
+      reportError('AddMealSheet._logScanned', e, st);
+      if (!mounted || !_stillOwner('meal')) return;
       setState(() => _saving = false);
       _showMealError('Could not log meal.');
     }
   }
 
-  void _showAddCustomSheet() {
+  /// [scanned]: a product to complete (its values not given are NaN). It is
+  /// picked once they are, ready to be logged.
+  void _showAddCustomSheet({Food? scanned}) {
+    if (!_stillOwner('custom food')) return;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _CustomFoodSheet(
         mealType: _mealType,
+        scanned: scanned,
         onSaved: (f) {
+          if (!mounted || !_stillOwner('custom food')) return;
           setState(() {
             _svc.addCustomFood(f);
             _filtered = _svc.getSampleFoods();
+            if (scanned == null) return;
+            _incomplete = null;
+            _inputMode = 'manual';
+            _selected = f;
           });
         }));
   }
 
   @override
-  Widget build(BuildContext context) => DraggableScrollableSheet(
+  Widget build(BuildContext context) =>
+      // Nothing picked or scanned by one member is drawn for another.
+      _signedIn == _owner ? _buildSheet(context) : const SizedBox.shrink();
+
+  Widget _buildSheet(BuildContext context) => DraggableScrollableSheet(
     initialChildSize: 0.88,
     maxChildSize: 0.96,
     minChildSize: 0.5,
@@ -1079,7 +1215,15 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
             // ── Body ────────────────────────────────────────────────
             Expanded(
               child: _inputMode == 'barcode'
-                ? BarcodeScanView(onFound: _logFromBarcode)
+                ? _incomplete != null
+                  ? _IncompleteProduct(
+                      name: _incomplete!.known.name,
+                      missing: _incomplete!.missing,
+                      onManual: () =>
+                          _showAddCustomSheet(scanned: _incomplete?.known),
+                      // A new scanner: the one before waits for its meal.
+                      onScanAgain: () => setState(() => _incomplete = null))
+                  : BarcodeScanView(onFound: _logFromBarcode)
                 : _inputMode == 'ai_scan'
                 ? AiScanView(
                     onAccept: _logFromScan,
@@ -1113,6 +1257,39 @@ class AddMealSheetState extends ConsumerState<AddMealSheet> {
                     })),
           ])),
       ])));
+}
+
+// ── A scanned product that does not give all its values ────────────────────
+class _IncompleteProduct extends StatelessWidget {
+  final String name, missing;
+  final VoidCallback onManual, onScanAgain;
+  const _IncompleteProduct({required this.name, required this.missing,
+    required this.onManual, required this.onScanAgain});
+
+  @override
+  Widget build(BuildContext context) => SingleChildScrollView(
+    padding: const EdgeInsets.all(24),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Semantics(
+        liveRegion: true,
+        container: true,
+        child: Text(
+          "Couldn't read the $missing for $name — add it manually, or scan it "
+          'again. Nothing was logged.',
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: _white, fontSize: 15, height: 1.4))),
+      const SizedBox(height: 20),
+      ElevatedButton(
+        onPressed: onManual,
+        style: ElevatedButton.styleFrom(minimumSize: const Size(44, 48)),
+        child: const Text('Add manually', textAlign: TextAlign.center)),
+      const SizedBox(height: 8),
+      TextButton(
+        onPressed: onScanAgain,
+        style: TextButton.styleFrom(
+          minimumSize: const Size(44, 48), foregroundColor: _brand),
+        child: const Text('Scan again', textAlign: TextAlign.center)),
+    ]));
 }
 
 // ── Food list row ──────────────────────────────────────────────────────────
@@ -1373,19 +1550,32 @@ class _MacroCell extends StatelessWidget {
 // ── Custom food entry sheet ────────────────────────────────────────────────
 class _CustomFoodSheet extends StatefulWidget {
   final String mealType;
+
+  /// A scanned product to complete: the values it does not give (NaN) are
+  /// asked for. Left empty they would be saved as 0.
+  final Food? scanned;
   final void Function(Food) onSaved;
-  const _CustomFoodSheet({required this.mealType, required this.onSaved});
+  const _CustomFoodSheet(
+    {required this.mealType, required this.onSaved, this.scanned});
   @override
   State<_CustomFoodSheet> createState() => _CustomFoodSheetState();
 }
 
 class _CustomFoodSheetState extends State<_CustomFoodSheet> {
-  final _name     = TextEditingController();
-  final _cal      = TextEditingController();
-  final _protein  = TextEditingController();
-  final _carbs    = TextEditingController();
-  final _fat      = TextEditingController();
+  late final _name     = TextEditingController(text: widget.scanned?.name);
+  late final _cal      = _value(widget.scanned?.calories);
+  late final _protein  = _value(widget.scanned?.protein);
+  late final _carbs    = _value(widget.scanned?.carbs);
+  late final _fat      = _value(widget.scanned?.fat);
   final _serving  = TextEditingController(text: '100');
+
+  /// What is still to be entered for a scanned product.
+  String? _asked;
+
+  static TextEditingController _value(double? v) => TextEditingController(
+      text: v == null || v.isNaN
+          ? ''
+          : v == v.roundToDouble() ? '${v.toInt()}' : '$v');
 
   @override
   void dispose() {
@@ -1398,6 +1588,22 @@ class _CustomFoodSheetState extends State<_CustomFoodSheet> {
   void _save() {
     final n = _name.text.trim();
     if (n.isEmpty) return;
+    // NaN and Infinity parse, and are not an amount: asked for in any food.
+    bool missing(TextEditingController field) {
+      final v = double.tryParse(field.text.trim());
+      return v == null ? widget.scanned != null : !v.isFinite;
+    }
+
+    final asked = [
+      for (final (field, label) in [
+        (_cal, 'calories'), (_protein, 'protein'),
+        (_carbs, 'carbs'), (_fat, 'fat'),
+      ])
+        if (missing(field)) label,
+    ];
+    setState(() => _asked = asked.isEmpty ? null : asked.join(', '));
+    if (asked.isNotEmpty) return;
+    final serving = double.tryParse(_serving.text);
     final food = Food(
       id:          'custom_${DateTime.now().millisecondsSinceEpoch}',
       name:        n,
@@ -1408,10 +1614,13 @@ class _CustomFoodSheetState extends State<_CustomFoodSheet> {
       fat:         double.tryParse(_fat.text)      ?? 0,
       fiber:       0,
       sugar:       0,
-      servingSize: double.tryParse(_serving.text) ?? 100,
+      servingSize: serving != null && serving.isFinite ? serving : 100,
       servingUnit: 'g');
     widget.onSaved(food);
-    if (mounted) Navigator.pop(context);
+    // Only itself: gone with its member, the route under it is not it.
+    if (mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
+      Navigator.pop(context);
+    }
   }
 
   @override
@@ -1443,6 +1652,15 @@ class _CustomFoodSheetState extends State<_CustomFoodSheet> {
           Expanded(child: _CustomField(_fat,     'Fat (g)',     TextInputType.number)),
         ]),
         const SizedBox(height: 20),
+        if (_asked != null) ...[
+          Semantics(
+            liveRegion: true,
+            container: true,
+            child: Text('Enter the $_asked — 0 if there is none.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Color(0xFFFFB4AB), fontSize: 13))),
+          const SizedBox(height: 12),
+        ],
         GestureDetector(
           onTap: _save,
           child: Container(
