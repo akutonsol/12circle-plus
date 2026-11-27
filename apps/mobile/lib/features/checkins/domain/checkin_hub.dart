@@ -56,6 +56,29 @@ CheckinHistory historyFrom(AsyncValue<List<WeeklyCheckin>> source,
   };
 }
 
+/// A check-in as the server holds it, with the member it belongs to, so that a
+/// list kept on screen past an account change cannot be opened as the next
+/// member's (P0-FL-59c).
+class MemberCheckin extends WeeklyCheckin {
+  MemberCheckin({
+    required this.memberId,
+    required super.id,
+    required super.weekNumber,
+    required super.weekStartDate,
+    required super.status,
+    required super.responses,
+    super.feedback,
+    required super.overallScore,
+    super.submittedAt,
+  });
+  final String memberId;
+}
+
+/// Whether [c] may be opened by [uid]'s account. A week that names no member was
+/// never read from the server; [uid] is not asked for it.
+bool isCheckinOf(WeeklyCheckin c, String? Function() uid) =>
+    c is! MemberCheckin || c.memberId == uid();
+
 /// `Week 13`.
 String weekLabel(WeeklyCheckin c) => 'Week ${c.weekNumber}';
 

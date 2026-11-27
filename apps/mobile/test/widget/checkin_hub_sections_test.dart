@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/checkins/data/models/checkin_model.dart';
+import 'package:circle_fitness/features/checkins/domain/checkin_provider.dart';
 import 'package:circle_fitness/features/checkins/presentation/checkin_hub_sections.dart';
 
 /// FIT-023 · the check-in hub's declared controls and history, mounted.
@@ -36,6 +37,8 @@ void main() {
     addTearDown(() => t.binding.setSurfaceSize(null));
     await t.pumpWidget(ProviderScope(
       overrides: [
+        // P0-FL-59c: the history is drawn for the member signed in.
+        checkinUidProvider.overrideWithValue('member-1'),
         checkinHistoryProvider.overrideWith((ref) => history.when(
               data: (d) => d,
               error: (e, s) => Future<List<WeeklyCheckin>>.error(e, s),
@@ -152,6 +155,8 @@ void main() {
     addTearDown(() => t.binding.setSurfaceSize(null));
     await t.pumpWidget(ProviderScope(
       overrides: [
+        // P0-FL-59c: the history is drawn for the member signed in.
+        checkinUidProvider.overrideWithValue('member-1'),
         checkinHistoryProvider.overrideWith((ref) async {
           calls++;
           if (!online) throw Exception('offline');
@@ -200,6 +205,8 @@ void main() {
     addTearDown(() => t.binding.setSurfaceSize(null));
     await t.pumpWidget(ProviderScope(
       overrides: [
+        // P0-FL-59c: the history is drawn for the member signed in.
+        checkinUidProvider.overrideWithValue('member-1'),
         checkinHistoryProvider.overrideWith((ref) async {
           calls++;
           if (calls == 1) throw Exception('offline');
@@ -256,6 +263,8 @@ void main() {
     addTearDown(() => t.binding.setSurfaceSize(null));
     await t.pumpWidget(ProviderScope(
       overrides: [
+        // P0-FL-59c: the history is drawn for the member signed in.
+        checkinUidProvider.overrideWithValue('member-1'),
         checkinHistoryProvider.overrideWith(
             (ref) => Future<List<WeeklyCheckin>>.error(Exception('offline'))),
       ],

@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/named_icon_button.dart';
 import '../domain/checkin_columns.dart';
 import '../domain/checkin_provider.dart';
 import '../domain/coach_review_queue.dart' as q;
 import '../../auth/domain/auth_provider.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 
 class CoachCheckinReviewScreen extends ConsumerStatefulWidget {
   const CoachCheckinReviewScreen({super.key});
@@ -22,6 +24,52 @@ class _CoachCheckinReviewScreenState
   final _recCtrl = TextEditingController();
   final List<String> _recommendations = [];
   bool _saving = false;
+
+  /// P0-FL-59c · the coach this reply is being written by. The drafts above and
+  /// [_open] are theirs; nothing is sent as anyone else.
+  String? _owner = checkinUidNow();
+
+  /// Raised when the drafts are dropped, so a send still in flight does not act
+  /// on the screen of the account that arrived.
+  int _epoch = 0;
+
+  /// The check-in last on screen, kept while the same coach's queue is re-read
+  /// and when that fails, so the reply being written does not lose it — and,
+  /// while there is a reply ([_drafting]), whatever that read says: the client
+  /// is not changed under the words written to them.
+  Map<String, dynamic>? _open;
+
+  bool get _drafting =>
+      _saving ||
+      _messageCtrl.text.isNotEmpty ||
+      _recCtrl.text.isNotEmpty ||
+      _recommendations.isNotEmpty;
+
+  void _clearDraft() {
+    _messageCtrl.clear();
+    _recCtrl.clear();
+    setState(_recommendations.clear);
+  }
+
+  bool _holds(int epoch) => epoch == _epoch && checkinUidNow() == _owner;
+
+  /// Drops everything the last coach had on this screen. Says nothing: the one
+  /// who arrived is told nothing about it.
+  void _drop() {
+    _epoch++;
+    _owner = checkinUidNow();
+    _messageCtrl.clear();
+    _recCtrl.clear();
+    // What it said to the coach who left is not said to the one who arrived.
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..removeCurrentSnackBar();
+    setState(() {
+      _recommendations.clear();
+      _open = null;
+      _saving = false;
+    });
+  }
 
   @override
   void dispose() {
@@ -39,10 +87,38 @@ class _CoachCheckinReviewScreenState
     });
   }
 
-  Future<void> _submit(Map<String, dynamic> checkin) async {
+  /// Whether an action built at [epoch] may be taken. If not, it belonged to the
+  /// coach who left: recorded, and nothing is said.
+  bool _mayAct(int epoch, String origin, String what) {
+    if (_holds(epoch)) return true;
+    reportError(origin, StateError('$what: the signed-in account changed'),
+        StackTrace.current);
+    if (epoch == _epoch) _drop();
+    return false;
+  }
+
+  /// [epoch] is the one the button was built at: the coach it is sent as.
+  Future<void> _submit(Map<String, dynamic> checkin, int epoch) async {
+    if (!_mayAct(epoch, 'CoachCheckinReviewScreen._submit', 'feedback not sent')) {
+      return;
+    }
     if (_messageCtrl.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please write a feedback message.')),
+      );
+      return;
+    }
+    // Not another client's check-in than the one the reply was written to, and
+    // not one that has left the queue (reviewed elsewhere, say) meanwhile.
+    if (_open?['id'] != checkin['id'] || _hasLeft(checkin['id'])) {
+      reportError(
+          'CoachCheckinReviewScreen._submit',
+          StateError('feedback not sent: the check-in left the queue'),
+          StackTrace.current);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text("Couldn't send your reply — this check-in is no "
+                'longer in your review queue. Go back to open the next one.')),
       );
       return;
     }
@@ -56,6 +132,12 @@ class _CoachCheckinReviewScreenState
       coachName: coachName,
     );
     if (!mounted) return;
+    if (!_holds(epoch)) {
+      // Sent by the coach who left: neither its outcome nor the next in their
+      // queue belongs to the one who arrived.
+      if (epoch == _epoch) _drop();
+      return;
+    }
     setState(() => _saving = false);
 
     if (!mounted) return;
@@ -70,10 +152,9 @@ class _CoachCheckinReviewScreenState
       // "the one after this" has nothing to anchor on.
       final next = q.nextInQueue(_queue(), checkin['id'] as String?);
       ref.invalidate(coachSubmittedCheckinsProvider);
+      // Sent: it holds this check-in on screen no longer.
+      _clearDraft();
       if (next != null) {
-        _messageCtrl.clear();
-        _recCtrl.clear();
-        setState(_recommendations.clear);
         ref.read(selectedCoachCheckinProvider.notifier).state = next;
         return;
       }
@@ -104,27 +185,39 @@ class _CoachCheckinReviewScreenState
   /// and those are different facts with different consequences — a coach whose
   /// queue failed silently loses `Send and open next` and is never told why.
   List<Map<String, dynamic>> _queue() =>
-      _loaded(ref.read(coachSubmittedCheckinsProvider));
+      _loaded(ref.read(coachSubmittedCheckinsProvider), checkinUidNow);
 
-  /// The queue as last loaded, kept while it is being re-read — after a send,
-  /// or when a `weekly_checkins` notification says one more arrived (C8) — so
-  /// the screen does not drop to a spinner under a coach writing a reply. A
-  /// failed read is still not a queue: see `_queue()`.
+  /// Whether the queue as this coach last read it no longer holds check-in [id].
+  /// Not known of a queue that was never read.
+  bool _hasLeft(Object? id) {
+    final mine =
+        heldFor(ref.read(coachSubmittedCheckinsProvider), checkinUidNow);
+    return mine.hasValue && !mine.requireValue.any((c) => c['id'] == id);
+  }
+
+  /// The queue as [uid]'s coach last read it, kept while it is being re-read —
+  /// after a send, or when a `weekly_checkins` notification says one more
+  /// arrived (C8) — so the screen does not drop to a spinner under a coach
+  /// writing a reply, and kept when that re-read fails, which the screen says. A
+  /// queue that was never read is still not a queue: see `_queue()`.
+  ///
+  /// By the owner the rows carry, NEVER by the kind of state (P0-FL-59c):
+  /// Riverpod keeps the last coach's rows in an `AsyncLoading` and an
+  /// `AsyncError` too, and those are their clients, with names and notes.
   static List<Map<String, dynamic>> _loaded(
-          AsyncValue<List<Map<String, dynamic>>> state) =>
-      switch (state) {
-        AsyncError() => const <Map<String, dynamic>>[],
-        AsyncValue(hasValue: true, :final value?) => value,
-        _ => const <Map<String, dynamic>>[],
-      };
+      AsyncValue<List<Map<String, dynamic>>> state, String? Function() uid) {
+    final mine = heldFor(state, uid);
+    return mine.hasValue ? mine.requireValue : const [];
+  }
 
   /// Advance without sending — FIT-033's declared `Next`.
-  void _openNext(Map<String, dynamic> checkin) {
+  void _openNext(Map<String, dynamic> checkin, int epoch) {
+    if (!_mayAct(epoch, 'CoachCheckinReviewScreen._openNext', 'next not opened')) {
+      return;
+    }
     final next = q.nextInQueue(_queue(), checkin['id'] as String?);
     if (next == null) return;
-    _messageCtrl.clear();
-    _recCtrl.clear();
-    setState(_recommendations.clear);
+    _clearDraft();
     ref.read(selectedCoachCheckinProvider.notifier).state = next;
   }
 
@@ -133,18 +226,40 @@ class _CoachCheckinReviewScreenState
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(checkinUidProvider, (_, next) {
+      if (next != _owner) _drop();
+    });
+    final epoch = _epoch;
     // Watched, not read — see `_queue()`. The three states are kept apart:
     // a queue that FAILED must not read as a queue that is empty.
     final queueState = ref.watch(coachSubmittedCheckinsProvider);
-    final queue = _loaded(queueState);
+    final uid = ref.watch(checkinUidProvider);
+    final queue = _loaded(queueState, () => uid);
     final queueFailed = queueState is AsyncError;
+    final queueFailure = SectionLoadFailure(
+      what: 'your review queue',
+      error: queueState.error,
+      busy: queueState.isLoading,
+      onRetry: () => ref.invalidate(coachSubmittedCheckinsProvider),
+      accent: AppColors.warning,
+    );
     // PD7: every way into this screen (the Check-ins nav item, "Needs you
     // today", the directory tile) arrives with nothing selected, so it said
     // "No check-in selected" and no check-in could ever be opened. With nothing
     // selected, open the oldest submitted one: the queue is read oldest first
     // (`getSubmittedCheckinsForCoach`), and Next / Send and open next page on.
-    final checkin = ref.watch(selectedCoachCheckinProvider) ??
-        (queue.isNotEmpty ? queue.first : null);
+    // A check-in being replied to is not moved on from: see [_open].
+    final selected = ref.watch(selectedCoachCheckinProvider);
+    final held = uid == _owner ? _open : null;
+    final open = (_drafting ? held : null) ??
+        selected ??
+        (queue.isNotEmpty ? queue.first : null) ??
+        (queueFailed || queueState.isLoading ? held : null);
+    // As the queue has it now, if it still does.
+    final checkin = open == null
+        ? null
+        : queue.where((c) => c['id'] == open['id']).firstOrNull ?? open;
+    _open = checkin;
 
     if (checkin == null) {
       return Scaffold(
@@ -164,8 +279,8 @@ class _CoachCheckinReviewScreenState
             AsyncLoading() => const CircularProgressIndicator(),
             // Not "nothing selected": the coach is about to conclude they have
             // nothing to review, when the truth is that we could not tell.
-            AsyncError() => const Text("Couldn't load your review queue",
-                style: TextStyle(color: AppColors.warning)),
+            AsyncError() =>
+              Padding(padding: const EdgeInsets.all(20), child: queueFailure),
             _ => const Text("No check-in selected",
                 style: TextStyle(color: AppColors.textSecondary)),
           },
@@ -200,7 +315,7 @@ class _CoachCheckinReviewScreenState
           if (q.nextInQueue(queue, checkin['id'] as String?) != null)
             NamedIconButton(
               label: 'Next',
-              onTap: () => _openNext(checkin),
+              onTap: () => _openNext(checkin, epoch),
               child: const Icon(Icons.arrow_forward, color: AppColors.white),
             ),
         ],
@@ -229,16 +344,6 @@ class _CoachCheckinReviewScreenState
                         position:
                             q.reviewPosition(queue, checkin['id'] as String?),
                       );
-                      if (queueFailed) {
-                        // Not "1 of ?" and not silence. The coach is about to
-                        // lose `Send and open next` and should know why.
-                        return Text(
-                            line.isEmpty
-                                ? "Couldn't load your review queue"
-                                : "$line · couldn't load your review queue",
-                            style: const TextStyle(
-                                color: AppColors.warning, fontSize: 13));
-                      }
                       if (line.isEmpty) return const SizedBox.shrink();
                       return Text(line,
                           style: const TextStyle(
@@ -264,6 +369,9 @@ class _CoachCheckinReviewScreenState
                   ),
               ],
             ),
+            // Not "1 of ?" and not silence. The coach is about to lose `Send and
+            // open next` and should know why.
+            if (queueFailed) queueFailure,
             const SizedBox(height: 20),
 
             // FIT-033's four stats. Only three are produced: `Sessions 4/4` is
@@ -353,6 +461,10 @@ class _CoachCheckinReviewScreenState
             Container(
               decoration: AppStyles.premiumCardDecoration,
               child: TextField(
+                // A new field after a drop: undo in the old one would bring the
+                // last coach's words back.
+                // And for another client: their field has its own history.
+                key: ValueKey('reply-$epoch-${checkin['id']}'),
                 controller: _messageCtrl,
                 maxLines: 4,
                 style: const TextStyle(color: AppColors.white, fontSize: 14),
@@ -377,6 +489,7 @@ class _CoachCheckinReviewScreenState
                   child: Container(
                     decoration: AppStyles.premiumCardDecoration,
                     child: TextField(
+                      key: ValueKey('recommendation-$epoch-${checkin['id']}'),
                       controller: _recCtrl,
                       style: const TextStyle(color: AppColors.white, fontSize: 13),
                       decoration: InputDecoration(
@@ -527,9 +640,9 @@ class _CoachCheckinReviewScreenState
                   label: label,
                   enabled: !_saving,
                   excludeSemantics: true,
-                  onTap: _saving ? null : () => _submit(checkin),
+                  onTap: _saving ? null : () => _submit(checkin, epoch),
                   child: ElevatedButton(
-                    onPressed: _saving ? null : () => _submit(checkin),
+                    onPressed: _saving ? null : () => _submit(checkin, epoch),
                     child: _saving
                         ? const SizedBox(
                             width: 22,
