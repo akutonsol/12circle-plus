@@ -4,7 +4,7 @@ import '../../../shared/theme/app_background.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../data/payment_service.dart' show ownerGone;
 import '../domain/payment_provider.dart';
-import 'checkout_launcher.dart' show showOwnedSnackBar;
+import 'checkout_launcher.dart' show outcomeOwnerGone, showOwnedSnackBar;
 
 const _card  = Color(0xFF0E0B16);
 const _brd   = Color(0xFF1A1020);
@@ -173,11 +173,17 @@ class _StripeButtonState extends ConsumerState<_StripeButton> {
       // Recorded by the service; said to the account that asked, nobody else.
       problem = couldntMessage('open Stripe', e);
     }
-    if (!mounted) return;
+    const origin = 'CoachPaymentsScreen.openStripe';
+    if (!mounted) {
+      // The screen went with the account (an account scope) (P0-FL-63b).
+      if (problem != null) outcomeOwnerGone(owner, origin, 'open Stripe');
+      return;
+    }
     setState(() => _busy = false);
     if (problem != null) {
       showOwnedSnackBar(messenger, owner, SnackBar(
-          content: Text(problem), backgroundColor: const Color(0xFFFFB4AB)));
+          content: Text(problem), backgroundColor: const Color(0xFFFFB4AB)),
+          origin: origin, flow: 'open Stripe');
     }
   }
 

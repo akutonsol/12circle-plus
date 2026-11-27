@@ -34,6 +34,13 @@ const _noConversationMessage = 'Open a conversation from Messages.';
 const _photoBusyMessage =
     'A photo is already being chosen or sent — wait for it to finish.';
 
+/// P0-FL-63b · marks a message on screen whose insert has not answered yet. It
+/// is drawn as [_sendingLabel], not with a sent time: nothing has said it was
+/// sent (there is no client timeout, so a stalled connection can hold it).
+/// Local only — never sent, and gone from the server's rows.
+const _pendingKey = '_unconfirmed';
+const _sendingLabel = 'Sending…';
+
 /// F-28 · the chat header's subtitle.
 ///
 /// It was the constant **"Online now"**, beside a green presence dot. Nothing
@@ -328,6 +335,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       'content': text,
       'sent_at': DateTime.now().toIso8601String(),
       'is_read': false,
+      _pendingKey: true,
     };
     setState(() => _messages = [..._messages, optimistic]);
     _scrollToBottom();
@@ -341,6 +349,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         // The points would go to whoever is signed in now.
         _refuse('ChatScreen._send.award', 'points not awarded');
         return;
+      }
+      // The server took the row: now it is shown as sent.
+      if (mounted && epoch == _epoch) {
+        setState(() => optimistic.remove(_pendingKey));
       }
       ScoreEngine().messageCoach(); // +5, once/day (server dedup)
       return;
@@ -692,7 +704,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       mediaPath: meta?[ChatMediaPath.mediaPathKey] as String?,
                       resolveMediaUrl: _signedUrlFor,
                       isMe: isMe,
-                      time: _formatTime(msg['sent_at'] ?? DateTime.now().toIso8601String()),
+                      time: msg[_pendingKey] == true
+                          ? _sendingLabel
+                          : _formatTime(msg['sent_at'] ?? DateTime.now().toIso8601String()),
                       showAvatar: showAvatar,
                       participantInitial: _participantName.isNotEmpty
                         ? _participantName[0].toUpperCase() : '?');
