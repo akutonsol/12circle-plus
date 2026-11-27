@@ -6,9 +6,11 @@ import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/core/router/app_router.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/payments/domain/entitlements.dart';
+import 'package:circle_fitness/features/workout/data/models/workout_model.dart';
 import 'package:circle_fitness/features/workout/data/workout_service.dart';
 import 'package:circle_fitness/features/workout/domain/load_format.dart';
 import 'package:circle_fitness/features/workout/domain/workout_provider.dart';
+import 'package:circle_fitness/features/workout/domain/workout_save.dart';
 import 'package:circle_fitness/features/workout/presentation/active_workout_screen.dart';
 import 'package:circle_fitness/features/workout/presentation/resume_workout_banner.dart';
 import 'package:circle_fitness/features/workout/presentation/widgets/rest_timer_widget.dart';
@@ -160,6 +162,10 @@ void main() {
       });
 
   Finder logSet() => find.bySemanticsLabel('Log set');
+
+  /// The [i]th set row's own "Log set".
+  Finder logSetOf(int i) =>
+      find.descendant(of: find.byType(SetTrackerRow).at(i), matching: logSet());
 
   /// The weight field of the [i]th set row on screen.
   Finder weightOf(int i) => find
@@ -504,5 +510,355 @@ void main() {
         rows.length,
         reason: 'one row per set');
     expect(rows.map((r) => r['user_id']), everyElement(acctA));
+  });
+
+  // ── Round 2 · a set in flight at Finish / End, and a Finish / End that fails.
+  //
+  // The same member throughout: these are about `_closed` (the workout is filed
+  // or ended) never swallowing a set the member CONFIRMED, and never outliving
+  // the workout it closed.
+
+  final set1 = _workout.exercises.first.sets[0];
+  List<(Object?, Object?, Object?)> savedRows(WorkoutSet set) => [
+        for (final r in _backend.workout.setLogs)
+          if (r['set_id'] == set.id) (r['user_id'], r['session_id'], r['completed'])
+      ];
+  List<(Object?, Object?)> sessionRows() =>
+      [for (final s in _backend.workout.sessions) (s['id'], s['status'])];
+  bool opensSession(Asked a) => a.method == 'POST' && a.table == 'workout_sessions';
+  bool abandons(Asked a) =>
+      a.method == 'PATCH' && a.table == 'workout_sessions' && a.body.contains('abandoned');
+
+  /// A opens the Zone on the real router; no warm-up answered, nothing logged.
+  Future<void> aOpensZone(WidgetTester t) async {
+    await mount(t);
+    container(t).read(selectedWorkoutProvider.notifier).state = _workout;
+    appRouter(t).go('/active-workout');
+    await settle(t);
+    expect(appPath(t), '/active-workout');
+    expect(find.text(_workout.title), findsOneWidget, reason: 'premise: the Zone is open');
+  }
+
+  /// A's session is still being opened (its insert held, not yet made) when A
+  /// confirms set 1 — whose save waits on that session — and then presses
+  /// [close]. Returns the hold.
+  Future<Completer<void>> set1WaitsOnTheOpeningSession(WidgetTester t) async {
+    final opening = Completer<void>();
+    _backend.workout.script
+        .add((where: opensSession, outcome: Outcome.overtaken, until: opening));
+    await aOpensZone(t);
+    expect(_backend.workout.sessions, isEmpty, reason: 'premise: the session is still opening');
+    await t.tap(logSet().first);
+    await settle(t, 4);
+    expect(_backend.workout.setLogs, isEmpty,
+        reason: 'premise: confirmed set 1 is waiting on the session');
+    return opening;
+  }
+
+  // QA should-fix 1 / mutant persistSet_rechecks_closed_after_await (see the
+  // report): set 1's save is suspended in `await _ensureSession()` while Finish
+  // runs. HOW IT FAILED at 1c65022: Finish found no session id and completed
+  // nothing; the session opened afterwards stayed `in_progress` — a finished
+  // workout offered for resume.
+  appTest('Finish while the session is still opening, set 1 confirmed and waiting '
+      'on it: Finish closes THAT session, and set 1 lands on it', (t) async {
+    final opening = await set1WaitsOnTheOpeningSession(t);
+    await t.tap(find.textContaining('Finish Early'));
+    await settle(t, 4);
+    opening.complete();
+    await settle(t, 20);
+
+    expect(_backend.workout.sessions, hasLength(1));
+    final sid = _backend.workout.sessions.single['id'];
+    expect(savedRows(set1), [(acctA, sid, true)], reason: 'the confirmed set 1 was lost');
+    expect(sessionRows(), [(sid, 'completed')],
+        reason: 'the finished workout left a session open');
+    expect(_backend.workout.writes(to: 'workout_logs').map((w) => w.who), [acctA]);
+    expect(find.byType(WorkoutCompleteDialog), findsOneWidget);
+    expect(t.widget<WorkoutCompleteDialog>(find.byType(WorkoutCompleteDialog)).setsLogged, 1,
+        reason: 'set 1 is counted though binding the session cleared it from memory');
+    await t.tap(find.text('Skip'));
+    await settle(t);
+    expect(appPath(t), '/home');
+    expect(find.text('Resume Workout?'), findsNothing,
+        reason: 'a finished workout offered for resume');
+  });
+
+  // HOW IT FAILED at 1c65022: End found no session id and ended nothing; the
+  // session opened afterwards stayed `in_progress`, and Home offered it.
+  appTest('End while the session is still opening, set 1 confirmed and waiting on '
+      'it: End ends THAT session, and set 1 lands on it', (t) async {
+    final opening = await set1WaitsOnTheOpeningSession(t);
+    await t.tap(find.bySemanticsLabel('End session'));
+    await settle(t, 2);
+    await t.tap(find.text('End Workout'));
+    await settle(t, 4);
+    opening.complete();
+    await settle(t, 20);
+
+    expect(_backend.workout.sessions, hasLength(1));
+    final sid = _backend.workout.sessions.single['id'];
+    expect(sessionRows(), [(sid, 'abandoned')],
+        reason: 'the ended workout left a session open');
+    expect(savedRows(set1), [(acctA, sid, true)], reason: 'the confirmed set 1 was lost');
+    expect(appPath(t), '/home');
+    expect(find.text('Resume Workout?'), findsNothing,
+        reason: 'an ended workout offered for resume');
+    expect(find.textContaining('Warmed Up'), findsNothing,
+        reason: 'the warm-up asked about a workout already ended');
+  });
+
+  // MUTANT closed_set_before_finish_saves (`_closed = true` before Finish's
+  // saves) drops set 2 here.
+  appTest('a set confirmed while Finish is saving still lands, on the session '
+      'Finish then completes', (t) async {
+    final sid = await aMidWorkout(t);
+    await t.pump(const Duration(milliseconds: 700)); // set 2's typed weight lands
+    await settle(t, 4);
+    final filing = _backend.workout.holds['POST workout_logs:$acctA'] = Completer<void>();
+    await t.tap(find.textContaining('Finish Early'));
+    await settle(t, 4);
+    expect(_backend.workout.writes(to: 'workout_logs'), hasLength(1),
+        reason: 'premise: Finish is saving');
+    expect(sessionRows(), [(sid, 'in_progress')], reason: 'premise: not completed yet');
+
+    await t.tap(logSetOf(1));
+    await settle(t, 4);
+    filing.complete();
+    await settle(t, 20);
+
+    expect(savedRows(set2), [(acctA, sid, true)],
+        reason: 'set 2, confirmed before the workout was filed, was lost');
+    expect(sessionRows(), [(sid, 'completed')]);
+    expect(find.byType(WorkoutCompleteDialog), findsOneWidget);
+  });
+
+  // MUTANT closed_before_abandon (`_closed = true` before End's request) drops
+  // set 2 here.
+  appTest('a set confirmed while End is being sent still lands, on the session '
+      'End then closes', (t) async {
+    final sid = await aMidWorkout(t);
+    await t.pump(const Duration(milliseconds: 700));
+    await settle(t, 4);
+    final ending = Completer<void>();
+    _backend.workout.script.add((where: abandons, outcome: Outcome.overtaken, until: ending));
+    await t.tap(find.bySemanticsLabel('End session'));
+    await settle(t, 2);
+    await t.tap(find.text('End Workout'));
+    await settle(t, 4);
+    expect(appPath(t), '/active-workout', reason: 'premise: End is in flight');
+
+    await t.tap(logSetOf(1));
+    await settle(t, 4);
+    ending.complete();
+    await settle(t, 20);
+
+    expect(savedRows(set2), [(acctA, sid, true)],
+        reason: 'set 2, confirmed before the workout was ended, was lost');
+    expect(sessionRows(), [(sid, 'abandoned')]);
+    expect(appPath(t), '/home');
+  });
+
+  // MUTANTS closed_set_on_failed_finish and closed_set_before_finish_saves: a
+  // Finish that did not file the workout closed it anyway, and every set logged
+  // before the retry was dropped without a word.
+  appTest('a Finish whose save fails leaves the workout open: a set logged after '
+      'it is saved, and the retry files the workout once', (t) async {
+    final sid = await aMidWorkout(t);
+    await t.pump(const Duration(milliseconds: 700));
+    await settle(t, 4);
+    _backend.workout.fails.add('POST workout_logs:$acctA');
+    await t.tap(find.textContaining('Finish Early'));
+    await settle(t);
+    expect(find.byType(WorkoutCompleteDialog), findsNothing);
+    expect(find.text(workoutSaveFailedMessage), findsOneWidget,
+        reason: 'premise: the failure is said');
+    // As at a446926: the session row closed, the workout itself not filed.
+    expect(sessionRows(), [(sid, 'completed')]);
+
+    _backend.workout.fails.clear();
+    await t.tap(logSetOf(1));
+    await settle(t, 4);
+    expect(savedRows(set2), [(acctA, sid, true)],
+        reason: 'a set logged after a failed Finish was dropped');
+
+    await t.tap(find.text(workoutSaveRetryLabel));
+    await settle(t);
+    expect(find.byType(WorkoutCompleteDialog), findsOneWidget);
+    expect(sessionRows(), [(sid, 'completed')]);
+    expect(_backend.workout.sessions, hasLength(1));
+  });
+
+  // UX 5. MUTANT closed_before_abandon drops set 2 here too.
+  appTest('an End whose request fails leaves the workout open and editable: the '
+      'failure is said, and a set logged after it is saved', (t) async {
+    final sid = await aMidWorkout(t);
+    await t.pump(const Duration(milliseconds: 700));
+    await settle(t, 4);
+    _backend.workout.script.add((where: abandons, outcome: Outcome.refused, until: null));
+    await t.tap(find.bySemanticsLabel('End session'));
+    await settle(t, 2);
+    await t.tap(find.text('End Workout'));
+    await settle(t, 4);
+    expect(appPath(t), '/active-workout');
+    // Said after the rest's own "−5 points" SnackBar, queued ahead of it.
+    for (var i = 0; i < 20 && find.textContaining("Couldn't end").evaluate().isEmpty; i++) {
+      await t.pump(const Duration(milliseconds: 500));
+    }
+    expect(find.textContaining("Couldn't end the workout"), findsOneWidget);
+    expect(find.textContaining('SECRET'), findsNothing, reason: 'raw server text');
+    expect(sessionRows(), [(sid, 'in_progress')]);
+
+    await t.tap(logSetOf(1));
+    await settle(t, 4);
+    expect(savedRows(set2), [(acctA, sid, true)],
+        reason: 'a set logged after a failed End was dropped');
+    expect(_backend.workout.sessions, hasLength(1));
+  });
+
+  // MUTANT ensureSession_reads_ref. HOW IT FAILED at 1c65022: the flush from
+  // set 2's dispose re-opened the session (its start had failed), and binding it
+  // read `ref` on the unmounted Zone — the set was lost and a FlutterError
+  // recorded.
+  appTest("the session's start failed; set 2 typed and the Zone left inside the "
+      'debounce: the flush opens the session and saves set 2 once, as A', (t) async {
+    _backend.workout.script.add((where: opensSession, outcome: Outcome.refused, until: null));
+    await aOpensZone(t);
+    expect(_backend.workout.sessions, isEmpty, reason: "premise: A's session did not open");
+    expect(find.textContaining("Couldn't start this workout"), findsOneWidget);
+    await t.tap(find.textContaining('Warmed Up'));
+    await settle(t);
+
+    await t.enterText(weightOf(1), '77');
+    await t.pump(const Duration(milliseconds: 100));
+    appRouter(t).go('/home');
+    await settle(t, 20);
+
+    expect(appPath(t), '/home');
+    expect(_backend.workout.sessions, hasLength(1),
+        reason: 'the flush could not open the session');
+    final sid = _backend.workout.sessions.single['id'];
+    expect(sessionRows(), [(sid, 'in_progress')]);
+    expect(
+        [
+          for (final r in _backend.workout.setLogs)
+            if (r['set_id'] == set2.id) (r['user_id'], r['session_id'], r['weight_kg'])
+        ],
+        [(acctA, sid, 77)],
+        reason: "the typed set 2 was lost as the Zone went");
+    expect(_failures.map((f) => '${f.error}'),
+        isNot(contains(contains('deactivated widget'))),
+        reason: 'the flush reached the unmounted Zone');
+  });
+
+  // MUTANT persistSet_ignores_closed: "Log set" (onCompleted, which has no
+  // `_closed` check of its own) on the filed Zone opened a new session for it.
+  // At a446926 this is defect 2 again.
+  appTest('the finish dialog dismissed by system back: a set logged on the filed '
+      'workout opens no new session and writes nothing', (t) async {
+    final sid = await aMidWorkout(t);
+    await t.pump(const Duration(milliseconds: 700));
+    await settle(t, 4);
+    await t.tap(find.textContaining('Finish Early'));
+    await settle(t);
+    await t.binding.handlePopRoute(); // Android back: no PopScope on the dialog
+    await settle(t);
+    expect(find.byType(WorkoutCompleteDialog), findsNothing,
+        reason: 'premise: back closed the dialog');
+    expect(appPath(t), '/active-workout', reason: 'premise: the filed Zone is still up');
+    final mark = _backend.sent.length;
+
+    await t.tap(logSetOf(2)); // set 3, never logged
+    await settle(t, 6);
+
+    expect(sessionRows(), [(sid, 'completed')],
+        reason: 'the filed workout was opened again as a new session');
+    expect(
+        [for (final w in _backend.writesSince(mark)) if (w.name == 'workout_set_logs') '$w'],
+        isEmpty,
+        reason: 'a set written after the workout was filed');
+  });
+
+  // UX 4. HOW IT FAILED at 1c65022: the view is keyed by the member alone, so the
+  // view that FILED a workout went on to show the next one, closed: the set
+  // logged on it was dropped without a word, and it never opened a session.
+  appTest('the finish dialog dismissed by system back, then another workout opened '
+      'in the Zone: a fresh Zone, whose set is saved to its own session', (t) async {
+    final sid = await aMidWorkout(t);
+    await t.pump(const Duration(milliseconds: 700));
+    await settle(t, 4);
+    await t.tap(find.textContaining('Finish Early'));
+    await settle(t);
+    expect(find.byType(WorkoutCompleteDialog), findsOneWidget);
+    await t.binding.handlePopRoute(); // Android back: no PopScope on the dialog
+    await settle(t);
+    expect(find.byType(WorkoutCompleteDialog), findsNothing,
+        reason: 'premise: back closed the dialog');
+    expect(appPath(t), '/active-workout', reason: 'premise: the filed Zone is still up');
+
+    // No control opens a workout INSIDE the Zone today; the selection is what
+    // a Resume card, a deep link or a re-bound program would set.
+    final next = WorkoutService().getSampleWorkouts()[1];
+    container(t).read(selectedWorkoutProvider.notifier).state = next;
+    await settle(t);
+    expect(find.text(next.title), findsOneWidget);
+    if (find.textContaining('Warmed Up').evaluate().isNotEmpty) {
+      await t.tap(find.textContaining('Warmed Up'));
+      await settle(t);
+    }
+    await t.tap(logSet().first);
+    await settle(t, 4);
+
+    final open = [
+      for (final s in _backend.workout.sessions)
+        if (s['workout_id'] == next.id) s['id']
+    ];
+    expect(open, hasLength(1), reason: 'the next workout never opened a session');
+    expect(sessionRows(), [(sid, 'completed'), (open.single, 'in_progress')]);
+    expect(
+        [
+          for (final r in _backend.workout.setLogs)
+            if (r['set_id'] == next.exercises.first.sets.first.id)
+              (r['user_id'], r['session_id'], r['completed'])
+        ],
+        [(acctA, open.single, true)],
+        reason: 'a set logged on the next workout was dropped without a word');
+  });
+
+  // The view is now one per workout, so selecting another one tears the old
+  // view down in the same frame (no route transition), and its set rows flush
+  // from dispose with the view already deactivated. With no session bound, that
+  // flush reaches _ensureSession.
+  // WITHOUT the `_stillSelected` gate in onChanged (mutant
+  // onChanged_ignores_selection): the flush modifies activeWorkoutProvider in
+  // the middle of the frame — Riverpod's "Tried to modify a provider while the
+  // widget tree was building" — and, had it got further, _ensureSession would
+  // have opened a session for the NEXT workout and filed this set into it.
+  appTest("no session yet, set 2 typed, another workout opened in the Zone inside "
+      "the debounce: the typed set goes into no other workout's session, and "
+      'nothing throws', (t) async {
+    _backend.workout.script.add((where: opensSession, outcome: Outcome.refused, until: null));
+    await aOpensZone(t);
+    expect(_backend.workout.sessions, isEmpty, reason: "premise: A's session did not open");
+    await t.tap(find.textContaining('Warmed Up'));
+    await settle(t);
+    await t.enterText(weightOf(1), '77');
+    await t.pump(const Duration(milliseconds: 100));
+    final mark = _backend.sent.length;
+
+    final next = WorkoutService().getSampleWorkouts()[1];
+    container(t).read(selectedWorkoutProvider.notifier).state = next;
+    await settle(t, 20);
+
+    expect(find.text(next.title), findsOneWidget, reason: 'premise: the next workout is up');
+    expect(
+        [for (final w in _backend.writesSince(mark)) if (w.name == 'workout_set_logs') '$w'],
+        isEmpty,
+        reason: "the first workout's typed set 2 was filed after it was left");
+    expect([for (final s in _backend.workout.sessions) s['workout_id']], [next.id],
+        reason: 'one session, opened by the next workout for itself');
+    expect(_failures.map((f) => '${f.error}'),
+        isNot(contains(contains('deactivated widget'))),
+        reason: 'the flush reached the deactivated Zone through `ref`');
   });
 }
