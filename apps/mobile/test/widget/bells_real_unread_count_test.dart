@@ -471,8 +471,10 @@ void main() {
         });
       }
 
+      // P0-FL-63c: a failed re-count is unknown — neither the last number
+      // nor "none" (it kept the last one, and after a 0 said "none unread").
       testWidgets('SAME ACCOUNT: a live event re-counts; a failed re-count '
-          'keeps the last one', (t) async {
+          'is unknown, not the last one', (t) async {
         final handle = t.ensureSemantics();
         server.unread[memberA] = 3;
         await mount(t);
@@ -486,7 +488,8 @@ void main() {
         n = answers();
         container.invalidate(unreadCountProvider);
         await until(t, () => answers() > n, 'the failed re-count');
-        expect(said(t), 'Notifications, 4 unread');
+        expect(said(t), 'Notifications');
+        expect(mark, findsNothing);
         server.fails.clear();
         server.unread[memberA] = 0;
         n = answers();
