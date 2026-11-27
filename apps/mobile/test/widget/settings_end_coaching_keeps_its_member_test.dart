@@ -8,7 +8,6 @@
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
-import 'package:circle_fitness/features/coach/domain/coach_provider.dart';
 import 'package:circle_fitness/features/payments/domain/entitlements.dart';
 import 'package:circle_fitness/features/settings/presentation/settings_screen.dart';
 import 'package:flutter/material.dart';

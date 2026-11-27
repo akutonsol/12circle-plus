@@ -8,7 +8,6 @@ import 'package:circle_fitness/features/checkins/domain/checkin_provider.dart';
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
 import 'package:circle_fitness/features/dashboard/domain/coach_triage_provider.dart';
 import 'package:circle_fitness/features/dashboard/presentation/coach_dashboard_screen.dart';
-import 'package:circle_fitness/features/messaging/domain/messaging_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
