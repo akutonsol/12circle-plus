@@ -1,7 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/observability/app_failure.dart';
 import 'coach_triage.dart';
+import 'still_reading.dart';
 import '../../auth/domain/auth_provider.dart';
 
 /// FIT-032 · assembling `ClientSignals` from the sources a coach may read.
@@ -27,10 +29,8 @@ import '../../auth/domain/auth_provider.dart';
 /// be built, and it must not claim the assignment behind it is genuine.
 final _db = Supabase.instance.client;
 
-/// The signed-in coach's active client ids.
-Future<List<String>> _activeClientIds() async {
-  final coachId = _db.auth.currentUser?.id;
-  if (coachId == null) return const [];
+/// [coachId]'s active client ids.
+Future<List<String>> _activeClientIds(String coachId) async {
   final rels = await _db
       .from('coach_client_relationships')
       .select('client_id')
@@ -75,10 +75,34 @@ final coachTriageSignalsProvider =
     FutureProvider.autoDispose<List<ClientSignals>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
   ref.watch(currentUserProvider.select((u) => u?.id));
+  // P0-FL-62c: the rows (and a failure) are marked as the coach's whose token
+  // asked — the auth client's id as the read starts, which a provider that has
+  // not heard of a switch yet would get wrong. Riverpod keeps them through the
+  // next coach's read and its failure; the card draws them for their own
+  // coach only. Every later step asks [stillMine] first: a step sent after a
+  // switch would go out under the next coach's token with this coach's client
+  // ids.
   final coachId = _db.auth.currentUser?.id;
+  try {
+    return await ownedRead(coachId, () => _triageFor(coachId));
+  } catch (e, st) {
+    reportError('coachTriageSignalsProvider', e, st);
+    rethrow;
+  }
+});
+
+/// The coach this read started for has left: nothing more is asked as them.
+void _stillMine(String coachId) {
+  if (accountLeft(coachId)) {
+    throw StateError('coach triage read: the signed-in account changed');
+  }
+}
+
+Future<List<ClientSignals>> _triageFor(String? coachId) async {
   if (coachId == null) return const [];
 
-  final ids = await _activeClientIds();
+  final ids = await _activeClientIds(coachId);
+  _stillMine(coachId);
   // No clients is a real answer and stays distinguishable from a failed read.
   if (ids.isEmpty) return const [];
 
@@ -90,6 +114,7 @@ final coachTriageSignalsProvider =
     final n = '${p['first_name'] ?? ''} ${p['last_name'] ?? ''}'.trim();
     if (n.isNotEmpty) names[p['id'] as String] = n;
   }
+  _stillMine(coachId);
 
   // ── Review · weekly_checkins (114: owner or is_active_coach_of) ──────────
   final week = <String, int>{};
@@ -107,6 +132,7 @@ final coachTriageSignalsProvider =
     week[uid] = (c['week_number'] as num?)?.toInt() ?? 0;
     note[uid] = excerpt(c['notes'] as String?);
   }
+  _stillMine(coachId);
 
   // ── At risk · workout_sessions (100: owner or is_active_coach_of) ────────
   final lastSession = <String, int>{};
@@ -121,6 +147,7 @@ final coachTriageSignalsProvider =
     final d = _wholeDaysSince(s['started_at'] as String?);
     if (d != null) lastSession[uid] = d;
   }
+  _stillMine(coachId);
 
   // ── Reply · the coach's own threads (participant-scoped) ─────────────────
   final asked = <String, String?>{};
@@ -128,6 +155,7 @@ final coachTriageSignalsProvider =
       .from('conversations')
       .select('id, participant_1, participant_2')
       .or('participant_1.eq.$coachId,participant_2.eq.$coachId');
+  _stillMine(coachId);
   final otherParty = <String, String>{};
   for (final c in convos as List) {
     final p1 = c['participant_1'] as String?;
@@ -151,6 +179,7 @@ final coachTriageSignalsProvider =
       if (asked.containsKey(uid)) continue;
       asked[uid] = excerpt(m['content'] as String?);
     }
+    _stillMine(coachId);
   }
 
   // ── Assign · assignments + the programme's own duration ──────────────────
@@ -163,6 +192,7 @@ final coachTriageSignalsProvider =
       .select('client_id, program_id, start_date, status')
       .inFilter('client_id', ids)
       .eq('status', 'active');
+  _stillMine(coachId);
   final programIds = (assignments as List)
       .map((a) => a['program_id'])
       .whereType<String>()
@@ -184,6 +214,7 @@ final coachTriageSignalsProvider =
           asWeeks(p['duration_weeks']);
       if (n != null && n > 0) durations[p['id'] as String] = n;
     }
+    _stillMine(coachId);
   }
   for (final a in assignments) {
     final uid = a['client_id'] as String?;
@@ -220,6 +251,7 @@ final coachTriageSignalsProvider =
     final c = r['churn_risk'];
     if (uid != null && c is num) churn[uid] = c.round();
   }
+  _stillMine(coachId);
 
   return [
     for (final id in ids)
@@ -236,4 +268,4 @@ final coachTriageSignalsProvider =
         churnRisk: churn[id],
       ),
   ];
-});
+}

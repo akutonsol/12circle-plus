@@ -247,6 +247,14 @@ AsyncValue<List<Map<String, dynamic>>> _aiSignalsFor(
   return heldFor(uid, read);
 }
 
+/// What of [read] the "Needs you today" card may draw for [uid] (the watched
+/// id): rows, or a failure, of [uid]'s own read only ([heldFor]) — and nothing
+/// while the auth client already names someone else, before [uid] has heard.
+AsyncValue<List<T>> _triageFor<T>(String? uid, AsyncValue<List<T>> read) {
+  if (hasAuthClient && !stillSignedIn(uid)) return AsyncLoading<List<T>>();
+  return heldFor(uid, read);
+}
+
 final clientCheckinsProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
   final uid = ref.watch(currentUserProvider.select((u) => u?.id));
@@ -908,7 +916,12 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
               // choice is visible in the diff. Neither is the board's — it
               // shows `9 days` and `Sunday` as sample values, not rules —
               // and both are recorded as OD-21.
-              ref.watch(coachTriageSignalsProvider).when(
+              // P0-FL-62c: drawn for the coach the rows were read for only.
+              // `.when` drew the previous value while the next read was out,
+              // so coach A's clients and their reasons could be up for coach
+              // B. The failure below is B's own read's, never A's.
+              _triageFor(_watchedUid(), ref.watch(coachTriageSignalsProvider))
+                  .when(
                 loading: () => const SizedBox.shrink(),
                 // A failed read must not read as "nothing needs you". That
                 // is F-15 on the screen F-15 was found on.
