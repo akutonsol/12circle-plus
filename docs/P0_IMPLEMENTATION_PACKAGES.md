@@ -287,6 +287,40 @@ Runtime (device/simulator/live QA): **not performed**; journey completion unchan
 
 **Runtime evidence:** none (no device, simulator or live QA). Journeys stay at 2 of 14 and beta conditions at 0 of 4.
 
+## Cycle 13 log (2026-11-25/26): P0-FL-59a–f, P0-FL-60a–c, P0-FL-61
+
+**How the cycle ran.**
+- The base was checked first: `origin/integration/p0-flutter-stack-c12` = `a82f993`, and `-c13` did not exist. #214–#218 were open and unmerged. Every package started from `a82f993` and targets `-c12`. Earlier cycle branches and PRs, main and #14 were not touched.
+- A read-only FL-59 inventory (state holders and write sites) came first; its closure map is `docs/IDENTITY_INVENTORY_CYCLE13.md` on the ledger branch. Ten engineers then worked in separate worktrees. Two shared files were given one owner each: `action_item_provider.dart` (59e owns the member provider; 59f's two coach hunks carried byte-identical) and the vendor folder (59a alone).
+- Each package got independent UX, security and QA review, with fix rounds until QA was VERIFIED at the final head. Security rejected eight of the ten at least once, each for a small owner check.
+- The lead ran mutants from every QA report. Each survivor was re-run in the package's own worktree, then killed by a test-only round or traced to the guard that stops the same case first. Shared-worktree runs under load produced one false survival (60c-9), and the runner's "did not compile" check matched a pub-get banner; both were found and fixed.
+- CI's negative controls and the static guards were run locally on every final head. EC-03 failed on FL-59e's head because a comment repeated the sentence it checks for; the comment was reworded before the PR opened.
+- SEC-R3 paths and Women's Health (incl. `home_screen.dart:817`) were not touched. The Action Center layout was not touched. No storage policy, backend authorization, migration or external configuration change.
+- **Combined branch `integration/p0-flutter-stack-c13`** @ `a446926`: the first combined build failed (analyze 320, 74 test files) although every package passed alone. Four integration commits (tests and one import, no behaviour change; security APPROVE-WITH-NOTES, QA VERIFIED) fix the clashes. Result (QA, local): 8902 tests, analyze 281, contract exit 0 (unseen 31), coordinator 268/268. Static guards, negative controls and the rest of CI on this head: CI **7/7 success**, run `45926493582`.
+
+| Package | Branch, final head, PR | Tests (full) | Independent review (final head) | Lead mutants | CI (exact head) |
+|---|---|---|---|---|---|
+| P0-FL-59a account scope, sign-in routing, reset link, reminders, notification watcher, vendor portal | `fix/account-scope-follows-signin` `2e74c54` → **#228** | 5815 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 23/24 | 7/7 `45925087333` |
+| P0-FL-59b live workout, sets, rest timer, finish, swaps | `fix/workout-belongs-to-its-member` `5bafd65` → **#227** | 5769 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES (REJECT at r2) · QA VERIFIED | 16/19 | 7/7 `45764984730` |
+| P0-FL-59c conversations, inbox, check-ins, coach review | `fix/conversation-and-checkins-keep-their-owner` `0335ee6` → **#222** | 5775 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 15/20 + 2 killed later, 4 traced | 7/7 `45753991323` |
+| P0-FL-59d coach tools (pricing, availability, integrations, focus, voice, video, exercises) | `fix/coach-tools-keep-their-owner` `d3dc7ea` → **#221** | 5941 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA no blocking defect | 19/19 | 7/7 `45750577959` |
+| P0-FL-59e member writes, awards and private screens | `fix/member-writes-keep-their-owner` `cc46fe1` → **#225** | 5959 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 18/19 | 7/7 `45760125222` |
+| P0-FL-59f coach client data, held rows, sheets, messages | `fix/coach-client-data-follows-signin` `ffc4b32` → **#224** | 6072 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 22/25 | 7/7 `45758267187` |
+| P0-FL-60a payment failures said truthfully and owned | `fix/payment-failures-recorded-and-owned` `491c286` → **#226** | 5859 | UX PASS-WITH-NOTES · sec APPROVE · QA VERIFIED | 27/29 | 7/7 `45761820719` |
+| P0-FL-60b Activity, Directory, nutrition AI, invite email | `fix/activity-ai-storage-failures-said` `97c3de1` → **#219** | 0 failures (412 files) | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 29/30 | 7/7 `45748953980` |
+| P0-FL-60c goals, pods, tickets, notifications | `fix/goals-pods-tickets-notifications-said` `2a8e471` → **#220** | 5775 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 24/25 | 7/7 `45746293433` |
+| P0-FL-61 header, bells, retry, food scan accessibility | `fix/shared-retry-bell-scan-accessibility` `b083f35` → **#223** | 5988 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 8/8 | 7/7 `45755909830` |
+
+**Surviving mutants at final heads:** each is named and traced in its PR (defence in depth behind a service or store check, or an equivalent); none is a missed behaviour. **Flakes:** `home_week_follows_calls_test` (base test, fixed 50 ms wait) fails intermittently under load.
+
+**Runtime evidence:** none (no device, simulator or live QA). Journeys stay at 2 of 14 and beta conditions at 0 of 4.
+
+### Backlog after cycle 13 (decision-free first)
+
+1. **P0-FL-62: remaining identity surfaces.** Rate your coach (A-15/W13) outside line 817; the AI coach screen (W15/E6) if outside SEC-R3; Manage Agenda and `create_class_screen`; `cancelCoach(expectedUid:)` at its four callers; dashboard approve/decline owner from the built row; the AI-signals card through `heldFor`/`ownedRead`; owner tags on the two coach action-item providers; QA's two combined-tree tests (Stop coach paid with one subscription; AccountScope teardown over an open workout).
+2. **P0-FL-63: small honesty fixes.** Vendor editor sheet built after a switch closes itself; reset form and B's own recovery during A's sign-out; dropped owned bar recorded; failed unread count; `resume_workout_banner` failure; refused workout selection said; Action Center first-load retry; coach-side action-item read throws.
+3. **Test hygiene:** `home_week_follows_calls_test` waits for the event.
+
 ### Backlog after cycle 12 (decision-free first)
 
 1. **P0-FL-59: account-switch sweep, HIGH items.**
