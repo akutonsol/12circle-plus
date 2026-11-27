@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../payments/domain/entitlements.dart';
 import '../../payments/presentation/upgrade_screen.dart'
-    show PlanLoadFailedNotice, knownPlan, reportPlanReadFailure;
+    show PlanLoadFailedNotice, ownedClientPlanProvider, reportPlanReadFailure;
 
 const _bg   = Color(0xFF0E0E0F);
 const _pri  = Color(0xFFDDB7FF);
@@ -73,16 +73,17 @@ class SubscriptionScreen extends ConsumerWidget {
     // P0-FL-17: an unread plan is not Basic/Free. Until client_plan() answers,
     // no tier is "Current": "…" while loading, "—" and a failure notice with
     // Try again when the read failed.
-    final planAsync = ref.watch(clientPlanProvider);
+    // P0-FL-60a (A-21): nor is another account's plan this one's.
+    final read = ref.watch(ownedClientPlanProvider);
     reportPlanReadFailure(ref, 'SubscriptionScreen.clientPlan');
-    final plan = knownPlan(planAsync);
+    final plan = read.value;
     final String? currentTier = switch (plan) {
       null                   => null,
       ClientPlan.coachGuided => 'elite',
       ClientPlan.aiGuided    => 'pro',
       _                      => 'basic', // free + self-guided map to Basic
     };
-    final planError = plan == null && planAsync.hasError ? planAsync.error : null;
+    final planError = plan == null ? read.error : null;
     final top    = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
 
@@ -154,7 +155,7 @@ class SubscriptionScreen extends ConsumerWidget {
               const SizedBox(height: 16),
               PlanLoadFailedNotice(
                 error: planError,
-                busy: planAsync.isLoading,
+                busy: read.isLoading,
                 onRetry: () => ref.invalidate(clientPlanProvider),
               ),
             ],

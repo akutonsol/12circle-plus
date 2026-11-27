@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/observability/app_failure.dart';
@@ -23,6 +26,112 @@ CheckoutRefused? checkoutRefusal(FunctionException e) {
       : 'You already have this plan.');
 }
 
+/// Who is signed in right now, or null (P0-FL-60a). Read it before the first
+/// await of an action and compare before every further step: a payment page or
+/// a cancellation belongs to the account that asked for it.
+///
+/// The only error it answers null for is the assertion of a Supabase client
+/// that was never initialised (a widget test without one; the app initialises
+/// it before the first frame).
+String? signedInUid() {
+  try {
+    return Supabase.instance.client.auth.currentUser?.id;
+  } on AssertionError {
+    return null;
+  }
+}
+
+/// True — and recorded — when [owner] is no longer the signed-in account.
+/// Nothing of [owner]'s may be opened, written or said after that.
+bool ownerGone(String? owner, String origin, String what) {
+  if (signedInUid() == owner) return false;
+  reportError(origin, _accountChanged(what), StackTrace.current);
+  return true;
+}
+
+StateError _accountChanged(String what) =>
+    StateError('$what: the signed-in account changed');
+
+/// Runs [then] once, as soon as [owner] is no longer the signed-in account,
+/// and returns how to stop waiting for that (P0-FL-60a).
+///
+/// From the auth client, not from a widget or a provider container: what it
+/// takes away (a SnackBar, a sheet) outlives the screen that showed it, and
+/// may have to go before the next frame.
+void Function() whenOwnerGone(String? owner, void Function() then) {
+  final GoTrueClient auth;
+  try {
+    auth = Supabase.instance.client.auth;
+  } on AssertionError {
+    return () {}; // no client, so no account to change (see [signedInUid])
+  }
+  late final StreamSubscription<AuthState> sub;
+  sub = auth.onAuthStateChange.listen((_) {
+    if (signedInUid() == owner) return;
+    sub.cancel();
+    then();
+    // An auth failure is its own event's to record (and changes no account).
+  }, onError: (Object _) {});
+  return sub.cancel;
+}
+
+/// True when the server's answer says the change was NOT made. Anything else —
+/// no answer, a fault after the payment provider may have acted, a reply that
+/// was lost — leaves the outcome unknown (P0-FL-60a, item 7).
+///
+///  * a table read or write is one transaction, so the database's own answer
+///    (an SQLSTATE) or PostgREST's (PGRST…) means it was not made — except the
+///    codes that themselves say the outcome is unknown: the connection was
+///    lost during the request (PGRST001, SQLSTATE class 08) or the commit's
+///    completion is unknown (40003). When the body names neither, the code is
+///    the HTTP status: a 4xx is a refusal, and a 5xx is a gateway's (502, 504,
+///    520, 522, 524 …), which does not know;
+///  * the payment functions refuse with a 4xx before they act, and name the
+///    two failures after which nothing was changed.
+bool definitelyRefused(Object e) => switch (e) {
+      PostgrestException(:final code) => code != null &&
+          !_outcomeUnknownCode.hasMatch(code) &&
+          (_databaseCode.hasMatch(code) || _refusedStatus(int.tryParse(code))),
+      FunctionException(:final status, :final details) =>
+        _refusedStatus(status) ||
+            (details is Map &&
+                const {'stripe_cancel_failed', 'Could not read your membership'}
+                    .contains(details['error'])),
+      _ => false,
+    };
+
+/// An SQLSTATE (five characters; with a digit, so that a gateway's word such as
+/// ERROR is not one), or a code of PostgREST's own.
+final _databaseCode =
+    RegExp(r'^((?=.*[0-9])[0-9A-Z]{5}|PGRST[0-9A-Z]{3})$');
+
+/// A database / PostgREST code that says the statement may or may not have
+/// been made: PGRST001 (connection lost during the request), class 08
+/// (connection exception) and 40003 (statement_completion_unknown).
+final _outcomeUnknownCode = RegExp(r'^(PGRST001|08[0-9A-Z]{3}|40003)$');
+
+/// A 4xx — but not 408, which is an answer that did not come.
+bool _refusedStatus(int? status) =>
+    status != null && status >= 400 && status < 500 && status != 408;
+
+/// What a cancellation came to.
+enum CancelOutcome { cancelled, refused, unconfirmed }
+
+/// Cancellations whose `false` was not the server's refusal.
+final _unconfirmedCancels = <String>{};
+
+extension CancelSubscriptionOutcome on PaymentService {
+  /// [PaymentService.cancelSubscription], with its `false` told apart: refused
+  /// by the server, or not known to have failed.
+  Future<CancelOutcome> cancelSubscriptionOutcome(String rowId) async {
+    _unconfirmedCancels.remove(rowId);
+    if (await cancelSubscription(rowId)) return CancelOutcome.cancelled;
+    return _unconfirmedCancels.remove(rowId)
+        ? CancelOutcome.unconfirmed
+        : CancelOutcome.refused;
+  }
+}
+
 /// Module 16 — Payments (Stripe).
 /// The app never touches the secret key; it asks the `create-checkout` Edge
 /// Function for a hosted Checkout URL and opens it, then reads subscription /
@@ -30,6 +139,32 @@ CheckoutRefused? checkoutRefusal(FunctionException e) {
 class PaymentService {
   final _db = Supabase.instance.client;
   String? get _uid => _db.auth.currentUser?.id;
+
+  /// Opens [url] for [owner] — never for another account (P0-FL-60a/E13): the
+  /// link was made for whoever was signed in when it was asked for, and shows
+  /// their invoices, card digits or payout account. Throws when the account
+  /// changed or the page did not open.
+  Future<void> _open(Object? url, String? owner, String what) async {
+    if (signedInUid() != owner) throw _accountChanged(what);
+    if (url is! String) throw StateError('$what: no url in the answer');
+    final bool opened;
+    try {
+      opened = await launchUrl(
+        Uri.parse(url),
+        mode: kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
+        webOnlyWindowName: kIsWeb ? '_self' : null,
+      );
+    } catch (e, st) {
+      // N-5: url_launcher and Uri.parse put the LINK in their message, and it
+      // opens the member's invoices or payout account for whoever has it. The
+      // type and code are what is recorded.
+      final code = e is PlatformException ? ' ${e.code}' : '';
+      Error.throwWithStackTrace(
+          StateError('$what: the page did not open (${e.runtimeType}$code)'),
+          st);
+    }
+    if (!opened) throw StateError('$what: the page did not open');
+  }
 
   /// Launches Stripe Checkout for the given flow. Returns false if we couldn't
   /// get / open a URL. The webhook reconciles the result asynchronously.
@@ -48,6 +183,7 @@ class PaymentService {
     String? packageId,
     String? tier, // for coach_plan: starter | growth | elite
   }) async {
+    final owner = _uid;
     try {
       final urls = _returnUrls();
       final res = await _db.functions.invoke('create-checkout', body: {
@@ -59,29 +195,33 @@ class PaymentService {
         if (urls.success != null) 'successUrl': urls.success,
         if (urls.cancel != null) 'cancelUrl': urls.cancel,
       });
-      final url = (res.data is Map) ? res.data['url'] as String? : null;
-      if (url == null) return false;
-      final uri = Uri.parse(url);
-      return launchUrl(
-        uri,
-        mode: kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
-        webOnlyWindowName: kIsWeb ? '_self' : null,
-      );
-    } on FunctionException catch (e) {
+      await _open(res.data is Map ? res.data['url'] : null, owner, 'checkout');
+      return true;
+    } on FunctionException catch (e, st) {
       // create-checkout refuses a second live subscription for what the user
       // already pays for (409 already_subscribed). That is an answer, not a
       // fault: "try again" would never work, so the caller is told why.
+      // Only the account that asked is told: the refusal is a fact about it.
       final refused = checkoutRefusal(e);
-      if (refused != null) throw refused;
+      if (refused == null) {
+        reportError('PaymentService.startCheckout', e, st);
+      } else if (!ownerGone(owner, 'PaymentService.startCheckout', 'checkout')) {
+        throw refused;
+      }
       return false;
-    } catch (_) {
+    } catch (e, st) {
+      // P0-FL-60a: the cause was lost, and a page that failed to open by
+      // throwing escaped (the launch was not awaited inside this try).
+      reportError('PaymentService.startCheckout', e, st);
       return false;
     }
   }
 
   /// Switches the active membership to another tier in place (Self <-> AI).
   /// Returns 'changed' on success, 'needs_checkout' if there's no membership to
-  /// change (caller should start a checkout), or 'error'.
+  /// change (caller should start a checkout), 'payment_issue', 'error' (the
+  /// server refused; nothing was changed) or 'unconfirmed' (no answer that says
+  /// so: the swap may have gone through and only the reply been lost).
   Future<String> changeMembership(String newKind) async {
     try {
       final res = await _db.functions
@@ -92,9 +232,11 @@ class PaymentService {
       if (data is Map && data['paymentIssue'] == true) return 'payment_issue';
       if (data is Map && data['needsCheckout'] == true) return 'needs_checkout';
       if (data is Map && (data['ok'] == true)) return 'changed';
-      return 'error';
-    } catch (_) {
-      return 'error';
+      throw StateError('update-subscription: unexpected response');
+    } catch (e, st) {
+      // P0-FL-60a: said by the caller; the cause was lost.
+      reportError('PaymentService.changeMembership', e, st);
+      return definitelyRefused(e) ? 'error' : 'unconfirmed';
     }
   }
 
@@ -108,26 +250,30 @@ class PaymentService {
     } catch (e, st) {
       // P0-FL-56b: `false` is said by the caller; the cause was lost.
       reportError('PaymentService.cancelSubscription', e, st);
+      // Read by [CancelSubscriptionOutcome].
+      if (!definitelyRefused(e)) _unconfirmedCancels.add(subscriptionRowId);
       return false;
     }
   }
 
   /// Coach: starts (or resumes) Stripe Connect onboarding. Opens the Stripe
   /// Account Link so the coach can receive client payments directly.
-  Future<bool> connectStripeOnboard() async {
+  ///
+  /// Throws, recorded, when it was not opened (P0-FL-60a) — including when the
+  /// account that asked is no longer the one signed in.
+  Future<void> connectStripeOnboard() async {
+    final owner = _uid;
     try {
       final base = kIsWeb ? Uri.base.origin : null;
       final res = await _db.functions.invoke('stripe-connect', body: {
         'action': 'onboard',
         if (base != null) 'returnUrl': '$base/#/coach-payments',
       });
-      final url = (res.data is Map) ? res.data['url'] as String? : null;
-      if (url == null) return false;
-      return launchUrl(Uri.parse(url),
-          mode: kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
-          webOnlyWindowName: kIsWeb ? '_self' : null);
-    } catch (_) {
-      return false;
+      await _open(
+          res.data is Map ? res.data['url'] : null, owner, 'Stripe onboarding');
+    } catch (e, st) {
+      reportError('PaymentService.connectStripeOnboard', e, st);
+      rethrow;
     }
   }
 
@@ -154,22 +300,31 @@ class PaymentService {
     throw StateError('stripe-connect status: unexpected response');
   }
 
-  /// Opens the Stripe Customer Portal (manage / update card).
+  /// Opens the Stripe Customer Portal (manage / update card). False only when
+  /// the server ANSWERED that there is no billing account yet.
+  ///
+  /// Throws, recorded, when it was not opened (P0-FL-60a): every failure used
+  /// to be false, and a paying member on a bad connection was told "No billing
+  /// account yet. Subscribe to a plan first."
   Future<bool> openBillingPortal() async {
+    final owner = _uid;
     try {
       final base = kIsWeb ? Uri.base.origin : null;
       final res = await _db.functions.invoke('create-portal-session', body: {
         if (base != null) 'returnUrl': '$base/#/subscription',
       });
-      final url = (res.data is Map) ? res.data['url'] as String? : null;
-      if (url == null) return false;
-      return launchUrl(
-        Uri.parse(url),
-        mode: kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
-        webOnlyWindowName: kIsWeb ? '_self' : null,
-      );
-    } catch (_) {
-      return false;
+      await _open(
+          res.data is Map ? res.data['url'] : null, owner, 'billing portal');
+      return true;
+    } catch (e, st) {
+      if (e is FunctionException &&
+          e.status == 400 &&
+          e.details is Map &&
+          e.details['error'] == 'No billing account yet') {
+        return false;
+      }
+      reportError('PaymentService.openBillingPortal', e, st);
+      rethrow;
     }
   }
 
@@ -216,12 +371,15 @@ class PaymentService {
 
   /// The user's active platform membership tier ('ai_guided' | 'self_guided'),
   /// or null if neither. Server-evaluated via active_membership().
+  ///
+  /// A failed read throws, recorded (P0-FL-60a): null is the answer "none".
   Future<String?> activeMembership() async {
     try {
       final res = await _db.rpc('active_membership');
       return res is String ? res : null;
-    } catch (_) {
-      return null;
+    } catch (e, st) {
+      reportError('PaymentService.activeMembership', e, st);
+      rethrow;
     }
   }
 
@@ -252,16 +410,21 @@ class PaymentService {
   }
 
   /// The coach's active platform plan tier ('starter'|'growth'|'elite'), or null.
+  ///
+  /// A failed read throws, recorded (P0-FL-60a). It used to be null — "no
+  /// plan" — and a paying coach was offered every plan for sale.
   Future<String?> coachPlanTier() async {
     try {
       final res = await _db.rpc('coach_plan_tier');
       return res is String ? res : null;
-    } catch (_) {
-      return null;
+    } catch (e, st) {
+      reportError('PaymentService.coachPlanTier', e, st);
+      rethrow;
     }
   }
 
-  /// Active subscription to a specific coach, if any.
+  /// Active subscription to a specific coach, if any. A failed read throws,
+  /// recorded (P0-FL-60a): null is the answer "not subscribed".
   Future<Map<String, dynamic>?> activeCoachSubscription(String coachId) async {
     final uid = _uid;
     if (uid == null) return null;
@@ -273,8 +436,9 @@ class PaymentService {
           .eq('coach_id', coachId)
           .inFilter('status', ['active', 'trialing'])
           .maybeSingle();
-    } catch (_) {
-      return null;
+    } catch (e, st) {
+      reportError('PaymentService.activeCoachSubscription', e, st);
+      rethrow;
     }
   }
 }

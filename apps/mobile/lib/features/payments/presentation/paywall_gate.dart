@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show User;
 import '../domain/entitlements.dart';
+import 'upgrade_screen.dart' show ownedClientPlanProvider;
 import '../../../core/widgets/named_icon_button.dart';
 import '../../auth/domain/auth_provider.dart';
 import '../../profile/presentation/widgets/profile_load_failed_notice.dart';
@@ -60,14 +61,20 @@ class PaywallGate extends ConsumerWidget {
     final isCoach = role.role == 'coach';
     if (isCoach) return child;
     final planAsync = ref.watch(clientPlanProvider);
+    final read = ref.watch(ownedClientPlanProvider);
     // Once we know the plan, keep rendering from it even while the provider is
     // refreshing (e.g. after a coaching-mode change re-resolves the plan). Only
     // the genuine first load (no value yet) shows the blocking spinner — a
     // mid-session refresh must never trap the user on a loading screen.
-    final plan = planAsync.valueOrNull;
+    //
+    // P0-FL-60a (A-21): known for THIS account. Riverpod holds the previous
+    // one's plan through this one's read and its failure, and it was gated on.
+    final plan = read.value;
     if (plan != null) {
       return plan.atLeast(required) ? child : PaywallLocked(required: required, feature: featureName);
     }
+    // Nor is another account's failure this one's: that would open the gate.
+    if (read.error == null) return const _Loading();
     return planAsync.when(
       loading: () => const _Loading(),
       error: (_, __) => child, // fail open rather than lock a paying user out

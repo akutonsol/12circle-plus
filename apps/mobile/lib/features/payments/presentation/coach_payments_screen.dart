@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../shared/theme/app_background.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
+import '../data/payment_service.dart' show ownerGone;
 import '../domain/payment_provider.dart';
+import 'checkout_launcher.dart' show showOwnedSnackBar;
 
 const _card  = Color(0xFF0E0B16);
 const _brd   = Color(0xFF1A1020);
@@ -18,7 +21,23 @@ class CoachPaymentsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final statusAsync = ref.watch(coachConnectStatusProvider);
+    // P0-FL-60a (A-19): this account's status only. A failed refresh keeps
+    // what this account last read, and says so.
+    final account = ref.watch(paymentAccountProvider);
+    final status = ref.watch(ownedConnectStatusProvider);
+    final s = status.value;
+    final Widget? failure = status.error == null
+        ? null
+        : SectionLoadFailure(
+            what: 'your Stripe status',
+            error: status.error,
+            busy: status.isLoading,
+            accent: _brand,
+            detail: s == null
+                ? null
+                : 'What’s below is from the last time it loaded.',
+            onRetry: () => ref.invalidate(coachConnectStatusProvider),
+          );
     return AppGradientBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
@@ -27,11 +46,15 @@ class CoachPaymentsScreen extends ConsumerWidget {
           iconTheme: const IconThemeData(color: _white),
           title: const Text('Payments', style: TextStyle(color: _white, fontWeight: FontWeight.w700)),
         ),
-        body: statusAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator(color: _brand)),
-          error: (e, _) => Center(child: Text('Could not load.',
-              textAlign: TextAlign.center, style: const TextStyle(color: _muted))),
-          data: (s) {
+        body: Builder(
+          builder: (context) {
+            if (s == null) {
+              return failure == null
+                  ? const Center(child: CircularProgressIndicator(color: _brand))
+                  : Center(
+                      child: SingleChildScrollView(
+                          padding: const EdgeInsets.all(16), child: failure));
+            }
             final connected = s['connected'] == true;
             final chargesOn = s['charges_enabled'] == true;
             final payoutsOn = s['payouts_enabled'] == true;
@@ -45,6 +68,10 @@ class CoachPaymentsScreen extends ConsumerWidget {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
                 children: [
+                  if (failure != null) ...[
+                    failure,
+                    const SizedBox(height: 12),
+                  ],
                   _RevenueSection(),
                   const SizedBox(height: 16),
                   // Status banner
@@ -92,23 +119,13 @@ class CoachPaymentsScreen extends ConsumerWidget {
                     ]),
                   ),
                   const SizedBox(height: 24),
-                  SizedBox(width: double.infinity, child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _brand, foregroundColor: _white,
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-                    icon: const Icon(Icons.link_rounded),
-                    label: Text(ready ? 'Manage Stripe account' : connected ? 'Finish Stripe setup' : 'Connect Stripe',
-                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-                    onPressed: () async {
-                      final ok = await ref.read(paymentServiceProvider).connectStripeOnboard();
-                      if (!ok && context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                          content: Text('Could not open Stripe onboarding. Try again.'),
-                          backgroundColor: Color(0xFFFFB4AB)));
-                      }
-                    },
-                  )),
+                  // Keyed by account: its spinner is the action of the account
+                  // that tapped it.
+                  _StripeButton(
+                    key: ValueKey(account),
+                    account: account,
+                    label: ready ? 'Manage Stripe account' : connected ? 'Finish Stripe setup' : 'Connect Stripe',
+                  ),
                 ],
               ),
             );
@@ -127,6 +144,62 @@ class CoachPaymentsScreen extends ConsumerWidget {
       Text(label, style: TextStyle(color: on ? _white : _muted, fontSize: 14)),
     ]),
   );
+}
+
+/// Opens the coach's Stripe pages. Busy while the link is made: a second tap
+/// asked for a second link and could open two pages (P0-FL-60a).
+class _StripeButton extends ConsumerStatefulWidget {
+  const _StripeButton({super.key, required this.account, required this.label});
+
+  /// The account this button was built for.
+  final String? account;
+  final String label;
+  @override
+  ConsumerState<_StripeButton> createState() => _StripeButtonState();
+}
+
+class _StripeButtonState extends ConsumerState<_StripeButton> {
+  bool _busy = false;
+
+  Future<void> _open() async {
+    final owner = widget.account;
+    if (ownerGone(owner, 'CoachPaymentsScreen', 'open Stripe')) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busy = true);
+    String? problem;
+    try {
+      await ref.read(paymentServiceProvider).connectStripeOnboard();
+    } catch (e) {
+      // Recorded by the service; said to the account that asked, nobody else.
+      problem = couldntMessage('open Stripe', e);
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (problem != null) {
+      showOwnedSnackBar(messenger, owner, SnackBar(
+          content: Text(problem), backgroundColor: const Color(0xFFFFB4AB)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: double.infinity,
+        child: ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: _brand, foregroundColor: _white,
+            padding: const EdgeInsets.symmetric(vertical: 15),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+          icon: _busy
+              ? const SizedBox(
+                  width: 18, height: 18,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: _white, semanticsLabel: 'Opening Stripe'))
+              : const Icon(Icons.link_rounded),
+          label: Text(widget.label,
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+          onPressed: _busy ? null : _open,
+        ),
+      );
 }
 
 class _Bullet extends StatelessWidget {
@@ -148,15 +221,24 @@ class _RevenueSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // A figure that was not read shows a dash, never zero (EC-14): a failed or
-    // pending read is not a zero balance.
-    final m = ref.watch(coachRevenueProvider).valueOrNull;
-    final bal = ref.watch(coachBalanceProvider).valueOrNull;
+    // pending read is not a zero balance. Nor is another coach's figure this
+    // one's (P0-FL-60a, A-19); a failed refresh keeps this coach's, and says so.
+    final revenue = ref.watch(ownedRevenueProvider);
+    final balance = ref.watch(ownedBalanceProvider);
+    final m = revenue.value;
+    final bal = balance.value;
     String d(num? v) => v == null ? '—' : '\$${v.toStringAsFixed(0)}';
     final pending = bal == null ? null : ((bal['pending'] as num?)?.toDouble() ?? 0) / 100.0;
     final completed = bal == null ? null : ((bal['paid'] as num?)?.toDouble() ?? 0) / 100.0;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Text('REVENUE', style: TextStyle(color: _muted, fontSize: 11,
           fontWeight: FontWeight.w700, letterSpacing: 1)),
+      if (revenue.error != null)
+        _failed('your revenue', revenue,
+            () => ref.invalidate(coachRevenueProvider)),
+      if (balance.error != null)
+        _failed('your payouts', balance,
+            () => ref.invalidate(coachBalanceProvider)),
       const SizedBox(height: 10),
       Row(children: [
         _metric('This month', d(m?['monthly']), _mint),
@@ -183,6 +265,18 @@ class _RevenueSection extends ConsumerWidget {
       ]),
     ]);
   }
+
+  Widget _failed(String what, OwnedRead<Object?> read, VoidCallback onRetry) =>
+      SectionLoadFailure(
+        what: what,
+        error: read.error,
+        busy: read.isLoading,
+        accent: _brand,
+        detail: read.hasValue
+            ? 'These figures are from the last time they loaded.'
+            : null,
+        onRetry: onRetry,
+      );
 
   Widget _metric(String label, String value, Color color) => Expanded(
     child: Container(

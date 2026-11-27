@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
+import '../data/payment_service.dart' show ownerGone, signedInUid;
 import '../domain/payment_provider.dart';
 import 'checkout_launcher.dart';
+import 'upgrade_screen.dart' show PlanLoadingRow;
 
 const _bg     = Color(0xFF030303);
 const _card   = Color(0xFF0E0B16);
@@ -37,8 +40,12 @@ class CoachPlanScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final currentAsync = ref.watch(coachPlanTierProvider);
-    final current = currentAsync.valueOrNull;
+    final account = ref.watch(paymentAccountProvider);
+    // P0-FL-60a: this account's tier only (A-19), and an unread tier is not
+    // "no plan": nothing is for sale until coach_plan_tier() has answered.
+    final read = ref.watch(ownedCoachPlanTierProvider);
+    final current = read.value;
+    final canChoose = read.hasValue && read.error == null;
 
     return Scaffold(
       backgroundColor: _bg,
@@ -63,9 +70,29 @@ class CoachPlanScreen extends ConsumerWidget {
                 'Keep 100% of clients you bring. Marketplace leads carry a small commission.',
                 style: TextStyle(color: _muted, fontSize: 13, height: 1.4)),
             const SizedBox(height: 20),
+            if (read.error != null) ...[
+              SectionLoadFailure(
+                what: 'your plan',
+                error: read.error,
+                busy: read.isLoading,
+                accent: _brand,
+                detail: read.hasValue
+                    ? 'This is the plan from the last time it loaded. '
+                        'Plans can’t be chosen until it loads.'
+                    : 'Plans can’t be chosen until it loads.',
+                onRetry: () => ref.invalidate(coachPlanTierProvider),
+              ),
+              const SizedBox(height: 16),
+            ] else if (!read.hasValue) ...[
+              const PlanLoadingRow(),
+              const SizedBox(height: 16),
+            ],
             ..._coachPlans.map((p) => _CoachPlanCard(
+                  key: ValueKey((account, p.tier)),
+                  account: account,
                   plan: p,
-                  isCurrent: current == p.tier,
+                  isCurrent: read.hasValue && current == p.tier,
+                  canChoose: canChoose,
                 )),
           ],
         ),
@@ -75,9 +102,17 @@ class CoachPlanScreen extends ConsumerWidget {
 }
 
 class _CoachPlanCard extends ConsumerStatefulWidget {
+  /// The account this card was built for (P0-FL-60a).
+  final String? account;
   final _CoachPlan plan;
   final bool isCurrent;
-  const _CoachPlanCard({required this.plan, required this.isCurrent});
+  final bool canChoose;
+  const _CoachPlanCard(
+      {super.key,
+      required this.account,
+      required this.plan,
+      required this.isCurrent,
+      required this.canChoose});
   @override
   ConsumerState<_CoachPlanCard> createState() => _CoachPlanCardState();
 }
@@ -86,11 +121,17 @@ class _CoachPlanCardState extends ConsumerState<_CoachPlanCard> {
   bool _loading = false;
 
   Future<void> _subscribe() async {
+    final owner = widget.account;
+    if (ownerGone(owner, 'CoachPlanScreen', 'choose a plan')) return;
     setState(() => _loading = true);
     // launchCheckout reports its own failure -- including "you already have a
     // coach plan", which a second checkout would have billed twice.
-    await launchCheckout(context, ref, kind: 'coach_plan', tier: widget.plan.tier);
-    if (mounted) setState(() => _loading = false);
+    await launchCheckout(context, ref, kind: 'coach_plan', tier: widget.plan.tier, owner: owner);
+    // Left, or another account signed in (the card is keyed by account).
+    if (!mounted) return;
+    setState(() => _loading = false);
+    // Another account's read is not this action's to refresh.
+    if (signedInUid() != owner) return;
     ref.invalidate(coachPlanTierProvider);
   }
 
@@ -171,7 +212,7 @@ class _CoachPlanCardState extends ConsumerState<_CoachPlanCard> {
                   padding: const EdgeInsets.symmetric(vertical: 13),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
-                onPressed: _loading ? null : _subscribe,
+                onPressed: _loading || !widget.canChoose ? null : _subscribe,
                 child: _loading
                     ? const SizedBox(
                         width: 18, height: 18,
