@@ -1,6 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/observability/app_failure.dart';
+import '../../coach/data/coach_relationship_service.dart' show AccountChangedError;
 
 enum AICoachMode { nutrition, workout, general, checkinAnalysis, riskDetection }
 
@@ -31,7 +32,46 @@ extension AICoachModeExt on AICoachMode {
 class AICoachService {
   final _db = Supabase.instance.client;
 
+  /// P0-FL-62a1 · The member this service acts for, captured when the member's
+  /// AI coach screen opened (`boundTo` of their id). Null: whoever is signed in
+  /// at each call, as before (the callers outside that screen).
+  ///
+  /// With an owner, nothing is read, written or invoked unless [owner] is the
+  /// account signed in at that moment, and every write is stamped with it: the
+  /// screen outlives a sign-in switch until its next frame (a hidden web tab
+  /// draws none), and the Edge Functions answer for whoever's token goes out.
+  final String? owner;
+
+  AICoachService({this.owner});
+
+  /// The account to act as: [owner] while it is the one signed in; without an
+  /// owner, whoever is. Throws [AccountChangedError], having sent nothing,
+  /// when [owner] is no longer signed in (signed out included).
+  String? _account(String what) {
+    final uid = _db.auth.currentUser?.id;
+    final o = owner;
+    if (o == null) return uid;
+    if (uid != o) throw AccountChangedError(what);
+    return o;
+  }
+
+  /// [_account] for a write or an invoke: the refusal is recorded, and null
+  /// (nothing to act as) comes back instead.
+  String? _actor(String method, String what) {
+    try {
+      return _account(what);
+    } on AccountChangedError catch (e, st) {
+      reportError('AICoachService.$method', e, st);
+      return null;
+    }
+  }
+
+  /// Throws [AccountChangedError] (recorded, nothing sent) when the owner has
+  /// left: the reply would be another member's conversation.
   Future<String> chat(String message, AICoachMode mode) async {
+    if (owner != null && _actor('chat', 'Asking the AI coach') == null) {
+      throw AccountChangedError('Asking the AI coach');
+    }
     final res = await _db.functions.invoke('ai-coach', body: {
       'message': message,
       'mode': mode.value,
@@ -73,7 +113,13 @@ class AICoachService {
 
   /// Generate a coaching artifact: 'daily_insight' | 'weekly_review' |
   /// 'goal_prediction'. Returns the structured result, or null on failure.
+  ///
+  /// With an owner who has left, nothing is invoked (it would run for the
+  /// member signed in now): recorded, and null.
   Future<Map<String, dynamic>?> generate(String type) async {
+    if (owner != null && _actor('generate', 'Generating $type') == null) {
+      return null;
+    }
     try {
       final res = await _db.functions.invoke('ai-coaching-engine', body: {'type': type});
       if (res.status != 200) return null;
@@ -98,7 +144,7 @@ class AICoachService {
   /// make, and the style card would then save it over their real persona the
   /// moment they touched it (P0-FL-50b).
   Future<Map<String, dynamic>> getPersona() async {
-    final uid = _db.auth.currentUser?.id;
+    final uid = _account('Reading the coach style');
     const fallback = {'name': 'Nova', 'style': 'motivational', 'tone': 'supportive'};
     if (uid == null) return Map.of(fallback);
     try {
@@ -112,7 +158,7 @@ class AICoachService {
   }
 
   Future<bool> setPersona({required String style, required String tone, String name = 'Nova'}) async {
-    final uid = _db.auth.currentUser?.id;
+    final uid = _actor('setPersona', 'Saving the coach style');
     if (uid == null) return false;
     try {
       // Ask for the row back: a write RLS filtered to nothing is a 204 too.
@@ -140,7 +186,7 @@ class AICoachService {
 
   /// Today's stored daily insight, if one exists.
   Future<Map<String, dynamic>?> getTodayInsight() async {
-    final uid = _db.auth.currentUser?.id;
+    final uid = _account("Reading today's brief");
     if (uid == null) return null;
     try {
       final today = DateTime.now().toIso8601String().substring(0, 10);
@@ -155,7 +201,7 @@ class AICoachService {
 
   /// Latest stored ai_insights row of a given type ('risk' | 'progress' | …).
   Future<Map<String, dynamic>?> getLatestInsight(String type) async {
-    final uid = _db.auth.currentUser?.id;
+    final uid = _account('Reading the latest $type insight');
     if (uid == null) return null;
     try {
       return await _db.from('ai_insights').select()
@@ -168,7 +214,7 @@ class AICoachService {
   }
 
   Future<Map<String, dynamic>?> getLatestReview() async {
-    final uid = _db.auth.currentUser?.id;
+    final uid = _account('Reading the weekly review');
     if (uid == null) return null;
     try {
       return await _db.from('ai_reviews').select()
@@ -180,7 +226,7 @@ class AICoachService {
   }
 
   Future<Map<String, dynamic>?> getLatestPrediction() async {
-    final uid = _db.auth.currentUser?.id;
+    final uid = _account('Reading the goal prediction');
     if (uid == null) return null;
     try {
       return await _db.from('ai_goal_predictions').select()
@@ -195,7 +241,7 @@ class AICoachService {
 
   /// kind: like | dislike | injury | preference | constraint | note
   Future<bool> addMemory(String kind, String content, {String source = 'user'}) async {
-    final uid = _db.auth.currentUser?.id;
+    final uid = _actor('addMemory', 'Saving a coaching memory');
     if (uid == null) return false;
     try {
       final rows = await _db.from('ai_memories').upsert({
@@ -219,7 +265,7 @@ class AICoachService {
   /// a failure shown as "nothing remembered" — e.g. the reload after a delete
   /// — tells them their injuries are gone when they are not (P0-FL-50b).
   Future<List<Map<String, dynamic>>> getMemories() async {
-    final uid = _db.auth.currentUser?.id;
+    final uid = _account('Reading the coaching memory');
     if (uid == null) return [];
     try {
       final data = await _db.from('ai_memories').select()
@@ -249,7 +295,13 @@ class AICoachService {
   ///
   /// RLS filtering the delete to nothing answers 204 like a real delete, so
   /// the row is asked back and an empty answer is a failure (P0-FL-50b).
+  ///
+  /// With an owner who has left, nothing is deleted (it would go out as the
+  /// member signed in now): recorded, and false.
   Future<bool> deleteMemory(String id) async {
+    if (owner != null && _actor('deleteMemory', 'Removing a coaching memory') == null) {
+      return false;
+    }
     try {
       final rows = await _db.from('ai_memories').delete().eq('id', id).select('id');
       if ((rows as List).isEmpty) {
@@ -265,7 +317,7 @@ class AICoachService {
   }
 
   Future<List<Map<String, dynamic>>> getConversationHistory({int limit = 20}) async {
-    final uid = _db.auth.currentUser?.id;
+    final uid = _account('Reading the conversation');
     if (uid == null) return [];
     try {
       // The LATEST [limit] exchanges, returned oldest first. Ascending with

@@ -11,6 +11,10 @@ import '../../auth/domain/auth_provider.dart';
 import '../../workout/domain/workout_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coach/domain/coach_ecosystem_provider.dart';
+import '../../dashboard/domain/still_reading.dart'
+    show OpenedByAccount, OwnedText, accountLeft, signedInUid, stillSignedIn, stoppedFor;
+import '../../payments/domain/payment_provider.dart'
+    show ownedReadProvider, paymentAccountProvider;
 import '../../workout/presentation/resume_workout_banner.dart';
 import '../../coaching_mode/domain/coaching_mode_provider.dart';
 import '../../womens_health/domain/cycle_provider.dart';
@@ -1187,16 +1191,27 @@ class _SessionBadge extends StatelessWidget {
 // always showed a hard-coded sentence under the coach's name and avatar — text
 // the coach never wrote. The tip was retired (PD-B20, I-LEG-03; decision-log
 // 2026-10-21); a real tip returns only with a table and an authoring surface.
+//
+// P0-FL-62a1 (A-15) · the coach drawn is the signed-in member's or none. It
+// read `assignedCoachProvider` straight, and Riverpod keeps the last value
+// through the next member's read: when B's read FAILED, B was shown A's coach,
+// with a Rate button bound to A's coach's id. [_ownedCoach] keeps only the
+// answer read for the member signed in now, and records a failed read once.
+// (A failed read still draws no card — what it should say is Julia's call.)
 class _CoachCard extends ConsumerWidget {
+  static final _ownedCoach =
+      ownedReadProvider(assignedCoachProvider, origin: 'home.coachCard');
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final coachAsync = ref.watch(assignedCoachProvider);
-    final coach      = coachAsync.valueOrNull;
+    final coachRead  = ref.watch(_ownedCoach);
+    final owner      = ref.watch(paymentAccountProvider);
+    final coach      = coachRead.value;
     final coachName  = coach == null ? null
         : '${coach['first_name'] ?? ''} ${coach['last_name'] ?? ''}'.trim();
     final avatarUrl  = coach?['avatar_url'] as String?;
 
-    if (coachAsync.isLoading || coach == null) return const SizedBox.shrink();
+    if (coachRead.isLoading || coach == null) return const SizedBox.shrink();
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(18),
@@ -1233,7 +1248,12 @@ class _CoachCard extends ConsumerWidget {
                   ])),
                   const SizedBox(width: 8),
                   GestureDetector(
-                    onTap: () => _showRateCoachDialog(context, coach['id'] as String),
+                    // Drawn for [owner]; a tap after they left (no frame yet)
+                    // opens nothing for whoever is signed in now.
+                    onTap: () {
+                      if (!stillSignedIn(owner)) return;
+                      _showRateCoachDialog(context, coach['id'] as String);
+                    },
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
                       decoration: BoxDecoration(
@@ -1256,6 +1276,11 @@ class _CoachCard extends ConsumerWidget {
   }
 }
 
+/// The card is private and drawn deep in the home screen (only in coach-guided
+/// mode); tests mount it alone, as they open the dialog below.
+@visibleForTesting
+Widget coachCardForTest() => _CoachCard();
+
 /// Shown inside the Rate Your Coach dialog when the review was not stored.
 const kReviewOfflineMessage =
     "Couldn't submit your review — check your connection and try again.";
@@ -1271,7 +1296,15 @@ const kReviewSignedOutMessage =
 void showRateCoachDialogForTest(BuildContext context, String coachId) =>
     _showRateCoachDialog(context, coachId);
 
+// P0-FL-62a1 (A-15, W13) · the review is the member's who OPENED the dialog.
+// It read the signed-in id at Submit, so A's open dialog (A's coach, A's stars
+// and words) was written as B's review of A's coach once B signed in. The
+// owner is taken here, as the dialog opens; the dialog closes itself, emptied,
+// when they leave ([OpenedByAccount]); the owner is checked again before the
+// upsert and after it, and the row is stamped with it. Nothing about A's
+// review is said to anybody else.
 void _showRateCoachDialog(BuildContext context, String coachId) {
+  final owner = signedInUid();
   int selectedStars = 5;
   final textCtrl = TextEditingController();
   bool saving = false;
@@ -1279,7 +1312,7 @@ void _showRateCoachDialog(BuildContext context, String coachId) {
   showDialog(
     context: context,
     useRootNavigator: true,
-    builder: (dialogCtx) => StatefulBuilder(
+    builder: (dialogCtx) => OpenedByAccount(owner: owner, child: StatefulBuilder(
       builder: (dialogCtx, setSt) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E20),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -1347,21 +1380,31 @@ void _showRateCoachDialog(BuildContext context, String coachId) {
             // recorded in the ledger: ratings stop updating after 115). The
             // client must still not write it; the fix belongs server-side.
             onPressed: saving ? null : () async {
-              setSt(() { saving = true; error = null; });
-              final uid = Supabase.instance.client.auth.currentUser?.id;
-              if (uid == null) {
+              // Opened signed out: there is nobody to write as.
+              if (owner == null) {
                 setSt(() { saving = false; error = kReviewSignedOutMessage; });
                 return;
               }
+              // Another member (or nobody) is signed in now: nothing is sent,
+              // and the dialog is closing itself with A's words in it.
+              if (stoppedFor(owner, 'home.rateCoach', 'Rating your coach')) {
+                textCtrl.clear();
+                return;
+              }
+              setSt(() { saving = true; error = null; });
               try {
                 final rows = await Supabase.instance.client
                     .from('coach_reviews').upsert({
-                  'coach_id': coachId, 'client_id': uid,
+                  'coach_id': coachId, 'client_id': owner,
                   'rating': selectedStars,
                   'review_text': textCtrl.text.trim().isEmpty
                     ? null : textCtrl.text.trim(),
                   'created_at': DateTime.now().toUtc().toIso8601String(),
                 }, onConflict: 'coach_id,client_id').select('id');
+                if (stoppedFor(owner, 'home.rateCoach', 'Rating your coach')) {
+                  textCtrl.clear();
+                  return;
+                }
                 if (rows.isEmpty) {
                   reportError('home.rateCoach',
                       StateError('coach_reviews upsert returned no row'));
@@ -1370,6 +1413,7 @@ void _showRateCoachDialog(BuildContext context, String coachId) {
                 }
               } catch (e, st) {
                 reportError('home.rateCoach', e, st);
+                if (accountLeft(owner)) { textCtrl.clear(); return; }
                 setSt(() {
                   saving = false;
                   error = isNetworkFailure(e)
@@ -1379,9 +1423,9 @@ void _showRateCoachDialog(BuildContext context, String coachId) {
               }
               if (dialogCtx.mounted) {
                 Navigator.of(dialogCtx, rootNavigator: true).pop();
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text('Review submitted! Thank you.'),
-                  backgroundColor: Color(0xFFA855F7)));
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: OwnedText('Review submitted! Thank you.', owner: owner),
+                  backgroundColor: const Color(0xFFA855F7)));
               }
             },
             child: saving
@@ -1392,7 +1436,7 @@ void _showRateCoachDialog(BuildContext context, String coachId) {
                   fontWeight: FontWeight.w700))),
         ],
       ),
-    ),
+    )),
   );
 }
 
