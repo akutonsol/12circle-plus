@@ -14,8 +14,16 @@
 // HOW TO SEE IT FAIL:
 //   git checkout a446926 -- lib/features/dashboard/presentation/coach_dashboard_screen.dart
 // "A's refresh, then B" draws A's client for B; "B's read failed" finds no
-// failure said; "B's own failure is retried" likewise. The controls pass on
-// both.
+// failure said; "B's own failure is retried" likewise; "the auth client
+// already names coach B" draws A's client on the rebuild; "the same coach's
+// own refresh fails" finds no failure said. The token and same-coach controls,
+// and "sign-out -> coach B", pass on both (coverage: on the base a dependency
+// change already hid the card).
+//
+// Round 2 (mutants): "the auth client already names coach B" is the only case
+// that reaches `_aiSignalsFor`'s auth-client check (every other switch is
+// heard by currentUserProvider first); "B's own failure is retried" asserts
+// the busy retry ('Retrying'), which nothing checked before.
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -28,6 +36,7 @@ import 'package:circle_fitness/features/dashboard/presentation/coach_dashboard_s
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase, User;
 
 import '../support/pump_until.dart';
 import '../support/two_coach_postgrest.dart';
@@ -37,6 +46,12 @@ const _failed = "Couldn't load your AI coach signals";
 
 /// A live change to a table: the reads that watch it run again.
 final _tick = StateProvider<int>((ref) => 0);
+
+/// The account the app's providers have heard of, held apart from the auth
+/// client: the window in which the auth client already names the next coach
+/// and no rebuild of [currentUserProvider] has been flushed yet.
+final _heard = StateProvider<User?>(
+    (ref) => Supabase.instance.client.auth.currentUser);
 
 void main() {
   final server = TwoCoachPostgrest();
@@ -102,7 +117,7 @@ void main() {
         reason: "A's client's risk summary ($when)");
   }
 
-  Future<void> show(WidgetTester tester) async {
+  Future<void> show(WidgetTester tester, {bool holdHeard = false}) async {
     tester.view
       ..devicePixelRatio = 1
       ..physicalSize = const Size(1200, 3000);
@@ -116,6 +131,8 @@ void main() {
       coachSubmittedCheckinsProvider.overrideWith((ref) async => const []),
       coachLeaderboardProvider.overrideWith((ref) async => const []),
       coachTriageSignalsProvider.overrideWith((ref) async => const []),
+      if (holdHeard)
+        currentUserProvider.overrideWith((ref) => ref.watch(_heard)),
     ]);
     await tester.pumpWidget(UncontrolledProviderScope(
         container: c,
@@ -252,11 +269,105 @@ void main() {
         what: "B's failure said",
         timeout: const Duration(seconds: 10));
     server.fails.clear();
+    final retry = server.holds['$_rpc:$memberB'] = Completer<void>();
+    expect(find.bySemanticsLabel('Retrying'), findsNothing, reason: 'premise');
     await tester.tap(find.text('Try again'));
+    await frames(tester, 3);
+    // While B's retry is out the button is busy: it says so and cannot be
+    // pressed again (a second tap would send a second read).
+    expect(find.bySemanticsLabel('Retrying'), findsOneWidget,
+        reason: "the retry is busy while B's read is out");
+    expect(find.text('Try again'), findsNothing,
+        reason: 'the busy button shows progress, not "Try again"');
+    expect(find.text(_failed), findsOneWidget,
+        reason: "B's last word stays said while the retry is out");
+    nothingOfA('retry in flight');
+    expect(server.count('$_rpc:$memberB'), 2, reason: 'one retry went out');
+    retry.complete();
     await pumpUntil(tester, () => seen(ofB()), what: "B's rows after retry");
     expect(find.text(_failed), findsNothing);
     nothingOfA('after retry');
     expect(server.count('$_rpc:$memberB'), 2);
+    await unmount(tester);
+  });
+
+  testWidgets(
+      "the auth client already names coach B and nothing has heard yet (no "
+      "frame of currentUserProvider): a rebuild draws nothing of A's",
+      (tester) async {
+    await show(tester, holdHeard: true);
+    final holdB = server.holds['$_rpc:$memberB'] = Completer<void>();
+    await tester.runAsync(() => signInAs(memberB));
+    // The premise of the window: the auth client is B's, the providers A's.
+    expect(Supabase.instance.client.auth.currentUser?.id, memberB,
+        reason: 'premise: the auth client names B');
+    expect(c.read(currentUserProvider)?.id, memberA,
+        reason: 'premise: nothing has heard of B yet');
+    // Any rebuild in this window (a parent, a tab, another read's answer).
+    tester.element(find.byType(CoachDashboardScreen)).markNeedsBuild();
+    await tester.pump();
+    nothingOfA('the auth client is B, the screen still watches A');
+    expect(find.text(_failed), findsNothing,
+        reason: 'nothing failed: nothing to say');
+    expect(server.count('$_rpc:$memberA'), 0,
+        reason: 'nothing was asked as A');
+    // Then the switch is heard: B's own read, B's own rows.
+    c.read(_heard.notifier).state = Supabase.instance.client.auth.currentUser;
+    await frames(tester, 2);
+    nothingOfA('B heard, B pending');
+    holdB.complete();
+    await pumpUntil(tester, () => seen(ofB()), what: "B's own signals");
+    nothingOfA('B answered');
+    expect(server.count('$_rpc:$memberB'), 1);
+    await unmount(tester);
+  });
+
+  testWidgets(
+      "coach A -> sign-out -> coach B: nothing of A's while out, nothing while "
+      "B's read is pending, then B's own; A's never asked again",
+      (tester) async {
+    await show(tester);
+    await become(tester, null);
+    await frames(tester);
+    nothingOfA('signed out');
+    expect(find.text(_failed), findsNothing,
+        reason: 'signed out is not a failure to say');
+    final holdB = server.holds['$_rpc:$memberB'] = Completer<void>();
+    await become(tester, memberB);
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+      nothingOfA('B signed in, B pending, frame $i');
+    }
+    holdB.complete();
+    await pumpUntil(tester, () => seen(ofB()), what: "B's own signals");
+    nothingOfA('B answered');
+    expect(server.count('$_rpc:$memberB'), 1);
+    expect(server.count('$_rpc:$memberA'), 0,
+        reason: 'nothing was asked as A after A left');
+    await unmount(tester);
+  });
+
+  testWidgets(
+      "the same coach's own refresh fails while A's rows are drawn: the "
+      'failure is said in their place, recorded once (Decision for Julia)',
+      (tester) async {
+    await show(tester);
+    server.fails.add('$_rpc:$memberA');
+    c.invalidate(coachAiSignalsProvider);
+    await pumpUntil(tester, () => seen(find.text(_failed)),
+        what: "A's own failure said",
+        timeout: const Duration(seconds: 10));
+    expect(ofA(), findsNothing,
+        reason: 'the failure replaces the rows (the recorded behaviour)');
+    expect(
+        reported.where((f) => f.origin == 'coachAiSignalsProvider').length, 1,
+        reason: "A's failure is recorded once");
+    expect(server.count('$_rpc:$memberA'), 1);
+    expect(server.count('$_rpc:$memberB'), 0);
+    server.fails.clear();
+    await tester.tap(find.text('Try again'));
+    await pumpUntil(tester, () => seen(ofA()), what: "A's rows again");
+    expect(find.text(_failed), findsNothing);
     await unmount(tester);
   });
 
