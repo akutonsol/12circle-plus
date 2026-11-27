@@ -11,6 +11,7 @@ import '../../../core/realtime/realtime.dart';
 import '../../checkins/domain/checkin_provider.dart' hide heldFor, ownedRead;
 import '../../messaging/data/messaging_service.dart';
 import '../../messaging/domain/messaging_provider.dart';
+import '../../coach/data/coach_relationship_service.dart' show AccountChangedError;
 import '../../coach/domain/coach_ecosystem_provider.dart';
 import '../../coach/presentation/coach_business_screen.dart';
 import '../../coach/presentation/coach_availability_screen.dart';
@@ -1437,9 +1438,19 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
   // what came of it is said only to them. An owner nobody knows is not them.
   Future<void> _approveRequest(String relId, String clientId, String? owner) async {
     const origin = 'CoachDashboard._approveRequest';
-    if (stoppedFor(owner ?? unknownOwner, origin, 'accept request')) return;
+    final asCoach = owner ?? unknownOwner;
+    if (stoppedFor(asCoach, origin, 'accept request')) return;
     try {
-      await ref.read(coachRelServiceProvider).approveRequest(relId, clientId);
+      // P0-FL-62b: sent as [asCoach] at every step, never as whoever is
+      // signed in when a step runs.
+      await ref
+          .read(coachRelServiceProvider)
+          .approveRequest(relId, clientId, expectedUid: asCoach);
+    } on AccountChangedError {
+      // Recorded by the service; nothing of it is for whoever is signed in
+      // now. (Back as the same coach: their list is read again.)
+      if (mounted && isSignedIn(owner)) ref.invalidate(pendingRequestsProvider);
+      return;
     } catch (e, s) {
       reportError(origin, e, s);
       if (mounted && !accountLeft(owner)) {
@@ -1460,9 +1471,19 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
 
   Future<void> _declineRequest(String relId, String clientId, String? owner) async {
     const origin = 'CoachDashboard._declineRequest';
-    if (stoppedFor(owner ?? unknownOwner, origin, 'decline request')) return;
+    final asCoach = owner ?? unknownOwner;
+    if (stoppedFor(asCoach, origin, 'decline request')) return;
     try {
-      await ref.read(coachRelServiceProvider).declineRequest(relId, clientId);
+      // P0-FL-62b: sent as [asCoach] at every step, never as whoever is
+      // signed in when a step runs.
+      await ref
+          .read(coachRelServiceProvider)
+          .declineRequest(relId, clientId, expectedUid: asCoach);
+    } on AccountChangedError {
+      // Recorded by the service; nothing of it is for whoever is signed in
+      // now. (Back as the same coach: their list is read again.)
+      if (mounted && isSignedIn(owner)) ref.invalidate(pendingRequestsProvider);
+      return;
     } catch (e, s) {
       reportError(origin, e, s);
       if (mounted && !accountLeft(owner)) {
