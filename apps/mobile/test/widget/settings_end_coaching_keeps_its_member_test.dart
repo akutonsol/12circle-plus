@@ -5,6 +5,11 @@
 // The real SettingsScreen, row, sheet and CoachRelationshipService; real auth
 // transitions; no AccountScope; the screen stays mounted across the switch.
 // A and B each pay coach Avery (one active coaching subscription each).
+//
+// Round 2 (QA's matrix gaps): B signs in over A's open "End coaching" dialog;
+// A's "End & switch" lands the instant B is signed in, before any frame or
+// screen listener; POSITIVE CONTROLS through a token refresh during the
+// cancellation and after A signs out and back in.
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -71,7 +76,8 @@ void main() {
     }
   }
 
-  Future<void> open(WidgetTester t) async {
+  Future<void> open(WidgetTester t,
+      {Future<void> Function(WidgetTester)? first}) async {
     await t.binding.setSurfaceSize(const Size(500, 3000));
     addTearDown(() => t.binding.setSurfaceSize(null));
     container = ProviderContainer(overrides: [
@@ -83,6 +89,7 @@ void main() {
       child: const MaterialApp(home: SettingsScreen()),
     ));
     await settle(t);
+    if (first != null) await first(t);
     expect(find.text('Coach Guided'), findsOneWidget, reason: 'premise');
     // Ask to switch to Self-Guided, up to "End & switch".
     await t.tap(find.text('Coach Guided'));
@@ -136,6 +143,85 @@ void main() {
         .single;
     expect((mode.who, mode.query['id']), (memberA, 'eq.$memberA'));
     expect(accountChanges(), isEmpty);
+    await close(t);
+  });
+
+  void controlOutcome() {
+    final read = server.reads('subscriptions').single;
+    expect((read.who, read.query['user_id'], read.query['coach_id']),
+        (memberA, 'eq.$memberA', 'eq.coach-a'));
+    expect(invokes().map((r) => (r.who, r.row['subscriptionId'])),
+        [(memberA, 'sub-$memberA')]);
+    expect(server.writes('coach_client_relationships'), isEmpty);
+    expect(find.text(_endsSaid), findsOneWidget);
+    final mode = server
+        .writes('user_profiles')
+        .where((w) => '${w.body}'.contains('coaching_mode'))
+        .single;
+    expect((mode.who, mode.query['id']), (memberA, 'eq.$memberA'));
+    expect(server.seen.where((r) => r.who == memberB), isEmpty);
+    expect(accountChanges(), isEmpty);
+  }
+
+  testWidgets('POSITIVE CONTROL, a token refresh while the cancellation is '
+      'sent: as the same member, once', (t) async {
+    await open(t);
+    final hold = server.holds['POST cancel-subscription:$memberA'] = Completer();
+    await t.tap(find.text('End & switch'));
+    await settle(t, 3);
+    expect(invokes(), hasLength(1), reason: 'premise');
+    await t.runAsync(refreshSession);
+    hold.complete();
+    await settle(t, 12);
+    controlOutcome();
+    await close(t);
+  });
+
+  testWidgets('POSITIVE CONTROL, A signed out and back in before opening the '
+      'sheet: as the same member, once', (t) async {
+    await open(t, first: (t) async {
+      await t.runAsync(signOut);
+      await settle(t);
+      await t.runAsync(() => signInAs(memberA));
+      await settle(t, 12);
+    });
+    await t.tap(find.text('End & switch'));
+    await settle(t, 12);
+    controlOutcome();
+    await close(t);
+  });
+
+  testWidgets("B signs in over A's open End coaching dialog: it goes, nothing "
+      'is sent, nothing said', (t) async {
+    await open(t);
+    expect(find.textContaining('End coaching with'), findsOneWidget,
+        reason: 'premise');
+    await t.runAsync(() => signInAs(memberB));
+    await settle(t);
+    expect(find.textContaining('End coaching with'), findsNothing,
+        reason: "A's dialog stayed up for B to confirm");
+    expect(find.text('End & switch'), findsNothing);
+    expect(server.reads('subscriptions'), isEmpty);
+    expect(invokes(), isEmpty);
+    expect(server.writes(), isEmpty);
+    nothingSaidToB();
+    await close(t);
+  });
+
+  testWidgets("no frame: A's End & switch lands the instant B is signed in, "
+      'before any listener: nothing is sent, nothing said, recorded once',
+      (t) async {
+    await open(t);
+    final endAndSwitch = t.widget<TextButton>(find.ancestor(
+        of: find.text('End & switch'), matching: find.byType(TextButton)));
+    await t.runAsync(() => switchAnd(memberB, endAndSwitch.onPressed!));
+    await settle(t);
+    expect(server.reads('subscriptions'), isEmpty);
+    expect(invokes(), isEmpty);
+    expect(server.writes(), isEmpty);
+    nothingSaidToB();
+    expect(find.textContaining('End coaching with'), findsNothing);
+    expect(accountChanges(), hasLength(1), reason: 'the stop is recorded once');
     await close(t);
   });
 

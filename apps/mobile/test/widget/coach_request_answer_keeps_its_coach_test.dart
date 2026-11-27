@@ -5,6 +5,7 @@ import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/core/realtime/realtime.dart';
 import 'package:circle_fitness/features/auth/domain/auth_provider.dart';
 import 'package:circle_fitness/features/checkins/domain/checkin_provider.dart';
+import 'package:circle_fitness/features/coach/data/coach_relationship_service.dart';
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
 import 'package:circle_fitness/features/dashboard/domain/coach_triage_provider.dart';
 import 'package:circle_fitness/features/dashboard/presentation/coach_dashboard_screen.dart';
@@ -37,7 +38,13 @@ import '../support/two_member_postgrest.dart' show TwoMemberPostgrest;
 //  (3) B signs in while A's answer is in flight and it lands: no notice from
 //      anyone, nothing said to B;
 //  (4) B signs in (or A signs out) while A's answer is in flight and it
-//      matched no row: nothing said to B, the stop recorded ONCE.
+//      matched no row: nothing said to B, the stop recorded ONCE — and B's
+//      list is not read again on A's behalf;
+//  (5) A -> B -> A while A's answer is running, and the refusal for the
+//      change reaches the screen once A is back: A's list IS read again, as
+//      A, exactly once (a service double: with the real service the refusal
+//      and the caller's catch are one microtask apart, see below);
+//  control: A signs out and back in, then answers: as (1).
 
 class _Socket implements WebSocketChannel {
   final _toClient = StreamController<String>();
@@ -110,11 +117,15 @@ class _Server extends TwoCoachPostgrest {
   final noRows = <String>{};
   final queries = <({String who, String method, String table, Map<String, String> q})>[];
 
+  /// Every pending-requests read (`status=eq.pending`), by who asked.
+  final pendingReads = <String>[];
+
   @override
   void reset() {
     super.reset();
     noRows.clear();
     queries.clear();
+    pendingReads.clear();
   }
 
   @override
@@ -122,6 +133,11 @@ class _Server extends TwoCoachPostgrest {
     final path = request.url.path;
     final who = path.startsWith('/auth/v1/') ? '' : TwoMemberPostgrest.who(request);
     final key = '${request.method} ${path.split('/').last}:$who';
+    if (request.method == 'GET' &&
+        path.endsWith('/coach_client_relationships') &&
+        request.url.queryParameters['status'] == 'eq.pending') {
+      pendingReads.add(who);
+    }
     if (request.method != 'GET' && !path.startsWith('/auth/v1/')) {
       queries.add((
         who: who,
@@ -135,6 +151,32 @@ class _Server extends TwoCoachPostgrest {
     return http.StreamedResponse(Stream.value(utf8.encode('[]')), 200,
         request: request, headers: {'content-type': 'application/json'});
   }
+}
+
+/// The service's refusal for a changed account, delivered when [gate] opens.
+/// With the real service that refusal is thrown at the step that saw another
+/// account, and the dashboard's catch runs a microtask later — a window no
+/// test can put a sign-in into. This double stands for a refusal that reaches
+/// the screen once the coach who started it is back.
+class _RefusesAfterGate extends CoachRelationshipService {
+  final gate = Completer<void>();
+  final asked = <String?>[];
+
+  Future<void> _refuse(String? expectedUid, String what) async {
+    asked.add(expectedUid);
+    await gate.future;
+    throw AccountChangedError(what);
+  }
+
+  @override
+  Future<void> approveRequest(String relationshipId, String clientId,
+          {String? expectedUid}) =>
+      _refuse(expectedUid, 'Approving a request');
+
+  @override
+  Future<void> declineRequest(String relationshipId, String clientId,
+          {String? expectedUid}) =>
+      _refuse(expectedUid, 'Declining a request');
 }
 
 void main() {
@@ -195,7 +237,8 @@ void main() {
     }
   }
 
-  Future<void> show(WidgetTester tester) async {
+  Future<void> show(WidgetTester tester,
+      {CoachRelationshipService? service}) async {
     tester.view
       ..devicePixelRatio = 1
       ..physicalSize = const Size(1200, 3000);
@@ -208,6 +251,7 @@ void main() {
       coachSubmittedCheckinsProvider.overrideWith((ref) async => const []),
       coachLeaderboardProvider.overrideWith((ref) async => const []),
       coachTriageSignalsProvider.overrideWith((ref) async => const []),
+      if (service != null) coachRelServiceProvider.overrideWithValue(service),
     ]);
     router = GoRouter(initialLocation: '/', routes: [
       GoRoute(path: '/', builder: (_, __) => const CoachDashboardScreen()),
@@ -246,13 +290,15 @@ void main() {
     ('Decline', 'rejected', 'Request declined'),
   ]) {
     group(label, () {
-      Future<void> pending(WidgetTester tester) async {
-        await show(tester);
+      Future<void> pending(WidgetTester tester,
+          {CoachRelationshipService? service}) async {
+        await show(tester, service: service);
         await pumpUntil(tester, () => seen(find.text(label)), what: label);
         await frames(tester);
         server.writes.clear();
         server.queries.clear();
         server.calls.clear();
+        server.pendingReads.clear();
       }
 
       VoidCallback tapOf(WidgetTester tester) => tester
@@ -356,6 +402,81 @@ void main() {
           await unmount(tester);
         });
       }
+
+      testWidgets("(4) B signs in while A's answer is in flight, and it "
+          "matched no row: B's list is not read again on A's behalf",
+          (tester) async {
+        await pending(tester);
+        final hold = server.holds['PATCH coach_client_relationships:$memberA'] =
+            Completer<void>();
+        server.noRows.add('PATCH coach_client_relationships:$memberA');
+        tapOf(tester)();
+        await pumpUntil(tester, () => patches().isNotEmpty, what: 'sent');
+        await become(tester, memberB);
+        // B's own list, read because B signed in, and settled.
+        await pumpUntil(tester, () => server.pendingReads.contains(memberB),
+            what: "B's list");
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+        await frames(tester, 6);
+        final before = server.pendingReads.toList();
+        expect(before.where((w) => w == memberB), hasLength(1), reason: 'premise');
+        hold.complete();
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+        await frames(tester, 10);
+        expect(server.pendingReads, before,
+            reason: "THE defect: A's refusal re-read B's pending requests "
+                '(${server.pendingReads.skip(before.length).toList()})');
+        nothingSaidToB();
+        await unmount(tester);
+      });
+
+      testWidgets("(5) A -> B -> A while A's answer runs, and the refusal "
+          "lands with A back: A's list is read again, as A, once", (tester) async {
+        final service = _RefusesAfterGate();
+        await pending(tester, service: service);
+        tapOf(tester)();
+        await frames(tester, 2);
+        expect(service.asked, [memberA], reason: 'premise: started as A');
+        await become(tester, memberB);
+        await become(tester, memberA);
+        await pumpUntil(tester, () => server.pendingReads.isNotEmpty &&
+                server.pendingReads.last == memberA,
+            what: "A's list after the switch back");
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+        await frames(tester, 6);
+        final before = server.pendingReads.length;
+        service.gate.complete();
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+        await frames(tester, 10);
+        expect(server.pendingReads.skip(before).toList(), [memberA],
+            reason: "A's list must be read again for A, exactly once");
+        expect(server.writes, isEmpty);
+        expect(find.byType(SnackBar), findsNothing);
+        expect(find.text(done), findsNothing);
+        await unmount(tester);
+      });
+
+      testWidgets('control, the same coach signed out and back in: one answer '
+          "of A's row, as A, and one notice, as A", (tester) async {
+        await pending(tester);
+        await become(tester, null);
+        await become(tester, memberA);
+        await pumpUntil(tester, () => seen(find.text(label)), what: '$label again');
+        await frames(tester);
+        server.writes.clear();
+        server.queries.clear();
+        await tester.tap(find.text(label));
+        await pumpUntil(tester, () => seen(find.text(done)), what: done);
+        final patch = patches().single;
+        expect((patch.who, patch.body['status']), (memberA, status));
+        expect(server.queries
+            .singleWhere((w) => w.table == 'coach_client_relationships')
+            .q['id'], 'eq.rel-$memberA');
+        final notice = server.writesTo('notifications').single;
+        expect((notice.who, notice.body['recipient_id']), (memberA, 'cl-p'));
+        expect(accountChanges(), isEmpty);
+        await unmount(tester);
+      });
 
       testWidgets('control: A stays and the answer matched no row: A is told',
           (tester) async {

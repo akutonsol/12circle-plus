@@ -394,6 +394,39 @@ void main() {
         });
       }
 
+      // (3b) Manage Subscription re-reads its lists after a refusal only for
+      // the member it was for (`stillSignedIn(owner)`): B's are not read
+      // again on A's behalf.
+      if (flow.name.startsWith('Manage')) {
+        testWidgets("(3b) B signs in while A's subscriptions read is in flight: "
+            "the refusal does not read B's lists again", (t) async {
+          await flow.open(t);
+          await flow.toConfirm(t);
+          final gate = server.gates['GET subscriptions/coach:$_a'] = Completer();
+          await confirmed(t);
+          await pumpUntil(t, () => coachSubReads().isNotEmpty, what: 'A asked');
+          await switchTo(t, _b);
+          // B's own lists, read because B signed in, and settled.
+          await settle(t);
+          bool listRead(_Req r) =>
+              r.who == _b &&
+              r.method == 'GET' &&
+              (r.name == 'coach_client_relationships' ||
+                  r.name == 'rpc/client_plan' ||
+                  (r.name == 'subscriptions' && !r.q.containsKey('coach_id')));
+          final before = server.log.where(listRead).length;
+          gate.complete();
+          await settle(t);
+          final again = server.log.where(listRead).skip(before).toList();
+          expect(again.map((r) => r.name).toList(), isEmpty,
+              reason: "THE defect: A's refusal re-read B's lists");
+          nothingSentAfterTheSwitch();
+          nothingSaidToB();
+          expect(accountChanges(), hasLength(1));
+          await unmount(t);
+        });
+      }
+
       // ── (4) while A's cancel-subscription is in flight ───────────────────
       testWidgets("(4) B signs in while A's cancel-subscription is in flight: no "
           'relationship update, no notification, nothing said to B', (t) async {
