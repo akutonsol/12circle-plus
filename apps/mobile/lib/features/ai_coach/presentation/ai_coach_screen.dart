@@ -4,6 +4,8 @@ import '../domain/coach_surface.dart';
 import 'widgets/coach_surface_tabs.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/ai_coach_service.dart';
+import '../../auth/domain/auth_provider.dart';
+import '../../dashboard/domain/still_reading.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -22,18 +24,61 @@ class _Message {
   const _Message(this.text, {required this.isUser});
 }
 
-class AICoachScreen extends ConsumerStatefulWidget {
+/// The member's AI coach: their conversation, brief, reviews, style and the
+/// facts it remembers (P0-FL-62a1).
+///
+/// Everything on it lives in State, and the State belongs to the member who
+/// opened it. So the screen is keyed by the signed-in member's id — by the id
+/// only: a token refresh or a profile edit is the same member and keeps the
+/// conversation and a half-typed message. Another member signing in, or
+/// signing out, replaces the whole screen with a fresh one, read for them.
+///
+/// Until that rebuild (a frame; a hidden web tab draws none) the old screen is
+/// still mounted, so each of its reads, writes and invokes also checks its
+/// member against the auth client itself ([AICoachService.owner], and
+/// `_forOwner` after every await): nothing of the last member's lands on
+/// screen, and nothing is sent as the next one.
+class AICoachScreen extends ConsumerWidget {
   const AICoachScreen({super.key});
   @override
-  ConsumerState<AICoachScreen> createState() => _AICoachScreenState();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+    return _AICoachBody(key: ValueKey<String?>(uid), owner: boundTo(uid));
+  }
 }
 
-class _AICoachScreenState extends ConsumerState<AICoachScreen> {
+class _AICoachBody extends ConsumerStatefulWidget {
+  const _AICoachBody({super.key, required this.owner});
+
+  /// The member this screen was opened for.
+  final String? owner;
+
+  @override
+  ConsumerState<_AICoachBody> createState() => _AICoachScreenState();
+}
+
+/// P0-FL-62a1 · a card of the member AI coach screen, bound to the member the
+/// screen was opened for.
+abstract class _OwnedCard extends StatefulWidget {
+  const _OwnedCard({required this.owner});
+  final String? owner;
+}
+
+mixin _ForOwner<W extends _OwnedCard> on State<W> {
+  /// Whether what just came back may still be drawn, said or followed up: the
+  /// card is mounted and its member is still the one signed in.
+  bool get _forOwner => mounted && !accountLeft(widget.owner);
+}
+
+class _AICoachScreenState extends ConsumerState<_AICoachBody> {
+  /// Whether what just came back may still be drawn: see [AICoachScreen].
+  bool get _forOwner => mounted && !accountLeft(widget.owner);
+
   /// Which of the board's two surfaces is showing. Before this, the screen
   /// chose for the user with `_messages.length <= 1`.
   CoachSurface _surface = CoachSurface.coaching;
 
-  final _svc = AICoachService();
+  late final _svc = AICoachService(owner: widget.owner);
   final _ctrl = TextEditingController();
   final _scroll = ScrollController();
   final List<_Message> _messages = [];
@@ -81,11 +126,11 @@ class _AICoachScreenState extends ConsumerState<AICoachScreen> {
       history = await _svc.getConversationHistory(limit: 10);
     } catch (e) {
       // Recorded by the service. No welcome: this is not a new conversation.
-      if (!mounted) return;
+      if (!mounted || accountLeft(widget.owner)) return;
       setState(() { _historyError = e; _historyRetrying = false; });
       return;
     }
-    if (!mounted) return;
+    if (!mounted || accountLeft(widget.owner)) return;
     setState(() {
       _historyError = null;
       _historyRetrying = false;
@@ -134,16 +179,16 @@ class _AICoachScreenState extends ConsumerState<AICoachScreen> {
 
     try {
       final reply = await _svc.chat(text, _mode);
-      if (!mounted) return;
+      if (!mounted || accountLeft(widget.owner)) return;
       setState(() => _messages.add(_Message(reply, isUser: false)));
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || accountLeft(widget.owner)) return;
       setState(() => _messages.add(_Message(
         'Sorry, I\'m having trouble connecting right now. Please try again in a moment.',
         isUser: false,
       )));
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (_forOwner) setState(() => _loading = false);
       _scrollToBottom();
     }
   }
@@ -243,14 +288,14 @@ class _AICoachScreenState extends ConsumerState<AICoachScreen> {
         Expanded(
           child: _surface == CoachSurface.coaching
               ? ListView(padding: const EdgeInsets.only(top: 4, bottom: 16), children: [
-                  const _DailyInsightCard(),
-                  const _MealIdeasCard(),
-                  const _ProgressInsightCard(),
-                  const _WeeklyReviewCard(),
-                  const _GoalPredictionCard(),
-                  const _RiskCard(),
-                  const _CoachPersonaCard(),
-                  const _CoachingMemoryCard(),
+                  _DailyInsightCard(owner: widget.owner),
+                  _MealIdeasCard(owner: widget.owner),
+                  _ProgressInsightCard(owner: widget.owner),
+                  _WeeklyReviewCard(owner: widget.owner),
+                  _GoalPredictionCard(owner: widget.owner),
+                  _RiskCard(owner: widget.owner),
+                  _CoachPersonaCard(owner: widget.owner),
+                  _CoachingMemoryCard(owner: widget.owner),
                   _SuggestedPrompts(mode: _mode, onTap: (p) { _ctrl.text = p; _send(); }),
                 ])
               : ListView.builder(
@@ -493,14 +538,14 @@ class _SuggestedPrompts extends StatelessWidget {
 }
 
 // ── Daily coaching insight card ───────────────────────────────────────────────
-class _DailyInsightCard extends StatefulWidget {
-  const _DailyInsightCard();
+class _DailyInsightCard extends _OwnedCard {
+  const _DailyInsightCard({required super.owner});
   @override
   State<_DailyInsightCard> createState() => _DailyInsightCardState();
 }
 
-class _DailyInsightCardState extends State<_DailyInsightCard> {
-  final _svc = AICoachService();
+class _DailyInsightCardState extends State<_DailyInsightCard> with _ForOwner<_DailyInsightCard> {
+  late final _svc = AICoachService(owner: widget.owner);
   Map<String, dynamic>? _insight;
   bool _loading = true;
   Object? _loadError;
@@ -523,22 +568,22 @@ class _DailyInsightCardState extends State<_DailyInsightCard> {
       today = await _svc.getTodayInsight();
     } catch (e) {
       // Not "no brief yet": never generate over a brief that may exist.
-      if (mounted) setState(() { _loadError = e; _loading = false; });
+      if (_forOwner) setState(() { _loadError = e; _loading = false; });
       return;
     }
-    if (!mounted) return;
+    if (!mounted || accountLeft(widget.owner)) return;
     _loadError = null;
     // Auto-generate today's brief on open if it doesn't exist yet (bounded to
     // once per day by the per-date dedup), so it's just there each morning.
     if (today == null) { await _generate(); return; }
-    if (!mounted) return;
+    if (!mounted || accountLeft(widget.owner)) return;
     setState(() { _insight = today; _loading = false; });
   }
 
   Future<void> _generate() async {
     setState(() => _loading = true);
     final res = await _svc.generate('daily_insight');
-    if (!mounted) return;
+    if (!mounted || accountLeft(widget.owner)) return;
     if (res != null) {
       // Shape the engine result like a stored row for display.
       setState(() {
@@ -554,7 +599,7 @@ class _DailyInsightCardState extends State<_DailyInsightCard> {
     } else {
       setState(() => _loading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not generate your brief. Try again.')));
+        SnackBar(content: OwnedText('Could not generate your brief. Try again.', owner: widget.owner)));
     }
   }
 
@@ -689,12 +734,12 @@ Widget _genButton(String label, VoidCallback onTap) => GestureDetector(
     child: Text(label, style: const TextStyle(color: _wht, fontSize: 13, fontWeight: FontWeight.w700))));
 
 // ── Weekly review card ────────────────────────────────────────────────────────
-class _WeeklyReviewCard extends StatefulWidget {
-  const _WeeklyReviewCard();
+class _WeeklyReviewCard extends _OwnedCard {
+  const _WeeklyReviewCard({required super.owner});
   @override State<_WeeklyReviewCard> createState() => _WeeklyReviewCardState();
 }
-class _WeeklyReviewCardState extends State<_WeeklyReviewCard> {
-  final _svc = AICoachService();
+class _WeeklyReviewCardState extends State<_WeeklyReviewCard> with _ForOwner<_WeeklyReviewCard> {
+  late final _svc = AICoachService(owner: widget.owner);
   Map<String, dynamic>? _review;
   bool _loading = true;
   Object? _loadError;
@@ -711,15 +756,15 @@ class _WeeklyReviewCardState extends State<_WeeklyReviewCard> {
       r = await _svc.getLatestReview();
     } catch (e) {
       // Not "no recent review": never generate one on a failed read.
-      if (mounted) setState(() { _loadError = e; _loading = false; });
+      if (_forOwner) setState(() { _loadError = e; _loading = false; });
       return;
     }
-    if (!mounted) return;
+    if (!mounted || accountLeft(widget.owner)) return;
     _loadError = null;
     // Auto-generate weekly if there's no review from the last 7 days.
     final stale = r == null || _staleEnd(r['period_end']?.toString());
     if (stale) { await _generate(); return; }
-    if (!mounted) return;
+    if (!mounted || accountLeft(widget.owner)) return;
     setState(() { _review = r; _loading = false; });
   }
   bool _staleEnd(String? end) {
@@ -729,13 +774,13 @@ class _WeeklyReviewCardState extends State<_WeeklyReviewCard> {
   Future<void> _generate() async {
     setState(() => _loading = true);
     final res = await _svc.generate('weekly_review');
-    if (!mounted) return;
+    if (!mounted || accountLeft(widget.owner)) return;
     setState(() {
       if (res != null) _review = {'summary': res['summary'], 'metrics': res['metrics'] ?? {}};
       _loading = false;
     });
     if (res == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not generate review.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: OwnedText('Could not generate review.', owner: widget.owner)));
     }
   }
 
@@ -792,12 +837,12 @@ class _WeeklyReviewCardState extends State<_WeeklyReviewCard> {
 }
 
 // ── Goal prediction card ──────────────────────────────────────────────────────
-class _GoalPredictionCard extends StatefulWidget {
-  const _GoalPredictionCard();
+class _GoalPredictionCard extends _OwnedCard {
+  const _GoalPredictionCard({required super.owner});
   @override State<_GoalPredictionCard> createState() => _GoalPredictionCardState();
 }
-class _GoalPredictionCardState extends State<_GoalPredictionCard> {
-  final _svc = AICoachService();
+class _GoalPredictionCardState extends State<_GoalPredictionCard> with _ForOwner<_GoalPredictionCard> {
+  late final _svc = AICoachService(owner: widget.owner);
   Map<String, dynamic>? _pred;
   bool _loading = true;
   Object? _loadError;
@@ -811,18 +856,18 @@ class _GoalPredictionCardState extends State<_GoalPredictionCard> {
   Future<void> _load() async {
     try {
       final p = await _svc.getLatestPrediction();
-      if (mounted) setState(() { _pred = p; _loadError = null; _loading = false; });
+      if (_forOwner) setState(() { _pred = p; _loadError = null; _loading = false; });
     } catch (e) {
-      if (mounted) setState(() { _loadError = e; _loading = false; });
+      if (_forOwner) setState(() { _loadError = e; _loading = false; });
     }
   }
   Future<void> _generate() async {
     setState(() => _loading = true);
     final res = await _svc.generate('goal_prediction');
-    if (!mounted) return;
+    if (!mounted || accountLeft(widget.owner)) return;
     setState(() { if (res != null) _pred = res; _loading = false; });
     if (res == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not generate prediction.')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: OwnedText('Could not generate prediction.', owner: widget.owner)));
     }
   }
 
@@ -874,12 +919,12 @@ class _GoalPredictionCardState extends State<_GoalPredictionCard> {
 const _C2_green = Color(0xFF6FFBBE);
 
 // ── Meal ideas card ───────────────────────────────────────────────────────────
-class _MealIdeasCard extends StatefulWidget {
-  const _MealIdeasCard();
+class _MealIdeasCard extends _OwnedCard {
+  const _MealIdeasCard({required super.owner});
   @override State<_MealIdeasCard> createState() => _MealIdeasCardState();
 }
-class _MealIdeasCardState extends State<_MealIdeasCard> {
-  final _svc = AICoachService();
+class _MealIdeasCardState extends State<_MealIdeasCard> with _ForOwner<_MealIdeasCard> {
+  late final _svc = AICoachService(owner: widget.owner);
   List<dynamic> _meals = [];
   bool _loading = true;
   Object? _loadError;
@@ -893,15 +938,15 @@ class _MealIdeasCardState extends State<_MealIdeasCard> {
     try {
       final i = await _svc.getLatestInsight('meal_suggestion');
       final m = (i?['data'] as Map?)?['meals'];
-      if (mounted) setState(() { _meals = m is List ? m : []; _loadError = null; _loading = false; });
+      if (_forOwner) setState(() { _meals = m is List ? m : []; _loadError = null; _loading = false; });
     } catch (e) {
-      if (mounted) setState(() { _loadError = e; _loading = false; });
+      if (_forOwner) setState(() { _loadError = e; _loading = false; });
     }
   }
   Future<void> _gen() async {
     setState(() => _loading = true);
     final r = await _svc.generate('meal_suggestion');
-    if (!mounted) return;
+    if (!mounted || accountLeft(widget.owner)) return;
     setState(() { final m = r?['meals']; _meals = m is List ? m : []; _loading = false; });
   }
   @override
@@ -943,12 +988,12 @@ class _MealIdeasCardState extends State<_MealIdeasCard> {
 }
 
 // ── Progress insight card ─────────────────────────────────────────────────────
-class _ProgressInsightCard extends StatefulWidget {
-  const _ProgressInsightCard();
+class _ProgressInsightCard extends _OwnedCard {
+  const _ProgressInsightCard({required super.owner});
   @override State<_ProgressInsightCard> createState() => _ProgressInsightCardState();
 }
-class _ProgressInsightCardState extends State<_ProgressInsightCard> {
-  final _svc = AICoachService();
+class _ProgressInsightCardState extends State<_ProgressInsightCard> with _ForOwner<_ProgressInsightCard> {
+  late final _svc = AICoachService(owner: widget.owner);
   Map<String, dynamic>? _it;
   bool _loading = true;
   Object? _loadError;
@@ -961,15 +1006,15 @@ class _ProgressInsightCardState extends State<_ProgressInsightCard> {
   Future<void> _load() async {
     try {
       final i = await _svc.getLatestInsight('progress');
-      if (mounted) setState(() { _it = i; _loadError = null; _loading = false; });
+      if (_forOwner) setState(() { _it = i; _loadError = null; _loading = false; });
     } catch (e) {
-      if (mounted) setState(() { _loadError = e; _loading = false; });
+      if (_forOwner) setState(() { _loadError = e; _loading = false; });
     }
   }
   Future<void> _gen() async {
     setState(() => _loading = true);
     final r = await _svc.generate('progress_insight');
-    if (!mounted) return;
+    if (!mounted || accountLeft(widget.owner)) return;
     setState(() { if (r != null) _it = {'title': r['title'], 'body': r['body']}; _loading = false; });
   }
   @override
@@ -997,12 +1042,12 @@ class _ProgressInsightCardState extends State<_ProgressInsightCard> {
 }
 
 // ── Risk assessment card ──────────────────────────────────────────────────────
-class _RiskCard extends StatefulWidget {
-  const _RiskCard();
+class _RiskCard extends _OwnedCard {
+  const _RiskCard({required super.owner});
   @override State<_RiskCard> createState() => _RiskCardState();
 }
-class _RiskCardState extends State<_RiskCard> {
-  final _svc = AICoachService();
+class _RiskCardState extends State<_RiskCard> with _ForOwner<_RiskCard> {
+  late final _svc = AICoachService(owner: widget.owner);
   Map<String, dynamic>? _it;
   bool _loading = true;
   Object? _loadError;
@@ -1015,15 +1060,15 @@ class _RiskCardState extends State<_RiskCard> {
   Future<void> _load() async {
     try {
       final i = await _svc.getLatestInsight('risk');
-      if (mounted) setState(() { _it = i; _loadError = null; _loading = false; });
+      if (_forOwner) setState(() { _it = i; _loadError = null; _loading = false; });
     } catch (e) {
-      if (mounted) setState(() { _loadError = e; _loading = false; });
+      if (_forOwner) setState(() { _loadError = e; _loading = false; });
     }
   }
   Future<void> _gen() async {
     setState(() => _loading = true);
     final r = await _svc.generate('risk_assessment');
-    if (!mounted) return;
+    if (!mounted || accountLeft(widget.owner)) return;
     setState(() {
       if (r != null) {
         _it = {'body': r['summary'], 'data': {
@@ -1073,12 +1118,12 @@ class _RiskCardState extends State<_RiskCard> {
 }
 
 // ── Coach personality card ────────────────────────────────────────────────────
-class _CoachPersonaCard extends StatefulWidget {
-  const _CoachPersonaCard();
+class _CoachPersonaCard extends _OwnedCard {
+  const _CoachPersonaCard({required super.owner});
   @override State<_CoachPersonaCard> createState() => _CoachPersonaCardState();
 }
-class _CoachPersonaCardState extends State<_CoachPersonaCard> {
-  final _svc = AICoachService();
+class _CoachPersonaCardState extends State<_CoachPersonaCard> with _ForOwner<_CoachPersonaCard> {
+  late final _svc = AICoachService(owner: widget.owner);
   // (style, tone, label)
   static const _styles = [
     ('supportive', 'supportive', 'Supportive'),
@@ -1106,9 +1151,9 @@ class _CoachPersonaCardState extends State<_CoachPersonaCard> {
   Future<void> _load() async {
     try {
       final p = await _svc.getPersona();
-      if (mounted) setState(() { _style = (p['style']?.toString() ?? 'motivational'); _loadError = null; _loading = false; });
+      if (_forOwner) setState(() { _style = (p['style']?.toString() ?? 'motivational'); _loadError = null; _loading = false; });
     } catch (e) {
-      if (mounted) setState(() { _loadError = e; _loading = false; });
+      if (_forOwner) setState(() { _loadError = e; _loading = false; });
     }
   }
   /// A style save is in flight.
@@ -1117,10 +1162,10 @@ class _CoachPersonaCardState extends State<_CoachPersonaCard> {
     final previous = _style;
     setState(() { _style = style; _saving = true; });
     final r = await changeCoachStyle(_svc, style: style, tone: tone);
-    if (!mounted) return;
+    if (!mounted || accountLeft(widget.owner)) return;
     // A style that was not saved is not shown as chosen.
     setState(() { if (!r.saved) _style = previous; _saving = false; });
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(r.message)));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: OwnedText(r.message, owner: widget.owner)));
   }
 
   @override
@@ -1168,12 +1213,12 @@ class _CoachPersonaCardState extends State<_CoachPersonaCard> {
 }
 
 // ── Coaching memory card ──────────────────────────────────────────────────────
-class _CoachingMemoryCard extends StatefulWidget {
-  const _CoachingMemoryCard();
+class _CoachingMemoryCard extends _OwnedCard {
+  const _CoachingMemoryCard({required super.owner});
   @override State<_CoachingMemoryCard> createState() => _CoachingMemoryCardState();
 }
-class _CoachingMemoryCardState extends State<_CoachingMemoryCard> {
-  final _svc = AICoachService();
+class _CoachingMemoryCardState extends State<_CoachingMemoryCard> with _ForOwner<_CoachingMemoryCard> {
+  late final _svc = AICoachService(owner: widget.owner);
   List<Map<String, dynamic>> _memories = [];
   bool _loading = true;
 
@@ -1196,21 +1241,25 @@ class _CoachingMemoryCardState extends State<_CoachingMemoryCard> {
   Future<void> _load() async {
     try {
       final m = await _svc.getMemories();
-      if (mounted) setState(() { _memories = m; _loadError = null; _loading = false; });
+      if (_forOwner) setState(() { _memories = m; _loadError = null; _loading = false; });
     } catch (e) {
-      if (mounted) setState(() { _loadError = e; _loading = false; });
+      if (_forOwner) setState(() { _loadError = e; _loading = false; });
     }
   }
 
   Future<void> _add() async {
+    // The draft is this member's: it closes, emptied, if another signs in.
     final res = await showDialog<(String, String)>(
-      context: context, builder: (_) => const _AddMemoryDialog());
+      context: context,
+      builder: (_) => OpenedByAccount(owner: widget.owner, child: const _AddMemoryDialog()));
     if (res == null) return;
+    // Refused (and recorded) by the service if the member has left since.
     final ok = await _svc.addMemory(res.$1, res.$2);
+    if (!mounted || accountLeft(widget.owner)) return;
     await _load();
-    if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("Couldn't save that for your coach — try again.")));
+    if (!ok && mounted && !accountLeft(widget.owner)) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: OwnedText("Couldn't save that for your coach — try again.", owner: widget.owner)));
     }
   }
 
@@ -1225,12 +1274,13 @@ class _CoachingMemoryCardState extends State<_CoachingMemoryCard> {
     if (!_deleting.add(id)) return;
     setState(() {});
     final ok = await _svc.deleteMemory(id);
+    if (!mounted || accountLeft(widget.owner)) return;
     await _load();
-    if (!mounted) return;
+    if (!mounted || accountLeft(widget.owner)) return;
     setState(() => _deleting.remove(id));
     if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't remove that — try again.")),
+        SnackBar(content: OwnedText("Couldn't remove that — try again.", owner: widget.owner)),
       );
     }
   }
