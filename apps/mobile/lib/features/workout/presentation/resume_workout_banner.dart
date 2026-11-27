@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/observability/app_failure.dart';
+import '../data/models/workout_model.dart';
 import '../data/workout_session_store.dart';
 import '../domain/workout_provider.dart';
+import 'widgets/section_load_failure.dart' show couldntMessage;
 
 // ── UC10: Resume Incomplete Workout Banner ────────────────────────────────────
 // Drop this widget anywhere in the home/train hub screen to show the prompt
@@ -21,37 +24,62 @@ class ResumeWorkoutBanner extends ConsumerStatefulWidget {
 }
 
 class _ResumeWorkoutBannerState extends ConsumerState<ResumeWorkoutBanner> {
-  bool _dismissed = false;
-  bool _discarding = false;
+  /// The session discarded, and the one being discarded — by id, because this
+  /// banner stays mounted when the account changes: one member's discard must
+  /// not hide the next member's unfinished workout.
+  String? _dismissedId;
+  String? _discardingId;
+
+  /// Whether [session] is the signed-in member's (P0-FL-59b). While B's lookup
+  /// is in flight, and after it fails, the provider still holds A's session.
+  bool _isMine(WorkoutSessionRecord session) =>
+      session.userId == signedInNow(ref);
 
   /// Discards the in-progress session -- and hides the banner only once the
   /// server has it. It used to hide first and swallow a failed abandon: the
   /// session stayed in_progress (and a user may hold only one, so it blocked
   /// the next workout) while the banner said it was gone.
   Future<void> _dismiss(WorkoutSessionRecord session) async {
-    if (_discarding) return;
+    if (_discardingId == session.id) return;
+    if (!_isMine(session)) return _reportChanged('discarding a workout');
     final messenger = ScaffoldMessenger.maybeOf(context);
-    setState(() => _discarding = true);
+    setState(() => _discardingId = session.id);
     try {
       await ref.read(workoutSessionManagerProvider).abandonSession(session.id);
-    } catch (_) {
+    } catch (e, st) {
+      reportError('ResumeWorkoutBanner.discard', e, st);
       if (!mounted) return;
-      setState(() => _discarding = false);
+      setState(() => _discardingId = null);
+      // Nothing is said to another member about this one's workout.
+      if (!_isMine(session)) return;
       messenger?.showSnackBar(const SnackBar(
           content: Text("Couldn't discard the workout. It's still in progress — try again.")));
       return;
     }
-    if (!mounted) return;
+    if (!mounted || !_isMine(session)) return;
     setState(() {
-      _discarding = false;
-      _dismissed = true;
+      _discardingId = null;
+      _dismissedId = session.id;
     });
     ref.invalidate(activeSessionProvider);
   }
 
+  void _reportChanged(String what) => reportError('ResumeWorkoutBanner',
+      StateError('$what: the signed-in account changed'));
+
   Future<void> _resume(WorkoutSessionRecord session) async {
-    final workout = await bindSessionToSelectedWorkout(ref, session);
-    if (!mounted) return;
+    if (!_isMine(session)) return _reportChanged('resuming a workout');
+    final Workout? workout;
+    try {
+      workout = await bindSessionToSelectedWorkout(ref, session);
+    } catch (e, st) {
+      reportError('ResumeWorkoutBanner.resume', e, st);
+      if (!mounted || !_isMine(session)) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(couldntMessage('open that workout', e))));
+      return;
+    }
+    if (!mounted || !_isMine(session)) return;
     if (workout == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('That workout is no longer available.')));
@@ -62,9 +90,13 @@ class _ResumeWorkoutBannerState extends ConsumerState<ResumeWorkoutBanner> {
 
   @override
   Widget build(BuildContext context) {
-    if (_dismissed) return const SizedBox.shrink();
+    final uid = ref.watch(restoringUserIdProvider);
     final session = ref.watch(activeSessionProvider).valueOrNull;
     if (session == null) return const SizedBox.shrink();
+    // Another member's session (see [_isMine]), or one just discarded.
+    if (session.userId != uid || session.id == _dismissedId) {
+      return const SizedBox.shrink();
+    }
 
     final elapsed = DateTime.now().difference(session.startedAt);
     final mins = elapsed.inMinutes;

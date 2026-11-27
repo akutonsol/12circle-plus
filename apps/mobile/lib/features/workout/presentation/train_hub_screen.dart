@@ -16,6 +16,7 @@ import '../domain/week_row.dart' show thisWeeksSessions;
 import 'train_palette.dart';
 import 'widgets/week_row_tile.dart';
 import 'widgets/section_load_failure.dart';
+import 'zone_entry.dart';
 import '../domain/workout_provider.dart';
 import '../../coach/domain/coach_name.dart';
 import '../../coach/domain/coach_provider.dart';
@@ -60,6 +61,7 @@ class _TrainHubScreenState extends ConsumerState<TrainHubScreen> {
     final weeklyAsync       = ref.watch(weeklyWorkoutCountProvider);
     final totalAsync        = ref.watch(totalWorkoutCountProvider);
     final activeSession     = ref.watch(activeSessionProvider);
+    final uid               = ref.watch(restoringUserIdProvider);
     final prsAsync          = ref.watch(personalRecordsProvider);
     // P0-FL-18: the Personal Records failure card, under the section's own
     // heading — shown for an error and for a reload/retry of that error.
@@ -225,7 +227,10 @@ class _TrainHubScreenState extends ConsumerState<TrainHubScreen> {
               // mid-workout. Say it failed, with Try again.
               error: (e, _) => activeSessionFailure(e),
               data: (session) {
-                if (session == null) return const SizedBox.shrink();
+                // Or another member's: a refresh keeps the value it replaces.
+                if (session == null || session.userId != uid) {
+                  return const SizedBox.shrink();
+                }
                 final title = session.workoutTitle.isNotEmpty
                     ? session.workoutTitle
                     : 'Workout';
@@ -528,8 +533,18 @@ class _TrainHubScreenState extends ConsumerState<TrainHubScreen> {
   /// from whatever happens to be in `selectedWorkoutProvider`, so resuming can
   /// never land on a different workout than the card advertises.
   Future<void> _resumeWorkout(WorkoutSessionRecord session) async {
-    final workout = await bindSessionToSelectedWorkout(ref, session);
-    if (!mounted) return;
+    final Workout? workout;
+    try {
+      workout = await bindSessionToSelectedWorkout(ref, session);
+    } catch (e, st) {
+      reportError('TrainHubScreen.resume', e, st);
+      if (!mounted || signedInNow(ref) != session.userId) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(couldntMessage('open that workout', e))));
+      return;
+    }
+    // Nothing is opened, or said, for another member about this one's workout.
+    if (!mounted || signedInNow(ref) != session.userId) return;
     if (workout == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('That workout is no longer available.')));
@@ -812,6 +827,7 @@ class _PlanSurface extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final assigned = ref.watch(assignedWorkoutsProvider);
+    final uid = ref.watch(restoringUserIdProvider);
 
     return assigned.when(
       loading: () => const _PlanLoading(),
@@ -822,7 +838,10 @@ class _PlanSurface extends ConsumerWidget {
       // for the same failure would have been a new product voice.
       error: (_, __) => _PlanUnavailable(
           onRetry: () => ref.invalidate(assignedWorkoutsProvider)),
-      data: (workouts) => workouts.isEmpty
+      data: (workouts) => !workouts.every((w) => w.isFor(uid))
+          // Read for somebody else, kept while this member's is read.
+          ? const _PlanLoading()
+          : workouts.isEmpty
           // The coach's name is deliberately NOT read here. Fetching it needs
           // an AsyncValue read whose failure would collapse to null — the
           // pattern EC-G8 ratchets — and a name is not worth an error swallow.
@@ -1068,6 +1087,8 @@ class _TodayHeroCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final metric = ref.watch(memberPrefersMetricProvider);
     final summary = workoutSummaryLine(workout, metric: metric);
+    // The account this card is drawn for: the owner of its tap.
+    final builtFor = ref.watch(restoringUserIdProvider);
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
       child: ClipRRect(
@@ -1117,7 +1138,7 @@ class _TodayHeroCard extends ConsumerWidget {
                       // The established identity mechanism — the same one
                       // workout_list_screen and active_workout_screen use. No
                       // second identity path is introduced.
-                      ref.read(selectedWorkoutProvider.notifier).state = workout;
+                      if (!selectWorkout(ref, workout, builtFor: builtFor)) return;
                       context.go('/active-workout');
                     },
                     child: Container(

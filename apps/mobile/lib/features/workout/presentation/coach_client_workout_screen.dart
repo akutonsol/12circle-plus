@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../domain/workout_day.dart';
 import '../domain/workout_provider.dart';
 import '../../../core/widgets/named_icon_button.dart';
@@ -28,11 +27,18 @@ class CoachClientWorkoutScreen extends ConsumerStatefulWidget {
 class _CoachClientWorkoutScreenState extends ConsumerState<CoachClientWorkoutScreen> {
   String? _expandedClientId;
 
-  String? get _coachId => Supabase.instance.client.auth.currentUser?.id;
+  /// The coach [_expandedClientId] was opened by.
+  String? _expandedBy;
 
   @override
   Widget build(BuildContext context) {
-    final coachId = _coachId;
+    // Watched, not read once: this screen can stay mounted while the account
+    // changes, and it listed the previous coach's clients (P0-FL-59b).
+    final coachId = ref.watch(restoringUserIdProvider);
+    if (_expandedBy != coachId) {
+      _expandedBy = coachId;
+      _expandedClientId = null;
+    }
     if (coachId == null) {
       return Scaffold(
         backgroundColor: _bg,

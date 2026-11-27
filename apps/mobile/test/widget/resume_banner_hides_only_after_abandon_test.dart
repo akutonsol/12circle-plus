@@ -33,6 +33,8 @@ Future<_Manager> _pump(WidgetTester t, {required bool fails}) async {
   final m = _Manager(fails: fails);
   await t.pumpWidget(ProviderScope(
     overrides: [
+      // Whose session it is: the signed-in member's (P0-FL-59b).
+      restoringUserIdProvider.overrideWithValue('u-1'),
       activeSessionProvider.overrideWith((ref) async => _session),
       workoutSessionManagerProvider.overrideWithValue(m),
     ],

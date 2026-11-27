@@ -120,8 +120,11 @@ void main() {
     });
 
     testWidgets('switching A -> B replaces the content entirely', (t) async {
-      final container = ProviderContainer(
-          overrides: [memberPrefersMetricProvider.overrideWithValue(true)]);
+      final container = ProviderContainer(overrides: [
+        memberPrefersMetricProvider.overrideWithValue(true),
+        // The selection is keyed by the member (P0-FL-59b).
+        restoringUserIdProvider.overrideWithValue('u1'),
+      ]);
       addTearDown(container.dispose);
       container.read(selectedWorkoutProvider.notifier).state = _workoutA;
 

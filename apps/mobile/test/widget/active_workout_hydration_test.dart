@@ -20,6 +20,8 @@ import 'package:circle_fitness/features/workout/presentation/active_workout_scre
 /// exactly the state a browser refresh leaves behind.
 Widget _zone(Future<RestoredWorkoutSession?> Function() restore) => ProviderScope(
       overrides: [
+        // The in-memory workout is keyed by the member (P0-FL-59b).
+        restoringUserIdProvider.overrideWithValue('u1'),
         activeWorkoutRestorationProvider.overrideWith((ref) => restore()),
       ],
       child: const MaterialApp(home: ActiveWorkoutScreen()),

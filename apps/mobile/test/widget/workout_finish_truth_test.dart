@@ -138,6 +138,13 @@ class _Backend extends http.BaseClient {
         return _fail(request);
       }
     }
+    // A write that asks for its row back is answered with it, as PostgREST does:
+    // an update that matched nothing is a failure (P0-FL-59b).
+    if (request.method == 'PATCH' && request.url.queryParameters.containsKey('select')) {
+      return _reply(request, 200, [
+        {'id': 'session-1'}
+      ]);
+    }
     return _reply(request, 200, []);
   }
 }
