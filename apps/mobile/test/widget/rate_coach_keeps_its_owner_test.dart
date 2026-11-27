@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
+import 'package:circle_fitness/features/coach/domain/coach_provider.dart';
 import 'package:circle_fitness/features/home/presentation/home_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -202,6 +203,42 @@ void main() {
     });
 
     testWidgets(
+        "A's failed submit landing after B signed in AND after A's dialog "
+        'closed: nothing is drawn into the closed dialog', (t) async {
+      // Round 2 (mutant rate-failure-after-switch-drawn). Here the dialog has
+      // already gone (frames ran after B signed in) when A's failure answers,
+      // so drawing the failure means a setState on a disposed dialog — an
+      // uncaught error after the member left.
+      await _as(t, memberA);
+      await _openDialog(t);
+      await _typeAndStar(t);
+      const key = 'POST coach_reviews:$memberA';
+      final gate = holdOn(_server, key);
+      _server.fails.add(key);
+
+      await t.tap(find.text('Submit'));
+      await t.pump();
+      await _as(t, memberB);
+      await _settle(t);
+      expect(find.text('Rate Your Coach'), findsNothing,
+          reason: "premise: A's dialog closed before A's answer");
+
+      _server.holds.remove(key);
+      gate.complete();
+      await _settle(t);
+
+      expect(t.takeException(), isNull);
+      expect(find.text(kReviewFailedMessage), findsNothing);
+      expect(find.text(kReviewOfflineMessage), findsNothing);
+      expect(find.text(_thanks), findsNothing);
+      expect(_reviewWrites(), hasLength(1));
+      expect(_reviewWrites(by: memberB), isEmpty);
+      expect(_reported.where((f) => f.origin == 'home.rateCoach'),
+          hasLength(1), reason: "A's failure is recorded, once");
+      await _close(t);
+    });
+
+    testWidgets(
         'sign-out closes it; the same member back in gets an empty dialog '
         'and submits once, as themselves', (t) async {
       await _as(t, memberA);
@@ -377,6 +414,41 @@ void main() {
       await _settle(t);
       expect(find.text('Coach Beta Trainer'), findsOneWidget,
           reason: "B's own coach once B's read answers");
+      await _close(t);
+    });
+
+    testWidgets(
+        "control: the same member's coach read reloads: A's coach again, "
+        'read twice as A, Rate still opens for A', (t) async {
+      seedCoaches();
+      await _as(t, memberA);
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      await t.pumpWidget(UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(home: Scaffold(body: coachCardForTest()))));
+      await _settle(t);
+      expect(find.text('Coach Alpha Trainer'), findsOneWidget,
+          reason: 'premise');
+
+      container.invalidate(assignedCoachProvider);
+      await _settle(t);
+
+      expect(find.text('Coach Alpha Trainer'), findsOneWidget,
+          reason: "the same member's reload dropped their own coach");
+      expect(
+          _server.calls
+              .where((c) => c == 'GET coach_client_relationships:$memberA'),
+          hasLength(2),
+          reason: 'read, then read again on the reload');
+      expect(_server.of('GET', 'coach_client_relationships', by: memberB),
+          isEmpty);
+      expect(_reported, isEmpty);
+
+      await t.tap(find.text('Rate'));
+      await _settle(t);
+      expect(find.text('Rate Your Coach'), findsOneWidget,
+          reason: "A's own card still opens A's dialog after the reload");
       await _close(t);
     });
 

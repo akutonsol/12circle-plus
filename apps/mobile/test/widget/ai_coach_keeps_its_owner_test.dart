@@ -223,6 +223,15 @@ void main() {
     expect(_server.of('POST', 'ai-coaching-engine'), isEmpty);
     _expectNone(['generated for B', 'generated for A'], 'nothing was generated');
     _expectAll(_bTexts, "B's own screen");
+    // Round 2 (mutant screen-daily-insight-read-then-generate-no-guard): the
+    // CARD stops at its own check after the read. Without it the card goes on
+    // to ask for a generation and only the service's owner check refuses it —
+    // recorded as a refused generate that nobody asked for.
+    expect(
+        _reported.map((f) => f.error.toString()),
+        isNot(contains(contains('Generating'))),
+        reason: "A's card, its read answered after B signed in, went on to "
+            'ask for a brief / review: it must stop at its own check');
     await _close(t);
   });
 
@@ -412,6 +421,236 @@ void main() {
     expect(find.text("Couldn't load your conversation"), findsOneWidget);
     expect(find.textContaining("I'm your AI Coach"), findsNothing);
     await _close(t);
+  });
+
+  // ── Round 2: the owner checks each layer carries on its own ───────────────
+  group('round 2', () {
+    testWidgets(
+        "Send pressed after B signed in (no frame): A's message never goes to "
+        'the AI coach as B', (t) async {
+      await _as(t, memberA);
+      await _pumpScreen(t);
+      await _toConversation(t);
+      await t.enterText(find.byType(TextField), 'typed by A');
+      await t.pump();
+      final send = t.widget<GestureDetector>(find
+          .ancestor(
+              of: find.byIcon(Icons.send_rounded),
+              matching: find.byType(GestureDetector))
+          .first);
+
+      await _as(t, memberB);
+      send.onTap!();
+      await _settle(t);
+
+      expect(_server.of('POST', 'ai-coach'), isEmpty,
+          reason: "A's message was sent to ai-coach with B's token");
+      _expectStopped('Asking the AI coach');
+      expect(find.text('reply for $memberB'), findsNothing);
+      expect(find.text('typed by A'), findsNothing);
+      await _close(t);
+    });
+
+    testWidgets(
+        "Predict pressed after B signed in (no frame): nothing is generated "
+        'as B', (t) async {
+      _server.answers.remove('ai_goal_predictions:$memberA');
+      await _as(t, memberA);
+      await _pumpScreen(t);
+      final predict = t.widget<GestureDetector>(find
+          .ancestor(
+              of: find.text('Predict My Goal Date'),
+              matching: find.byType(GestureDetector))
+          .first);
+
+      await _as(t, memberB);
+      predict.onTap!();
+      await _settle(t);
+
+      expect(_server.of('POST', 'ai-coaching-engine'), isEmpty,
+          reason: "A's Predict ran the engine as B");
+      _expectStopped('Generating goal_prediction');
+      expect(find.text('generated for B'), findsNothing);
+      expect(find.text('Could not generate prediction.'), findsNothing);
+      expect(find.text('B prediction summary'), findsOneWidget);
+      await _close(t);
+    });
+
+    testWidgets(
+        "A's goal prediction failing, answered after B signed in and before a "
+        'frame: B is never shown a bar for it', (t) async {
+      _server.answers.remove('ai_goal_predictions:$memberA');
+      await _as(t, memberA);
+      await _pumpScreen(t);
+      const key = 'POST ai-coaching-engine:$memberA';
+      final gate = holdOn(_server, key);
+      _server.fails.add(key);
+      await t.tap(find.text('Predict My Goal Date'));
+      await _settle(t, 3);
+      expect(_server.of('POST', 'ai-coaching-engine', by: memberA),
+          hasLength(1), reason: 'premise');
+
+      // B signs in and A's failure answers in the same gap: no frame between.
+      await t.runAsync(() async {
+        await signInAs(memberB);
+        _server.holds.remove(key);
+        gate.complete();
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      });
+      // Let A's answer run to the end with NO frame drawn (fake time and
+      // microtasks only): a hidden tab, or the gap before B's first frame.
+      for (var i = 0; i < 10; i++) {
+        await t.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 5)));
+        await t.binding.delayed(const Duration(milliseconds: 5));
+      }
+      var barSeen = false;
+      for (var i = 0; i < 12; i++) {
+        await t.pump(const Duration(milliseconds: 50));
+        barSeen |= find.byType(SnackBar).evaluate().isNotEmpty;
+        await t.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 5)));
+      }
+
+      expect(barSeen, isFalse,
+          reason: "a bar for A's failed prediction came up on B's screen "
+              '(emptied by OwnedText, but still a bar)');
+      expect(find.text('Could not generate prediction.'), findsNothing);
+      expect(_server.of('POST', 'ai-coaching-engine', by: memberB), isEmpty);
+      expect(find.text('B prediction summary'), findsOneWidget);
+      await _close(t);
+    });
+
+    testWidgets(
+        "A's style save in flight across A -> B: one write, stamped A; B is "
+        'told nothing and keeps B\'s style', (t) async {
+      await _as(t, memberA);
+      await _pumpScreen(t);
+      final gate = holdOn(_server, 'POST ai_profiles:$memberA');
+      await t.tap(find.text('Tough Love'));
+      await _settle(t, 3);
+      expect(_server.of('POST', 'ai_profiles', by: memberA), hasLength(1),
+          reason: 'premise: in flight');
+
+      await _as(t, memberB);
+      await _settle(t);
+      gate.complete();
+      await _settle(t);
+
+      final writes = _server.of('POST', 'ai_profiles');
+      expect(writes, hasLength(1), reason: 'one write, never repeated as B');
+      expect(_bodyOf(writes.single)['user_id'], memberA);
+      expect(find.byType(SnackBar), findsNothing,
+          reason: "B was told about A's style save");
+      expect(
+          find.text('Coach style updated — your next brief will match.'),
+          findsNothing);
+      expect(
+          find.bySemanticsLabel('Coach style: Scientific'), findsOneWidget);
+      expect(
+          t.getSemantics(find.bySemanticsLabel('Coach style: Scientific')),
+          isSemantics(isSelected: true),
+          reason: "B's own style, freshly read, is the one shown as B's");
+      await _close(t);
+    });
+
+    testWidgets(
+        "A's add memory in flight across A -> B: one write, stamped A; B sees "
+        "B's memories and no message", (t) async {
+      await _as(t, memberA);
+      await _pumpScreen(t);
+      await t.tap(find.bySemanticsLabel('Add memory'));
+      await _settle(t, 3);
+      await t.enterText(find.byType(TextField).last, 'A secret injury');
+      final gate = holdOn(_server, 'POST ai_memories:$memberA');
+      await t.tap(find.widgetWithText(TextButton, 'Save'));
+      await _settle(t, 3);
+      expect(_server.of('POST', 'ai_memories', by: memberA), hasLength(1),
+          reason: 'premise: in flight');
+
+      await _as(t, memberB);
+      await _settle(t);
+      gate.complete();
+      await _settle(t);
+
+      final writes = _server.of('POST', 'ai_memories');
+      expect(writes, hasLength(1));
+      expect(_bodyOf(writes.single),
+          allOf(containsPair('user_id', memberA),
+              containsPair('content', 'A secret injury')));
+      expect(find.text('A secret injury'), findsNothing);
+      expect(find.text('left knee A'), findsNothing);
+      expect(find.text('left knee B'), findsOneWidget);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(_server.of('GET', 'ai_memories', by: memberA), hasLength(1),
+          reason: "A's card did not re-read after its save: A had left");
+      await _close(t);
+    });
+
+    testWidgets(
+        "A's delete in flight, failing after A -> B: one delete, as A; B is "
+        'not told "Couldn\'t remove that"', (t) async {
+      await _as(t, memberA);
+      await _pumpScreen(t);
+      const key = 'DELETE ai_memories:$memberA';
+      final gate = holdOn(_server, key);
+      _server.zeroRows.add(key);
+      await t.tap(find.bySemanticsLabel('Delete memory: left knee A'));
+      await _settle(t, 3);
+      expect(_server.of('DELETE', 'ai_memories', by: memberA), hasLength(1),
+          reason: 'premise: in flight');
+
+      await _as(t, memberB);
+      await _settle(t);
+      gate.complete();
+      await _settle(t);
+
+      final deletes = _server.of('DELETE', 'ai_memories');
+      expect(deletes, hasLength(1));
+      expect(deletes.single, contains('id=eq.mem-A'));
+      expect(find.byType(SnackBar), findsNothing);
+      expect(find.text("Couldn't remove that — try again."), findsNothing);
+      expect(find.text('left knee B'), findsOneWidget);
+      expect(
+          _reported
+              .where((f) => f.origin == 'AICoachService.deleteMemory'),
+          hasLength(1),
+          reason: "A's 0-row delete is still recorded, once");
+      await _close(t);
+    });
+
+    testWidgets(
+        'control: the same member retries a failed conversation read and '
+        'gets their history', (t) async {
+      _server.fails.add('GET ai_conversations:$memberA');
+      await _as(t, memberA);
+      await _pumpScreen(t);
+      await _toConversation(t);
+      expect(find.text("Couldn't load your conversation"), findsOneWidget,
+          reason: 'premise');
+      expect(find.text('my knee hurts'), findsNothing);
+
+      _server.fails.remove('GET ai_conversations:$memberA');
+      await t.tap(find.widgetWithText(TextButton, 'Try again'));
+      await _settle(t);
+
+      expect(find.text("Couldn't load your conversation"), findsNothing);
+      expect(find.text('my knee hurts'), findsOneWidget);
+      expect(find.text('answer for A'), findsOneWidget);
+      expect(find.textContaining("I'm your AI Coach"), findsNothing,
+          reason: 'A has history: not a new conversation');
+      expect(_server.calls.where((c) => c == 'GET ai_conversations:$memberA'),
+          hasLength(2), reason: 'read, then read again on Try again');
+      expect(_server.of('GET', 'ai_conversations', by: memberB), isEmpty);
+      expect(
+          _reported.where(
+              (f) => f.origin == 'AICoachService.getConversationHistory'),
+          hasLength(1),
+          reason: 'the first failure, recorded once');
+      expect(_reported.map((f) => f.error.toString()),
+          isNot(contains(contains('signed-in account changed'))));
+      await _close(t);
+    });
   });
 
   group('controls: the same member', () {
