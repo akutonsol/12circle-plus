@@ -1,7 +1,22 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthState, Supabase;
+import '../../../core/observability/app_failure.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/theme/app_background.dart';
+import '../../dashboard/domain/still_reading.dart'
+    show
+        OpenedByAccount,
+        OwnedText,
+        accountLeft,
+        hasAuthClient,
+        signedInUid,
+        stillSignedIn,
+        stoppedFor;
+import '../../workout/presentation/widgets/section_load_failure.dart'
+    show couldntMessage;
 import '../domain/class_provider.dart';
 
 /// Coach: publish a group class — either an online group call or an in-person
@@ -31,22 +46,82 @@ class _CreateClassScreenState extends ConsumerState<CreateClassScreen> {
 
   static const _types = ['hiit', 'strength', 'yoga', 'cardio', 'pilates', 'dance', 'boxing', 'meditation'];
 
+  /// P0-FL-62a2 (W22) · the coach this form was opened for. The class is
+  /// created for them only, and stamped with them; when another account signs
+  /// in, or nobody is, the form is cleared and the screen closes
+  /// ([OpenedByAccount]), and nothing of it is said to the next account.
+  late final String? _owner;
+  StreamSubscription<AuthState>? _auth;
+
+  @override
+  void initState() {
+    super.initState();
+    _owner = signedInUid();
+    if (!hasAuthClient) return;
+    // The auth client itself, not a provider: this must happen also while no
+    // frame is drawn (a hidden tab). A refreshed token is the same coach and
+    // keeps the form. An error on this stream is not a change of account.
+    _auth = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+      if (mounted && !stillSignedIn(_owner)) setState(_clearForm);
+    }, onError: (_) {});
+  }
+
+  void _clearForm() {
+    for (final c in [_title, _desc, _location, _link, _price]) {
+      c.clear();
+    }
+    _type = 'hiit';
+    _isOnline = false;
+    _paid = false;
+    _duration = 60;
+    _capacity = 20;
+    _date = DateTime.now().add(const Duration(days: 1));
+    _time = const TimeOfDay(hour: 7, minute: 0);
+    _saving = false;
+  }
+
   @override
   void dispose() {
+    _auth?.cancel();
     _title.dispose(); _desc.dispose(); _location.dispose(); _link.dispose(); _price.dispose();
     super.dispose();
   }
 
+  /// Whether the save stopped because [owner] is no longer signed in: then it
+  /// is recorded, the form is cleared, and nothing is said.
+  bool _left(String? owner, String what) {
+    if (!stoppedFor(owner, 'CreateClassScreen._save', what)) return false;
+    if (mounted) setState(_clearForm);
+    return true;
+  }
+
   Future<void> _save() async {
+    // A second tap that landed before the disabled button was drawn.
+    if (_saving) return;
+    final owner = _owner;
+    // A tap that landed after a switch, with no frame between.
+    if (_left(owner, 'create the class')) return;
     if (_title.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Add a class title'), backgroundColor: Colors.red));
       return;
     }
+    if (owner == null) {
+      // Nobody was signed in when the form opened: nobody to create it for.
+      final e = StateError('create the class: nobody is signed in');
+      reportError('CreateClassScreen._save', e);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(couldntMessage('create the class', e)),
+          backgroundColor: Colors.red));
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
     setState(() => _saving = true);
     final when = DateTime(_date.year, _date.month, _date.day, _time.hour, _time.minute);
     try {
+      // No await between the check above and the request.
       await ref.read(liveClassServiceProvider).createClass(
+        coachId: owner,
         title: _title.text.trim(),
         description: _desc.text.trim(),
         type: _type,
@@ -58,19 +133,30 @@ class _CreateClassScreenState extends ConsumerState<CreateClassScreen> {
         maxCapacity: _capacity,
         price: _paid ? double.tryParse(_price.text.trim()) : null,
       );
-      if (mounted) Navigator.pop(context, true);
-    } catch (e) {
-      if (mounted) {
-        setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not create class.'), backgroundColor: Colors.red));
+    } catch (e, st) {
+      // The service's own refusal for another account is that stop, not a
+      // failure of the coach's: recorded once, as the stop.
+      if (e is! StateError || !accountLeft(owner)) {
+        reportError('CreateClassScreen._save', e, st);
       }
+      if (_left(owner, 'create the class (answered)')) return;
+      if (mounted) setState(() => _saving = false);
+      if (messenger.mounted) {
+        messenger.showSnackBar(SnackBar(
+            content: OwnedText(couldntMessage('create the class', e), owner: owner),
+            backgroundColor: Colors.red));
+      }
+      return;
     }
+    // Created for [owner]; if they left meanwhile, the next account is not
+    // taken back to a list as if it had made it.
+    if (_left(owner, 'create the class (answered)')) return;
+    if (mounted) Navigator.pop(context, true);
   }
 
   @override
   Widget build(BuildContext context) {
-    return AppGradientBackground(
+    return OpenedByAccount(owner: _owner, child: AppGradientBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
@@ -178,7 +264,7 @@ class _CreateClassScreenState extends ConsumerState<CreateClassScreen> {
           ],
         ),
       ),
-    );
+    ));
   }
 
   Widget _label(String t) => Padding(

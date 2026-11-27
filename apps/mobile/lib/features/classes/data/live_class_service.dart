@@ -161,7 +161,15 @@ class LiveClassService {
   };
 
   /// Coach: create a group class (online or in-person).
+  ///
+  /// P0-FL-62a2 (W22) · [coachId] is the coach the form was opened for: the
+  /// class is stamped with it — never with whoever is signed in by the time it
+  /// is saved — and it is not sent unless that coach is still the one signed
+  /// in. With [coachId] the row is asked for back, and none coming back is a
+  /// failure (thrown). Without it (no caller in the app any more) the old
+  /// shape is kept: the signed-in coach, nothing sent when signed out.
   Future<void> createClass({
+    String? coachId,
     required String title,
     required String description,
     required String type,
@@ -173,9 +181,13 @@ class LiveClassService {
     int maxCapacity = 20,
     double? price,
   }) async {
-    final uid = _db.auth.currentUser?.id;
+    final signedIn = _db.auth.currentUser?.id;
+    if (coachId != null && signedIn != coachId) {
+      throw StateError('createClass: the signed-in account changed');
+    }
+    final uid = coachId ?? signedIn;
     if (uid == null) return;
-    await _db.from('classes').insert({
+    final insert = _db.from('classes').insert({
       'coach_id': uid,
       'title': title,
       'description': description,
@@ -193,6 +205,12 @@ class LiveClassService {
       'status': 'scheduled',
       'price': price,
     });
+    if (coachId == null) {
+      await insert;
+      return;
+    }
+    final created = await insert.select('id');
+    if (created.isEmpty) throw StateError('createClass: no row was created');
   }
 
   /// Coach: cancel a class they own (drops it from listings + frees seats).

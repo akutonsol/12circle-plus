@@ -9,11 +9,16 @@ final vendorServiceProvider = Provider<VendorService>((ref) => VendorService());
 
 final sessionServiceProvider = Provider<SessionService>((ref) => SessionService());
 
-/// An event's agenda (sessions). Used by both the vendor manager and the
-/// client-facing agenda view.
-final eventSessionsProvider =
-    FutureProvider.family<List<Map<String, dynamic>>, String>((ref, eventId) async {
-  return ref.watch(sessionServiceProvider).getSessions(eventId);
+/// An event's agenda (sessions), read for [owner] — the account that opened
+/// the agenda (P0-FL-62a2). Used by both the vendor manager and the
+/// client-facing agenda view. For anyone else nothing is asked, and an answer
+/// that lands after another account signed in is a failure of [owner]'s, never
+/// rows for the next one. Dropped with its screen.
+final eventSessionsProvider = FutureProvider.autoDispose
+    .family<VendorRows, ({String eventId, String? owner})>((ref, key) async {
+  final svc = ref.watch(sessionServiceProvider);
+  return _ownedRead('eventSessionsProvider', key.owner,
+      () => svc.getSessions(key.eventId));
 });
 
 /// Rows, and the account whose read they answered (P0-FL-59a): taken when the
