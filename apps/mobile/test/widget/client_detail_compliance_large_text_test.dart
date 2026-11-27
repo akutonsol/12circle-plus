@@ -11,6 +11,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../support/two_member_postgrest.dart' show memberA, signInAs;
+
 // P0-FL-52 · Client detail, "12 Circle Score + Compliance" at large text.
 //
 // The four _ComplianceCard tiles share one Row. Cycle 9 left them UNVERIFIED
@@ -88,6 +90,8 @@ void main() {
       ),
       debug: false,
     );
+    // P0-FL-59f: the client page is drawn for the coach it was opened by only.
+    await signInAs(memberA);
   });
 
   /// Pumps the Overview with every FlutterError collected (first line), so a
@@ -121,7 +125,8 @@ void main() {
               .overrideWith((ref) async => const <Map<String, dynamic>>[]),
         ],
         child: const MaterialApp(
-          home: ClientDetailScreen(clientId: _clientId, clientName: 'Jordan'),
+          home: ClientDetailScreen(
+              clientId: _clientId, clientName: 'Jordan', owner: memberA),
         ),
       ));
       for (var i = 0; i < 20; i++) {

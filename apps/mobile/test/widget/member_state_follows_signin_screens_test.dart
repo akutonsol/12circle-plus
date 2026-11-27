@@ -173,8 +173,14 @@ void main() {
       expect(find.bySemanticsLabel('Loading challenges'), findsNothing);
       // …and stays said while a new session re-reads it for the same member.
       final hold = server.holds['GET challenges:$memberB'] = Completer<void>();
-      final reads = server.calls.length;
+      final before = c.read(currentUserProvider);
       await tester.runAsync(refreshSession);
+      await pumpUntil(tester, () => c.read(currentUserProvider) != before,
+          what: 'the same member as a new User');
+      // P0-FL-59f: the list follows the id, so a new session alone reads
+      // nothing again; whatever else does, below.
+      final reads = server.calls.length;
+      c.invalidate(liveChallengesProvider);
       await pumpUntil(tester, () => server.calls.length > reads,
           what: 'the re-read');
       expect(find.text('No challenges here'), findsOneWidget);
@@ -204,8 +210,14 @@ void main() {
         (tester) async {
       await challengesAsA(tester);
       final hold = server.holds['GET challenges:$memberA'] = Completer<void>();
-      final reads = server.calls.length;
+      final before = c.read(currentUserProvider);
       await tester.runAsync(refreshSession);
+      await pumpUntil(tester, () => c.read(currentUserProvider) != before,
+          what: 'the same member as a new User');
+      // P0-FL-59f: the list follows the id, so a new session alone reads
+      // nothing again; whatever else does, below.
+      final reads = server.calls.length;
+      c.invalidate(liveChallengesProvider);
       await pumpUntil(tester, () => server.calls.length > reads,
           what: 'the re-read');
       expect(find.bySemanticsLabel('Loading challenges'), findsNothing);

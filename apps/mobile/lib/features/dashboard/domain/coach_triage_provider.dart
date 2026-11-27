@@ -74,7 +74,7 @@ String? excerpt(String? text, {int max = 48}) {
 final coachTriageSignalsProvider =
     FutureProvider.autoDispose<List<ClientSignals>>((ref) async {
   // QAX-SES-01: recompute for whoever is signed in now, not whoever was.
-  ref.watch(currentUserProvider);
+  ref.watch(currentUserProvider.select((u) => u?.id));
   final coachId = _db.auth.currentUser?.id;
   if (coachId == null) return const [];
 

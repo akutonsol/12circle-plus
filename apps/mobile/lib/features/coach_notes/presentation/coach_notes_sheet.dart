@@ -1,21 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/observability/app_failure.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../dashboard/domain/still_reading.dart';
 import '../data/coach_note_service.dart';
 import '../domain/coach_note_provider.dart';
 
 /// Coach: private notes about a client (Module 29). Opens a bottom sheet with
 /// the existing notes and an inline composer.
+/// [owner] is the coach whose page opens it (P0-FL-59f); whoever is signed in
+/// now, if the page does not say.
 Future<void> showCoachNotesSheet(
-    BuildContext context, WidgetRef ref, String clientId, String clientName) {
+    BuildContext context, WidgetRef ref, String clientId, String clientName,
+    {String? owner}) async {
+  final opener = owner ?? signedInUid();
+  if (stoppedFor(opener, 'CoachNotesSheet.open', 'open sheet')) return;
   // Read on each opening. The family outlives the sheet, so a failed read
   // would otherwise be shown again every time it is opened.
   ref.invalidate(clientNotesProvider(clientId));
-  return showModalBottomSheet(
+  await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => _NotesSheet(clientId: clientId, clientName: clientName),
+    builder: (_) => OpenedByAccount(
+        owner: opener,
+        child: _NotesSheet(clientId: clientId, clientName: clientName)),
   );
 }
 
@@ -31,6 +40,10 @@ class _NotesSheetState extends ConsumerState<_NotesSheet> {
   final _ctrl = TextEditingController();
   String _tag = 'general';
   bool _saving = false;
+
+  /// P0-FL-59f: whose notes these are. Written and deleted as them, or not at
+  /// all; the sheet closes when they leave ([OpenedByAccount]).
+  final String? _owner = signedInUid();
 
   static const _tags = [
     ('general', '📝'),
@@ -51,8 +64,12 @@ class _NotesSheetState extends ConsumerState<_NotesSheet> {
     setState(() => _saving = true);
     final saved = await ref
         .read(coachNoteServiceProvider)
-        .addNote(widget.clientId, _ctrl.text.trim(), tag: _tag);
+        .addNote(widget.clientId, _ctrl.text.trim(), owner: _owner, tag: _tag);
     if (!mounted) return;
+    if (stoppedFor(_owner, 'CoachNotesSheet.add', 'report saved note')) {
+      _ctrl.clear();
+      return;
+    }
     setState(() => _saving = false);
     if (!saved) {
       // Keep what the coach typed: clearing it on a failed save lost the note
@@ -67,7 +84,8 @@ class _NotesSheetState extends ConsumerState<_NotesSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final notesAsync = ref.watch(clientNotesProvider(widget.clientId));
+    final notesAsync = heldFor(
+        _owner, ref.watch(clientNotesProvider(widget.clientId)));
     return Container(
       height: MediaQuery.of(context).size.height * 0.8,
       padding: EdgeInsets.only(
@@ -127,14 +145,23 @@ class _NotesSheetState extends ConsumerState<_NotesSheet> {
                         // closed); save and read already report (#78).
                         onDelete: () async {
                           final messenger = ScaffoldMessenger.of(context);
+                          if (stoppedFor(_owner, 'CoachNotesSheet.delete',
+                              'delete note')) {
+                            return;
+                          }
                           try {
                             await ref
                                 .read(coachNoteServiceProvider)
                                 .deleteNote(notes[i].id);
-                          } catch (_) {
-                            if (!mounted) return;
+                          } catch (e, st) {
+                            reportError('CoachNotesSheet.delete', e, st);
+                            if (!mounted || !stillSignedIn(_owner)) return;
                             messenger.showSnackBar(const SnackBar(
                                 content: Text("Couldn't delete the note — try again.")));
+                            return;
+                          }
+                          if (stoppedFor(_owner, 'CoachNotesSheet.delete',
+                              'report deleted note')) {
                             return;
                           }
                           if (!mounted) return;

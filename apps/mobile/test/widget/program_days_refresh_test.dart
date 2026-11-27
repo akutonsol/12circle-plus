@@ -5,6 +5,7 @@ import 'package:circle_fitness/features/coach/data/coach_program_service.dart';
 import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.dart';
 import 'package:circle_fitness/features/coach/domain/package_provider.dart';
 import 'package:circle_fitness/features/coach/presentation/program_builder_screen.dart';
+import 'package:circle_fitness/features/dashboard/domain/still_reading.dart';
 import 'package:circle_fitness/features/dashboard/presentation/client_detail_screen.dart';
 import 'package:circle_fitness/features/scoring/domain/score_provider.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +14,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../support/two_member_postgrest.dart' show memberA, signInAs;
 
 // The Programs list and the Assign sheet both read `myProgramsProvider`, and the
 // sheet refuses a program whose day count is 0. That count comes from one query,
@@ -186,7 +189,8 @@ Future<GoRouter> _pump(WidgetTester t, _FakeSvc svc) async {
           GoRoute(
             path: '/client',
             builder: (_, __) =>
-                const ClientDetailScreen(clientId: _clientId, clientName: 'Jordan'),
+                const ClientDetailScreen(
+              clientId: _clientId, clientName: 'Jordan', owner: memberA),
           ),
         ],
       ),
@@ -197,9 +201,11 @@ Future<GoRouter> _pump(WidgetTester t, _FakeSvc svc) async {
   await t.pumpWidget(ProviderScope(
     overrides: [
       coachProgramServiceProvider.overrideWithValue(svc),
-      myProgramsProvider.overrideWith((ref) => svc.getMyPrograms()),
-      programWorkoutsProvider
-          .overrideWith((ref, programId) => svc.getProgramWorkouts(programId)),
+      // Marked as the signed-in coach's, as the providers mark what they read.
+      myProgramsProvider
+          .overrideWith((ref) => ownedRead(memberA, svc.getMyPrograms)),
+      programWorkoutsProvider.overrideWith((ref, programId) =>
+          ownedRead(memberA, () => svc.getProgramWorkouts(programId))),
       clientDetailProvider(_clientId).overrideWith((ref) async => {
             'id': _clientId,
             'first_name': 'Jordan',
@@ -300,6 +306,8 @@ void main() {
       ),
       debug: false,
     );
+    // P0-FL-59f: the client page is drawn for the coach it was opened by only.
+    await signInAs(memberA);
   });
 
   group('adding a workout', () {

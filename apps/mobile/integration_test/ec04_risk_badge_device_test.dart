@@ -16,7 +16,7 @@
 // overflowing badge would put EC-04's fix back in the same place it started: a coach
 // unable to read that the assessment is absent.
 //
-// NOTHING IS SIGNED IN AND NO BACKEND IS TOUCHED. `clientDetailProvider` and
+// ONLY A FAKE SESSION IS SIGNED IN AND NO BACKEND IS TOUCHED. `clientDetailProvider` and
 // `clientAssessmentProvider` are overridden with in-memory data, so this leaves no fixture behind and makes no claim about
 // any real client's risk.
 //
@@ -36,6 +36,8 @@ import 'package:circle_fitness/features/coach/domain/coach_ecosystem_provider.da
 import 'package:circle_fitness/features/coach/domain/package_provider.dart';
 import 'package:circle_fitness/features/scoring/domain/score_provider.dart';
 import 'package:circle_fitness/features/dashboard/presentation/client_detail_screen.dart';
+
+import '../test/support/two_member_postgrest.dart' show TwoMemberPostgrest, initTwoMemberSupabase, memberA, signInAs;
 
 const _clientId = 'ec04-probe-client';
 
@@ -76,7 +78,8 @@ Future<void> _mount(WidgetTester t, {String? riskLevel}) async {
       myProgramsProvider.overrideWith((ref) async => const <Map<String, dynamic>>[]),
     ],
     child: MaterialApp(
-      home: ClientDetailScreen(clientId: _clientId, clientName: 'Probe Client'),
+      home: ClientDetailScreen(
+          clientId: _clientId, clientName: 'Probe Client', owner: memberA),
     ),
   ));
   for (var i = 0; i < 6; i++) {
@@ -106,6 +109,13 @@ void _drain(WidgetTester t) {
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
+  // P0-FL-59f: the client page is drawn for the coach it was opened by only. A
+  // fake session over a fake server on an unroutable URL.
+  setUpAll(() async {
+    await initTwoMemberSupabase(TwoMemberPostgrest());
+    await signInAs(memberA);
+  });
 
   testWidgets('the unassessed badge fits its pill at the real font and dpr', (t) async {
     await _mount(t);

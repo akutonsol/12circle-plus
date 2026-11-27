@@ -1,16 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../dashboard/domain/still_reading.dart';
 import '../domain/action_item_provider.dart';
 
 /// Coach: assign an action item to a client. Returns true if assigned.
+/// [owner] is the coach whose page opens it (P0-FL-59f); whoever is signed in
+/// now, if the page does not say.
 Future<bool> showAssignActionItemSheet(
-    BuildContext context, WidgetRef ref, String clientId) async {
+    BuildContext context, WidgetRef ref, String clientId,
+    {String? owner}) async {
+  final opener = owner ?? signedInUid();
+  if (stoppedFor(opener, 'AssignActionItemSheet.open', 'open sheet')) {
+    return false;
+  }
   final result = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => _AssignSheet(clientId: clientId, ref: ref),
+    builder: (_) =>
+        OpenedByAccount(
+            owner: opener, child: _AssignSheet(clientId: clientId, ref: ref)),
   );
   return result ?? false;
 }
@@ -30,6 +40,10 @@ class _AssignSheetState extends State<_AssignSheet> {
   String _category = 'daily';
   DateTime? _due;
   bool _saving = false;
+
+  /// P0-FL-59f: whose draft this is. Assigned as them, or not at all; the
+  /// sheet closes when they leave ([OpenedByAccount]).
+  final String? _owner = signedInUid();
 
   static const _categories = [
     ('daily', '📋 Daily'),
@@ -58,6 +72,12 @@ class _AssignSheetState extends State<_AssignSheet> {
 
   Future<void> _save() async {
     if (_title.text.trim().isEmpty) return;
+    if (stoppedFor(
+        _owner, 'AssignActionItemSheet._save', 'assign action item')) {
+      _title.clear();
+      _desc.clear();
+      return;
+    }
     setState(() => _saving = true);
     final ok = await widget.ref.read(actionItemServiceProvider).assignActionItem(
           clientId: widget.clientId,
@@ -67,6 +87,10 @@ class _AssignSheetState extends State<_AssignSheet> {
           dueDate: _due, // points are awarded automatically by the scoring engine
 
         );
+    if (stoppedFor(_owner, 'AssignActionItemSheet._save',
+        'report assigned action item')) {
+      return;
+    }
     if (!mounted) return;
     if (ok) {
       widget.ref.invalidate(clientActionItemsProvider(widget.clientId));

@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
 
 class CoachNote {
   final String id;
@@ -53,18 +54,28 @@ class CoachNoteService {
         .toList();
   }
 
-  Future<bool> addNote(String clientId, String body, {String tag = 'general'}) async {
-    final coachId = _uid;
-    if (coachId == null || body.trim().isEmpty) return false;
+  /// Stores the note as [owner]'s — the coach who wrote it — and only while
+  /// they are the one signed in (P0-FL-59f). The row policy checks `coach_id`
+  /// alone (018), so a note stamped with whoever is signed in at the time was
+  /// accepted, about a client that coach may not have.
+  Future<bool> addNote(String clientId, String body,
+      {required String? owner, String tag = 'general'}) async {
+    if (owner == null || body.trim().isEmpty) return false;
+    if (_uid != owner) {
+      reportError('CoachNoteService.addNote',
+          StateError('add note: the signed-in account changed'));
+      return false;
+    }
     try {
       await _db.from('coach_notes').insert({
-        'coach_id': coachId,
+        'coach_id': owner,
         'client_id': clientId,
         'body': body.trim(),
         'tag': tag,
       });
       return true;
-    } catch (_) {
+    } catch (e, st) {
+      reportError('CoachNoteService.addNote', e, st);
       return false;
     }
   }

@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../dashboard/domain/still_reading.dart' show heldFor, ownedRead;
 import '../data/challenge_service.dart';
 import '../data/live_challenge_service.dart';
 import '../data/models/challenge_model.dart';
@@ -23,9 +24,10 @@ final selectedChallengeTabProvider = StateProvider<int>((ref) => 0);
 
 // ── Live challenges from Supabase ─────────────────────────────────────────────
 final liveChallengesProvider = FutureProvider<List<Challenge>>((ref) async {
-  ref.watch(currentUserProvider);
+  // By id, and marked as theirs: progress and "joined" are this member's.
+  final uid = ref.watch(_signedInUid);
   final svc = ref.watch(liveChallengeServiceProvider);
-  return svc.getActiveChallenges();
+  return ownedRead(uid, svc.getActiveChallenges);
 });
 
 class ChallengeNotifier extends StateNotifier<List<Challenge>> {
@@ -95,13 +97,16 @@ class ChallengeNotifier extends StateNotifier<List<Challenge>> {
 /// different member (or nobody) gets a new, empty notifier; the old one is
 /// disposed, so nothing still in flight for it can land in the new one.
 final challengeNotifierProvider = StateNotifierProvider<ChallengeNotifier, List<Challenge>>((ref) {
-  ref.watch(_signedInUid);
+  final uid = ref.watch(_signedInUid);
   final svc = ref.watch(liveChallengeServiceProvider);
   final notifier = ChallengeNotifier([], svc);
-  // Populate notifier from live DB data as soon as it loads
+  // Populate notifier from live DB data as soon as it loads -- this member's
+  // rows only (P0-FL-59f): a list invalidated while the change of account is
+  // still unflushed is AsyncData of the last member's.
   ref.listen<AsyncValue<List<Challenge>>>(
     liveChallengesProvider,
-    (_, next) => next.whenData(notifier.initialize),
+    (_, next) => heldFor(uid, next)
+        .whenData(notifier.initialize),
     fireImmediately: true,
   );
   return notifier;
