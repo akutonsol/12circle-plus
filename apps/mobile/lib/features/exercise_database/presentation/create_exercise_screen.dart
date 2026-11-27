@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -5,6 +6,7 @@ import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthState, Supabase;
 import '../domain/content_review_submission.dart';
 import '../domain/custom_exercise_provider.dart';
 import '../../auth/domain/auth_provider.dart';
@@ -102,6 +104,64 @@ final exerciseMediaPickerProvider = Provider<ImagePicker>((ref) => ImagePicker()
 /// Where the edit form's prefill of an existing exercise stands.
 enum _Prefill { loading, failed, missing, loaded }
 
+/// P0-FL-59d · a route's content, for the account [owner] only. For anyone else
+/// nothing of it is drawn — not even the first frame of a route pushed just
+/// before a switch — and the route closes. It listens for itself: whatever
+/// opened the route may be gone by then.
+class _OwnedRoute extends StatefulWidget {
+  final String? owner;
+  final Widget child;
+  const _OwnedRoute({required this.owner, required this.child});
+  @override
+  State<_OwnedRoute> createState() => _OwnedRouteState();
+}
+
+class _OwnedRouteState extends State<_OwnedRoute> {
+  StreamSubscription<AuthState>? _authSub;
+
+  bool get _mine =>
+      Supabase.instance.client.auth.currentUser?.id == widget.owner;
+
+  @override
+  void initState() {
+    super.initState();
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+      if (!mounted || _mine) return;
+      setState(() {}); // (one already closing stops showing it, too)
+      _close();
+    }, onError: (Object e, StackTrace s) =>
+        reportError('CreateExerciseScreen._OwnedRoute', e, s));
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  void _close() {
+    final route = ModalRoute.of(context);
+    if (route != null && route.isActive) route.navigator?.removeRoute(route);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_mine) return widget.child;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_mine) _close();
+    });
+    return const SizedBox.shrink();
+  }
+}
+
+/// Closes [context]'s own route with [result], if it is still open: once it
+/// has been closed under a tap, popping would close the page beneath.
+void _popRoute(BuildContext context, [Object? result]) {
+  final route = context.mounted ? ModalRoute.of(context) : null;
+  if (route == null || !route.isActive) return;
+  route.isCurrent ? Navigator.pop(context, result) : route.navigator?.removeRoute(route);
+}
+
 class CreateExerciseScreen extends ConsumerStatefulWidget {
   const CreateExerciseScreen({super.key});
   @override
@@ -171,9 +231,85 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   // its options and what it returns are unchanged.
   late final ImagePicker _picker = ref.read(exerciseMediaPickerProvider);
 
+  /// P0-FL-59d · the coach this form is for. It stayed filled over a switch on
+  /// this device: Save made one coach's typed exercise the next coach's, an
+  /// open edit became a media-only write on the last coach's exercise, and a
+  /// save already running went on uploading and syncing as the next account.
+  String? _owner;
+  /// Counts the forms: whatever was started for an earlier one is dropped.
+  int _form = 0;
+  StreamSubscription<AuthState>? _authSub;
+
+  String? get _uid => Supabase.instance.client.auth.currentUser?.id;
+
+  /// [form] is the one shown, and its coach is signed in.
+  bool _still(int form) => form == _form && _uid == _owner;
+
+  /// True when [form] is no longer the signed-in coach's: recorded as
+  /// [method]'s, the form is cleared, and the caller sends nothing.
+  bool _accountChanged(String method, int form, String what) {
+    if (_still(form)) return false;
+    reportError('CreateExerciseScreen.$method',
+        StateError('$what: the signed-in account changed'));
+    _followAccount();
+    return true;
+  }
+
+  /// Another account (or none): a blank form of their own, nothing of the
+  /// last coach's. The same coach (a token refresh) keeps what they typed.
+  void _followAccount() {
+    final uid = _uid;
+    if (!mounted || uid == _owner) return;
+    ScaffoldMessenger.of(context)..clearSnackBars()..removeCurrentSnackBar();
+    setState(() {
+      _owner = uid;
+      _form++;
+      _saving = false;
+      _readingMedia = false;
+      _savedId = null;
+      _editingId = null;
+      _editingCoachId = null;
+      _editingContentStatus = null;
+      _existingImageUrl = null;
+      _prefill = null;
+      _prefillError = null;
+      _prefillRetrying = false;
+      for (final c in [_nameCtrl, _descCtrl, _beginnerCtrl, _advancedCtrl, _tagsCtrl]) {
+        c.clear();
+      }
+      _category = 'Strength';
+      _muscle = 'Chest';
+      _equipment = 'Barbell';
+      _difficulty = 'Intermediate';
+      _visibility = 'private';
+      _secondaryMuscles.clear();
+      _primaryMuscles.clear();
+      _equipmentList.clear();
+      _movementPattern = null;
+      _exerciseType = null;
+      _beginnerFriendly = false;
+      _videoRequired = false;
+      _supportsPr = true;
+      _supportsRpe = true;
+      _importedExtra = {};
+      _importedRaw = null;
+      for (final l in [_instructionCtrls, _cueCtrls, _mistakeCtrls, _alternativeCtrls]) {
+        _setCtrls(l, const []);
+      }
+      _imageBytes = null;
+      _imageExt = 'jpg';
+      _videoEntries.clear();
+    });
+  }
+
   @override
   void initState() {
     super.initState();
+    _owner = _uid;
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
+        (_) => _followAccount(),
+        onError: (Object e, StackTrace s) =>
+            reportError('CreateExerciseScreen.onAuthStateChange', e, s));
     _tabs = TabController(length: 4, vsync: this);
     final editId = ref.read(editingExerciseProvider);
     if (editId != null) {
@@ -192,22 +328,24 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   Future<void> _retryPrefill() async {
     final id = _editingId;
     if (id == null || _prefillRetrying) return;
+    final form = _form;
     setState(() => _prefillRetrying = true);
     await _loadForEdit(id);
-    if (mounted) setState(() => _prefillRetrying = false);
+    if (mounted && form == _form) setState(() => _prefillRetrying = false);
   }
 
   /// Load an existing exercise into the form for editing.
   Future<void> _loadForEdit(String id) async {
     Map<String, dynamic>? fetched;
+    final form = _form;
     try {
       fetched = await ref.read(customExerciseSvcProvider).getRawById(id);
     } catch (e) {
       // Recorded by the service; said here, with a retry.
-      if (mounted) setState(() { _prefill = _Prefill.failed; _prefillError = e; });
+      if (mounted && _still(form)) setState(() { _prefill = _Prefill.failed; _prefillError = e; });
       return;
     }
-    if (!mounted) return;
+    if (!mounted || !_still(form)) return;
     final row = fetched;
     if (row == null) {
       setState(() => _prefill = _Prefill.missing);
@@ -241,6 +379,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
 
   @override
   void dispose() {
+    _authSub?.cancel();
     _tabs.dispose();
     _nameCtrl.dispose(); _descCtrl.dispose();
     _beginnerCtrl.dispose(); _advancedCtrl.dispose(); _tagsCtrl.dispose();
@@ -489,11 +628,13 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   }
 
   /// Paste an exercise JSON (e.g. AI-generated) to prefill the form.
-  Future<void> _importJson() async {
+  Future<void> _importJson(int form) async {
+    if (_accountChanged('_importJson', form, 'Importing an exercise')) return;
     final ctrl = TextEditingController();
+    final owner = _owner;
     final ok = await showDialog<bool>(
       context: context,
-      builder: (dctx) => AlertDialog(
+      builder: (dctx) => _OwnedRoute(owner: owner, child: AlertDialog(
         backgroundColor: const Color(0xFF1C1B1C),
         title: const Text('Paste exercise JSON',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
@@ -509,14 +650,14 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dctx, false),
+          TextButton(onPressed: () => _popRoute(dctx, false),
             child: const Text('Cancel', style: TextStyle(color: Color(0xFFCDC3D0)))),
-          TextButton(onPressed: () => Navigator.pop(dctx, true),
+          TextButton(onPressed: () => _popRoute(dctx, true),
             child: const Text('Import', style: TextStyle(color: _C.primary, fontWeight: FontWeight.w700))),
         ],
-      ),
+      )),
     );
-    if (ok != true) return;
+    if (ok != true || !mounted || !_still(form)) return;
     try {
       _applyNormalized(_normalizeImport(jsonDecode(ctrl.text) as Map<String, dynamic>));
       if (mounted) {
@@ -587,8 +728,9 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   /// unguarded, so a denied permission was an uncaught error and the tile did
   /// nothing. [what] is 'image' or 'video'; whatever was chosen before stays.
   Future<(XFile, Uint8List)?> _pickMedia(
-      String what, Future<XFile?> Function() open) async {
+      int form, String what, Future<XFile?> Function() open) async {
     if (_picking) return null;
+    if (_accountChanged('_pickMedia', form, 'Choosing media')) return null;
     _picking = true;
     try {
       final XFile? file;
@@ -596,6 +738,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
         file = await open();
       } catch (e, st) {
         reportError('exercise.$what.pick.gallery', e, st);
+        if (!_still(form)) return null; // not said to the next account
         final library = what == 'video' ? 'videos' : 'photos';
         // image_picker's permission codes end `_access_denied`.
         _sayMedia(e is PlatformException && e.code.endsWith('_access_denied')
@@ -604,26 +747,27 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
             : couldntMessage('open your $library', e));
         return null;
       }
-      if (file == null) return null;
+      if (file == null || !_still(form)) return null;
       if (mounted) setState(() => _readingMedia = true);
       try {
-        return (file, await file.readAsBytes());
+        final bytes = await file.readAsBytes();
+        return _still(form) ? (file, bytes) : null;
       } catch (e, st) {
         reportError('exercise.$what.read', e, st);
-        _sayMedia(couldntMessage('use that $what', e));
+        if (_still(form)) _sayMedia(couldntMessage('use that $what', e));
         return null;
       } finally {
-        if (mounted) setState(() => _readingMedia = false);
+        if (mounted && form == _form) setState(() => _readingMedia = false);
       }
     } finally {
       _picking = false;
     }
   }
 
-  Future<void> _pickImage() async {
-    final picked = await _pickMedia('image',
+  Future<void> _pickImage(int form) async {
+    final picked = await _pickMedia(form, 'image',
         () => _picker.pickImage(source: ImageSource.gallery, imageQuality: 80));
-    if (picked == null || !mounted) return;
+    if (picked == null || !mounted || !_still(form)) return;
     final (file, bytes) = picked;
     setState(() {
       _imageBytes = bytes;
@@ -636,13 +780,12 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     return (i >= 0 && i < name.length - 1) ? name.substring(i + 1).toLowerCase() : fallback;
   }
 
-  Future<void> _pickVideo(int index) async {
+  Future<void> _pickVideo(int form, _VideoEntry entry) async {
     // The entry, not its index: one removed while its file is read must not
     // hand the video to the next entry (or throw past the end of the list).
-    final entry = _videoEntries[index];
     final picked = await _pickMedia(
-        'video', () => _picker.pickVideo(source: ImageSource.gallery));
-    if (picked == null || !mounted) return;
+        form, 'video', () => _picker.pickVideo(source: ImageSource.gallery));
+    if (picked == null || !mounted || !_still(form)) return;
     final (file, bytes) = picked;
     setState(() {
       entry.bytes = bytes;
@@ -666,7 +809,10 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     };
   }
 
-  Future<void> _save() async {
+  /// [form] is the one the tapped Save was drawn on: its own coach's, at every
+  /// step below (P0-FL-59d).
+  Future<void> _save(int form) async {
+    if (_accountChanged('_save', form, 'Saving an exercise')) return;
     // The SnackBar's "Save again" can be tapped while a save is running; the
     // Save button is disabled then, and so is this.
     if (_saving) return;
@@ -736,6 +882,9 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     String? id;
     if (!editingExisting) {
       id = await ref.read(myExercisesNotifierProvider.notifier).create(fields: fields);
+      // (Null: the service recorded why.)
+      if (id == null && !_still(form)) return _followAccount();
+      if (id != null && _accountChanged('_save', form, 'Exercise details')) return;
       if (id != null) {
         // B1 · the row exists now: from here on this screen edits it. A later
         // Save (after a media/relations failure) updates THIS row instead of
@@ -756,8 +905,10 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
       f..remove('image_url')..remove('video_variants');
       final upd = {...f, ...extra};
       if (_visibility == 'global') upd['submission_status'] = 'approved';
-      final ok = await svc.updateExercise(_editingId!, upd);
-      id = ok ? _editingId : null;
+      final editing = _editingId!;
+      final ok = await svc.updateExercise(editing, upd);
+      if (!ok && !_still(form)) return _followAccount();
+      id = ok ? editing : null;
     }
 
     // A hand-written library draft goes to the editorial review queue
@@ -773,8 +924,9 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
           contentStatus: _editingContentStatus,
           instructions: _listFrom(_instructionCtrls),
         )) {
+      if (_accountChanged('_save', form, 'Submitting for review')) return;
       if (await svc.reviewExercise(id, 'under_review')) {
-        _editingContentStatus = 'under_review';
+        if (_still(form)) _editingContentStatus = 'under_review';
       } else {
         reviewSubmitFailed = true;
         reviewSubmitError = svc.lastError;
@@ -791,7 +943,10 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
       // lastError is cleared before each step below, so this is never an
       // earlier call's error.
       final err = svc.lastError;
-      if (err != null) reportError('CreateExerciseScreen.$origin', err);
+      // P0-FL-59d · once: some steps' failures the service records itself.
+      if (err != null && !identical(err, svc.recordedError)) {
+        reportError('CreateExerciseScreen.$origin', err);
+      }
       mediaFailures.add(what);
       mediaErrors.add(err);
     }
@@ -799,6 +954,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     if (id != null) {
       // Upload picked image + video files.
       String? imageUrl;
+      if (_accountChanged('_save', form, 'Exercise media')) return;
       if (_imageBytes != null) {
         svc.lastError = null;
         imageUrl = await svc.uploadImage(_imageBytes!, _imageExt, id);
@@ -808,6 +964,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
       }
       final uploadedVariants = List<VideoVariant>.from(variants);
       for (int i = 0; i < _videoEntries.length; i++) {
+        if (_accountChanged('_save', form, 'Exercise media')) return;
         final entry = _videoEntries[i];
         if (entry.bytes != null) {
           svc.lastError = null;
@@ -821,6 +978,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
         }
       }
 
+      if (_accountChanged('_save', form, 'Exercise media')) return;
       if (mediaOnly) {
         // Coach attaching media to an admin/platform exercise (privileged RPC).
         svc.lastError = null;
@@ -837,6 +995,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
             mediaStepFailed('saveImageUrl', "the image couldn't be attached");
           }
         }
+        if (_accountChanged('_save', form, 'Exercise videos')) return;
         if (uploadedVariants.length != variants.length || editingExisting) {
           if (!await svc.updateExercise(id, {
             'video_variants': uploadedVariants.map((v) => v.toJson()).toList(),
@@ -844,16 +1003,19 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
             mediaStepFailed('saveVideoVariants', "the videos couldn't be attached");
           }
         }
+        if (_accountChanged('_save', form, 'Exercise muscles and equipment')) return;
         svc.lastError = null;
         if (!await svc.syncRelations(id, _relationsJson())) {
           mediaStepFailed('syncRelations',
               "the muscle and equipment details couldn't be saved");
         }
       }
+      if (!_still(form)) return _followAccount(); // saved, by the last coach
       _savedId = id;
     }
 
     if (!mounted) return;
+    if (!_still(form)) return _followAccount();
     setState(() => _saving = false);
     if (!mounted) return;
     if (id != null) {
@@ -867,10 +1029,13 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
         // re-uploads every picked file; the picks are kept).
         // U4: a failed review submission is folded into this ONE message —
         // Save again retries it too — rather than a second queued SnackBar.
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        final messenger = ScaffoldMessenger.of(context);
+        final owner = _owner;
+        final bar = messenger.showSnackBar(SnackBar(
             duration: const Duration(seconds: 10),
             // U3: retry from the message itself.
-            action: SnackBarAction(label: 'Save again', onPressed: _save),
+            action: SnackBarAction(label: 'Save again',
+                onPressed: () => _saveAgain(form, owner, messenger)),
             content: Text(exerciseMediaFailureMessage(
               mediaOnly: mediaOnly,
               mediaWriteFailed: mediaWriteFailed,
@@ -879,6 +1044,9 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
               reviewSubmitFailed: reviewSubmitFailed,
               reviewSubmitError: reviewSubmitError,
             ))));
+        // P0-FL-59d · a message with an action waits on the app's messenger
+        // when this screen is left: it watches the account itself.
+        _endWithAccount(messenger, owner, bar);
       } else if (reviewSubmitFailed) {
         // Saved, but not queued: say so rather than leave it invisible to reviewers.
         // U2: there is no "submit for review" control for a saved draft, so
@@ -897,7 +1065,11 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
       if (mediaFailures.isEmpty) _showSuccess();
     } else {
       final err = svc.lastError;
-      if (err != null) reportError('CreateExerciseScreen.save', err);
+      // P0-FL-59d · createExercise / updateExercise record their own failure;
+      // it was recorded here a second time.
+      if (err != null && !identical(err, svc.recordedError)) {
+        reportError('CreateExerciseScreen.save', err);
+      }
       // S3: createExercise returns null with no error when nobody is signed
       // in; say that, not "check your connection".
       final signedOut = ref.read(currentUserProvider) == null;
@@ -921,6 +1093,38 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     }
   }
 
+  /// [bar] goes when [owner] does, whether or not this screen is still open.
+  ///
+  /// It listens once: `clearSnackBars` drops a QUEUED message without ever
+  /// closing it, and the listener that message left behind took away the next
+  /// coach's own.
+  void _endWithAccount(ScaffoldMessengerState messenger, String? owner,
+      ScaffoldFeatureController<SnackBar, SnackBarClosedReason> bar) {
+    StreamSubscription<AuthState>? sub;
+    sub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+      if (_uid == owner) return;
+      sub?.cancel();
+      if (messenger.mounted) messenger..clearSnackBars()..removeCurrentSnackBar();
+    }, onError: (Object e, StackTrace s) =>
+        reportError('CreateExerciseScreen._endWithAccount', e, s));
+    bar.closed.whenComplete(() => sub?.cancel());
+  }
+
+  /// The message outlives the form: once that is closed there is nothing left
+  /// to save again, and the tap did nothing and said nothing.
+  void _saveAgain(int form, String? owner, ScaffoldMessengerState messenger) {
+    if (_uid != owner) return; // another account's tap: nothing is said of it
+    if (mounted) {
+      if (form == _form) _save(form);
+      return;
+    }
+    _endWithAccount(messenger, owner, messenger.showSnackBar(SnackBar(
+        duration: const Duration(seconds: 8),
+        content: Semantics(liveRegion: true, child: const Text(
+            "Couldn't save again — this form was closed. Open the exercise from "
+            'your library to finish it.')))));
+  }
+
   /// P0-FL-5 · the text of an error this app wrote on purpose, or null.
   ///
   /// This used to pull the `message:` out of any Postgrest/Storage exception
@@ -936,9 +1140,13 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
   }
 
   void _showSuccess() {
+    final form = _form;
+    final owner = _owner;
+    final savedId = _savedId;
     showDialog(
       context: context,
-      builder: (dctx) => AlertDialog(
+      // Pushed after the save's awaits: it is drawn for this coach or not at all.
+      builder: (dctx) => _OwnedRoute(owner: owner, child: AlertDialog(
         backgroundColor: _C.card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('Exercise Saved!', style: TextStyle(color: _C.wht, fontWeight: FontWeight.w700)),
@@ -951,14 +1159,18 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
         actions: [
           TextButton(
             // Pop the dialog via its own context (root navigator), then leave the screen.
-            onPressed: () { Navigator.of(dctx).pop(); if (mounted) context.pop(); },
+            onPressed: () {
+              _popRoute(dctx);
+              if (mounted && _still(form)) context.pop();
+            },
             child: const Text('Back to Library', style: TextStyle(color: _C.primary))),
-          if (_savedId != null)
+          if (savedId != null)
             TextButton(
               onPressed: () {
-                Navigator.of(dctx).pop();
-                ref.read(myExercisesNotifierProvider.notifier).submitForGlobal(_savedId!).then((ok) {
-                  if (!mounted) return;
+                _popRoute(dctx);
+                if (_accountChanged('_showSuccess', form, 'Submitting an exercise')) return;
+                ref.read(myExercisesNotifierProvider.notifier).submitForGlobal(savedId).then((ok) {
+                  if (!mounted || !_still(form)) return;
                   // The result was ignored: a submission that failed still said
                   // "Published to the Global Library!".
                   if (!ok) {
@@ -974,7 +1186,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
               },
               child: const Text('Submit to Global Library', style: TextStyle(color: _C.amber))),
         ],
-      ),
+      )),
     );
   }
 
@@ -992,6 +1204,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
     ref.watch(currentUserProfileProvider);
     ref.watch(currentUserProvider);
     final locked = _isCoachMediaOnly();
+    final form = _form; // the form this frame draws
     return Scaffold(
       backgroundColor: _C.bg,
       body: Column(children: [
@@ -1009,7 +1222,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
               Expanded(child: Text(_editingId != null ? 'Edit Exercise' : 'Create Exercise',
                 style: const TextStyle(color: _C.wht, fontSize: 20, fontWeight: FontWeight.w700))),
               if (locked) const SizedBox() else GestureDetector(
-                onTap: _importJson,
+                onTap: () => _importJson(form),
                 child: Container(
                   margin: const EdgeInsets.only(right: 8),
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1030,7 +1243,7 @@ class _CreateExerciseScreenState extends ConsumerState<CreateExerciseScreen>
                 enabled: !(_saving || _prefillPending || _readingMedia),
                 label: 'Save',
                 child: GestureDetector(
-                  onTap: _saving || _prefillPending || _readingMedia ? null : _save,
+                  onTap: _saving || _prefillPending || _readingMedia ? null : () => _save(form),
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     decoration: BoxDecoration(
@@ -1228,6 +1441,7 @@ class _MediaTabState extends State<_MediaTab> {
   @override
   Widget build(BuildContext context) {
     final s = widget.s;
+    final form = s._form; // the form this frame draws
     return ListView(padding: const EdgeInsets.all(20), children: [
       // Encourage adding real media.
       Container(
@@ -1251,7 +1465,7 @@ class _MediaTabState extends State<_MediaTab> {
       const Text('EXERCISE IMAGE', style: TextStyle(color: _C.mut, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
       const SizedBox(height: 10),
       GestureDetector(
-        onTap: () async { await s._pickImage(); if (mounted) setState(() {}); },
+        onTap: () async { await s._pickImage(form); if (mounted) setState(() {}); },
         child: Container(
           height: 160,
           decoration: BoxDecoration(
@@ -1294,9 +1508,7 @@ class _MediaTabState extends State<_MediaTab> {
             Text('No videos yet. Tap + to add.', style: TextStyle(color: _C.mut, fontSize: 12)),
           ]))
       else
-        ...s._videoEntries.asMap().entries.map((e) {
-          final i = e.key;
-          final entry = e.value;
+        ...s._videoEntries.map((entry) {
           return Container(
             margin: const EdgeInsets.only(bottom: 12),
             padding: const EdgeInsets.all(14),
@@ -1316,7 +1528,7 @@ class _MediaTabState extends State<_MediaTab> {
                     ))),
                 const Spacer(),
                 GestureDetector(
-                  onTap: () => setState(() => s._videoEntries.removeAt(i)),
+                  onTap: () => setState(() => s._videoEntries.remove(entry)),
                   child: const Icon(Icons.remove_circle_outline, color: _C.error, size: 18)),
               ]),
               const SizedBox(height: 10),
@@ -1332,7 +1544,7 @@ class _MediaTabState extends State<_MediaTab> {
               const SizedBox(height: 8),
               // File upload
               GestureDetector(
-                onTap: () async { await s._pickVideo(i); if (mounted) setState(() {}); },
+                onTap: () async { await s._pickVideo(form, entry); if (mounted) setState(() {}); },
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   decoration: BoxDecoration(

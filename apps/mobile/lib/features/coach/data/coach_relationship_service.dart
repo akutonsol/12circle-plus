@@ -1,10 +1,35 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/observability/app_failure.dart';
 
+/// P0-FL-59d · a relationship write (or one of its later steps) was refused:
+/// the account it was started by is no longer the one signed in. Thrown by
+/// every [CoachRelationshipService] write that knows its account — also in
+/// place of a refusal written to be shown ("No active coaching…") that arrives
+/// after the switch.
+///
+/// CONTRACT: it is not for the screen. Whoever is signed in now is not who
+/// acted, so nothing is said to them — `if (e is AccountChangedError) return;`
+/// before any message. The service has recorded it (a caller that records it
+/// again does no harm). It is a [StateError] so that callers which treat a
+/// StateError as a refusal still compile and still stop; most of those show
+/// its [message], so that names no action and nobody. What was refused is in
+/// [toString] only, which is what is recorded.
+class AccountChangedError extends StateError {
+  AccountChangedError(this.what) : super('Not done: the signed-in account changed');
+
+  /// The refused step, for the record only.
+  final String what;
+
+  @override
+  String toString() => '$what: the signed-in account changed';
+}
+
 class CoachRelationshipService {
   final _db = Supabase.instance.client;
 
   // ── Client sends coach request (pending) ──────────────────
+  /// Throws [AccountChangedError], having sent nothing more, when the client
+  /// it was started by is no longer signed in (P0-FL-59d).
   Future<void> requestCoach(String coachId, {String? message}) async {
     final clientId = _requireSignedIn();
     // The upsert below rewrites `status` on an existing row. Over an ACTIVE row
@@ -16,6 +41,8 @@ class CoachRelationshipService {
         .select('status')
         .eq('client_id', clientId)
         .eq('coach_id', coachId);
+    // (Before the refusal below, which is written to be shown, too.)
+    _requireAccount('requestCoach', 'Coaching request', clientId);
     if ((existing as List).any((r) => r['status'] == 'active')) {
       throw StateError('This coach is already your coach.');
     }
@@ -31,6 +58,7 @@ class CoachRelationshipService {
     // Best-effort, and reported: the change above is saved, and a failed
     // notification thrown from here read as a failed save (N3).
     try {
+      _require('Coaching-request notification', clientId);
       await _db.from('notifications').insert({
         'recipient_id': coachId,
         'type': 'coach_request',
@@ -56,26 +84,51 @@ class CoachRelationshipService {
     return id;
   }
 
+  /// P0-FL-59d · [owner] is still the signed-in account. Otherwise throws
+  /// [AccountChangedError], and the caller sends nothing.
+  void _require(String what, String owner) {
+    if (_db.auth.currentUser?.id != owner) throw AccountChangedError(what);
+  }
+
+  /// The same, and the refusal is recorded: for a step whose failure reaches
+  /// the caller (a notification's is recorded by its own catch).
+  void _requireAccount(String method, String what, String owner) {
+    try {
+      _require(what, owner);
+    } on AccountChangedError catch (e, st) {
+      reportError('CoachRelationshipService.$method', e, st);
+      rethrow;
+    }
+  }
+
   /// A request answer that matched no row is not an answer (QAX-ERR-02): RLS
   /// filters out a relationship that is not this coach's, or one already
   /// answered, without an error — and the screen said "Client accepted!".
-  void _requireAnswered(List<dynamic> rows) {
+  void _requireAnswered(List<dynamic> rows, String method, String coachId) {
     if (rows.isEmpty) {
+      _requireAccount(method, 'Answering a request', coachId);
       throw StateError('That request is no longer pending — nothing was changed.');
     }
   }
 
   // ── Coach approves a pending request ──────────────────────
-  Future<void> approveRequest(String relationshipId, String clientId) async {
+  /// P0-FL-59d · answered by the coach whose request list it was
+  /// ([expectedUid]; whoever is signed in when it is not given), or not at
+  /// all: anyone else gets [AccountChangedError].
+  Future<void> approveRequest(String relationshipId, String clientId,
+      {String? expectedUid}) async {
+    final coachId = expectedUid ?? _requireSignedIn();
+    _requireAccount('approveRequest', 'Approving a request', coachId);
     final rows = await _db.from('coach_client_relationships').update({
       'status': 'active',
       'activated_at': DateTime.now().toUtc().toIso8601String(),
     }).eq('id', relationshipId).eq('status', 'pending').select('id');
-    _requireAnswered(rows);
+    _requireAnswered(rows, 'approveRequest', coachId);
     // Notify client
     // Best-effort, and reported: the change above is saved, and a failed
     // notification thrown from here read as a failed save (N3).
     try {
+      _require('Request-approved notification', coachId);
       await _db.from('notifications').insert({
         'recipient_id': clientId,
         'type': 'request_approved',
@@ -89,14 +142,19 @@ class CoachRelationshipService {
   }
 
   // ── Coach declines a pending request ─────────────────────
-  Future<void> declineRequest(String relationshipId, String clientId) async {
+  /// [expectedUid] as for [approveRequest].
+  Future<void> declineRequest(String relationshipId, String clientId,
+      {String? expectedUid}) async {
+    final coachId = expectedUid ?? _requireSignedIn();
+    _requireAccount('declineRequest', 'Declining a request', coachId);
     final rows = await _db.from('coach_client_relationships').update({
       'status': 'rejected',
     }).eq('id', relationshipId).eq('status', 'pending').select('id');
-    _requireAnswered(rows);
+    _requireAnswered(rows, 'declineRequest', coachId);
     // Best-effort, and reported: the change above is saved, and a failed
     // notification thrown from here read as a failed save (N3).
     try {
+      _require('Request-declined notification', coachId);
       await _db.from('notifications').insert({
         'recipient_id': clientId,
         'type': 'request_declined',
@@ -151,13 +209,20 @@ class CoachRelationshipService {
   // Throws if either step fails. The email is the invite — the client is sent
   // nothing else — so a failed send is a failed invite. It was swallowed, and
   // the coach was told "Invite sent!" for an email that never left.
+  //
+  // P0-FL-59d · [coachId]'s invite is written and emailed by [coachId], or not
+  // at all ([AccountChangedError]): the email function answers as whoever is
+  // signed in, so a switch after the insert sent the prospect the next coach's
+  // name and reply-to with this coach's token.
   Future<String> sendInvite(String coachId, String email) async {
+    _requireAccount('sendInvite', 'Client invite', coachId);
     final result = await _db.from('coach_invites').insert({
       'coach_id': coachId,
       'invitee_email': email,
     }).select().single();
     final token = result['token'] as String?;
     // Deliver the actual email.
+    _requireAccount('sendInvite', 'Client invite email', coachId);
     await _db.functions.invoke('send-invite-email',
         body: {'email': email, 'type': 'client', if (token != null) 'token': token});
     return token ?? '';
@@ -182,8 +247,16 @@ class CoachRelationshipService {
   ///
   /// Throws if a cancellation fails, if no active relationship was ended, or
   /// if no one is signed in; nothing is then changed locally.
-  Future<CoachingEnd> cancelCoach(String coachId, String? reason, String? customReason) async {
-    final clientId = _requireSignedIn();
+  ///
+  /// P0-FL-59d · [expectedUid] is the client who was asked (whoever was signed
+  /// in when the dialog opened): for anyone else nothing is sent. Every later
+  /// step re-checks the client it started for, so a switch between two steps
+  /// never ends the next account's coaching or subscription. Both are
+  /// [AccountChangedError]: see there for what a caller may do with it.
+  Future<CoachingEnd> cancelCoach(String coachId, String? reason, String? customReason,
+      {String? expectedUid}) async {
+    final clientId = expectedUid ?? _requireSignedIn();
+    _requireAccount('cancelCoach', 'Ending coaching', clientId);
     final paid = await _db
         .from('subscriptions')
         .select('id, current_period_end')
@@ -194,10 +267,12 @@ class CoachRelationshipService {
     if ((paid as List).isNotEmpty) {
       DateTime? endsAt;
       for (final s in paid) {
+        _requireAccount('cancelCoach', 'Ending coaching', clientId);
         final res = await _db.functions
             .invoke('cancel-subscription', body: {'subscriptionId': s['id']});
         final d = res.data;
         if (d is! Map || d['ok'] != true) {
+          _requireAccount('cancelCoach', 'Ending coaching', clientId);
           throw StateError('Your coaching could not be ended. Try again.');
         }
         final at = DateTime.tryParse('${d['endsAt'] ?? s['current_period_end'] ?? ''}');
@@ -205,6 +280,7 @@ class CoachRelationshipService {
       }
       return CoachingEnd.at((endsAt ?? DateTime.now()).toLocal());
     }
+    _requireAccount('cancelCoach', 'Ending coaching', clientId);
     final ended = await _db.from('coach_client_relationships').update({
       'status': 'cancelled',
       'cancelled_by': 'client',
@@ -216,18 +292,21 @@ class CoachRelationshipService {
     // it was reported as "Coaching ended." and the coach was told so (P0-FL-1).
     // Refuse it before the notification, as approve/decline do (QAX-ERR-02).
     if ((ended as List).isEmpty) {
+      _requireAccount('cancelCoach', 'Ending coaching', clientId);
       throw StateError('No active coaching with this coach — nothing was changed.');
     }
     // Notify the coach that the client has ended the relationship.
     // Best-effort, and reported: the change above is saved, and a failed
     // notification thrown from here read as a failed save (N3).
     try {
+      _require('Coaching-ended notification', clientId);
       final me = await _db
           .from('user_profiles')
           .select('first_name, last_name')
           .eq('id', clientId)
           .maybeSingle();
       final name = '${me?['first_name'] ?? ''} ${me?['last_name'] ?? ''}'.trim();
+      _require('Coaching-ended notification', clientId);
       await _db.from('notifications').insert({
         'recipient_id': coachId,
         'type': 'coaching_ended',
@@ -248,14 +327,19 @@ class CoachRelationshipService {
   /// Throws if no one is signed in or the update changed no row (P0-FL-3):
   /// both returned normally and the sheet said "Pricing updated." for a price
   /// that was never saved.
-  Future<void> setGlobalPrice(double price) async {
-    final coachId = _requireSignedIn();
+  ///
+  /// P0-FL-59d · [expectedUid] is the coach whose price the form was opened
+  /// on: for anyone else nothing is sent.
+  Future<void> setGlobalPrice(double price, {String? expectedUid}) async {
+    final coachId = expectedUid ?? _requireSignedIn();
+    _requireAccount('setGlobalPrice', 'Coaching price', coachId);
     final rows = await _db
         .from('user_profiles')
         .update({'pricing_monthly': price})
         .eq('id', coachId)
         .select('id');
     if ((rows as List).isEmpty) {
+      _requireAccount('setGlobalPrice', 'Coaching price', coachId);
       throw StateError(
           "Your price couldn't be saved. Nothing was changed — try again.");
     }
