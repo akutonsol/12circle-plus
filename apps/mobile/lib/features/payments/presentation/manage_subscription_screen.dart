@@ -7,6 +7,7 @@ import '../domain/entitlements.dart';
 import '../domain/payment_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coach/data/coach_relationship_service.dart';
+import '../../dashboard/domain/still_reading.dart' show boundTo, stillSignedIn;
 import '../../../core/observability/app_failure.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
 import 'checkout_launcher.dart' show OwnedDialog, showOwnedSnackBar;
@@ -117,9 +118,9 @@ class _ManageSubscriptionScreenState
     final coach = rel['coach'] as Map<String, dynamic>? ?? {};
     final coachName =
         '${coach['first_name'] ?? ''} ${coach['last_name'] ?? ''}'.trim();
-    // P0-FL-60a: cancelCoach ends the coaching of WHOEVER is signed in — with
-    // the same coach, the next account's. Only for the account that was asked:
-    // [owner] is who the row was drawn for.
+    // P0-FL-60a: cancelCoach without an account ends the coaching of WHOEVER
+    // is signed in — with the same coach, the next account's. Only for the
+    // account that was asked: [owner] is who the row was drawn for.
     bool gone() =>
         ownerGone(owner, 'ManageSubscriptionScreen', 'stop coaching');
     if (gone()) return;
@@ -158,9 +159,21 @@ class _ManageSubscriptionScreenState
     // relationship ends now. The message follows what actually happened.
     String message;
     try {
-      final end = await CoachRelationshipService()
-          .cancelCoach(coachId, 'client_cancelled', null);
+      // P0-FL-62b: every step for [owner] (an owner nobody knows is nobody),
+      // never for whoever is signed in when a step runs.
+      final end = await CoachRelationshipService().cancelCoach(
+          coachId, 'client_cancelled', null,
+          expectedUid: boundTo(owner));
       message = end.describe();
+    } on AccountChangedError {
+      // Recorded by the service; nothing of it is for whoever is signed in
+      // now. (Back as the same member: what is left is read again.)
+      if (stillSignedIn(owner) && mounted) {
+        ref.invalidate(myCoachesProvider);
+        ref.invalidate(mySubscriptionsProvider);
+        ref.invalidate(clientPlanProvider);
+      }
+      return;
     } catch (e, st) {
       reportError('ManageSubscriptionScreen.stopCoach', e, st);
       // cancelCoach's StateError says what happened ("No active coaching with

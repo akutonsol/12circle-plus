@@ -9,6 +9,7 @@ import '../../../core/identity/account_scope.dart'
     show signOutFailedText, signOutOfDevice, signedInUid;
 import '../../../core/observability/app_failure.dart';
 import '../../coach/data/coach_relationship_service.dart';
+import '../../dashboard/domain/still_reading.dart' show OpenedByAccount;
 import '../../coach/domain/coach_provider.dart';
 import '../../coaching_mode/domain/coaching_mode_provider.dart';
 import '../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
@@ -967,7 +968,8 @@ class MyCoachSection extends ConsumerWidget {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => StatefulBuilder(builder: (ctx, set) => Container(
+      // P0-FL-62b: the sheet is [owner]'s, and goes when they do.
+      builder: (_) => OpenedByAccount(owner: owner, child: StatefulBuilder(builder: (ctx, set) => Container(
         padding: EdgeInsets.fromLTRB(20, 0, 20, MediaQuery.of(ctx).padding.bottom + 20),
         decoration: const BoxDecoration(
           color: Color(0xFF1C1B1C),
@@ -1054,7 +1056,7 @@ class MyCoachSection extends ConsumerWidget {
             textAlign: TextAlign.center,
             style: TextStyle(color: Color(0xFF4B444F), fontSize: 11)),
         ]),
-      )));
+      ))));
 
     if (confirmed == true && owner != null && signedInUid() != owner) {
       accountChanged();
@@ -1067,13 +1069,20 @@ class MyCoachSection extends ConsumerWidget {
       // billing; now a paid subscription is cancelled at the end of the paid
       // period (coaching lasts until then) and an unpaid relationship ends now.
       String? message;
+      // Recorded by the service when it stops for the account (P0-FL-62b).
+      var recorded = false;
       try {
+        // P0-FL-62b: every step for [owner], never for whoever is signed in
+        // when a step runs.
         final end = await CoachRelationshipService().cancelCoach(
           coachId,
           selectedReason,
           customCtrl.text.trim().isEmpty ? null : customCtrl.text.trim(),
+          expectedUid: owner,
         );
         message = end.describe();
+      } on AccountChangedError {
+        recorded = true;
       } catch (e) {
         reportError('MyCoachSection.cancelCoach', e);
         // cancelCoach's StateError says what happened ("No active coaching
@@ -1088,7 +1097,7 @@ class MyCoachSection extends ConsumerWidget {
         }
       }
       if (signedInUid() != owner) {
-        accountChanged();
+        if (!recorded) accountChanged();
       } else {
         if (message != null) {
           messenger?.showSnackBar(SnackBar(content: Text(message)));
