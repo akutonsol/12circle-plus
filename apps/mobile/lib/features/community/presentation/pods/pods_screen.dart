@@ -1,5 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../../core/observability/app_failure.dart';
+import '../../../workout/presentation/widgets/section_load_failure.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 const _bg    = Color(0xFF030303);
@@ -22,55 +26,164 @@ class _PodsScreenState extends State<PodsScreen> {
   final _db = Supabase.instance.client;
   List<Map<String, dynamic>> _myPods = [];
   List<Map<String, dynamic>> _openPods = [];
-  bool _loading = true;
+  bool _loading = false;
+
+  /// Whose pods these are (P0-FL-60c); null when nobody is signed in.
+  String? _owner;
+
+  /// One per account shown: an answer that started under another one is
+  /// dropped, even when the same member is back.
+  int _epoch = 0;
+
+  /// [_owner]'s pods were read. Until then the empty lists are not "none".
+  bool _loaded = false;
+  Object? _loadError;
+
+  /// The latest read; an older one still in flight is dropped.
+  int _loadSeq = 0;
+
+  /// The pod being joined; one at a time.
+  String? _joining;
+
+  /// Who is signed in is followed here, without a frame: an answer can land
+  /// while the app is hidden.
+  StreamSubscription<AuthState>? _authSub;
 
   @override
   void initState() {
     super.initState();
+    _owner = _db.auth.currentUser?.id;
+    _authSub = _db.auth.onAuthStateChange.listen((_) => _followAccount(),
+        onError: (Object e, StackTrace st) =>
+            reportError('PodsScreen.onAuthStateChange', e, st));
     _load();
   }
 
-  Future<void> _load() async {
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  /// Whether [owner] is still the one signed in, and the one shown. Otherwise
+  /// the screen follows whoever is.
+  bool _still(String? owner) {
+    if (owner != null &&
+        owner == _owner &&
+        _db.auth.currentUser?.id == owner) {
+      return true;
+    }
+    _followAccount();
+    return false;
+  }
+
+  /// Nothing of the previous member's stays, and the next one's are read.
+  void _followAccount() {
+    if (!mounted) return;
+    final uid = _db.auth.currentUser?.id;
+    if (uid == _owner) return;
+    setState(() {
+      _owner = uid;
+      _epoch++;
+      _myPods = [];
+      _openPods = [];
+      _loaded = false;
+      _loading = false;
+      _loadError = null;
+      _joining = null;
+    });
+    _load();
+  }
+
+  /// [again]: what is on its way may predate a change just made.
+  Future<void> _load({bool again = false}) async {
+    final owner = _owner;
+    if (owner == null || (_loading && !again) || !_still(owner)) return;
+    final seq = ++_loadSeq;
     setState(() => _loading = true);
     try {
-      final uid = _db.auth.currentUser?.id;
       final [mine, open] = await Future.wait([
         _db.from('accountability_pods')
             .select('*, accountability_pod_members!inner(user_id), public_profiles!coach_id(first_name, last_name)')
-            .eq('accountability_pod_members.user_id', uid!),
+            .eq('accountability_pod_members.user_id', owner),
         _db.from('accountability_pods')
             .select('*, public_profiles!coach_id(first_name, last_name)')
             .eq('status', 'open')
             .limit(10),
       ]);
-      if (!mounted) return;
+      if (!mounted || seq != _loadSeq || !_still(owner)) return;
       setState(() {
         _myPods = List<Map<String, dynamic>>.from(mine as List);
         _openPods = List<Map<String, dynamic>>.from(open as List);
+        _loaded = true;
+        _loadError = null;
         _loading = false;
       });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() { _loading = false; });
+    } catch (e, st) {
+      // Not "no pods": said as a failure, over whatever was read before.
+      reportError('PodsScreen.load', e, st);
+      if (!mounted || seq != _loadSeq || !_still(owner)) return;
+      setState(() {
+        _loadError = e;
+        _loading = false;
+      });
     }
   }
 
-  Future<void> _joinPod(String podId) async {
-    final uid = _db.auth.currentUser?.id;
-    if (uid == null) return;
+  /// [owner]: who the Join button was built for. Nothing is sent, read again
+  /// or said once they are no longer the one signed in.
+  Future<void> _joinPod(Map<String, dynamic> pod, String? owner) async {
+    if (!_still(owner)) return _accountChanged();
+    if (_joining != null) return;
+    final epoch = _epoch;
+    final podId = pod['id'] as String;
+    setState(() => _joining = podId);
+    Object? error;
     try {
-      await _db.from('accountability_pod_members').insert({'pod_id': podId, 'user_id': uid});
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Joined pod! Welcome to your accountability group 🙌'),
-          backgroundColor: Color(0xFF6FFBBE)));
-        _load();
-      }
-    } catch (_) {}
+      await _db.from('accountability_pod_members').insert({'pod_id': podId, 'user_id': owner});
+    } catch (e, st) {
+      reportError('PodsScreen.joinPod', e, st);
+      error = e;
+    }
+    if (!mounted) return;
+    if (epoch != _epoch || !_still(owner)) return _accountChanged();
+    if (error == null) {
+      // The server took it: theirs, even if the read that follows fails.
+      setState(() => _myPods = [..._myPods, pod]);
+      _say('Joined pod! Welcome to your accountability group 🙌',
+          background: const Color(0xFF6FFBBE));
+    }
+    // "Already a member" (23505) is answered by the pods themselves.
+    final duplicate = error is PostgrestException && error.code == '23505';
+    if (error == null || duplicate) await _load(again: true);
+    if (!mounted) return;
+    if (epoch != _epoch || !_still(owner)) return _accountChanged();
+    setState(() => _joining = null);
+    if (error == null) return;
+    if (!duplicate) {
+      _say(couldntMessage('join that pod', error));
+    } else if (!_myPods.any((m) => m['id'] == podId)) {
+      // The pods were not read (said above them), so the answer is said here;
+      // or they were, and it is not among them.
+      _say(_loadError != null
+          ? "You're already in that pod."
+          : couldntMessage('join that pod', error));
+    }
   }
+
+  void _accountChanged() => reportError(
+      'PodsScreen.joinPod',
+      StateError('joining a pod: the signed-in account changed'),
+      StackTrace.current);
+
+  void _say(String message, {Color? background}) =>
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), backgroundColor: background));
 
   @override
   Widget build(BuildContext context) {
+    final error = _loadError;
+    final owner = _owner;
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
@@ -82,7 +195,7 @@ class _PodsScreenState extends State<PodsScreen> {
         title: const Text('Accountability Pods',
           style: TextStyle(color: _wht, fontSize: 18, fontWeight: FontWeight.w700)),
       ),
-      body: _loading
+      body: _loading && !_loaded && error == null
           ? const Center(child: CircularProgressIndicator(color: _brand))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(20),
@@ -97,20 +210,30 @@ class _PodsScreenState extends State<PodsScreen> {
                     style: TextStyle(color: _pri, fontSize: 13, height: 1.5)),
                 )),
                 const SizedBox(height: 24),
+                if (error != null) ...[
+                  SectionLoadFailure(
+                    what: _loaded ? 'the latest pods' : 'your pods',
+                    error: error,
+                    busy: _loading,
+                    onRetry: () => _load()),
+                  const SizedBox(height: 24),
+                ],
                 if (_myPods.isNotEmpty) ...[
                   _Section('My Pods', child: Column(
                     children: _myPods.map((p) => _PodCard(pod: p, isJoined: true, onJoin: null)).toList(),
                   )),
                   const SizedBox(height: 24),
                 ],
-                _Section('Open Pods', child: _openPods.isEmpty
+                if (_loaded) _Section('Open Pods', child: _openPods.isEmpty
                     ? const _EmptyPods()
                     : Column(
                         children: _openPods.map((p) {
                           final alreadyIn = _myPods.any((m) => m['id'] == p['id']);
                           return _PodCard(
                             pod: p, isJoined: alreadyIn,
-                            onJoin: alreadyIn ? null : () => _joinPod(p['id'] as String));
+                            busy: _joining != null,
+                            joining: _joining == p['id'],
+                            onJoin: alreadyIn ? null : () => _joinPod(p, owner));
                         }).toList(),
                       )),
               ]),
@@ -135,7 +258,13 @@ class _PodCard extends StatelessWidget {
   final Map<String, dynamic> pod;
   final bool isJoined;
   final VoidCallback? onJoin;
-  const _PodCard({required this.pod, required this.isJoined, required this.onJoin});
+
+  /// A join is in flight ([joining]: this pod's); no other can start.
+  final bool busy;
+  final bool joining;
+  const _PodCard({
+    required this.pod, required this.isJoined, required this.onJoin,
+    this.busy = false, this.joining = false});
 
   @override
   Widget build(BuildContext context) {
@@ -181,12 +310,16 @@ class _PodCard extends StatelessWidget {
           const Spacer(),
           if (onJoin != null)
             ElevatedButton(
-              onPressed: onJoin,
+              onPressed: busy ? null : onJoin,
               style: ElevatedButton.styleFrom(
                 backgroundColor: _brand, foregroundColor: _wht,
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-              child: const Text('Join', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
+              child: joining
+                  ? const SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2, color: _wht, semanticsLabel: 'Joining'))
+                  : const Text('Join', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13))),
         ]),
       ]),
     );

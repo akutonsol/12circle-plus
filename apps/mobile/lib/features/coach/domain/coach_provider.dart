@@ -39,17 +39,53 @@ final assignedCoachProvider = FutureProvider<Map<String, dynamic>?>((ref) async 
   }
 });
 
+// P0-FL-60c · the two coach links below are the signed-in member's or nothing:
+// riverpod carries the last value through loading and error, and through the
+// refresh that `invalidate` makes of a change of account it has not seen yet, so
+// neither says whose a value is. Whose it was is remembered, and the last
+// member's is forgotten as the next one's read starts.
+class _LinkOwner {
+  bool read = false;
+  String? uid;
+
+  void become(String? next,
+      void Function(AsyncValue<Map<String, dynamic>?>) show) {
+    if (read && uid != next) {
+      show(const AsyncData(null));
+      show(const AsyncLoading()); // not read is not "none"
+    }
+    read = true;
+    uid = next;
+  }
+}
+
+final _pendingOwner = Provider<_LinkOwner>((ref) => _LinkOwner());
+final _relationshipOwner = Provider<_LinkOwner>((ref) => _LinkOwner());
+
+/// A link is read, and kept, as [uid] only.
+void _mustStillBe(String uid, String what) {
+  if (_db.auth.currentUser?.id != uid) {
+    throw StateError('$what: the signed-in account changed');
+  }
+}
+
 // ── Pending coach request (for showing "Request Sent" state) ─────────────────
+//
+// A failed read is recorded and rethrown (P0-FL-60c). It used to return null,
+// which is "no pending request" — the answer that offers another one.
 final pendingCoachProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
-  final user = ref.watch(currentUserProvider);
-  if (user == null) return null;
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+  ref.read(_pendingOwner).become(uid, (v) => ref.state = v);
+  if (uid == null) return null;
   try {
+    _mustStillBe(uid, 'reading the pending request');
     final rel = await _db
         .from('coach_client_relationships')
         .select('coach_id, status, pending_at')
-        .eq('client_id', user.id)
+        .eq('client_id', uid)
         .eq('status', 'pending')
         .maybeSingle();
+    _mustStillBe(uid, 'reading the pending request');
     final coachId = rel?['coach_id'] as String?;
     if (coachId == null) return null;
     // H-06 / 3A-7: repointed at public_profiles.
@@ -58,9 +94,13 @@ final pendingCoachProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
         .select('id, first_name, last_name, avatar_url, coach_title')
         .eq('id', coachId)
         .maybeSingle();
+    _mustStillBe(uid, 'reading the pending request');
     if (coach == null) return null;
     return {...coach, 'pending_at': rel?['pending_at']};
-  } catch (_) { return null; }
+  } catch (e, st) {
+    reportError('pendingCoachProvider', e, st);
+    rethrow;
+  }
 });
 
 // ── All of the client's active coaches (multi-coach support) ──────────────────
@@ -187,16 +227,26 @@ final availableCoachesProvider = FutureProvider<List<Map<String, dynamic>>>((ref
 });
 
 // ── Relationship status for the current client ────────────────────────────────
+//
+// A failed read is recorded and rethrown (P0-FL-60c): null is "no
+// relationship", and an unread one is not that.
 final clientRelationshipProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
-  final user = ref.watch(currentUserProvider);
-  if (user == null) return null;
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+  ref.read(_relationshipOwner).become(uid, (v) => ref.state = v);
+  if (uid == null) return null;
   try {
-    return await _db
+    _mustStillBe(uid, 'reading the relationship');
+    final rel = await _db
         .from('coach_client_relationships')
         .select('id, coach_id, status, created_at, activated_at')
-        .eq('client_id', user.id)
+        .eq('client_id', uid)
         .order('created_at', ascending: false)
         .limit(1)
         .maybeSingle();
-  } catch (_) { return null; }
+    _mustStillBe(uid, 'reading the relationship');
+    return rel;
+  } catch (e, st) {
+    reportError('clientRelationshipProvider', e, st);
+    rethrow;
+  }
 });

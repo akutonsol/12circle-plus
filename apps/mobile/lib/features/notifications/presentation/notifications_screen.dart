@@ -2,9 +2,11 @@ import 'package:flutter/foundation.dart' show AsyncValueGetter;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 import '../data/notification_model.dart';
 import '../domain/notification_provider.dart';
 import '../domain/notification_groups.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../../../core/widgets/named_icon_button.dart';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -18,9 +20,24 @@ class _C {
   static const onSurface   = Color(0xFFDAE2FD);
   static const onSurfVar   = Color(0xFFCFC2D6);
   static const outline     = Color(0xFF988D9F);
-  static const outlineVar  = Color(0xFF4D4354);
   static const error       = Color(0xFFFFB4AB);
   static const errCont     = Color(0xFF93000A);
+}
+
+/// Runs [change] (one of [notifier]'s three) and says it when the server did
+/// not take it — to the member whose list the control was drawn for, not to
+/// whoever is signed in by the tap or by the answer (P0-FL-60c). [notifier] is
+/// the one the control was BUILT with: read at the tap, it would be the next
+/// member's, and act for them.
+Future<bool> _saySo(BuildContext context, String doWhat,
+    NotificationsNotifier notifier, AsyncValueGetter<bool> change) async {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final ok = await change();
+  if (!ok && Supabase.instance.client.auth.currentUser?.id == notifier.owner) {
+    messenger?.showSnackBar(
+        SnackBar(content: Text(couldntMessage(doWhat, notifier.lastError))));
+  }
+  return ok;
 }
 
 class NotificationsScreen extends ConsumerStatefulWidget {
@@ -41,9 +58,22 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
   //
   // The board draws marking-read as something the client does, so it is.
 
+  /// The list whose "Mark all read" is on its way; that one takes no second tap.
+  NotificationsNotifier? _markingAll;
+
+  Future<void> _markAll(NotificationsNotifier notifier) async {
+    if (identical(_markingAll, notifier)) return;
+    setState(() => _markingAll = notifier);
+    await _saySo(context, 'mark them read', notifier, notifier.markAllRead);
+    if (!mounted || !identical(_markingAll, notifier)) return;
+    setState(() => _markingAll = null);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(notificationsProvider);
+    final notifier = ref.watch(notificationsProvider.notifier);
+    final marking = identical(_markingAll, notifier);
     final topPad = MediaQuery.of(context).padding.top;
 
     return Scaffold(
@@ -91,46 +121,42 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
                 style: TextStyle(color: _C.onSurface, fontSize: 22,
                   fontWeight: FontWeight.w700)),
               const Spacer(),
-              GestureDetector(
-                onTap: () async {
-                  final ok = await ref.read(notificationsProvider.notifier).markAllRead();
-                  if (!ok && context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                        content: Text("Couldn't mark them read — try again.")));
-                  }
-                },
+              NamedIconButton(
+                label: marking ? 'Marking all read' : markAllReadLabel,
+                onTap: marking ? null : () => _markAll(notifier),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                   decoration: BoxDecoration(
                     color: _C.brand.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(color: _C.brand.withValues(alpha: 0.25))),
-                  child: const Text(markAllReadLabel,
-                    style: TextStyle(color: _C.primary, fontSize: 11,
-                      fontWeight: FontWeight.w600)))),
+                  child: Text(markAllReadLabel,
+                    style: TextStyle(
+                      color: _C.primary.withValues(alpha: marking ? 0.5 : 1),
+                      fontSize: 11, fontWeight: FontWeight.w600)))),
             ]),
           ),
 
           // ── Content ──────────────────────────────────────────────────────
           Expanded(
             child: state.when(
+              // A failed refresh keeps the list that was read.
+              skipError: true,
               loading: () => const Center(
                 child: CircularProgressIndicator(color: _C.primary, strokeWidth: 2)),
               error: (e, _) => Center(
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.wifi_off_rounded, color: _C.outlineVar, size: 40),
-                  const SizedBox(height: 12),
-                  Text('Couldn\'t load notifications',
-                    style: TextStyle(color: _C.onSurfVar.withValues(alpha: 0.6))),
-                  const SizedBox(height: 8),
-                  GestureDetector(
-                    onTap: () => ref.read(notificationsProvider.notifier).refresh(),
-                    child: Text('Try again',
-                      style: const TextStyle(color: _C.primary, fontSize: 13))),
-                ])),
-              data: (list) => list.isEmpty
-                  ? _EmptyState()
-                  : _NotificationList(list: list),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: _LoadFailure(state: state, notifier: notifier))),
+              data: (list) => Column(children: [
+                if (state.hasError)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: _LoadFailure(state: state, notifier: notifier)),
+                Expanded(child: list.isEmpty
+                    ? _EmptyState()
+                    : _NotificationList(list: list, notifier: notifier)),
+              ]),
             ),
           ),
         ]),
@@ -139,18 +165,34 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
   }
 }
 
+class _LoadFailure extends StatelessWidget {
+  final AsyncValue<List<AppNotification>> state;
+  final NotificationsNotifier notifier;
+  const _LoadFailure({required this.state, required this.notifier});
+  @override
+  Widget build(BuildContext context) => SectionLoadFailure(
+        what: state.hasValue ? 'your latest notifications' : 'your notifications',
+        error: state.error,
+        busy: state.isLoading,
+        onRetry: notifier.refresh,
+        accent: _C.primary,
+        textColor: _C.onSurface,
+        mutedColor: _C.onSurfVar);
+}
+
 // ── Notification List ─────────────────────────────────────────────────────────
-class _NotificationList extends ConsumerWidget {
+class _NotificationList extends StatelessWidget {
   final List<AppNotification> list;
-  const _NotificationList({required this.list});
+  final NotificationsNotifier notifier;
+  const _NotificationList({required this.list, required this.notifier});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final groups = _groupByDate(list);
     return RefreshIndicator(
       color: _C.primary,
       backgroundColor: _C.surfCont,
-      onRefresh: () => ref.read(notificationsProvider.notifier).refresh(),
+      onRefresh: notifier.refresh,
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
         itemCount: _countItems(groups),
@@ -161,8 +203,8 @@ class _NotificationList extends ConsumerWidget {
           return Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: _NotificationCard(notification: n,
-              onTap: () => ref.read(notificationsProvider.notifier).markRead(n.id),
-              onDismiss: () => ref.read(notificationsProvider.notifier).delete(n.id)));
+              onTap: () => _saySo(context, 'mark that read', notifier, () => notifier.markRead(n.id)),
+              onDismiss: () => _saySo(context, 'delete that', notifier, () => notifier.delete(n.id))));
         },
       ),
     );
@@ -231,7 +273,8 @@ class _GroupHeader extends StatelessWidget {
 class _NotificationCard extends StatelessWidget {
   final AppNotification notification;
   final VoidCallback onTap;
-  /// Deletes the notification; true when the server took it.
+  /// Deletes the notification, saying so when the server did not take it; true
+  /// when it did.
   final AsyncValueGetter<bool> onDismiss;
   const _NotificationCard({
     required this.notification,
@@ -259,14 +302,7 @@ class _NotificationCard extends StatelessWidget {
         child: const Icon(Icons.delete_outline_rounded, color: _C.error, size: 24)),
       // Delete first, dismiss only if it was deleted: a row whose delete failed
       // slides back, still there, and the member is told.
-      confirmDismiss: (_) async {
-        final ok = await onDismiss();
-        if (!ok && context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text("Couldn't delete that — try again.")));
-        }
-        return ok;
-      },
+      confirmDismiss: (_) => onDismiss(),
       child: GestureDetector(
         onTap: onTap,
         child: AnimatedContainer(

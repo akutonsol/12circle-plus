@@ -1,18 +1,47 @@
 import '../../../core/observability/app_failure.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/theme/app_background.dart';
+import '../../auth/domain/auth_provider.dart';
+import '../../workout/presentation/widgets/section_load_failure.dart';
+import '../data/goal_service.dart';
 import '../data/models/goal.dart';
 import '../domain/goal_provider.dart';
 import '../../../core/widgets/back_leading.dart';
 
-/// Shown when a goal action did not persist (QAX-COR-08).
-void _showGoalFailure(BuildContext context) =>
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(content: Text(goalActionFailedMessage)));
+/// Said when a goal action did not persist (QAX-COR-08); [couldntMessage] says
+/// the connection instead when the failure IS the connection.
+const goalActionFailedMessage =
+    "Couldn't update your goal — try again in a moment. If it keeps happening, contact support.";
 
-const goalActionFailedMessage = "Couldn't update your goal — check your connection and try again.";
+/// The signed-in account, by id: a token refresh is the same member.
+final _goalsUid = currentUserProvider.select((u) => u?.id);
+
+/// Whether [owner] — the account a control was built for — is still signed in:
+/// asked at the tap, and again after a write came back. False too when the
+/// app's providers went with the account in the meantime.
+bool _stillFor(ProviderContainer c, String? owner) {
+  // The auth client first: the provider hears of a change a moment later.
+  if (owner != null &&
+      Supabase.instance.client.auth.currentUser?.id != owner) {
+    return false;
+  }
+  try {
+    return c.read(_goalsUid) == owner;
+  } on StateError {
+    return false; // the container is disposed
+  }
+}
+
+/// A failure said where the member is typing; announced when it appears.
+Widget _saidHere(String message) => Semantics(
+      liveRegion: true,
+      container: true,
+      child: Text(message,
+          style: const TextStyle(color: AppColors.error, fontSize: 13)),
+    );
 
 class GoalsScreen extends ConsumerWidget {
   const GoalsScreen({super.key});
@@ -20,6 +49,18 @@ class GoalsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final goalsAsync = ref.watch(myGoalsProvider);
+    final uid = ref.watch(_goalsUid);
+    // P0-FL-60c · every state of goalsOfProvider(uid) is uid's: what was read
+    // stays on screen while it is read again, and when that fails.
+    void reread() => ref.invalidate(goalsOfProvider(uid));
+    final failure = goalsAsync.hasError
+        ? SectionLoadFailure(
+            what: goalsAsync.hasValue ? 'your latest goals' : 'your goals',
+            error: goalsAsync.error,
+            busy: goalsAsync.isLoading,
+            onRetry: reread,
+          )
+        : null;
     return AppGradientBackground(
       child: Scaffold(
       backgroundColor: Colors.transparent,
@@ -33,33 +74,44 @@ class GoalsScreen extends ConsumerWidget {
       ),
       floatingActionButton: FloatingActionButton.extended(
         backgroundColor: AppColors.purple,
-        onPressed: () => _showAddGoal(context, ref),
+        onPressed: () => _showAddGoal(context, uid),
         icon: const Icon(Icons.add, color: Colors.white),
         label: const Text('New Goal', style: TextStyle(color: Colors.white)),
       ),
       body: goalsAsync.when(
+        skipLoadingOnReload: true,
+        skipError: true,
         loading: () => const Center(
             child: CircularProgressIndicator(color: AppColors.purple)),
-        error: (_, __) => const Center(
-            child: Text('Could not load goals',
-                style: TextStyle(color: AppColors.textTertiary))),
+        error: (_, __) => Center(
+            child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20), child: failure)),
         data: (goals) {
-          if (goals.isEmpty) return const _Empty();
+          if (goals.isEmpty) {
+            return Column(children: [
+              if (failure != null)
+                Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: failure),
+              const Expanded(child: _Empty()),
+            ]);
+          }
           final active = goals.where((g) => !g.isCompleted).toList();
           final done = goals.where((g) => g.isCompleted).toList();
           return RefreshIndicator(
             color: AppColors.purple,
-            onRefresh: () async => ref.invalidate(myGoalsProvider),
+            onRefresh: () async => reread(),
             child: ListView(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 96),
               children: [
+                if (failure != null) failure,
                 if (active.isNotEmpty) ...[
                   const _Label('Active'),
-                  ...active.map((g) => _GoalCard(goal: g)),
+                  ...active.map((g) => _GoalCard(goal: g, owner: uid)),
                 ],
                 if (done.isNotEmpty) ...[
                   const _Label('Achieved 🎉'),
-                  ...done.map((g) => _GoalCard(goal: g)),
+                  ...done.map((g) => _GoalCard(goal: g, owner: uid)),
                 ],
               ],
             ),
@@ -87,7 +139,11 @@ class _Label extends StatelessWidget {
 
 class _GoalCard extends ConsumerWidget {
   final Goal goal;
-  const _GoalCard({required this.goal});
+
+  /// Who was signed in when this card was built: the only account its actions
+  /// may be sent for.
+  final String? owner;
+  const _GoalCard({required this.goal, required this.owner});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -121,20 +177,34 @@ class _GoalCard extends ConsumerWidget {
               color: AppColors.surfaceDarkElevated,
               icon: const Icon(Icons.more_horiz, color: AppColors.textTertiary),
               onSelected: (v) async {
+                // The card can go while the write is in flight, its ref with it.
+                final c = ProviderScope.containerOf(context, listen: false);
+                final messenger = ScaffoldMessenger.maybeOf(context);
+                if (!_stillFor(c, owner)) {
+                  reportError('GoalsScreen.$v',
+                      StateError('goal $v: the signed-in account changed'),
+                      StackTrace.current);
+                  return;
+                }
                 if (v == 'update') {
-                  await _showUpdate(context, ref);
+                  await _showUpdate(context);
                   return;
                 }
                 try {
                   if (v == 'complete') {
-                    await ref.read(goalServiceProvider).complete(goal.id);
+                    await c.read(goalServiceProvider).completeFor(owner, goal.id);
                   } else if (v == 'delete') {
-                    await ref.read(goalServiceProvider).deleteGoal(goal.id);
+                    await c.read(goalServiceProvider).deleteGoalFor(owner, goal.id);
                   }
-                  ref.invalidate(myGoalsProvider);
+                  if (_stillFor(c, owner)) c.invalidate(goalsOfProvider(owner));
                 } catch (e, s) {
                   reportError('GoalsScreen.$v', e, s);
-                  if (context.mounted) _showGoalFailure(context);
+                  // Not to whoever signed in meanwhile.
+                  if (!_stillFor(c, owner)) return;
+                  messenger?.showSnackBar(SnackBar(
+                      content: Text(couldntMessage(
+                          v == 'delete' ? 'delete your goal' : 'update your goal',
+                          e))));
                 }
               },
               itemBuilder: (_) => const [
@@ -177,45 +247,147 @@ class _GoalCard extends ConsumerWidget {
     );
   }
 
-  Future<void> _showUpdate(BuildContext context, WidgetRef ref) async {
-    final ctrl = TextEditingController(
-        text: goal.currentValue?.toString() ?? '');
-    final val = await showDialog<double>(
-      context: context,
-      builder: (dctx) => AlertDialog(
-        backgroundColor: AppColors.surfaceDark,
-        title: const Text('Update progress',
-            style: TextStyle(color: AppColors.white)),
-        content: TextField(
-          controller: ctrl,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          autofocus: true,
-          style: const TextStyle(color: AppColors.white),
-          decoration: InputDecoration(
-              suffixText: goal.unit,
-              suffixStyle: const TextStyle(color: AppColors.textTertiary),
-              hintText: 'Current value',
-              hintStyle: const TextStyle(color: AppColors.textTertiary)),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(dctx),
-              child: const Text('Cancel',
-                  style: TextStyle(color: AppColors.textTertiary))),
-          TextButton(
-              onPressed: () =>
-                  Navigator.pop(dctx, double.tryParse(ctrl.text.trim())),
-              child: const Text('Save',
-                  style: TextStyle(color: AppColors.purple))),
+  Future<void> _showUpdate(BuildContext context) => showDialog<void>(
+        context: context,
+        builder: (_) => _OwnersOnly(
+            owner: owner,
+            child: _UpdateProgressDialog(goal: goal, owner: owner)),
+      );
+}
+
+/// P0-FL-60c · the dialog saves, and closes only when the server took it: a
+/// failed save (or a number it cannot read) keeps what was typed and says so.
+/// It used to close first, losing the value with the failure.
+class _UpdateProgressDialog extends ConsumerStatefulWidget {
+  final Goal goal;
+  final String? owner;
+  const _UpdateProgressDialog({required this.goal, required this.owner});
+  @override
+  ConsumerState<_UpdateProgressDialog> createState() =>
+      _UpdateProgressDialogState();
+}
+
+class _UpdateProgressDialogState extends ConsumerState<_UpdateProgressDialog> {
+  late final _ctrl = TextEditingController(
+      text: widget.goal.currentValue?.toString() ?? '');
+  bool _saving = false;
+  String? _failure;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    final val = double.tryParse(_ctrl.text.trim());
+    if (val == null) {
+      setState(() => _failure = 'Enter a number, like 72.5.');
+      return;
+    }
+    final c = ProviderScope.containerOf(context, listen: false);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final owner = widget.owner;
+    setState(() {
+      _saving = true;
+      _failure = null;
+    });
+    var saved = false;
+    Object? error;
+    try {
+      saved = await c
+          .read(goalServiceProvider)
+          .updateProgressFor(owner, widget.goal.id, val);
+    } catch (e) {
+      error = e; // recorded by the service
+    }
+    // Not to whoever signed in meanwhile.
+    if (!_stillFor(c, owner)) return;
+    c.invalidate(goalsOfProvider(owner));
+    if (saved) {
+      if (mounted) Navigator.pop(context);
+      return;
+    }
+    final said = couldntMessage('update your goal', error);
+    if (!mounted) {
+      messenger?.showSnackBar(SnackBar(content: Text(said)));
+      return;
+    }
+    setState(() {
+      _saving = false;
+      _failure = said;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final failure = _failure;
+    return AlertDialog(
+      backgroundColor: AppColors.surfaceDark,
+      title: const Text('Update progress',
+          style: TextStyle(color: AppColors.white)),
+      scrollable: true,
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _ctrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            autofocus: true,
+            style: const TextStyle(color: AppColors.white),
+            decoration: InputDecoration(
+                suffixText: widget.goal.unit,
+                suffixStyle: const TextStyle(color: AppColors.textTertiary),
+                hintText: 'Current value',
+                hintStyle: const TextStyle(color: AppColors.textTertiary)),
+          ),
+          if (failure != null) ...[
+            const SizedBox(height: 12),
+            _saidHere(failure),
+          ],
         ],
       ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel',
+                style: TextStyle(color: AppColors.textTertiary))),
+        TextButton(
+            onPressed: _saving ? null : _save,
+            child: Text(_saving ? 'Saving…' : 'Save',
+                style: const TextStyle(color: AppColors.purple))),
+      ],
     );
-    if (val != null) {
-      final ok = await ref.read(goalServiceProvider).updateProgress(goal.id, val);
-      ref.invalidate(myGoalsProvider);
-      if (!ok && context.mounted) _showGoalFailure(context);
-    }
   }
+}
+
+/// A dialog, sheet or picker that goes with the member it was opened for, at
+/// once and silently: what was typed in [child] with it. Asked in the build, so
+/// a route opened just before the switch is never drawn for the next member.
+class _OwnersOnly extends ConsumerWidget {
+  final String? owner;
+  final Widget child;
+  const _OwnersOnly({required this.owner, required this.child});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (ref.watch(_goalsUid) == owner) return child;
+    _removeRoute(context);
+    return const SizedBox.shrink();
+  }
+}
+
+/// Removes the route [context] is in (not whatever is on top of it), after
+/// this frame: the account can change during a build.
+void _removeRoute(BuildContext context) {
+  final route = ModalRoute.of(context);
+  if (route == null) return;
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (route.isActive) route.navigator?.removeRoute(route);
+  });
+  WidgetsBinding.instance.scheduleFrame();
 }
 
 class _Empty extends StatelessWidget {
@@ -238,23 +410,26 @@ class _Empty extends StatelessWidget {
       );
 }
 
-void _showAddGoal(BuildContext context, WidgetRef ref) {
+void _showAddGoal(BuildContext context, String? owner) {
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => _AddGoalSheet(ref: ref),
+    builder: (_) => _OwnersOnly(owner: owner, child: _AddGoalSheet(owner: owner)),
   );
 }
 
-class _AddGoalSheet extends StatefulWidget {
-  final WidgetRef ref;
-  const _AddGoalSheet({required this.ref});
+class _AddGoalSheet extends ConsumerStatefulWidget {
+  /// Who opened the sheet: what is typed here is theirs alone (P0-FL-60c).
+  final String? owner;
+  const _AddGoalSheet({required this.owner});
   @override
-  State<_AddGoalSheet> createState() => _AddGoalSheetState();
+  ConsumerState<_AddGoalSheet> createState() => _AddGoalSheetState();
 }
 
-class _AddGoalSheetState extends State<_AddGoalSheet> {
+class _AddGoalSheetState extends ConsumerState<_AddGoalSheet> {
+  String? get _owner => widget.owner;
+  String? _failure;
   final _title = TextEditingController();
   final _start = TextEditingController();
   final _target = TextEditingController();
@@ -282,29 +457,51 @@ class _AddGoalSheetState extends State<_AddGoalSheet> {
   }
 
   Future<void> _save() async {
-    if (_title.text.trim().isEmpty) return;
-    setState(() => _saving = true);
-    final ok = await widget.ref.read(goalServiceProvider).createGoal(
-          title: _title.text.trim(),
-          type: _type,
-          startValue: double.tryParse(_start.text.trim()),
-          targetValue: double.tryParse(_target.text.trim()),
-          unit: _unit.text.trim(),
-          targetDate: _date,
-        );
-    if (!mounted) return;
-    if (ok) {
-      widget.ref.invalidate(myGoalsProvider);
-      Navigator.pop(context);
-    } else {
-      setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not save goal.')));
+    if (_saving || _title.text.trim().isEmpty) return;
+    final c = ProviderScope.containerOf(context, listen: false);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    setState(() {
+      _saving = true;
+      _failure = null;
+    });
+    var saved = false;
+    Object? error;
+    try {
+      // Refuses, and records, when _owner is no longer signed in.
+      saved = await c.read(goalServiceProvider).createGoal(
+            owner: _owner,
+            title: _title.text.trim(),
+            type: _type,
+            startValue: double.tryParse(_start.text.trim()),
+            targetValue: double.tryParse(_target.text.trim()),
+            unit: _unit.text.trim(),
+            targetDate: _date,
+          );
+    } catch (e) {
+      error = e; // recorded by the service
     }
+    // Not to whoever signed in meanwhile.
+    if (!_stillFor(c, _owner)) return;
+    if (saved) {
+      c.invalidate(goalsOfProvider(_owner));
+      if (mounted) Navigator.pop(context);
+      return;
+    }
+    final said = couldntMessage('save your goal', error);
+    if (!mounted) {
+      messenger?.showSnackBar(SnackBar(content: Text(said)));
+      return;
+    }
+    // Said in the sheet, over what they typed: a SnackBar is behind it.
+    setState(() {
+      _saving = false;
+      _failure = said;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    final failure = _failure;
     return Container(
       padding: EdgeInsets.only(
           left: 24,
@@ -315,7 +512,7 @@ class _AddGoalSheetState extends State<_AddGoalSheet> {
         color: AppColors.bgDarkSecondary,
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         Center(
           child: Container(
             width: 40, height: 4,
@@ -368,6 +565,8 @@ class _AddGoalSheetState extends State<_AddGoalSheet> {
           onTap: () async {
             final picked = await showDatePicker(
               context: context,
+              builder: (_, picker) => _OwnersOnly(
+                  owner: _owner, child: picker ?? const SizedBox.shrink()),
               initialDate: DateTime.now().add(const Duration(days: 30)),
               firstDate: DateTime.now(),
               lastDate: DateTime.now().add(const Duration(days: 730)),
@@ -396,6 +595,10 @@ class _AddGoalSheetState extends State<_AddGoalSheet> {
           ),
         ),
         const SizedBox(height: 20),
+        if (failure != null) ...[
+          _saidHere(failure),
+          const SizedBox(height: 12),
+        ],
         SizedBox(
           width: double.infinity,
           child: ElevatedButton(
@@ -407,7 +610,7 @@ class _AddGoalSheetState extends State<_AddGoalSheet> {
                 : const Text('Create Goal'),
           ),
         ),
-      ]),
+      ])),
     );
   }
 
