@@ -10,7 +10,6 @@ import '../../dashboard/domain/still_reading.dart'
     show
         OpenedByAccount,
         OwnedText,
-        accountLeft,
         hasAuthClient,
         signedInUid,
         stillSignedIn,
@@ -134,12 +133,19 @@ class _CreateClassScreenState extends ConsumerState<CreateClassScreen> {
         price: _paid ? double.tryParse(_price.text.trim()) : null,
       );
     } catch (e, st) {
-      // The service's own refusal for another account is that stop, not a
-      // failure of the coach's: recorded once, as the stop.
-      if (e is! StateError || !accountLeft(owner)) {
-        reportError('CreateClassScreen._save', e, st);
+      // Recorded once. When the account left meanwhile, that one record says
+      // both: the stop, and how the insert had failed (a refusal, no row, or
+      // the service's own refusal for another account). Nothing is said.
+      if (!stillSignedIn(owner)) {
+        reportError(
+            'CreateClassScreen._save',
+            StateError('create the class (answered): the signed-in account '
+                'changed; the insert had failed: $e'),
+            st);
+        if (mounted) setState(_clearForm);
+        return;
       }
-      if (_left(owner, 'create the class (answered)')) return;
+      reportError('CreateClassScreen._save', e, st);
       if (mounted) setState(() => _saving = false);
       if (messenger.mounted) {
         messenger.showSnackBar(SnackBar(

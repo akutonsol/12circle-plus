@@ -3,6 +3,7 @@ import 'package:circle_fitness/features/vendor/presentation/event_agenda_screen.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 
 import '../support/coach_tools_server.dart';
 import '../support/two_member_postgrest.dart';
@@ -190,6 +191,8 @@ void main() {
       expect(find.textContaining("Couldn't"), findsNothing);
       expect(by(memberB), isEmpty, reason: "B re-read A's agenda: ${by(memberB).toList()}");
       expect(changed(), ['EventAgendaScreen.updateSession']);
+      // Round 2 (security N2, the same rule here): one failure, one record.
+      expect(reported, hasLength(1), reason: 'recorded twice: $reported');
       await agendaGone(t);
       await unmountAll(t);
     });
@@ -242,6 +245,188 @@ void main() {
       await switchTo(t, memberB);
       await agendaGone(t);
       expect(by(memberB), isEmpty);
+      await unmountAll(t);
+    });
+  });
+
+  // Round 2 (mutants M13, M14, M15): each binding on its own, with the layer
+  // that normally stops the same case first taken out of the way.
+  group('each binding on its own', () {
+    testWidgets(
+        "opened for vendor A (the opener's owner) while B is already signed in: "
+        'it closes before B sees anything, and reads nothing', (t) async {
+      t.view
+        ..devicePixelRatio = 1
+        ..physicalSize = const Size(1200, 2600);
+      addTearDown(t.view.reset);
+      // The opener captured A at the tap; B signed in before the first frame.
+      await t.runAsync(() => signInAs(memberB));
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      routes = Routes();
+      await t.pumpWidget(UncontrolledProviderScope(
+          container: c,
+          child: pushedPage(routes,
+              const EventAgendaScreen(event: _event, canManage: true, owner: memberA))));
+      await t.tap(find.text('go'));
+      await settleReal(t);
+      await t.pump(const Duration(seconds: 1));
+      expect(find.byType(EventAgendaScreen), findsNothing,
+          reason: "A's agenda stayed open for B");
+      expect(find.text('Add Session'), findsNothing);
+      expect(find.text('go'), findsOneWidget);
+      expect(server.log, isEmpty, reason: "A's agenda was read as B: ${server.log}");
+      await unmountAll(t);
+    });
+
+    testWidgets(
+        "A's editor sheet closes itself even when the page under it cannot "
+        '(the agenda is the first route)', (t) async {
+      t.view
+        ..devicePixelRatio = 1
+        ..physicalSize = const Size(1200, 2600);
+      addTearDown(t.view.reset);
+      await t.runAsync(() => signInAs(memberA));
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      // The first route: the page's own binding blanks it but cannot pop it,
+      // so only the sheet's binding can take A's draft away.
+      await t.pumpWidget(UncontrolledProviderScope(
+          container: c,
+          child: const MaterialApp(
+              home: EventAgendaScreen(event: _event, canManage: true))));
+      await settleReal(t);
+      await openEditor(t);
+      await t.enterText(find.byType(TextField).first, 'A private retitle');
+      final save = tapOf(t, 'Save changes');
+      await switchTo(t, memberB);
+      await t.pump(const Duration(seconds: 1));
+      expect(find.text('Edit Session'), findsNothing, reason: "A's editor stayed open for B");
+      expect(find.text('A private retitle'), findsNothing, reason: "A's draft is shown to B");
+      save(); // the tap already on its way
+      await settleReal(t);
+      expect(server.writes, isEmpty, reason: "A's draft was saved by B: ${server.writes.toList()}");
+      await unmountAll(t);
+    });
+
+    testWidgets(
+        "a rebuild before the page hears of B draws none of A's sessions",
+        (t) async {
+      // A listener subscribed before the page's own ones rebuilds the page
+      // after B is signed in but before the page (and its binding) heard of
+      // it: what that build draws must already be nothing of A's.
+      bool? drawnInGap;
+      final early = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+        if (drawnInGap != null ||
+            Supabase.instance.client.auth.currentUser?.id != memberB) {
+          return;
+        }
+        final page = find.byType(EventAgendaScreen);
+        if (page.evaluate().isEmpty) return;
+        final el = t.element(page);
+        el.markNeedsBuild();
+        el.owner!.buildScope(el);
+        drawnInGap = find.text('A keynote').evaluate().isNotEmpty ||
+            find.byIcon(Icons.more_horiz).evaluate().isNotEmpty;
+      });
+      addTearDown(early.cancel);
+      await open(t);
+      expect(find.text('A keynote'), findsOneWidget, reason: 'premise');
+      await switchTo(t, memberB);
+      expect(drawnInGap, isNotNull, reason: 'premise: built in the gap');
+      expect(drawnInGap, isFalse, reason: "A's sessions were drawn while B was signed in");
+      await agendaGone(t);
+      expect(by(memberB), isEmpty);
+      await unmountAll(t);
+    });
+  });
+
+  group('round 2: more of the matrix', () {
+    testWidgets("switch while A's delete is in flight: one delete, as A; B is told nothing",
+        (t) async {
+      await open(t);
+      final hold = server.hold((s) => s.isWrite);
+      await openMenu(t);
+      await t.tap(find.text('Delete'));
+      await settleReal(t);
+      expect(server.writes.single.who, memberA, reason: 'premise: A sent it');
+      await switchTo(t, memberB);
+      hold.complete();
+      await settleReal(t);
+      expect(server.writes, hasLength(1));
+      expect(server.writes.single.method, 'DELETE');
+      expect(find.byType(SnackBar), findsNothing);
+      expect(by(memberB), isEmpty, reason: "B re-read A's agenda: ${by(memberB).toList()}");
+      expect(changed(), ['EventAgendaScreen.deleteSession']);
+      await agendaGone(t);
+      await unmountAll(t);
+    });
+
+    testWidgets("B's own read failed: said to B with Try again; never A's rows",
+        (t) async {
+      server.failing = reads;
+      await open(t, as: memberB);
+      expect(find.textContaining("Couldn't load the agenda"), findsOneWidget);
+      expect(find.text('Try again'), findsOneWidget);
+      expect(find.textContaining('No sessions yet'), findsNothing);
+      expect(server.log.where(reads).map((s) => s.who), [memberB]);
+      await unmountAll(t);
+    });
+
+    testWidgets('the failure card fits a 320×568 screen at 3× text', (t) async {
+      server.failing = reads;
+      t.platformDispatcher.textScaleFactorTestValue = 3;
+      addTearDown(t.platformDispatcher.clearTextScaleFactorTestValue);
+      await t.runAsync(() => signInAs(memberA));
+      t.view
+        ..devicePixelRatio = 1
+        ..physicalSize = const Size(320, 568);
+      addTearDown(t.view.reset);
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      await t.pumpWidget(UncontrolledProviderScope(
+          container: c,
+          child: const MaterialApp(
+              home: EventAgendaScreen(event: _event, canManage: true))));
+      await settleReal(t);
+      expect(find.textContaining("Couldn't load the agenda"), findsOneWidget);
+      expect(t.takeException(), isNull, reason: 'overflowed at 3× text');
+      final retry = t.getSize(find.ancestor(
+          of: find.text('Try again'), matching: find.bySubtype<ButtonStyleButton>()).first);
+      expect(retry.height, greaterThanOrEqualTo(44));
+      await unmountAll(t);
+    });
+
+    testWidgets('a failed refresh at 3× text on 320×568: the rows are kept under the card',
+        (t) async {
+      t.platformDispatcher.textScaleFactorTestValue = 3;
+      addTearDown(t.platformDispatcher.clearTextScaleFactorTestValue);
+      await t.runAsync(() => signInAs(memberA));
+      t.view
+        ..devicePixelRatio = 1
+        ..physicalSize = const Size(320, 568);
+      addTearDown(t.view.reset);
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      await t.pumpWidget(UncontrolledProviderScope(
+          container: c,
+          child: const MaterialApp(
+              home: EventAgendaScreen(event: _event, canManage: true))));
+      await settleReal(t);
+      expect(find.text('A keynote'), findsOneWidget, reason: 'premise');
+      server.failing = reads;
+      final refreshed =
+          t.state<RefreshIndicatorState>(find.byType(RefreshIndicator)).show();
+      await t.pump();
+      await t.pump(const Duration(seconds: 1));
+      await settleReal(t);
+      await t.pump(const Duration(seconds: 1));
+      await refreshed;
+      expect(find.textContaining("Couldn't load the agenda"), findsOneWidget);
+      expect(t.takeException(), isNull, reason: 'overflowed at 3× text');
+      await t.scrollUntilVisible(find.text('A keynote'), 200,
+          scrollable: find.byType(Scrollable).first);
+      expect(find.text('A keynote'), findsOneWidget, reason: 'the kept rows are reachable');
       await unmountAll(t);
     });
   });

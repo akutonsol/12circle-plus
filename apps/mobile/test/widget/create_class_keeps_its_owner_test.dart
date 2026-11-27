@@ -1,8 +1,10 @@
 import 'package:circle_fitness/core/observability/app_failure.dart';
+import 'package:circle_fitness/features/classes/data/live_class_service.dart';
 import 'package:circle_fitness/features/classes/presentation/create_class_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 
 import '../support/coach_tools_server.dart';
 import '../support/two_member_postgrest.dart';
@@ -149,7 +151,60 @@ void main() {
       expect(find.byType(SnackBar), findsNothing, reason: "A's failure was said to B");
       expect(find.textContaining('create'), findsNothing);
       expect(changed(), ['CreateClassScreen._save']);
+      // Round 2 (security N2): one failure, one record.
+      expect(reported, hasLength(1), reason: 'recorded twice: $reported');
       await formGone(t);
+      await unmountAll(t);
+    });
+
+    testWidgets(
+        'switch during a save that came back with no row: recorded once, '
+        'and the record keeps the 0-row failure', (t) async {
+      await open(t);
+      await type(t);
+      final hold = server.hold((s) => s.isWrite);
+      server.zeroRows = (s) => s.isWrite;
+      await t.tap(find.text('Publish Class'));
+      await settleReal(t);
+      await switchTo(t, memberB);
+      hold.complete();
+      await settleReal(t);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(reported, hasLength(1), reason: 'recorded twice: $reported');
+      expect('${reported.single.error}',
+          allOf(contains('signed-in account changed'), contains('no row was created')),
+          reason: 'the 0-row failure was lost from the record');
+      await formGone(t);
+      await unmountAll(t);
+    });
+
+    // Round 2 (mutant M6). The page is bound to the coach who opened it, not
+    // to whoever is signed in when it is next built. A listener subscribed
+    // before the page's own ones rebuilds the page after coach B is signed
+    // in but before the page has heard of it (a build in that gap: the
+    // binding alone must still say A).
+    testWidgets('a rebuild before the page hears of coach B still closes it for B',
+        (t) async {
+      var rebuiltInGap = false;
+      final early = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
+        if (rebuiltInGap ||
+            Supabase.instance.client.auth.currentUser?.id != memberB) {
+          return;
+        }
+        final page = find.byType(CreateClassScreen);
+        if (page.evaluate().isEmpty) return;
+        final el = t.element(page);
+        el.markNeedsBuild();
+        el.owner!.buildScope(el);
+        rebuiltInGap = true;
+      });
+      addTearDown(early.cancel);
+      await open(t);
+      await type(t);
+      await switchTo(t, memberB);
+      expect(rebuiltInGap, isTrue, reason: 'premise: built in the gap');
+      await formGone(t);
+      expect(server.writes, isEmpty);
       await unmountAll(t);
     });
 
@@ -234,6 +289,46 @@ void main() {
       await settleReal(t);
       expect(inserts(), hasLength(1), reason: 'the class was created twice');
       await unmountAll(t);
+    });
+  });
+
+  // Round 2 (mutant M8). The screen checks the account itself, with no await
+  // before the service runs, so only a direct call reaches the service's own
+  // check: a coach id that is not the signed-in account sends nothing.
+  group('the class service on its own', () {
+    Future<void> create(String coachId) => LiveClassService().createClass(
+          coachId: coachId,
+          title: 'A private yoga',
+          description: '',
+          type: 'yoga',
+          scheduledAt: DateTime.utc(2026, 12, 1, 7),
+          durationMinutes: 60,
+          isOnline: false,
+        );
+
+    test('a class for coach A, asked while coach B is signed in, sends nothing',
+        () async {
+      await signInAs(memberB);
+      expect(Supabase.instance.client.auth.currentUser?.id, memberB, reason: 'premise');
+      await expectLater(
+          create(memberA),
+          throwsA(isA<StateError>().having((e) => e.message, 'message',
+              contains('the signed-in account changed'))));
+      expect(server.log, isEmpty, reason: "A's class was sent on B's token: ${server.log}");
+    });
+
+    test('signed out: a class for coach A sends nothing', () async {
+      await signOut();
+      await expectLater(create(memberA), throwsA(isA<StateError>()));
+      expect(server.log, isEmpty);
+    });
+
+    test('control: the signed-in coach creates once, stamped with themselves', () async {
+      await signInAs(memberA);
+      await create(memberA);
+      expect(inserts().single.who, memberA);
+      expect(inserts().single.json, containsPair('coach_id', memberA));
+      expect(inserts().single.query, contains('select=id'));
     });
   });
 

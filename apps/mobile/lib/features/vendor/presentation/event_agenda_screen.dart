@@ -76,17 +76,18 @@ class _EventAgendaScreenState extends ConsumerState<EventAgendaScreen> {
     final canManage = widget.canManage && mine;
     final failureCard = failure == null
         ? null
-        : Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-            child: SectionLoadFailure(
-              what: 'the agenda',
-              error: failure,
-              busy: sessionsAsync.isLoading,
-              onRetry: () => ref.invalidate(eventSessionsProvider(_key)),
-              accent: _brand,
-              mutedColor: _muted,
-            ),
+        : SectionLoadFailure(
+            what: 'the agenda',
+            error: failure,
+            busy: sessionsAsync.isLoading,
+            onRetry: () => ref.invalidate(eventSessionsProvider(_key)),
+            accent: _brand,
+            mutedColor: _muted,
           );
+    // The card scrolls with the page: at large text on a small screen it is
+    // taller than the screen (it overflowed by 461 px at 3× on 320×568).
+    Widget failureOnly(Widget card) => ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 96), children: [card]);
 
     return OpenedByAccount(
       owner: _owner,
@@ -119,11 +120,12 @@ class _EventAgendaScreenState extends ConsumerState<EventAgendaScreen> {
             : null,
         body: Builder(builder: (_) {
           if (sessions == null) {
-            return failureCard ??
-                const Center(child: CircularProgressIndicator(color: _brand));
+            return failureCard != null
+                ? failureOnly(failureCard)
+                : const Center(child: CircularProgressIndicator(color: _brand));
           }
           if (sessions.isEmpty) {
-            if (failureCard != null) return failureCard;
+            if (failureCard != null) return failureOnly(failureCard);
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(32),
@@ -137,30 +139,32 @@ class _EventAgendaScreenState extends ConsumerState<EventAgendaScreen> {
               ),
             );
           }
-          // A failed refresh keeps what was shown, and says so above it.
-          final list = RefreshIndicator(
+          // A failed refresh keeps what was shown, and says so above it, in
+          // the same scroll.
+          final lead = failureCard == null ? 0 : 1;
+          return RefreshIndicator(
             color: _brand,
             backgroundColor: _card,
             onRefresh: () async => ref.invalidate(eventSessionsProvider(_key)),
             child: ListView.builder(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
-              itemCount: sessions.length,
-              itemBuilder: (_, i) => _SessionCard(
-                session: sessions[i],
-                canManage: canManage,
-                onEdit: () => _editSession(existing: sessions[i]),
-                onDelete: () => _write(
-                  origin: 'EventAgendaScreen.deleteSession',
-                  what: 'delete the session',
-                  send: (svc) =>
-                      svc.deleteSession(sessions[i]['id'] as String),
-                ),
-              ),
+              itemCount: sessions.length + lead,
+              itemBuilder: (_, i) {
+                if (i < lead) return failureCard!;
+                final session = sessions[i - lead];
+                return _SessionCard(
+                  session: session,
+                  canManage: canManage,
+                  onEdit: () => _editSession(existing: session),
+                  onDelete: () => _write(
+                    origin: 'EventAgendaScreen.deleteSession',
+                    what: 'delete the session',
+                    send: (svc) => svc.deleteSession(session['id'] as String),
+                  ),
+                );
+              },
             ),
           );
-          return failureCard == null
-              ? list
-              : Column(children: [failureCard, Expanded(child: list)]);
         }),
       ),
     );
@@ -215,6 +219,16 @@ class _EventAgendaScreenState extends ConsumerState<EventAgendaScreen> {
     try {
       await send(svc);
     } catch (e, st) {
+      // Recorded once. When the account left meanwhile, that one record says
+      // both: the stop, and how the write had failed. Nothing is said.
+      if (!stillSignedIn(owner)) {
+        reportError(
+            origin,
+            StateError('$what (answered): the signed-in account changed; '
+                'the write had failed: $e'),
+            st);
+        return;
+      }
       reportError(origin, e, st);
       failure = e;
     }
@@ -284,13 +298,17 @@ class _SessionCard extends StatelessWidget {
                         if (timeText.isNotEmpty) ...[
                           const Icon(Icons.schedule, size: 14, color: _lilac),
                           const SizedBox(width: 6),
-                          Text(timeText,
-                              style: const TextStyle(
-                                  color: _lilac,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700)),
-                        ],
-                        const Spacer(),
+                          // Wraps at large text instead of running off the
+                          // card (it overflowed by 471 px at 3× on 320 wide).
+                          Expanded(
+                            child: Text(timeText,
+                                style: const TextStyle(
+                                    color: _lilac,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700)),
+                          ),
+                        ] else
+                          const Spacer(),
                         if (canManage)
                           PopupMenuButton<String>(
                             color: _card,
