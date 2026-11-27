@@ -1,15 +1,17 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/identity/account_scope.dart' show signedInUid;
+
 /// Module 15 — Vendor Portal data access.
 /// A vendor owns events (vendor_id) and can read / check-in their attendees.
 /// RLS (migration 020) enforces ownership; this service just shapes the calls.
 class VendorService {
   final _db = Supabase.instance.client;
-  String? get _uid => _db.auth.currentUser?.id;
 
   /// Events owned by the signed-in vendor, with a live registration count.
-  Future<List<Map<String, dynamic>>> getMyEvents() async {
-    final uid = _uid;
+  ///
+  /// For [uid], the account the read was started for (P0-FL-59a).
+  Future<List<Map<String, dynamic>>> getMyEvents(String? uid) async {
     if (uid == null) return [];
     final data = await _db
         .from('events')
@@ -19,20 +21,32 @@ class VendorService {
     return List<Map<String, dynamic>>.from(data);
   }
 
-  Future<Map<String, dynamic>> createEvent(Map<String, dynamic> data) async {
-    final uid = _uid;
+  /// Stamped with [vendorId], the account the editor was opened for — never
+  /// whoever is signed in by the time it is saved (P0-FL-59a).
+  Future<Map<String, dynamic>> createEvent(Map<String, dynamic> data,
+      {required String vendorId}) async {
     return await _db.from('events').insert({
       ...data,
-      'vendor_id': uid,
+      'vendor_id': vendorId,
     }).select().single();
   }
 
+  /// Throws when no row changed: RLS filters an update it refuses silently.
   Future<void> updateEvent(String eventId, Map<String, dynamic> data) async {
-    await _db.from('events').update(data).eq('id', eventId);
+    final changed =
+        await _db.from('events').update(data).eq('id', eventId).select('id');
+    _changedOne(changed, 'updateEvent');
   }
 
+  /// Throws when no row was deleted (refused, or already gone).
   Future<void> deleteEvent(String eventId) async {
-    await _db.from('events').delete().eq('id', eventId);
+    final deleted =
+        await _db.from('events').delete().eq('id', eventId).select('id');
+    _changedOne(deleted, 'deleteEvent');
+  }
+
+  static void _changedOne(List<dynamic> rows, String what) {
+    if (rows.isEmpty) throw StateError('$what: no row was changed');
   }
 
   /// Attendees for one of the vendor's events (joined to their profile).
@@ -52,7 +66,12 @@ class VendorService {
   /// owner decision authorizes bounding it (see 135's header, boundary 1).
   /// `email` is likewise preserved: whether a vendor should receive an
   /// attendee's email is an open owner question (boundary 2).
-  Future<List<Map<String, dynamic>>> getRegistrations(String eventId) async {
+  ///
+  /// For [owner] (P0-FL-59a): the second step is not sent once another account
+  /// is signed in — it would ask, on that account's token, about [owner]'s
+  /// attendees.
+  Future<List<Map<String, dynamic>>> getRegistrations(String eventId,
+      {required String owner}) async {
     final registrations = List<Map<String, dynamic>>.from(await _db
         .from('event_registrations')
         // I-COM-01 · `ticket_code` DOES NOT EXIST. The column is `qr_code`
@@ -70,6 +89,9 @@ class VendorService {
         .select('id, status, checked_in_at, registered_at, user_id')
         .eq('event_id', eventId)
         .order('registered_at') as List);
+    if (signedInUid() != owner) {
+      throw StateError('getRegistrations: the signed-in account changed');
+    }
     final attendeeIds = registrations
         .map((r) => r['user_id'] as String?)
         .whereType<String>()
@@ -97,10 +119,12 @@ class VendorService {
     ];
   }
 
+  /// Throws when no row changed.
   Future<void> setCheckedIn(String registrationId, bool checkedIn) async {
-    await _db.from('event_registrations').update({
+    final changed = await _db.from('event_registrations').update({
       'checked_in_at': checkedIn ? DateTime.now().toUtc().toIso8601String() : null,
       'status': checkedIn ? 'attended' : 'registered',
-    }).eq('id', registrationId);
+    }).eq('id', registrationId).select('id');
+    _changedOne(changed, 'setCheckedIn');
   }
 }

@@ -24,6 +24,7 @@ import '../../features/habits/domain/habit_provider.dart'
 import '../../features/nutrition/domain/nutrition_provider.dart'
     show nutritionGoalsProvider;
 import '../../features/workout/domain/workout_provider.dart' show assignedWorkoutsProvider;
+import '../identity/account_scope.dart' show isMixedSession, signedInUid;
 import 'browser_push.dart';
 
 /// Re-reads what a new notification says has changed.
@@ -87,6 +88,7 @@ class _NotificationWatcherState extends ConsumerState<NotificationWatcher> {
   final Set<String> _seen = {};
   bool _primed = false;
   StreamSubscription? _sub;
+  StreamSubscription<AuthState>? _auth;
   String? _uid;
   Timer? _retry;
   Duration _retryDelay = _firstRetry;
@@ -98,19 +100,29 @@ class _NotificationWatcherState extends ConsumerState<NotificationWatcher> {
   void initState() {
     super.initState();
     ensurePermission();
-    _subscribe();
+    _follow(_signedIn);
+    // P0-FL-59a (A-31): follows the account itself. It was looked at only in
+    // build: a sign-out kept the old account's subscription, and the next
+    // account got nothing until something rebuilt this.
+    _auth = Supabase.instance.client.auth.onAuthStateChange.listen((state) {
+      if (!isMixedSession(state.session)) _follow(state.session?.user.id);
+    }, onError: (Object _, StackTrace __) {});
   }
 
-  void _subscribe() {
-    final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (uid == null || uid == _uid) return;
+  String? get _signedIn => signedInUid();
+
+  /// Drops the previous account's subscription; with nobody signed in there is
+  /// none.
+  void _follow(String? uid) {
+    if (uid == _uid) return;
     _uid = uid;
     _retry?.cancel();
     _retryDelay = _firstRetry;
     _sub?.cancel();
+    _sub = null;
     _seen.clear();
     _primed = false;
-    _listen(uid);
+    if (uid != null) _listen(uid);
   }
 
   void _listen(String uid) {
@@ -120,6 +132,8 @@ class _NotificationWatcherState extends ConsumerState<NotificationWatcher> {
           .stream(primaryKey: ['id'])
           .eq('recipient_id', uid)
           .listen((rows) {
+        // These rows are [uid]'s; act on them only for [uid].
+        if (!mounted || _uid != uid || _signedIn != uid) return;
         _retryDelay = _firstRetry;
         for (final r in rows) {
           final id = r['id']?.toString();
@@ -154,7 +168,7 @@ class _NotificationWatcherState extends ConsumerState<NotificationWatcher> {
     _retryDelay = delay * 2 > _maxRetry ? _maxRetry : delay * 2;
     _retry = Timer(delay, () {
       if (!mounted || _uid != uid) return;
-      if (Supabase.instance.client.auth.currentUser?.id != uid) return;
+      if (_signedIn != uid) return;
       _sub?.cancel();
       _listen(uid);
     });
@@ -162,15 +176,12 @@ class _NotificationWatcherState extends ConsumerState<NotificationWatcher> {
 
   @override
   void dispose() {
+    _auth?.cancel();
     _retry?.cancel();
     _sub?.cancel();
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) {
-    // Re-subscribe if the signed-in user changed (login after logout).
-    _subscribe();
-    return widget.child;
-  }
+  Widget build(BuildContext context) => widget.child;
 }
