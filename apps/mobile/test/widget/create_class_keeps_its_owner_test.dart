@@ -159,10 +159,12 @@ void main() {
       await type(t);
       final publish = tapOf(t, 'Publish Class');
       await signOutNow(t);
+      // Before any tap: A's form is gone with A.
+      await formGone(t);
       publish();
       await settleReal(t);
       expect(server.writes, isEmpty);
-      await formGone(t);
+      expect(popped, isNot(true), reason: 'a signed-out Publish closed as created');
       // The same coach, back in: a blank form of their own that creates once.
       await switchTo(t, memberA);
       await t.tap(find.text('go'));
