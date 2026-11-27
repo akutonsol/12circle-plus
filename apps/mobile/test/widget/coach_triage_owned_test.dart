@@ -22,7 +22,8 @@
 // not the owner — "B's read failed" and "the same coach's own refresh fails"
 // (the failure was never recorded). The rest are coverage: on 0a723c3 a change
 // of dependency makes the read a RELOAD, which `.when` draws as loading, so A's
-// rows were not drawn on the frames these tests can reach.
+// rows were not drawn on the frames these tests can reach. "A's read
+// straddles the switch at its LAST step" fails there on the record only.
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
@@ -291,6 +292,37 @@ void main() {
         f.origin == _origin &&
         '${f.error}'.contains('the signed-in account changed'));
     expect(stops.length, 1, reason: "A's stopped read is recorded once");
+    await unmount(tester);
+  });
+
+  testWidgets(
+      "A's read straddles the switch at its LAST step (the drop-off scores): "
+      "its answer is no answer — the stop is recorded, nothing of A's drawn",
+      (tester) async {
+    // FAILS on 0a723c3 on the record only (no stop was recorded; the screen
+    // was safe there, Riverpod drops a superseded future's value). Kills "the
+    // last step's guard dropped", which hands back A's rows as if the read had
+    // finished for A.
+    const rpc = 'POST rpc/coach_client_ai_signals';
+    await show(tester);
+    final lateA = server.holds[key(rpc, memberA)] = Completer<void>();
+    c.invalidate(coachTriageSignalsProvider);
+    await pumpUntil(tester, () => server.count(key(rpc, memberA)) == 1,
+        what: "A's read at its last step");
+    await become(tester, memberB);
+    await pumpUntil(tester, () => seen(ofB()), what: "B's own row");
+    lateA.complete();
+    await frames(tester);
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 200)));
+    await frames(tester);
+    nothingOfA("after A's late last answer");
+    expect(ofB(), findsOneWidget);
+    final stops = reported.where((f) =>
+        f.origin == _origin &&
+        '${f.error}'.contains('the signed-in account changed'));
+    expect(stops.length, 1,
+        reason: "A's read that finished after A left is a recorded stop");
     await unmount(tester);
   });
 
