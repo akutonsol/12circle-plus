@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/vendor/presentation/vendor_portal_screen.dart';
 import 'package:flutter/material.dart';
