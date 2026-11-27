@@ -20,7 +20,7 @@ The two inventories (Area A state holders, ids A-xx; Area B write sites, ids W/E
 | A-11 | Coaching-mode plan RPC runs as B | HIGH impact, low likelihood | CLOSED | FL-59e | Gap between client check and token stays server-side (migration class). |
 | A-12 | Coach review draft sent as B | MED | CLOSED | FL-59c | PD8 refusal rule and its wording wait on Julia. |
 | A-14 | Awards after an await go to whoever is signed in | MED | PARTLY | FL-59e, FL-59b, FL-59c | `live_challenge_service` awards not named by any report; server-side gap remains. |
-| A-15 | Rate-your-coach review saved under B | MED | NOT MAPPED | — | See section 3. |
+| A-15 | Rate-your-coach review saved under B | MED | CLOSED (C14) | FL-62a1 (#231) | Owner captured at open; checked before/after the upsert; card reads the signed-in member's coach only. Error-card half: a failed read is now recorded, but showing it needs a layout decision (C14-62a1-01). |
 | A-16 | Late restore or bind writes A's workout into B's state | LOW | CLOSED | FL-59b | |
 | W1 | Intake writes A's health answers into B's profile | HIGH P1 | CLOSED | FL-59e | Intake "Nothing was lost" wording waits on Julia. |
 | W2 | Reset form changes B's password | HIGH P1 | CLOSED | FL-59a | |
@@ -34,16 +34,16 @@ The two inventories (Area A state holders, ids A-xx; Area B write sites, ids W/E
 | W10 | B's voice overlay points at A's recording | MED P2 | CLOSED | FL-59d | Julia decides on release during the microphone permission prompt (D-2). |
 | W11 | Coaching-mode sheet applies A's choice to B | MED P2 | CLOSED | FL-59e | |
 | W12 | Cancel-coach dialog ends B's coaching | MED P2 | NOT MAPPED | — | See section 3. |
-| W13 | A's rating becomes B's public review | MED P2 | NOT MAPPED | — | See section 3. |
+| W13 | A's rating becomes B's public review | MED P2 | CLOSED (C14) | FL-62a1 (#231) | Upsert stamped with the owner captured at open; nothing sent for B. |
 | W14 | Coach note stored as B's | MED P1 | CLOSED | FL-59f | |
-| W15 | AI coach draft, memory or persona saved for B | MED P2 | NOT MAPPED | — | See section 3. |
+| W15 | AI coach draft, memory or persona saved for B | MED P2 | CLOSED (C14) | FL-62a1 (#231) | `AICoachService(owner:)`; persona/memory writes refuse and record for anyone else; Add memory dialog owned. |
 | W16 | Scan result or selected food logged by B | MED P2 | CLOSED | FL-59e, FL-61 | FL-61 closes it only when merged with or after FL-59e. |
 | W17 | Video response sent by B | MED P2 | CLOSED | FL-59d | |
 | W18 | Review feedback saved as B's review | MED P2 | CLOSED | FL-59c | |
 | W19 | Client-page sheets and price saved by B | MED P2 | CLOSED | FL-59f | Action Center layout unchanged; density decision with Julia. |
 | W20 | Assign program/habits leaves client with none after a switch | MED P2 | OPEN-MIGRATION | — | Needs one atomic RPC; `coach_program_service` is SEC-R3 protected. |
 | W21 | Create/edit exercise steps run as B | MED P2 | CLOSED | FL-59d | Julia owns the exercise detail AI content path (R3-3). |
-| W22 | A's typed program, class, slot, invite or event created as B | MED P2 | PARTLY | FL-59d, FL-59f, FL-59a | `create_class_screen` not reported; `sendInvite` email step still multi-step. |
+| W22 | A's typed program, class, slot, invite or event created as B | MED P2 | PARTLY | FL-59d, FL-59f, FL-59a, FL-62a2 (#230) | `create_class_screen` closed in Cycle 14 (FL-62a2). `sendInvite` email step still multi-step. |
 | W23 | A's draft post or comment published as B | MED P2 | NOT MAPPED | — | See section 3. |
 | W24 | Score awards after awaits land on B | MED P2 | CLOSED | FL-59e, FL-59b, FL-59c | Award RPCs use `auth.uid()`; final gap is server-side. |
 | W25 | Workout feedback inserted with A's session as B | MED P2 | CLOSED | FL-59b | |
@@ -77,7 +77,7 @@ The two inventories (Area A state holders, ids A-xx; Area B write sites, ids W/E
 | E3 | Progress keeps A's body photos and weights | HIGH P1 | CLOSED | FL-59e | |
 | E4 | Intake shows A's health answers and photos | HIGH P1 | CLOSED | FL-59e | |
 | E5 | Chat thread, photos and draft stay for B | HIGH P1 | CLOSED | FL-59c | Julia confirms a dropped chat stays closed. |
-| E6 | AI coach screen keeps A's conversation and memories | HIGH P1 | NOT MAPPED | — | See section 3. |
+| E6 | AI coach screen keeps A's conversation and memories | HIGH P1 | CLOSED (C14) | FL-62a1 (#231) | Screen keyed by uid; every await re-checks the owner; late chat/insight/generate answers never drawn for B. |
 | E7 | Coach client workout screen shows A's stats | MED P1 | CLOSED | FL-59b | |
 | E8 | Availability shows A's client names and times | MED P1 | CLOSED | FL-59d | Partial cancel needs an atomic RPC (D-3, Julia). |
 | E9 | Check-in and booking screens keep A's appointments | MED P2 | CLOSED | FL-59c, FL-59e | |
@@ -114,9 +114,9 @@ The two inventories (Area A state holders, ids A-xx; Area B write sites, ids W/E
 
 ## 3. Not mapped
 
-- **A-15 / W13 (Rate your coach):** FL-59a's containment tests open this dialog under AccountScope. No report names either id or adds an owner check at save. The error-card half of A-15 is not reported at all.
+- **A-15 / W13 (Rate your coach):** *(Closed in Cycle 14 by FL-62a1, #231 — see section 5.)* FL-59a's containment tests open this dialog under AccountScope. No report names either id or adds an owner check at save. The error-card half of A-15 is not reported at all.
 - **W12 (cancel coach):** FL-59d added `expectedUid` to `cancelCoach`. FL-59a guarded the profile dialog and FL-60a guarded Stop coach. No report names W12, and PR FL-59d still lists callers that do not pass `expectedUid`.
-- **W15 / E6 (AI coach screen):** this screen appears only in FL-59a's containment brief. No package owned `ai_coach_screen`, and no report names either id.
+- **W15 / E6 (AI coach screen):** *(Closed in Cycle 14 by FL-62a1, #231 — see section 5.)* this screen appears only in FL-59a's containment brief. No package owned `ai_coach_screen`, and no report names either id.
 - **W23 (posts and comments):** FL-59e round 2 says the post sheet and comment box now have an owner. It never names W23.
 - **W32 (second-step notifications):** parts are re-checked in FL-59c (review feedback), FL-59d (availability cancel) and FL-59e (comments). FL-59f lists accept/decline notifications as still open. No report names W32.
 - **E14 (prefilled sheets):** the inventory says to fix this "with each write fix". No report names E14, and W23 is itself unmapped.
@@ -129,9 +129,18 @@ The two inventories (Area A state holders, ids A-xx; Area B write sites, ids W/E
 
 | Class | CLOSED | PARTLY | OPEN-ENG | OPEN-DECISION | OPEN-MIGRATION | OUT-OF-SCOPE | NOT MAPPED | Total |
 |---|---|---|---|---|---|---|---|---|
-| 2 wrong-user write | 36 | 3 | 0 | 0 | 1 | 0 | 6 | 46 |
-| 1 data exposure | 24 | 3 | 0 | 0 | 0 | 0 | 3 | 30 |
+| 2 wrong-user write | 39 | 3 | 0 | 0 | 1 | 0 | 3 | 46 |
+| 1 data exposure | 25 | 3 | 0 | 0 | 0 | 0 | 2 | 30 |
 | 3 stale state | 11 | 0 | 1 | 2 | 0 | 0 | 3 | 17 |
-| **All** | **71** | **6** | **1** | **2** | **1** | **0** | **12** | **93** |
+| **All** | **75** | **6** | **1** | **2** | **1** | **0** | **8** | **93** |
 
 Migration items still open outside these rows: the QAX-SEC-04 messages participant check (A-05, W3), set-log session ownership (A-01, W4), and the server-side `auth.uid()` award gap (A-11, A-14, W24).
+
+## 5. Cycle 14 update (2026-11-27)
+
+Counts in section 4 now include Cycle 14. Changed rows: **A-15, W13, W15, E6** (NOT MAPPED → CLOSED, FL-62a1 #231); **W22** stays PARTLY (Create Class closed by FL-62a2 #230; `sendInvite` remains). Cycle 14 also closed items that had no inventory ID of their own:
+- **Manage Agenda** (`event_agenda_screen.dart`, the FL-59a follow-up): bound to its account, 0-row writes are failures (FL-62a2 #230). Its callers do not yet pass `owner:` (C14-62a2-02, Cycle 15 FL-63a).
+- **`cancelCoach` callers and dashboard approve/decline** pass `expectedUid` (FL-62b #229). A wrong-account write was **not** reachable on the base; this is defence in depth plus single recording.
+- **AI COACH SIGNALS and NEEDS YOU TODAY cards** draw only rows owned by the signed-in coach; coach action-item families carry an owner tag (latent) (FL-62c #233).
+- **Account switch over an open workout** has a combined test; it found and fixed two workout defects (FL-62d #232).
+Still NOT MAPPED after Cycle 14: W32, E14, E17, A-33 (unchanged; not in Cycle 14 scope). Migration-class items are documented in `docs/MIGRATION_CLASS_IDENTITY_RISKS_C14.md` (C14-MIG-01..07); none was applied.

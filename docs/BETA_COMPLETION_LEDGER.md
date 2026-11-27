@@ -1028,6 +1028,77 @@ Mutant test lists were taken from each package's test diff. One lead mutant from
 - Client Action Center has no retry on a failed first load; the coach-side action-item read turns a failure into an empty list.
 - `home_week_follows_calls_test` waits a fixed 50 ms and fails intermittently under load (base test).
 
+### Cycle 14: P0-FL-62a–e, remaining identity-isolation surfaces (2026-11-27)
+
+**Base.** Verified before any branch was cut:
+- `origin/integration/p0-flutter-stack-c13` = `a446926` (tree `68aaf93`), and no `-c14` branch existed.
+- #219–#228 open, unmerged, auto-merge off.
+- main `8f2c8a0`. PR #14 untouched (OPEN, `f16ebc5`).
+
+All five packages start from `a446926` and **target `integration/p0-flutter-stack-c13`**.
+
+**Shared mechanism (unchanged from Cycle 13).** Each package captures the owner when the data, sheet or action starts. It re-checks against the raw signed-in uid before every write and after every await. Its tests mount screens **without** `AccountScope` and keep them mounted across a real switch. The exception is FL-62d, whose subject is `AccountScope` itself.
+
+**Combined evidence branch.** `integration/p0-flutter-stack-c14` = `a446926` plus the five final heads, merged `--no-ff` in package order (62a1, 62a2, 62b, 62c, 62d).
+- **Merging:** there are no integration commits and no conflicts. Only `coach_dashboard_screen.dart` (62b request methods, 62c cards) auto-merged.
+- **At `7b9ce5c` (tree `f969c20`), local:** analyze **281**; **9084** tests pass, 7 skipped, 0 failed.
+- **Protected paths:** none touched. That covers Women's Health, Copilot, `coach_program_service`, `core/observability`, the AI workout build, `supabase/**`, `.github/**` and `.gitleaksignore`. In `home_screen.dart`, only the imports and the `_CoachCard`/Rate region (from line 1187) changed.
+- **CI (push):** **7/7 success**, run `46065115113` on `7b9ce5c` (Flutter analyze/test/QA web build, static guards, negative control, live QA suites, EC-04, UIX-1, I-WRK-01).
+
+| PR | Package | Final head | Independent verdicts | Lead mutants | Tests (full) | CI (exact head) |
+|---|---|---|---|---|---|---|
+| #231 | **P0-FL-62a1**: Rate your coach (A-15/W13) and the member AI coach screen (E6/W15) act and show only for their member | `dabb64f` | security APPROVE-WITH-NOTES · UX PASS-WITH-NOTES · QA NOT VERIFIED ×2 (test gaps / lead evidence) → **VERIFIED** | 14/16 (2 traced) | 8940 | 7/7 `46054572407` |
+| #230 | **P0-FL-62a2**: Manage Agenda and Create Class (W22 part) bound to the account that opened them; 0-row writes are failures; failure card fits 3× text | `63530e0` | security APPROVE-WITH-NOTES ×2 · UX PASS-WITH-NOTES ×2 · QA **VERIFIED** ×2 | **15/15** | 8945 | 7/7 `46049578462` |
+| #229 | **P0-FL-62b**: Stop coach (4 callers) and dashboard approve/decline pass `expectedUid`; one stop recorded once; Profile sheet owned. Includes **FL-62d part 1**: paid Stop coach with one subscription across a switch | `3a07c04` | security APPROVE-WITH-NOTES · UX PASS-WITH-NOTES · QA **VERIFIED** ×2 | **13/13** | 8952 | 7/7 `46040951114` |
+| #233 | **P0-FL-62c**: AI COACH SIGNALS card and (scope extension) NEEDS YOU TODAY triage card draw only the signed-in coach's rows; coach action-item families owner-tagged (latent) | `d0de96a` | security APPROVE-WITH-NOTES ×2 · UX PASS-WITH-NOTES ×2 · QA **VERIFIED** ×2 | 15/16 (1 traced) | 8934 | 7/7 `46059568043` |
+| #232 | **P0-FL-62d**: combined test of an account switch over an open workout. It found and fixed two workout defects: End with a pending set threw; a flush after Finish/End re-opened the workout as a new session. Round 2: Finish/End wait for an opening session; Zone keyed by member+workout | `2e09e73` | security APPROVE-WITH-NOTES ×2 · UX PASS-WITH-NOTES ×2 · QA **VERIFIED** ×2 | 11 caught + 4 traced | 8921 | 7/7 `46057307694`* |
+
+\* #232's first CI attempt failed one unrelated Cycle 13 test, `payment_failures_recorded_and_owned_test` "connectStripeOnboard: control". It passed 5/5 locally at the same head, and the failed job passed on one rerun. That flake is recorded as C14-FLAKE-01 and routed to FL-63e.
+
+**FL-62e (migration-class risks).** A read-only investigation at `a446926`, in `docs/MIGRATION_CLASS_IDENTITY_RISKS_C14.md`. Nothing was authored as a migration or applied. Entries C14-MIG-01..07 cover:
+- the messages INSERT participant check (and the UPDATE authorship / conversation re-point found alongside it);
+- set-log session ownership and `workout_logs` duplicate filing;
+- habit-log ownership (185 still excluded on QA);
+- server-side PD8 (conflicting records: ledger #6 open vs commit `20adcc4`);
+- `p_expected_uid` on RPCs;
+- atomic availability cancel (the slot half is already server-side via 187);
+- the server-side award gap.
+
+**Scope held:**
+- SEC-R3 check: the AI coach screen, AI-signals RPC and triage provider do not call Copilot, `predictClient`, `evaluateWeek`, `regenerateProgram` or the AI workout build, so none was deferred for SEC-R3.
+- Women's Health and `home_screen.dart:817` untouched.
+- No migration, QA/production write, deploy, secret or config change. No merge, no auto-merge.
+
+**Corrections recorded:**
+- FL-62b: the brief's premise (a wrong-account write when `expectedUid` is not passed) did **not** reproduce on the base. The engineer, security and QA each re-derived this. #229 is defence in depth plus single recording.
+- FL-62c: most of QA's triage "B pending" leak did not reproduce under Riverpod 2.6.1 (a switch is a reload, drawn as loading). The reachable window is the no-frame case.
+
+**What the evidence covers:** automated only. **Journeys 2/14, beta-ready conditions 0/4, unchanged.**
+
+**New decisions for Julia (cycle 14)**, each in `docs/BLOCKER_REGISTER_C14_C15.md`:
+- **Wording:**
+  - "Couldn't load your AI coach signals";
+  - the agenda and Create Class failure sentences;
+  - what A is told after an A→B→A mid-step refusal (Intake keeps a spinner where the base had a sentence).
+- **Behaviour:**
+  - the Home coach card on a failed read;
+  - the Rate button target, which needs a layout change;
+  - keep vs replace the AI-signals rows on a failed refresh;
+  - a retry for the triage card;
+  - the agenda closing on a switch, agenda delete confirmation, and whether B may see an agenda A opened;
+  - a dead workout generation's one save;
+  - drop vs flush of an unconfirmed set at End/Finish;
+  - Android back on the finish dialog.
+
+**Engineering follow-ups:**
+- `assignedCoachProvider` watches the whole User (C14-62b-03).
+- `AccountChangedError` is a `StateError` (C14-62b-04).
+- `AICoachService.generate` swallows failures (C14-62a1-02).
+- `action_item_service` returns `[]` on failure (C14-62c-02, routed to FL-63d).
+- The agenda's callers do not pass `owner:` (C14-62a2-02, routed to FL-63a).
+- `beginSession` clears held sets (C14-62d-02).
+- A possible double award after back-dismiss (C14-62d-03, unverified).
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
