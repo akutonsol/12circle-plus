@@ -45,9 +45,11 @@ class ActionCenterScreen extends ConsumerWidget {
             child: CircularProgressIndicator(color: AppColors.purple)),
         // P0-FL-63d · a failed first load says so, with a Try again that
         // reads again and shows it is busy (the error is kept while the
-        // re-read is in flight, so the card stays up, `busy`).
+        // re-read is in flight, so the card stays up, `busy`). It scrolls:
+        // at large text on a short phone the card is taller than the screen,
+        // and Try again must stay reachable (r2, UX should-fix 1).
         null => Center(
-            child: Padding(
+            child: SingleChildScrollView(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: SectionLoadFailure(
                 what: 'your action items',

@@ -203,6 +203,65 @@ void main() {
       await close(t);
     });
 
+    // P0-FL-63d r2 (UX should-fix 1): the failure card is several lines; at
+    // 3x text on a 320x568 phone it was taller than the screen and pushed
+    // Try again (the only way back) off it. Only RenderFlex overflow reports
+    // are caught (anything else still fails the test as usual), and only
+    // those of a Flex inside the Action Center count.
+    testWidgets('a failed first load fits at 320x568 and 3x text: no '
+        'overflow, Try again on screen and at least 44 high', (t) async {
+      final seen = <String>[];
+      final previous = FlutterError.onError;
+      FlutterError.onError = (d) {
+        final text = d.toString();
+        if (d.exception is FlutterError &&
+            d.library == 'rendering library' &&
+            text.contains('A RenderFlex overflowed by')) {
+          seen.add(text);
+        } else {
+          previous?.call(d);
+        }
+      };
+      addTearDown(() => FlutterError.onError = previous);
+      t.view
+        ..devicePixelRatio = 1
+        ..physicalSize = const Size(320, 568);
+      t.platformDispatcher.textScaleFactorTestValue = 3.0;
+      addTearDown(t.view.reset);
+      addTearDown(t.platformDispatcher.clearTextScaleFactorTestValue);
+
+      server.fails.add('$_key:$memberA');
+      await mount(t);
+      expect(find.text(_failed), findsOneWidget, reason: 'premise');
+      final ids = t
+          .renderObjectList(find.descendant(
+              of: find.byType(ActionCenterScreen),
+              matching: find.bySubtype<Flex>()))
+          .map(describeIdentity)
+          .toSet();
+      final mine = [
+        for (final e in seen)
+          if (ids.any((id) =>
+              e.contains('$id ') || e.contains('$id\n') || e.contains('$id:')))
+            e
+      ];
+      expect(mine, isEmpty,
+          reason: 'the failure card does not overflow at 3x on 320dp');
+      await t.ensureVisible(tryAgain());
+      await settle(t, 2);
+      final r = t.getRect(tryAgain());
+      expect(r.top, greaterThanOrEqualTo(0));
+      expect(r.bottom, lessThanOrEqualTo(568),
+          reason: 'Try again can be brought on screen');
+      expect(tryAgain().hitTestable(), findsOneWidget);
+      expect(r.height, greaterThanOrEqualTo(44));
+      // It still works from there.
+      await t.tap(tryAgain());
+      await settle(t);
+      expect(readsOf(memberA), 2);
+      await close(t);
+    });
+
     testWidgets('POSITIVE CONTROL: a normal load, then completing a task '
         'writes once, for this member, and reads again', (t) async {
       await mount(t);
@@ -290,6 +349,76 @@ void main() {
       c.invalidate(p);
       await settled();
       expect(ownRead(c.read(p)).value?.map((i) => i.title), ['Walk', 'Row']);
+    });
+
+    // P0-FL-63d r2 (QA should-fix 2): the coach read can now really fail, so
+    // coach A's failure is an AsyncError Riverpod keeps through coach B's
+    // read of the same client. It is A's (tagged with A): drawn through
+    // ownRead it is nothing for B — not a failure, not data — and B then
+    // gets B's own answer, read as B.
+    List<SeenRequest> readsAs(String who) => server.seen
+        .where((r) => r.isRead && r.target == 'action_items' && r.who == who)
+        .toList();
+
+    test("coach A's failure is not drawn for coach B reading the same "
+        "client; B gets B's own answer", () async {
+      server.rows['action_items']![memberB] = [item(_client, 'Swim')];
+      server.fails.add('$_key:$memberA');
+      final p = clientActionItemsProvider(_client);
+      final s = actionCompletionProvider(_client);
+      c.listen(p, (_, __) {});
+      c.listen(s, (_, __) {});
+      await settled();
+      expect(ownRead(c.read(p)).error, isNotNull,
+          reason: "premise: A's read failed (on base it was answered [])");
+      expect(ownRead(c.read(s)).error, isNotNull, reason: 'premise');
+      int recorded() => reported
+          .where((f) => f.origin == 'ActionItemService.getClientActionItems')
+          .length;
+      final beforeB = recorded();
+      expect(beforeB, greaterThan(0), reason: "A's failure was recorded");
+      final holdB = server.holds['$_key:$memberB'] = Completer();
+      await signInAs(memberB);
+      await settled();
+      // B's read is in flight: Riverpod still holds A's AsyncError.
+      expect(c.read(p).error, isNotNull,
+          reason: "premise: Riverpod keeps A's failure through B's read");
+      for (final read in [ownRead(c.read(p)), ownRead(c.read(s))]) {
+        expect(read.error, isNull, reason: "A's failure is not B's");
+        expect(read.value, isNull, reason: 'and B has no answer yet');
+      }
+      holdB.complete();
+      await settled();
+      expect(ownRead(c.read(p)).value?.map((i) => i.title), ['Swim']);
+      expect(ownRead(c.read(p)).error, isNull);
+      final stats = ownRead(c.read(s)).value!;
+      expect((stats.assigned, stats.completed), (1, 0));
+      final asB = readsAs(memberB);
+      expect(asB, isNotEmpty, reason: 'B read as B');
+      expect(asB.every((r) => r.query['client_id'] == 'eq.$_client'), isTrue);
+      expect(recorded(), beforeB, reason: "B's reads succeeded: nothing more");
+    });
+
+    test("coach A's failure landing after the switch to B is not B's",
+        () async {
+      server.rows['action_items']![memberB] = [item(_client, 'Swim')];
+      server.fails.add('$_key:$memberA');
+      final holdA = server.holds['$_key:$memberA'] = Completer();
+      final holdB = server.holds['$_key:$memberB'] = Completer();
+      final p = clientActionItemsProvider(_client);
+      c.listen(p, (_, __) {});
+      await settled();
+      expect(readsAs(memberA), hasLength(1), reason: 'premise');
+      await signInAs(memberB);
+      await settled();
+      holdA.complete();
+      await settled();
+      expect(ownRead(c.read(p)).error, isNull,
+          reason: "A's late failure is not drawn for B");
+      expect(ownRead(c.read(p)).value, isNull);
+      holdB.complete();
+      await settled();
+      expect(ownRead(c.read(p)).value?.map((i) => i.title), ['Swim']);
     });
 
     test('POSITIVE CONTROL: a normal read and its completion', () async {
