@@ -125,6 +125,19 @@ void _expectAll(List<String> texts, String why) {
   }
 }
 
+/// Settles frame by frame and says whether a SnackBar was in the tree on ANY
+/// of them. A bar whose OwnedText finds its account gone takes itself down
+/// after its first frame, so a check only at the end would miss it.
+Future<bool> _settleWatchingForABar(WidgetTester t) async {
+  var seen = false;
+  for (var i = 0; i < 12; i++) {
+    await t.pump(const Duration(milliseconds: 50));
+    seen |= find.byType(SnackBar).evaluate().isNotEmpty;
+    await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 5)));
+  }
+  return seen;
+}
+
 Map<String, Object?> _bodyOf(String line) =>
     jsonDecode(line.substring(line.indexOf('{'))) as Map<String, Object?>;
 
@@ -616,6 +629,130 @@ void main() {
               .where((f) => f.origin == 'AICoachService.deleteMemory'),
           hasLength(1),
           reason: "A's 0-row delete is still recorded, once");
+      await _close(t);
+    });
+
+    // Round 3. The add-memory test above only covers a save that succeeds,
+    // and a successful add says nothing, so it cannot tell whether a FAILED
+    // add of A's is announced on B's screen. Two switch points: during the
+    // save (caught by the check straight after `addMemory`), and during the
+    // re-read that follows a failed save — only the check on the bar itself
+    // stops that one, so dropping it fails the second test, not the first.
+    // OwnedText takes a bar for a departed account down after one frame, so
+    // both watch every frame for a bar rather than look only at the end.
+    testWidgets(
+        "A's add memory in flight, failing after A -> B: one write, as A; B is "
+        'told nothing at all', (t) async {
+      await _as(t, memberA);
+      await _pumpScreen(t);
+      await t.tap(find.bySemanticsLabel('Add memory'));
+      await _settle(t, 3);
+      await t.enterText(find.byType(TextField).last, 'A secret injury');
+      const key = 'POST ai_memories:$memberA';
+      final gate = holdOn(_server, key);
+      _server.zeroRows.add(key);
+      await t.tap(find.widgetWithText(TextButton, 'Save'));
+      await _settle(t, 3);
+      expect(_server.of('POST', 'ai_memories', by: memberA), hasLength(1),
+          reason: 'premise: in flight');
+
+      // A -> B and the failure land with no frame drawn in between.
+      await t.runAsync(() async {
+        await signInAs(memberB);
+        gate.complete();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      });
+      expect(Supabase.instance.client.auth.currentUser?.id, memberB,
+          reason: 'premise');
+      final barSeen = await _settleWatchingForABar(t);
+
+      final writes = _server.of('POST', 'ai_memories');
+      expect(writes, hasLength(1));
+      expect(_bodyOf(writes.single), containsPair('user_id', memberA));
+      expect(barSeen, isFalse,
+          reason: "a bar about A's failed save came up on B's screen "
+              '(emptied by OwnedText, but still a bar)');
+      expect(find.byType(SnackBar), findsNothing);
+      expect(find.text("Couldn't save that for your coach — try again."),
+          findsNothing);
+      expect(find.text('A secret injury'), findsNothing);
+      expect(find.text('left knee A'), findsNothing);
+      expect(find.text('left knee B'), findsOneWidget);
+      expect(_server.of('GET', 'ai_memories', by: memberA), hasLength(1),
+          reason: "A's card did not re-read after its save: A had left");
+      expect(
+          _reported.where((f) => f.origin == 'AICoachService.addMemory'),
+          hasLength(1),
+          reason: "A's 0-row save is still recorded, once");
+      await _close(t);
+    });
+
+    testWidgets(
+        "A's add memory failed, then A -> B while the re-read is in flight: "
+        'B is told nothing at all', (t) async {
+      await _as(t, memberA);
+      await _pumpScreen(t);
+      await t.tap(find.bySemanticsLabel('Add memory'));
+      await _settle(t, 3);
+      await t.enterText(find.byType(TextField).last, 'A secret injury');
+      _server.zeroRows.add('POST ai_memories:$memberA');
+      final reread = holdOn(_server, 'GET ai_memories:$memberA');
+      await t.tap(find.widgetWithText(TextButton, 'Save'));
+      await _settle(t, 3);
+      expect(_server.of('GET', 'ai_memories', by: memberA), hasLength(2),
+          reason: "premise: A's save failed and the re-read is in flight");
+
+      await t.runAsync(() async {
+        await signInAs(memberB);
+        reread.complete();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      });
+      expect(Supabase.instance.client.auth.currentUser?.id, memberB,
+          reason: 'premise');
+      final barSeen = await _settleWatchingForABar(t);
+
+      expect(_server.of('POST', 'ai_memories'), hasLength(1));
+      expect(barSeen, isFalse,
+          reason: "a bar about A's failed save came up on B's screen "
+              '(emptied by OwnedText, but still a bar)');
+      expect(find.byType(SnackBar), findsNothing);
+      expect(find.text("Couldn't save that for your coach — try again."),
+          findsNothing);
+      expect(find.text('left knee A'), findsNothing);
+      expect(find.text('left knee B'), findsOneWidget);
+      expect(
+          _reported.where((f) => f.origin == 'AICoachService.addMemory'),
+          hasLength(1),
+          reason: "A's 0-row save is recorded, once");
+      await _close(t);
+    });
+
+    testWidgets(
+        'control: the same member whose add fails is told so, once, in the '
+        'existing voice', (t) async {
+      await _as(t, memberA);
+      await _pumpScreen(t);
+      await t.tap(find.bySemanticsLabel('Add memory'));
+      await _settle(t, 3);
+      await t.enterText(find.byType(TextField).last, 'likes rows');
+      _server.zeroRows.add('POST ai_memories:$memberA');
+      await t.tap(find.widgetWithText(TextButton, 'Save'));
+      await _settle(t);
+
+      final writes = _server.of('POST', 'ai_memories');
+      expect(writes, hasLength(1));
+      expect(writes.single, startsWith('POST ai_memories:$memberA'));
+      expect(_bodyOf(writes.single), containsPair('user_id', memberA));
+      expect(find.text("Couldn't save that for your coach — try again."),
+          findsOneWidget);
+      expect(find.text('left knee A'), findsOneWidget);
+      expect(_server.of('GET', 'ai_memories', by: memberA), hasLength(2),
+          reason: 'read, then read again after the save');
+      expect(
+          _reported.where((f) => f.origin == 'AICoachService.addMemory'),
+          hasLength(1));
+      expect(_reported.map((f) => f.error.toString()),
+          isNot(contains(contains('signed-in account changed'))));
       await _close(t);
     });
 
