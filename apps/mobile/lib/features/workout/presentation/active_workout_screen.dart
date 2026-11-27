@@ -109,12 +109,14 @@ class ActiveWorkoutScreen extends ConsumerWidget {
     // One view per member: when the account changes, the previous member's view
     // — its session id, clock, idle total and typed fields — goes with them.
     final uid = ref.watch(restoringUserIdProvider);
-    final view = _ActiveWorkoutView(key: ValueKey(uid));
-
     // A workout already in memory (started, or resumed from a Resume card) is
     // authoritative — the database has nothing to add. Not one read for
     // somebody else, however it got there (A-10).
     final workout = ref.watch(selectedWorkoutProvider);
+    // And one per workout (P0-FL-62d): a view that filed or ended its workout
+    // is closed for good, so another workout selected under it gets a view —
+    // and a session — of its own. An exercise swap keeps the workout's id.
+    final view = _ActiveWorkoutView(key: ValueKey((uid, workout?.id)));
     if (workout != null && workout.isFor(uid)) return view;
 
     final restoration = ref.watch(activeWorkoutRestorationProvider);
@@ -168,6 +170,14 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// by when this view is created (P0-FL-59b). Every write below is theirs or
   /// is not sent.
   late final String? _owner;
+  /// The workout this view is for (P0-FL-62d); the view is keyed by it.
+  late final String? _workoutId;
+
+  /// Whether this view's workout is still the one selected. Not once another
+  /// is: this view is then being torn down in the middle of a frame, and a
+  /// row's flush from its dispose would write into the next workout's state
+  /// (and, with no session bound, open a session for the next workout).
+  bool get _stillSelected => _app.read(selectedWorkoutProvider)?.id == _workoutId;
   late final _workoutService = WorkoutService(owner: _owner);
   StreamSubscription<AuthState>? _authEvents;
   final _scrollController = ScrollController();
@@ -184,7 +194,17 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// Resolved once in initState so dispose() can persist elapsed time without
   /// reaching for `ref` during teardown.
   late final WorkoutSessionManager _sessions;
+  /// This view's container, resolved in initState (P0-FL-62d). A set row
+  /// flushes its pending save from its own dispose, when this view is already
+  /// deactivated and `ref` may not look its container up any more: that threw
+  /// in the middle of tearing the tree down (End Workout, or an account
+  /// generation thrown away), and left the rest of the old tree mounted.
+  late final ProviderContainer _app;
   String? _sessionId;
+  /// The session was completed or ended (P0-FL-62d). Nothing typed into the
+  /// workout afterwards — a field's blur when the finish dialog takes focus, a
+  /// row's flush as the screen goes — may open another session for it.
+  bool _closed = false;
   /// The activation in flight, shared by every caller so a session is never
   /// opened twice concurrently. Null when none is running.
   Future<WorkoutSessionRecord?>? _activation;
@@ -238,7 +258,9 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   void initState() {
     super.initState();
     _owner = ref.read(restoringUserIdProvider);
+    _workoutId = ref.read(selectedWorkoutProvider)?.id;
     _sessions = ref.read(workoutSessionManagerProvider);
+    _app = ProviderScope.containerOf(context, listen: false);
     // Not a frame: a siren already sounding in a hidden tab stops when its
     // member leaves. Stream errors are the auth provider's to report.
     _authEvents = _db.auth.onAuthStateChange.listen((_) {
@@ -569,7 +591,8 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// For the member who owns this workout, whoever is signed in now.
   Future<String?> _ensureSession() async {
     if (_sessionId != null) return _sessionId;
-    final workout = ref.read(selectedWorkoutProvider);
+    // Not `ref`: also reached from a set row's flush in its dispose.
+    final workout = _app.read(selectedWorkoutProvider);
     final uid = _owner;
     if (workout == null || uid == null) return null;
     // Joins the activation already started in initState rather than opening a
@@ -580,6 +603,28 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     return _sessionId;
   }
 
+  /// Waits for the session still being opened, if there is one (P0-FL-62d).
+  ///
+  /// Finish and End close the session by its id. Pressed while it was still
+  /// being opened, they found none and closed nothing — and the session opened
+  /// a moment later stayed `in_progress`, the finished workout offered for
+  /// resume, while a set confirmed meanwhile was still waiting on it. A failed
+  /// opening is reported and said by whoever started it; here it only means
+  /// there is no session to close, as before.
+  ///
+  /// The warm-up is not asked once they are pressed: the question would go up
+  /// over the finish dialog, or over Home after End.
+  ///
+  /// False when [what]'s member is no longer the one signed in.
+  Future<bool> _sessionOpened(String what) async {
+    final opening = _activation;
+    if (opening != null) {
+      _warmupSettled = true;
+      await opening.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    }
+    return _isOwner(what);
+  }
+
   /// Persists a set (ensuring a session exists). Fire-and-forget so callers
   /// don't await across a widget-tree mutation. saveSetLog upserts, so this is
   /// safe to call repeatedly (on edit and on complete). Surfaces errors so a
@@ -588,6 +633,8 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       String? libraryExerciseId, String setId, int setNumber,
       String? tempo, int reps, double weightKg, double? rpe, String? notes,
       bool completed) async {
+    // The workout is filed or ended: an edit now is not part of it.
+    if (_closed) return;
     if (!_isOwner('saving a set')) return;
     try {
       final sid = await _ensureSession();
@@ -675,7 +722,8 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// isn't persisted either.
   bool _cacheSet(WorkoutExercise we, WorkoutSet set, int reps, double weightKg,
       double? rpe, String? notes) {
-    return ref.read(activeWorkoutProvider.notifier).setSetData(set, {
+    // Not `ref`: a row's flush calls this from its dispose ([_app]).
+    return _app.read(activeWorkoutProvider.notifier).setSetData(set, {
       'reps': reps,
       'weight': weightKg,
       'rpe': rpe,
@@ -690,7 +738,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// edit to a completed set — so persisting from it means the recorded result
   /// is what reaches `workout_set_logs`, whatever a widget emitted.
   void _persistFromState(WorkoutExercise we, WorkoutSet set) {
-    final data = ref.read(activeWorkoutProvider.notifier).setData(set.id);
+    final data = _app.read(activeWorkoutProvider.notifier).setData(set.id);
     _persistSet(
       we.exercise.name,
       we.instanceId,
@@ -759,19 +807,28 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
 
   Future<void> _completeWorkout() async {
     if (!_isOwner('finishing a workout')) return;
-    final workout = ref.read(selectedWorkoutProvider);
-    if (workout == null) return;
+    setState(() => _saving = true);
     // Everything after the awaits below goes through the app's container, not
     // `ref`: the screen can be left while the save is in flight, and `ref`
     // throws once it is disposed — which skipped the reset, every re-read and
     // clearing the selection, so the finished workout was started again.
-    final app = ProviderScope.containerOf(context, listen: false);
+    final app = _app;
+    // Before the wait: binding a session that was still opening clears the sets
+    // held in memory, and the set confirmed meanwhile is one of them.
+    final entered = app.read(activeWorkoutProvider);
+    if (!await _sessionOpened('finishing a workout')) {
+      if (mounted) setState(() => _saving = false);
+      return;
+    }
+    final workout = app.read(selectedWorkoutProvider);
+    if (workout == null) {
+      if (mounted) setState(() => _saving = false);
+      return;
+    }
     final appState = app.read(appWorkoutStateProvider);
     final isStillThis = _stillThisWorkout(app, workout);
-    final entered = app.read(activeWorkoutProvider);
 
-    _dismissRest(); // bank any in-progress overtime + silence the siren
-    setState(() => _saving = true);
+    _dismissRest(app); // bank any in-progress overtime + silence the siren
     _timer?.cancel();
 
     final log = WorkoutLog(
@@ -869,7 +926,9 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     final still = isStillThis();
     // Captured before the reset below wipes it — FIT-018's stats come from
     // here, and reading them after would make every session read 0 sets.
-    final completedSets = (still ? app.read(activeWorkoutProvider) : entered)
+    final completedSets = (still
+            ? {...entered, ...app.read(activeWorkoutProvider)}
+            : entered)
         .values
         .where((st) => st['completed'] == true)
         .toList(growable: false);
@@ -878,6 +937,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     // still has to name the session it is rating, so hand it the captured id.
     final finishedSessionId = _sessionId;
     _sessionId = null;
+    _closed = true;
     // The session is archived — stop offering it as resumable, and drop the
     // restored copy so a later cold start doesn't rebuild a finished workout.
     app.invalidate(activeSessionProvider);
@@ -1716,8 +1776,9 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
         // rest, and a refused edit isn't written to the database either.
         onChanged: (reps, weight, rpe, notes) {
           // Also reached from the row's dispose, which flushes a pending
-          // debounce: by then the in-memory sets may be another member's.
-          if (!_isOwner('saving a set')) return;
+          // debounce: by then the in-memory sets may be another member's, or
+          // another workout's, or the workout already filed or ended.
+          if (_closed || !_isOwner('saving a set') || !_stillSelected) return;
           _markCurrentSet(we, set);
           if (_cacheSet(we, set, reps, weight, rpe, notes)) {
             _persistFromState(we, set);
@@ -1959,15 +2020,16 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// is left on the screen to try again.
   Future<void> _endWorkout() async {
     if (!_isOwner('ending a workout')) return;
-    final sid = _sessionId;
-    // Through the app's container after the await, as in _completeWorkout:
+    // Through the app's container after the awaits, as in _completeWorkout:
     // `ref` throws once the screen is gone, and the ended workout stayed
     // selected.
-    final app = ProviderScope.containerOf(context, listen: false);
+    final app = _app;
+    if (!await _sessionOpened('ending a workout')) return;
+    final sid = _sessionId;
     final appState = app.read(appWorkoutStateProvider);
-    final isStillThis = _stillThisWorkout(app, ref.read(selectedWorkoutProvider));
+    final isStillThis = _stillThisWorkout(app, app.read(selectedWorkoutProvider));
     // App-wide: the rest running now is this workout's, and stops with it.
-    final rest = ref.read(restTimerProvider);
+    final rest = app.read(restTimerProvider);
     if (sid != null) {
       try {
         await _sessions.abandonSession(sid);
@@ -1985,6 +2047,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     if (!_isOwner('ending a workout') || !appState.alive) return;
     _timer?.cancel();
     _sessionId = null;
+    _closed = true;
     if (!isStillThis()) {
       // Another workout is open by now. Its own rest is kept; the ended
       // one's would sound, and charge, over it.
