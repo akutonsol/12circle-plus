@@ -36,7 +36,8 @@ class _Message {
 /// Until that rebuild (a frame; a hidden web tab draws none) the old screen is
 /// still mounted, so each of its reads, writes and invokes also checks its
 /// member against the auth client itself ([AICoachService.owner], and
-/// `_forOwner` after every await): nothing of the last member's lands on
+/// `mounted && !accountLeft(owner)` after every await): nothing of the last
+/// member's lands on
 /// screen, and nothing is sent as the next one.
 class AICoachScreen extends ConsumerWidget {
   const AICoachScreen({super.key});
@@ -64,16 +65,7 @@ abstract class _OwnedCard extends StatefulWidget {
   final String? owner;
 }
 
-mixin _ForOwner<W extends _OwnedCard> on State<W> {
-  /// Whether what just came back may still be drawn, said or followed up: the
-  /// card is mounted and its member is still the one signed in.
-  bool get _forOwner => mounted && !accountLeft(widget.owner);
-}
-
 class _AICoachScreenState extends ConsumerState<_AICoachBody> {
-  /// Whether what just came back may still be drawn: see [AICoachScreen].
-  bool get _forOwner => mounted && !accountLeft(widget.owner);
-
   /// Which of the board's two surfaces is showing. Before this, the screen
   /// chose for the user with `_messages.length <= 1`.
   CoachSurface _surface = CoachSurface.coaching;
@@ -188,7 +180,7 @@ class _AICoachScreenState extends ConsumerState<_AICoachBody> {
         isUser: false,
       )));
     } finally {
-      if (_forOwner) setState(() => _loading = false);
+      if (mounted && !accountLeft(widget.owner)) setState(() => _loading = false);
       _scrollToBottom();
     }
   }
@@ -544,7 +536,7 @@ class _DailyInsightCard extends _OwnedCard {
   State<_DailyInsightCard> createState() => _DailyInsightCardState();
 }
 
-class _DailyInsightCardState extends State<_DailyInsightCard> with _ForOwner<_DailyInsightCard> {
+class _DailyInsightCardState extends State<_DailyInsightCard> {
   late final _svc = AICoachService(owner: widget.owner);
   Map<String, dynamic>? _insight;
   bool _loading = true;
@@ -568,7 +560,7 @@ class _DailyInsightCardState extends State<_DailyInsightCard> with _ForOwner<_Da
       today = await _svc.getTodayInsight();
     } catch (e) {
       // Not "no brief yet": never generate over a brief that may exist.
-      if (_forOwner) setState(() { _loadError = e; _loading = false; });
+      if (mounted && !accountLeft(widget.owner)) setState(() { _loadError = e; _loading = false; });
       return;
     }
     if (!mounted || accountLeft(widget.owner)) return;
@@ -738,7 +730,7 @@ class _WeeklyReviewCard extends _OwnedCard {
   const _WeeklyReviewCard({required super.owner});
   @override State<_WeeklyReviewCard> createState() => _WeeklyReviewCardState();
 }
-class _WeeklyReviewCardState extends State<_WeeklyReviewCard> with _ForOwner<_WeeklyReviewCard> {
+class _WeeklyReviewCardState extends State<_WeeklyReviewCard> {
   late final _svc = AICoachService(owner: widget.owner);
   Map<String, dynamic>? _review;
   bool _loading = true;
@@ -756,7 +748,7 @@ class _WeeklyReviewCardState extends State<_WeeklyReviewCard> with _ForOwner<_We
       r = await _svc.getLatestReview();
     } catch (e) {
       // Not "no recent review": never generate one on a failed read.
-      if (_forOwner) setState(() { _loadError = e; _loading = false; });
+      if (mounted && !accountLeft(widget.owner)) setState(() { _loadError = e; _loading = false; });
       return;
     }
     if (!mounted || accountLeft(widget.owner)) return;
@@ -841,7 +833,7 @@ class _GoalPredictionCard extends _OwnedCard {
   const _GoalPredictionCard({required super.owner});
   @override State<_GoalPredictionCard> createState() => _GoalPredictionCardState();
 }
-class _GoalPredictionCardState extends State<_GoalPredictionCard> with _ForOwner<_GoalPredictionCard> {
+class _GoalPredictionCardState extends State<_GoalPredictionCard> {
   late final _svc = AICoachService(owner: widget.owner);
   Map<String, dynamic>? _pred;
   bool _loading = true;
@@ -856,9 +848,9 @@ class _GoalPredictionCardState extends State<_GoalPredictionCard> with _ForOwner
   Future<void> _load() async {
     try {
       final p = await _svc.getLatestPrediction();
-      if (_forOwner) setState(() { _pred = p; _loadError = null; _loading = false; });
+      if (mounted && !accountLeft(widget.owner)) setState(() { _pred = p; _loadError = null; _loading = false; });
     } catch (e) {
-      if (_forOwner) setState(() { _loadError = e; _loading = false; });
+      if (mounted && !accountLeft(widget.owner)) setState(() { _loadError = e; _loading = false; });
     }
   }
   Future<void> _generate() async {
@@ -923,7 +915,7 @@ class _MealIdeasCard extends _OwnedCard {
   const _MealIdeasCard({required super.owner});
   @override State<_MealIdeasCard> createState() => _MealIdeasCardState();
 }
-class _MealIdeasCardState extends State<_MealIdeasCard> with _ForOwner<_MealIdeasCard> {
+class _MealIdeasCardState extends State<_MealIdeasCard> {
   late final _svc = AICoachService(owner: widget.owner);
   List<dynamic> _meals = [];
   bool _loading = true;
@@ -938,9 +930,9 @@ class _MealIdeasCardState extends State<_MealIdeasCard> with _ForOwner<_MealIdea
     try {
       final i = await _svc.getLatestInsight('meal_suggestion');
       final m = (i?['data'] as Map?)?['meals'];
-      if (_forOwner) setState(() { _meals = m is List ? m : []; _loadError = null; _loading = false; });
+      if (mounted && !accountLeft(widget.owner)) setState(() { _meals = m is List ? m : []; _loadError = null; _loading = false; });
     } catch (e) {
-      if (_forOwner) setState(() { _loadError = e; _loading = false; });
+      if (mounted && !accountLeft(widget.owner)) setState(() { _loadError = e; _loading = false; });
     }
   }
   Future<void> _gen() async {
@@ -992,7 +984,7 @@ class _ProgressInsightCard extends _OwnedCard {
   const _ProgressInsightCard({required super.owner});
   @override State<_ProgressInsightCard> createState() => _ProgressInsightCardState();
 }
-class _ProgressInsightCardState extends State<_ProgressInsightCard> with _ForOwner<_ProgressInsightCard> {
+class _ProgressInsightCardState extends State<_ProgressInsightCard> {
   late final _svc = AICoachService(owner: widget.owner);
   Map<String, dynamic>? _it;
   bool _loading = true;
@@ -1006,9 +998,9 @@ class _ProgressInsightCardState extends State<_ProgressInsightCard> with _ForOwn
   Future<void> _load() async {
     try {
       final i = await _svc.getLatestInsight('progress');
-      if (_forOwner) setState(() { _it = i; _loadError = null; _loading = false; });
+      if (mounted && !accountLeft(widget.owner)) setState(() { _it = i; _loadError = null; _loading = false; });
     } catch (e) {
-      if (_forOwner) setState(() { _loadError = e; _loading = false; });
+      if (mounted && !accountLeft(widget.owner)) setState(() { _loadError = e; _loading = false; });
     }
   }
   Future<void> _gen() async {
@@ -1046,7 +1038,7 @@ class _RiskCard extends _OwnedCard {
   const _RiskCard({required super.owner});
   @override State<_RiskCard> createState() => _RiskCardState();
 }
-class _RiskCardState extends State<_RiskCard> with _ForOwner<_RiskCard> {
+class _RiskCardState extends State<_RiskCard> {
   late final _svc = AICoachService(owner: widget.owner);
   Map<String, dynamic>? _it;
   bool _loading = true;
@@ -1060,9 +1052,9 @@ class _RiskCardState extends State<_RiskCard> with _ForOwner<_RiskCard> {
   Future<void> _load() async {
     try {
       final i = await _svc.getLatestInsight('risk');
-      if (_forOwner) setState(() { _it = i; _loadError = null; _loading = false; });
+      if (mounted && !accountLeft(widget.owner)) setState(() { _it = i; _loadError = null; _loading = false; });
     } catch (e) {
-      if (_forOwner) setState(() { _loadError = e; _loading = false; });
+      if (mounted && !accountLeft(widget.owner)) setState(() { _loadError = e; _loading = false; });
     }
   }
   Future<void> _gen() async {
@@ -1122,7 +1114,7 @@ class _CoachPersonaCard extends _OwnedCard {
   const _CoachPersonaCard({required super.owner});
   @override State<_CoachPersonaCard> createState() => _CoachPersonaCardState();
 }
-class _CoachPersonaCardState extends State<_CoachPersonaCard> with _ForOwner<_CoachPersonaCard> {
+class _CoachPersonaCardState extends State<_CoachPersonaCard> {
   late final _svc = AICoachService(owner: widget.owner);
   // (style, tone, label)
   static const _styles = [
@@ -1151,9 +1143,9 @@ class _CoachPersonaCardState extends State<_CoachPersonaCard> with _ForOwner<_Co
   Future<void> _load() async {
     try {
       final p = await _svc.getPersona();
-      if (_forOwner) setState(() { _style = (p['style']?.toString() ?? 'motivational'); _loadError = null; _loading = false; });
+      if (mounted && !accountLeft(widget.owner)) setState(() { _style = (p['style']?.toString() ?? 'motivational'); _loadError = null; _loading = false; });
     } catch (e) {
-      if (_forOwner) setState(() { _loadError = e; _loading = false; });
+      if (mounted && !accountLeft(widget.owner)) setState(() { _loadError = e; _loading = false; });
     }
   }
   /// A style save is in flight.
@@ -1217,7 +1209,7 @@ class _CoachingMemoryCard extends _OwnedCard {
   const _CoachingMemoryCard({required super.owner});
   @override State<_CoachingMemoryCard> createState() => _CoachingMemoryCardState();
 }
-class _CoachingMemoryCardState extends State<_CoachingMemoryCard> with _ForOwner<_CoachingMemoryCard> {
+class _CoachingMemoryCardState extends State<_CoachingMemoryCard> {
   late final _svc = AICoachService(owner: widget.owner);
   List<Map<String, dynamic>> _memories = [];
   bool _loading = true;
@@ -1241,9 +1233,9 @@ class _CoachingMemoryCardState extends State<_CoachingMemoryCard> with _ForOwner
   Future<void> _load() async {
     try {
       final m = await _svc.getMemories();
-      if (_forOwner) setState(() { _memories = m; _loadError = null; _loading = false; });
+      if (mounted && !accountLeft(widget.owner)) setState(() { _memories = m; _loadError = null; _loading = false; });
     } catch (e) {
-      if (_forOwner) setState(() { _loadError = e; _loading = false; });
+      if (mounted && !accountLeft(widget.owner)) setState(() { _loadError = e; _loading = false; });
     }
   }
 
