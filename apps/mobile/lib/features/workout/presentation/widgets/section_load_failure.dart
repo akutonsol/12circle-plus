@@ -68,9 +68,14 @@ class SectionLoadFailure extends StatelessWidget {
     final d = detail;
     final hint = d == null ? hintFor(error) : '${hintFor(error)} $d';
     final retry = Semantics(
+      container: true,
       button: true,
+      enabled: !busy,
       label: busy ? 'Retrying' : 'Try again: load $what',
       excludeSemantics: true,
+      // `excludeSemantics` drops the TextButton's tap with its label: without
+      // this a screen reader found a button it could not press (P0-FL-61).
+      onTap: busy ? null : onRetry,
       child: TextButton(
         onPressed: busy ? null : onRetry,
         style: TextButton.styleFrom(
