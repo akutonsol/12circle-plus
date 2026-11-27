@@ -17,6 +17,7 @@ import '../../auth/domain/auth_provider.dart';
 import '../../coaching_mode/domain/coaching_mode_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coach/data/coach_relationship_service.dart';
+import '../../dashboard/domain/still_reading.dart' show boundTo;
 import '../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
 import '../../payments/presentation/upgrade_screen.dart'
     show PlanChipState, reportPlanReadFailure;
@@ -847,14 +848,16 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
         final svc = CoachRelationshipService();
         try {
           for (final c in coaches) {
-            // `cancelCoach` ends the coaching of whoever is signed in.
             if (!_stillOwner('end coaching')) return;
             final coachId = c['coach_id'] as String?;
             if (coachId != null) {
               // A paid coach is cancelled at the end of the paid period and
               // coaching lasts until then (owner decision 2): say so.
-              // (Asked as the owner just above: no await in between.)
-              final end = await svc.cancelCoach(coachId, 'switched_to_self_serve', null);
+              // P0-FL-62b: every step for [_owner] (an owner nobody knows is
+              // nobody), never for whoever is signed in when a step runs.
+              final end = await svc.cancelCoach(
+                  coachId, 'switched_to_self_serve', null,
+                  expectedUid: boundTo(_owner));
               if (end.scheduled && _signedIn == _owner && messenger.mounted) {
                 messenger.showSnackBar(SnackBar(content: Text(end.describe())));
               }
@@ -862,8 +865,20 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
           }
         } catch (e, st) {
           // Coaching did not end, so the mode does not change either.
-          reportError('CoachingModeSheet.apply.cancelCoach', e, st);
-          if (!_stillOwner('end coaching')) return;
+          // An AccountChangedError the service has recorded; nothing of it is
+          // for whoever is signed in now (P0-FL-62b).
+          final accountChanged = e is AccountChangedError;
+          if (!accountChanged) {
+            reportError('CoachingModeSheet.apply.cancelCoach', e, st);
+          }
+          if (_signedIn != _owner) {
+            if (accountChanged) {
+              _closeForOwner();
+            } else {
+              _stillOwner('end coaching');
+            }
+            return;
+          }
           // One of several may have ended: re-read even if the sheet is gone.
           container.invalidate(myCoachesProvider);
           container.invalidate(assignedCoachProvider);

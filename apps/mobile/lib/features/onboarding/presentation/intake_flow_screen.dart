@@ -5073,11 +5073,17 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
               .eq('status', 'active')
               .neq('coach_id', coach['id'] as String);
           for (final o in (others as List)) {
-            // `cancelCoach` ends the coaching of whoever is signed in.
             if (!_stillOwner('end previous coach')) return;
             try {
-              await CoachRelationshipService()
-                  .cancelCoach(o['coach_id'] as String, 'switched_during_intake', null);
+              // P0-FL-62b: every step for [uid], never for whoever is signed
+              // in when a step runs.
+              await CoachRelationshipService().cancelCoach(
+                  o['coach_id'] as String, 'switched_during_intake', null,
+                  expectedUid: uid);
+            } on AccountChangedError {
+              // Recorded by the service; nothing of it is for whoever is
+              // signed in now.
+              return;
             } catch (e) {
               reportError('IntakeFlow.selectCoach.endPrevious', e);
               previousNotEnded =
