@@ -36,6 +36,9 @@ class _Server extends TwoMemberPostgrest {
   int functionStatus = 200;
   Object? functionBody;
 
+  /// When set, sent as-is (application/json) instead of [functionBody].
+  String? functionRaw;
+
   final requests = <String>[];
   final bodies = <String>[];
 
@@ -46,6 +49,7 @@ class _Server extends TwoMemberPostgrest {
     insertStatus = null;
     functionStatus = 200;
     functionBody = null;
+    functionRaw = null;
     requests.clear();
     bodies.clear();
   }
@@ -63,6 +67,11 @@ class _Server extends TwoMemberPostgrest {
         '${u.query.isEmpty ? '' : '?${u.query}'}');
     if (request is http.Request) bodies.add(request.body);
     if (name == 'ai-coaching-engine') {
+      if (functionRaw != null) {
+        return http.StreamedResponse(
+            Stream.value(utf8.encode(functionRaw!)), functionStatus,
+            request: request, headers: {'content-type': 'application/json'});
+      }
       return _out(functionBody, functionStatus, request);
     }
     if (name == 'action_items' && request.method == 'POST') {
@@ -146,29 +155,72 @@ void main() {
   });
 
   group('AICoachService.generate (ai-coaching-engine)', () {
+    // RM-2 r2 (S-1): a distinctive marker stands for the model text / member
+    // data a function body can carry. No record may contain it.
+    const marker = 'SECRET_MEMBER_DATA_7f3a';
+    void noBody() {
+      for (final f in reported) {
+        expect('$f', isNot(contains(marker)),
+            reason: 'THE S-1 defect: the function body reached the record');
+        expect('${f.error}', isNot(contains(marker)),
+            reason: 'THE S-1 defect: the function body reached the record');
+      }
+    }
+
     test('a failed invoke is null and recorded once, without the body',
         () async {
       server
         ..functionStatus = 500
-        ..functionBody = {'error': 'SECRET_MEMBER_DATA'};
+        ..functionBody = {'error': 'Could not read AI result', 'raw': marker};
       expect(await AICoachService(owner: memberA).generate('meal_suggestion'),
           isNull);
       expect(from('AICoachService.generate'), hasLength(1),
           reason: 'THE defect: catch (_) { return null; } recorded nothing');
       expect(reported, hasLength(1));
+      noBody();
+      expect('${reported.single.error}',
+          contains('ai-coaching-engine meal_suggestion answered 500'));
       expect(server.requests, ['POST ai-coaching-engine:$memberA']);
     });
 
+    test('a 2xx answer that is not 200 is null and recorded once, status only',
+        () async {
+      server
+        ..functionStatus = 202
+        ..functionBody = {
+          'result': {'title': marker}
+        };
+      expect(await AICoachService(owner: memberA).generate('progress_insight'),
+          isNull);
+      expect(from('AICoachService.generate'), hasLength(1),
+          reason: 'a non-200 answer must be recorded, not dropped');
+      expect('${reported.single.error}',
+          contains('ai-coaching-engine progress_insight answered 202'));
+      noBody();
+    });
+
     test('an answer that is not a result is null and recorded once', () async {
-      server.functionBody = {'oops': true};
+      server.functionBody = {'oops': marker, 'result': marker};
       expect(await AICoachService().generate('progress_insight'), isNull);
       expect(from('AICoachService.generate'), hasLength(1));
+      noBody();
     });
 
     test('an unreadable answer is null and recorded once', () async {
-      server.functionBody = 'not json object';
+      server.functionBody = 'not json object $marker';
       expect(await AICoachService().generate('risk_assessment'), isNull);
       expect(from('AICoachService.generate'), hasLength(1));
+      noBody();
+    });
+
+    test('malformed JSON is null and recorded once, the text never quoted',
+        () async {
+      server.functionRaw = '{"raw": "$marker" ';
+      expect(await AICoachService().generate('risk_assessment'), isNull);
+      expect(from('AICoachService.generate'), hasLength(1));
+      expect('${reported.single.error}',
+          contains('ai-coaching-engine risk_assessment failed'));
+      noBody();
     });
 
     test('control: a result comes back with its confidence, nothing recorded',

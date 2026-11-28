@@ -812,7 +812,14 @@ void main() {
       final svc = _lib('features/ai_coach/data/ai_coach_service.dart');
       expect(svc, isNot(contains('} catch (_) { return null; }')),
           reason: 'the swallow came back');
-      expect(svc, contains("reportError('AICoachService.generate', e, st);"));
+      // RM-2 r2 (S-1): recorded WITHOUT the error itself — a
+      // FunctionException's toString carries the function body (model text
+      // built from the member's health data). Behaviour is proven in
+      // assign_and_generate_failures_recorded_test (marker never recorded).
+      expect(svc, matches(RegExp(r"reportError\(\s*'AICoachService\.generate',")),
+          reason: 'the failure must still be recorded');
+      expect(svc, isNot(contains("reportError('AICoachService.generate', e, st);")),
+          reason: 'S-1: the raw error (with the function body) is recorded');
       expect(svc, contains('Future<Map<String, dynamic>?> generate(String type)'),
           reason: 'still null on failure — when it throws, close F-J-16 and '
               'rewrite this test');

@@ -939,7 +939,16 @@ class _MealIdeasCardState extends State<_MealIdeasCard> {
     setState(() => _loading = true);
     final r = await _svc.generate('meal_suggestion');
     if (!mounted || accountLeft(widget.owner)) return;
-    setState(() { final m = r?['meals']; _meals = m is List ? m : []; _loading = false; });
+    // RM-2 r2 · a failure (null) keeps the ideas already shown and is said, as
+    // the brief / review / prediction cards say theirs. It used to set `[]`:
+    // the card fell back to its starting prompt, a false "nothing yet".
+    setState(() {
+      if (r != null) { final m = r['meals']; _meals = m is List ? m : []; }
+      _loading = false;
+    });
+    if (r == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: OwnedText('Could not generate meal ideas.', owner: widget.owner)));
+    }
   }
   @override
   Widget build(BuildContext context) => _coachCard(
@@ -1008,6 +1017,10 @@ class _ProgressInsightCardState extends State<_ProgressInsightCard> {
     final r = await _svc.generate('progress_insight');
     if (!mounted || accountLeft(widget.owner)) return;
     setState(() { if (r != null) _it = {'title': r['title'], 'body': r['body']}; _loading = false; });
+    // RM-2 r2 · the failure is said (it was silent); what was shown stays.
+    if (r == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: OwnedText('Could not generate progress insight.', owner: widget.owner)));
+    }
   }
   @override
   Widget build(BuildContext context) => _coachCard(
@@ -1068,6 +1081,10 @@ class _RiskCardState extends State<_RiskCard> {
       }
       _loading = false;
     });
+    // RM-2 r2 · the failure is said (it was silent); what was shown stays.
+    if (r == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: OwnedText('Could not generate risk assessment.', owner: widget.owner)));
+    }
   }
   Color _riskColor(num v) => v >= 66 ? const Color(0xFFFFB4AB) : v >= 33 ? const Color(0xFFF59E0B) : _C2_green;
   @override

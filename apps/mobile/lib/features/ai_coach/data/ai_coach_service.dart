@@ -145,7 +145,18 @@ class AICoachService {
     } catch (e, st) {
       // RM-2 (C14-62a1-02) · recorded once (this caught and dropped it); null
       // stays the failure the callers say.
-      reportError('AICoachService.generate', e, st);
+      //
+      // RM-2 r2 (S-1) · never the error itself: a non-2xx answer throws a
+      // FunctionException whose toString carries the function's body (model
+      // text built from the member's health data), and a FormatException
+      // quotes the text it could not parse. Only the function, the type, the
+      // status and the error's class are recorded.
+      reportError(
+          'AICoachService.generate',
+          StateError(e is FunctionException
+              ? 'ai-coaching-engine $type answered ${e.status}'
+              : 'ai-coaching-engine $type failed: ${e.runtimeType}'),
+          st);
       return null;
     }
   }
