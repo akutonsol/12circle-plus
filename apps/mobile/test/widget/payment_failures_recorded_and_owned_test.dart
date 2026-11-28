@@ -25,6 +25,7 @@ import 'package:circle_fitness/features/profile/presentation/subscription_screen
 import 'package:circle_fitness/features/workout/presentation/widgets/section_load_failure.dart';
 
 import '../support/pump_until.dart';
+import '../support/settled.dart' show eventually;
 import '../support/two_member_postgrest.dart';
 
 // P0-FL-60a · payment failures are recorded, and a payment page opens only for
@@ -331,8 +332,13 @@ void main() {
         server.answers['${o.$1}:$_a'] = (200, {'url': 'https://stripe/a'});
         final gate = server.gates['${o.$1}:$_a'] = Completer();
         final done = o.$2().then<void>((_) {}, onError: (_) {});
-        await pumpEventQueue();
-        expect(server.log, ['${o.$1}:$_a'], reason: 'premise: A asked');
+        // C14-FLAKE-01: this was `pumpEventQueue()` (20 turns) and then the
+        // premise. Under load the invoke had not reached the server in 20
+        // turns (CI: Expected ['stripe-connect:<A>'] Actual []), so the
+        // control failed before anything was opened. The request is now
+        // waited for as an event, bounded, and the premise is unchanged.
+        await eventually(() => server.log, ['${o.$1}:$_a'],
+            reason: 'premise: A asked');
         await change();
         gate.complete();
         await done;
@@ -374,7 +380,10 @@ void main() {
           (409, {'code': 'already_subscribed', 'error': 'You have this.'});
       final gate = server.gates['create-checkout:$_a'] = Completer();
       final done = PaymentService().startCheckout(kind: 'ai_guided');
-      await pumpEventQueue();
+      // C14-FLAKE-01: the same unsynchronised step: B must sign in while A's
+      // request is held, not before it was sent.
+      await eventually(() => server.log, ['create-checkout:$_a'],
+          reason: 'premise: A asked');
       await signInAs(_b);
       gate.complete();
       expect(await done, isFalse);

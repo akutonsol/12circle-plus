@@ -12,12 +12,26 @@ import 'package:flutter_test/flutter_test.dart';
 // coaching_calls through the realtime ticker the app uses everywhere else.
 //
 // HOW TO SEE IT FAIL: on main a coaching_calls change does not re-run the
-// provider (1 build, not 2).
+// provider (1 build, not 2) — the wait for the second build times out.
+//
+// P0-FL-63e: this waited a fixed 50 ms twice, a race against machine load (the
+// first build, or the re-run, had not settled yet under the full suite). It now
+// waits for each SETTLED build as an event, bounded so that a re-run that never
+// comes fails, naming it, instead of hanging.
+
+/// Long enough that no load reaches it (the run is in-memory, no backend), and
+/// well inside the test's own 30 s timeout so the reason below is what is said.
+const _bound = Duration(seconds: 10);
+
 void main() {
   test("a coaching_calls change re-reads Home's week", () async {
     final ticks = StreamController<int>();
-    addTearDown(ticks.close);
+    // Not awaited: when the provider does NOT follow coaching_calls (the
+    // defect) nothing listened to [ticks], and its close() never completes —
+    // the teardown would then hang the failure to the 30 s test timeout.
+    addTearDown(() => unawaited(ticks.close()));
     var builds = 0;
+    var settled = Completer<void>();
     final c = ProviderContainer(overrides: [
       // What is counted is purely whether the provider RE-RUNS (each run
       // settles, as data or as an error -- no backend here), not what it reads.
@@ -29,12 +43,24 @@ void main() {
     ]);
     addTearDown(c.dispose);
     c.listen(weeklyActivityProvider, (_, next) {
-      if (!next.isLoading) builds++;
+      if (next.isLoading) return;
+      builds++;
+      if (!settled.isCompleted) settled.complete();
     }, fireImmediately: true);
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    Future<void> nextSettledBuild(String what) => settled.future.timeout(
+        _bound,
+        onTimeout: () => fail('No settled build of weeklyActivityProvider '
+            'within ${_bound.inSeconds} s: $what (builds so far: $builds).'));
+
+    await nextSettledBuild('premise: the first build');
     final before = builds;
+    expect(before, 1, reason: 'premise: exactly one build before the tick');
+
+    settled = Completer<void>(); // armed BEFORE the tick, so it cannot be missed
     ticks.add(1); // a call was booked
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await nextSettledBuild(
+        "THE defect: a booked call left Home's week as it was");
     expect(builds, greaterThan(before),
         reason: "THE defect: a booked call left Home's week as it was");
   });
