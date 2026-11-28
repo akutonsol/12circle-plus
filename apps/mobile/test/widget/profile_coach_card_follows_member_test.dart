@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:circle_fitness/core/observability/app_failure.dart';
+import 'package:circle_fitness/features/coach/domain/coach_provider.dart';
 import 'package:circle_fitness/features/profile/presentation/profile_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -98,6 +99,26 @@ void main() {
     nothingOfA();
     expect(find.text('No coach assigned yet'), findsNothing);
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    server.gates['GET $_rel:$_b']!.complete();
+    await pumpUntil(t, () => seen(find.text('Coach Bea Burr')), what: "B's coach");
+    await close(t);
+  });
+
+  testWidgets("A's coach being re-read (a realtime tick / pull to refresh) as "
+      "B signs in, no frame between, B's read pending: nothing of A's",
+      (t) async {
+    await open(t);
+    server.gates['GET $_rel:$_b'] = Completer();
+    final container = ProviderScope.containerOf(
+        t.element(find.byType(MyCoachSection)));
+    await t.runAsync(() async {
+      container.invalidate(assignedCoachProvider);
+      await signInAs(_b);
+    });
+    await pumpUntil(t, () => server.named(_rel, who: _b).isNotEmpty, what: "B's read");
+    await frames(t);
+    nothingOfA();
+    expect(find.text('No coach assigned yet'), findsNothing);
     server.gates['GET $_rel:$_b']!.complete();
     await pumpUntil(t, () => seen(find.text('Coach Bea Burr')), what: "B's coach");
     await close(t);
