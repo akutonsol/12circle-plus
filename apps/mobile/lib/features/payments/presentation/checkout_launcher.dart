@@ -48,20 +48,55 @@ Future<bool> launchCheckout(
   // The service recorded it.
   if (context.mounted) {
     showOwnedSnackBar(ScaffoldMessenger.of(context), owner,
-        SnackBar(content: Text(problem), backgroundColor: const Color(0xFFFFB4AB)));
+        SnackBar(content: Text(problem), backgroundColor: const Color(0xFFFFB4AB)),
+        origin: 'launchCheckout', flow: 'checkout');
+  } else {
+    // The screen went with the account (an account scope): still A's outcome.
+    outcomeOwnerGone(owner, 'launchCheckout', 'checkout');
   }
   return false;
+}
+
+/// Records that the outcome of [flow], meant for the account that acted, was
+/// not shown to it because another account (or nobody) is signed in now
+/// (P0-FL-63b). Names the flow only — never the message, an amount or a name.
+void recordOutcomeNotShown(String origin, String flow) => reportError(
+    origin,
+    StateError('$flow outcome not shown: the signed-in account changed'),
+    StackTrace.current);
+
+/// True — and recorded as an outcome [owner] never saw — when [owner] is no
+/// longer the signed-in account. For the checks AFTER an action was sent; the
+/// one before it is [ownerGone] (nothing was done, so there is no outcome).
+bool outcomeOwnerGone(String? owner, String origin, String flow) {
+  if (signedInUid() == owner) return false;
+  recordOutcomeNotShown(origin, flow);
+  return true;
 }
 
 /// Says the outcome of [owner]'s action to [owner] only (P0-FL-60a): not shown
 /// when another account is signed in, and gone — without its exit animation —
 /// when that changes, even if the screen that showed it is not there any more.
+///
+/// A bar that is dropped so before [owner] saw it — never put up, or put up
+/// but not yet drawn (still queued, or no frame ran: a hidden web tab) — is
+/// recorded once under [origin] as [flow]'s outcome not shown (P0-FL-63b).
 void showOwnedSnackBar(
-    ScaffoldMessengerState messenger, String? owner, SnackBar bar) {
-  if (signedInUid() != owner || !messenger.mounted) return;
-  final shown = messenger.showSnackBar(bar);
+    ScaffoldMessengerState messenger, String? owner, SnackBar bar,
+    {required String origin, required String flow}) {
+  if (signedInUid() != owner) {
+    recordOutcomeNotShown(origin, flow);
+    return;
+  }
+  if (!messenger.mounted) return;
+  var visible = false;
+  final shown = messenger.showSnackBar(_whenVisible(bar, () => visible = true));
   final stop = whenOwnerGone(owner, () {
+    // Its messenger already went (and the bar with it): not this change's.
     if (!messenger.mounted) return;
+    // Up but not yet fully in view (still queued, entering, or no frame ran):
+    // the change takes it before [owner] saw it.
+    if (!visible) recordOutcomeNotShown(origin, flow);
     // Every bar up or waiting is from before the account changed.
     messenger
       ..clearSnackBars()
@@ -69,6 +104,33 @@ void showOwnedSnackBar(
   });
   shown.closed.whenComplete(stop);
 }
+
+/// [bar], also calling [seen] the first time it is visible.
+SnackBar _whenVisible(SnackBar bar, VoidCallback seen) => SnackBar(
+      key: bar.key,
+      content: bar.content,
+      backgroundColor: bar.backgroundColor,
+      elevation: bar.elevation,
+      margin: bar.margin,
+      padding: bar.padding,
+      width: bar.width,
+      shape: bar.shape,
+      hitTestBehavior: bar.hitTestBehavior,
+      behavior: bar.behavior,
+      action: bar.action,
+      actionOverflowThreshold: bar.actionOverflowThreshold,
+      showCloseIcon: bar.showCloseIcon,
+      closeIconColor: bar.closeIconColor,
+      duration: bar.duration,
+      persist: bar.persist,
+      animation: bar.animation,
+      onVisible: () {
+        seen();
+        bar.onVisible?.call();
+      },
+      dismissDirection: bar.dismissDirection,
+      clipBehavior: bar.clipBehavior,
+    );
 
 /// Runs [open], which pushes one route, and takes that route away when [owner]
 /// is no longer signed in (P0-FL-60a) — before it is drawn, if no frame ran in
