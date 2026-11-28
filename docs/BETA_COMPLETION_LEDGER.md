@@ -1099,6 +1099,48 @@ All five packages start from `a446926` and **target `integration/p0-flutter-stac
 - `beginSession` clears held sets (C14-62d-02).
 - A possible double award after back-dismiss (C14-62d-03, unverified).
 
+### Cycle 15: P0-FL-63a–e, small honesty fixes and test hygiene (2026-11-27/28)
+
+**Base.** The verified Cycle 14 head: `origin/integration/p0-flutter-stack-c14` = `7b9ce5c` (tree `f969c20`, push CI 7/7 `46065115113`). No `-c15` branch existed when Cycle 15 started. All five packages start from `7b9ce5c` and **target `integration/p0-flutter-stack-c14`**.
+
+**Combined evidence branch.** `integration/p0-flutter-stack-c15` = `7b9ce5c` plus the five final heads merged `--no-ff` in package order (63a, 63b, 63c, 63d, 63e).
+- No integration commits and no conflicts. An early partial trial (63a, 63c, 63d, 63e) and the final build both passed locally before push.
+- @ `6d1611d` (tree `2cd5f14`), local: analyze **281**; **9176** tests pass, 7 skipped, 0 failed.
+- **Protected paths:** none touched. That covers Women's Health, Copilot, `coach_program_service`, `core/observability`, the AI workout build, `supabase/**`, `.github/**` and `.gitleaksignore`; `home_screen.dart` is not touched.
+- **CI (push):** **7/7 success**, run `46100139167` on `6d1611d` (Flutter analyze/test/QA web build, static guards, negative control, live QA suites, EC-04, UIX-1, I-WRK-01).
+
+| PR | Package | Final head | Independent verdicts | Lead mutants | Tests (full) | CI (exact head) |
+|---|---|---|---|---|---|---|
+| #237 | **P0-FL-63a**: a vendor editor sheet first built after the account changed removes its own route and records the stop once; Manage Agenda gets the portal's owner (closes C14-62a2-02) | `f24db60` | security APPROVE-WITH-NOTES · UX PASS-WITH-NOTES · QA **VERIFIED** ×2 | 8/10 (M7, M9 traced as equivalent) | 9098 | 7/7 `46092105087` |
+| #238 | **P0-FL-63b**: payment outcome messages dropped because the account changed are recorded once (no amounts or PII); chat shows "Sending…" until the server answers; Upgrade → Free can no longer hang on an account switch | `83946b6` | security APPROVE-WITH-NOTES ×2 · UX PASS-WITH-NOTES → PASS · QA **VERIFIED** ×2 | 21/22 (M18 traced) | 9128 | 7/7 `46098611670` |
+| #235 | **P0-FL-63c**: a failed unread count is unknown, never "none unread" or the last count; the label is neutral; it recovers on the next good read. Two FL-61 expectations reversed on purpose (reviewed) | `85e3c04` | security APPROVE-WITH-NOTES · UX PASS-WITH-NOTES · QA **VERIFIED** | 11/12 (1 traced) | 9104 | 7/7 `46087521803` |
+| #236 | **P0-FL-63d**: the Action Center shows a failed first load with a working, busy-aware retry, and the failure state scrolls at 3×; the coach-side action-item read records and rethrows instead of `[]` (closes C14-62c-02) | `6d5ee71` | security APPROVE-WITH-NOTES ×2 · UX PASS-WITH-NOTES ×2 · QA **VERIFIED** ×2 | **11/11** + owner-filter mutant caught | 9098 | 7/7 `46089943980` |
+| #234 | **P0-FL-63e**: `home_week_follows_calls_test` and the payment E13 controls wait for real events with bounded, clear timeouts, with no fixed sleeps (closes C14-FLAKE-01); tests only | `dd5b100` | security APPROVE-WITH-NOTES · UX PASS · QA **VERIFIED** | **2/2** (lead-run) | 9084 | 7/7 `46085564934` |
+
+**How FL-63b was interpreted.** "Dropped message reporting" is the Cycle 13 FL-60a follow-up: a payment outcome bar dropped because the account changed was not itself recorded. The chat send path was also checked for false "sent". An unanswered insert was drawn as sent; it now shows "Sending…". That sentence is new copy and is listed for Julia.
+
+**Test hygiene (FL-63e).** Neither flake was fixed by raising a delay. Each test was proven to still fail on the real defect, and to fail fast rather than hang. Stability: 30/30 sequential runs, plus runs alongside the full suite.
+
+**What the evidence covers:** automated only, with no device, simulator, screen-reader or live-QA run. **Journeys 2/14, beta-ready conditions 0/4, unchanged.**
+
+**New decisions for Julia (cycle 15)**, each in `docs/BLOCKER_REGISTER_C14_C15.md`:
+- **Wording:**
+  - "Sending…";
+  - "Couldn't send…" versus "Couldn't confirm…" after a dropped chat connection, where the row may have been stored;
+  - the Action Center now uses the shared "Couldn't load your action items …" card.
+- **Behaviour:**
+  - a visible "count unknown" state on the bells (already recorded);
+  - a same-account re-count in flight keeps the last confirmed number;
+  - an outcome bar still sliding in counts as not shown;
+  - whether coaches should see a client's action-item list.
+
+**Engineering follow-ups:**
+- `AccountChangedError` has no "already sent" flag (C15-63b-03 / C14-62b-04).
+- `choose_package_screen` drops its checkout outcome without a record (C15-63b-04).
+- The coach unread provider returns 0 while loading, and dead `home_org.dart` (C15-63c-02).
+- `assignActionItem` swallows failures (C15-63d-03).
+- The sheet's own date picker stays over B (C15-63a-01).
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
@@ -1173,6 +1215,20 @@ exists.
 - Nutrition sync verified (2026-11-16): every meal-logging path calls `refreshAfterMealLogged`; no defect.
 
 ## Next autonomous action
+
+**After Cycles 14–15 (2026-11-28): do not start Cycle 16.** Both cycles are closed.
+- **Combined branches:** `integration/p0-flutter-stack-c14` @ `7b9ce5c` and `integration/p0-flutter-stack-c15` @ `6d1611d`, both with CI 7/7.
+- **PRs:** #229–#238, all open, unmerged and green on their exact heads.
+
+The next pass is the **blocker-remediation pass**, driven by `docs/BLOCKER_REGISTER_C14_C15.md` and its "Recommended remediation sequence":
+1. The security batch that needs Julia's authorization: the messages participant and authorship migration, and the 182→186 QA window.
+2. The owner decisions that unblock server work: PD8, brief #9, D-3, PD-B18.
+3. Data integrity: set-log ownership and `workout_logs` duplicates.
+4. Two decision-free Flutter packages: identity follow-ups and honesty follow-ups.
+5. One batched wording and behaviour review with Julia.
+6. A device/simulator and live-QA walkthrough before any beta-readiness count changes.
+
+Journeys stay 2/14 and conditions 0/4.
 
 **Cycle 14 recommendation (2026-11-26).** Cycle 13 is done:
 - FL-59a is #228, FL-59b #227, FL-59c #222, FL-59d #221, FL-59e #225, FL-59f #224, FL-60a #226, FL-60b #219, FL-60c #220 and FL-61 #223, all targeting `-c12`.

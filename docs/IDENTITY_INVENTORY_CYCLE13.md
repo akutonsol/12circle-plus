@@ -144,3 +144,11 @@ Counts in section 4 now include Cycle 14. Changed rows: **A-15, W13, W15, E6** (
 - **AI COACH SIGNALS and NEEDS YOU TODAY cards** draw only rows owned by the signed-in coach; coach action-item families carry an owner tag (latent) (FL-62c #233).
 - **Account switch over an open workout** has a combined test; it found and fixed two workout defects (FL-62d #232).
 Still NOT MAPPED after Cycle 14: W32, E14, E17, A-33 (unchanged; not in Cycle 14 scope). Migration-class items are documented in `docs/MIGRATION_CLASS_IDENTITY_RISKS_C14.md` (C14-MIG-01..07); none was applied.
+
+## 6. Cycle 15 update (2026-11-28)
+
+No inventory row changed status in Cycle 15 (FL-63 was honesty and test hygiene). Two identity-adjacent follow-ups closed:
+- Manage Agenda now receives the portal's captured owner (C14-62a2-02, FL-63a #237).
+- A vendor editor sheet first built after a switch closes itself and records the stop once (FL-59a follow-up, FL-63a #237).
+
+Counts in section 4 are unchanged from the Cycle 14 update.
