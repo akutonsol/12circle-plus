@@ -287,6 +287,33 @@ Runtime (device/simulator/live QA): **not performed**; journey completion unchan
 
 **Runtime evidence:** none (no device, simulator or live QA). Journeys stay at 2 of 14 and beta conditions at 0 of 4.
 
+## Remediation pass log (2026-11-28): RM-1, RM-2, RM-3 (blocker remediation, Items 1–6; not a new cycle)
+
+**How it ran:**
+- **Base:** `integration/p0-flutter-stack-c15` @ `6d1611d`, verified first.
+- **Work:** three engineers in separate worktrees, targeting `-c15`. Each package had independent UX, security and QA review, with narrow re-checks after each round.
+- **Mutants:** the lead ran them in each package worktree, plus the node guards, static guards and negative controls at every final head.
+- **Scope extensions, lead decisions within the same defect class:**
+  - RM-1 r2: marketplace and pricing-sheet raw text, plus `saveSchedule` owner stamping.
+  - RM-2 r2: the three silent AI coach cards.
+- **Combined `integration/p0-flutter-stack-rem1`** @ `cfbac7c` (tree `1212a88`): no conflicts and no integration commits. Local: analyze 281, **9330** passed, 7 skipped, 0 failed. CI **7/7**, run `46122834293`.
+
+| Package | Branch, final head, PR | Tests (full) | Independent review (final head) | Lead mutants | CI (exact head) |
+|---|---|---|---|---|---|
+| RM-1 coach flows truthful after an account change (+ `saveSchedule` P1 fix) | `fix/coach-account-change-truthful` `36f4509` → **#240** | 9264 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 19/19 | 7/7 `46119481276` |
+| RM-2 remaining swallowed failures, record wording, vendor pickers, client messaging guard (+ AI cards, no body in records) | `fix/remaining-failures-recorded` `3aab67e` → **#241** | 9216 | UX PASS-WITH-NOTES · sec APPROVE · QA VERIFIED | 17 + 1 documented | 7/7 `46121089995` |
+| RM-3 held sets survive a late bind; a filed workout is filed and awarded once | `fix/workout-sets-and-awards-once` `928eaf7` → **#239** | 9202 | UX PASS-WITH-NOTES · sec APPROVE · QA VERIFIED | 15 + 1 traced | 7/7 `46118042732` |
+
+**Not done here, and why:**
+- **Server-side security** (C14-MIG-01/02/03/05): needs authorization; drafts are in `docs/proposals/SECURITY_REMEDIATION_PLAN_2026-11-28.md` on the ledger branch.
+- **Owner decisions:** `docs/proposals/OWNER_DECISION_BATCH_2026-11-28.md`.
+- **Device/simulator/live QA:** no simulator, emulator or local backend is available, and live QA writes need authorization (Z4).
+
+**Runtime evidence:** none. Journeys stay at 2 of 14, and beta conditions at 0 of 4.
+
+### Next after the remediation pass
+Do not start Cycle 16. Next is the owner's review of the decision and authorization batch.
+
 ## Cycle 15 log (2026-11-27/28): P0-FL-63a–e (small honesty fixes and test hygiene)
 
 **How the cycle ran.**
