@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-// /action-items has a failure state — "Could not load your action items" —
+// /action-items has a failure state — "Couldn't load your action items" —
 // that could not be reached: `ActionItemService.getMyActionItems` caught every
 // error and returned `[]`, so a failed read told a client with tasks waiting
 // "No action items yet / Your coach will assign tasks here." And
@@ -130,7 +130,7 @@ void main() {
         const ProviderScope(child: MaterialApp(home: ActionCenterScreen())));
     expect(find.text('No action items yet'), findsNothing,
         reason: 'THE defect: a client with a task was told they have none');
-    expect(find.text('Could not load your action items'), findsOneWidget);
+    expect(find.text("Couldn't load your action items"), findsOneWidget);
   });
 
   testWidgets('a failure clears on the next visit', (tester) async {
@@ -142,7 +142,7 @@ void main() {
     Widget screen(Widget home) =>
         UncontrolledProviderScope(container: app, child: MaterialApp(home: home));
     await show(tester, screen(const ActionCenterScreen()));
-    expect(find.text('Could not load your action items'), findsOneWidget);
+    expect(find.text("Couldn't load your action items"), findsOneWidget);
 
     await show(tester, screen(const SizedBox())); // leave /action-items
     server.fails = false;
@@ -172,6 +172,6 @@ void main() {
     await show(tester,
         const ProviderScope(child: MaterialApp(home: ActionCenterScreen())));
     expect(find.text('No action items yet'), findsOneWidget);
-    expect(find.text('Could not load your action items'), findsNothing);
+    expect(find.text("Couldn't load your action items"), findsNothing);
   });
 }
