@@ -1,0 +1,177 @@
+# Silent error-handling inventory — 12circle-plus Flutter app
+
+Traceable record of every place the app swallows a failure (no message to the user, nothing recorded), with the
+user-facing consequence, priority, proposed fix and the PR that carries it.
+
+- **Inventory basis:** `integration/p0-flutter-stack` @ `f4cf7b1` (= `origin/main` 8f2c8a0 + open PRs #172–#180), so
+  sites already fixed by those PRs are not counted. Produced read-only by `cplus-flutter-engineer` (2026-11-17);
+  the lead verified the P1 sites. 354 `catch` sites + `catchError`/`onError`/`.then`/`valueOrNull ??` reads scanned;
+  every suspect read with its caller. Limits: `custom_exercise_service` `lastError` callers spot-checked; unawaited
+  futures grep-based.
+- **Priority:** P1 = false success or data loss on a beta journey (`docs/CONTROLLED_BETA_SCOPE.md`); P2 = failure
+  shown as empty/zero/wrong state on a beta journey; P3 = off-journey, or best-effort that should at least be recorded.
+- **Rule for every fix:** a behaviour test that fails on the base commit, independent review, CI — no broad
+  catch-replacement without testing the affected behaviour.
+- **Women's Health / cycle:** `womens_health_screen.dart:386` (`recentSymptomsProvider.valueOrNull ?? []` — a failed
+  read shows as "no recent symptoms") is **noted only**; that area is out of scope.
+
+## Already fixed by open PRs (cycles 1–5)
+
+| PR | Package | What was silent |
+|---|---|---|
+| #172 | P0-FL-1 | ending coaching / requesting a coach: 0-row and signed-out writes reported as success |
+| #173 | P0-FL-2 | coach Requests tab raw error; check-in history failure without retry |
+| #174 | P0-FL-3 | coach price writes: 0-row / signed-out saves reported as "Pricing updated" / "Custom price set" |
+| #176 | P0-FL-4 | Business Profile: failed load = editable blank form (Save overwrote the profile); 0-row saves; invite insert swallowed |
+| #175 | P0-FL-5 | raw exception text on leaderboard, community feed, create exercise |
+| #177 | P0-FL-6 | pricing sheet `_load` `catch (_) {}`; Requests label `valueOrNull` |
+| #178 | P0-FL-7 | create exercise: media/relations failures followed by "Exercise Saved!" |
+| #179 | P0-FL-8 | `liveMembersProvider` `catch → []` ("No members yet") |
+| #180 | P0-FL-9 | settings unit, rate-coach upsert, intake progress: no row check / `catch (_) {}` |
+| #181 | P0-FL-10 | `groupNotifierProvider` `whenData` ignored errors ("no groups" / "not joined"); `leaveGroup` 0-row = "left" |
+| #182 | P0-FL-12 | client-detail prefill failures → Save wiped the client's plan / habits; paid-plan check `catch → false` |
+
+## Remaining beta-journey sites (P1 / P2)
+
+| # | Site (`apps/mobile/lib/…` @ f4cf7b1) | Operation | User-facing consequence | Journey | Pri | Package | PR |
+|---|---|---|---|---|---|---|---|
+| 1 | `features/dashboard/presentation/client_detail_screen.dart:1861` | read `client_nutrition_plans` (prefill `.then`, no onError) | blank form; Save overwrote the client's plan | J6 | **P1** | P0-FL-12 | #182 |
+| 2 | `client_detail_screen.dart:2023` | read `client_habits` (prefill) | nothing pre-selected; Save switched off all active habits | J6 | **P1** | P0-FL-12 | #182 |
+| 3 | `features/onboarding/presentation/intake_flow_screen.dart:3635` | storage upload of baseline photos | intake continues as if uploaded; photos silently lost | J1 / J11 | **P1** | P0-FL-19 | #185 |
+| 4 | `features/coach/data/coach_program_service.dart:514` + `client_detail_screen.dart:230` | read `subscriptions`/`payments` | "unlocks once this client subscribes"; Assign Program hidden | J6 | P2 | P0-FL-12 | #182 |
+| 5 | `intake_flow_screen.dart:158` | read `user_profiles` (resume) | intake restarts blank; later saves overwrite stored answers | J1 | P2 | P0-FL-19 | #185 |
+| 6 | `features/coach/domain/coach_provider.dart:168` | read `public_profiles` + counts | "No coaches available right now" | J5 | P2 | P0-FL-19 | #185 |
+| 7 | `features/auth/presentation/login_screen.dart:70` | read role | a coach is routed to the client `/home` | J2 / J14 | P2 | P0-FL-15 | #186 |
+| 8 | `core/router/app_router.dart:259` | read role (redirect) | same | J2 / J14 | P2 | P0-FL-15 | #186 |
+| 9 | `features/auth/domain/auth_provider.dart:103` | read `user_profiles` (`→ null`) | Profile shows "Member" defaults; its error branch unreachable | J11 / J12 | P2 | P0-FL-16 | #189 |
+| 10 | `features/messaging/data/messaging_service.dart:55` | read `conversations` (`→ []`) | "No conversations yet" | messaging | P2 | P0-FL-13 | #184 |
+| 11 | `messaging_service.dart:177` | message insert ok, preview update fails → false | "Not sent" though saved; resend duplicates | messaging | P2 | P0-FL-13 | #184 |
+| 12 | `features/dashboard/presentation/coach_dashboard_screen.dart:48–49` | `notifications` stream `handleError` + `catch → []` | empty sheet, badge 0, stream dead | J5 / J10 | P2 | P0-FL-14 | #190 |
+| 13 | `coach_dashboard_screen.dart:1868` | consumer of #12 (`?? []`) | "No notifications" | J5 / J10 | P2 | P0-FL-14 | #190 |
+| 14 | `features/coach/presentation/coach_availability_screen.dart:58` | read slots + `coaching_calls` | no slots, no upcoming calls | booking | P2 | P0-FL-14 | #190 |
+| 15 | `features/workout/data/workout_service.dart:323` | `getExerciseProgression` | empty chart; error reads "No data yet" | J11 | P2 | P0-FL-18 | #188 |
+| 16 | `workout_service.dart:339` | `getLoggedExerciseNames` | strength screen empty state | J11 | P2 | P0-FL-18 | #188 |
+| 17 | `workout_service.dart:490` | `getClientPersonalRecords` | coach sees "No personal records yet" | J11 | P2 | P0-FL-18 | #188 |
+| 18 | `workout_service.dart:503` | `getClientRecentSessions` | coach sees "No sessions recorded" | J11 | P2 | P0-FL-18 | #188 |
+| 19–23 | `clientPlanProvider.valueOrNull ?? ClientPlan.free` in `manage_subscription_screen.dart:152`, `upgrade_screen.dart:56`, `profile/presentation/subscription_screen.dart:70`, `profile_screen.dart:55`, `settings_screen.dart:146` | RPC `client_plan()` | a coached client shown "Free"; upgrade offers a plan they have | J12 / J13 | P2 ×5 | P0-FL-17 | #191 |
+
+## Packages (beta value first; all decision-free unless noted)
+
+| Package | Files | Sites | Fix pattern | Base | Status |
+|---|---|---|---|---|---|
+| **P0-FL-12** client-detail assignment honesty | `client_detail_screen.dart`, `coach_program_service.dart` | #1, #2, #4 | prefill failure → notice + retry, inputs and Save disabled until loaded; paid-plan check rethrows → honest retry state | on #180 | **#182** — UX/security/QA passed at 23dd969; CI 7/7 |
+| P0-FL-13 messaging inbox and send | `messaging_service.dart`, `messaging_screen.dart` | #10, #11 | rethrow → inbox error state; preview-update failure after a saved insert = success + recorded | `origin/main` | **PR open, unmerged** — #184 · head 72fed97 · CI 7/7 (cycle 6) |
+| P0-FL-14 coach notifications + availability | `coach_dashboard_screen.dart`, `coach_availability_screen.dart` | #12–#14 | stream errors reach the sheet (retry); availability error state | integration base | **PR open, unmerged** — #190 · head beb2a3f · CI 7/7 (cycle 6) |
+| P0-FL-15 sign-in routing | `login_screen.dart`, `app_router.dart` | #7, #8 | failed role read → stay + "Couldn't load your account — Try again", no guessed route | `origin/main` | **PR open, unmerged** — #186 · head c117cfb · CI 7/7 (cycle 6) |
+| P0-FL-16 profile read passes errors on | `auth_provider.dart`, `profile_screen.dart` | #9 | report + rethrow; profile failure banner; audit `.when` consumers | on #180 | **PR open, unmerged** — #189 · head 3f357ee · CI 7/7 (cycle 6) |
+| P0-FL-17 plan label honesty | 5 subscription/profile/settings screens | #19–#23 | plan unknown → "—" + retry; never "Free"; upgrade offers nothing as current | on FL-16 | **PR open, unmerged** — #191 · head d307187 · CI 7/7 (cycle 6) |
+| P0-FL-18 progress views | `workout_service.dart`, strength / coach-client workout / train hub screens | #15–#18 (+ `:439`) | `catch → []` removed; error arms with retry | `origin/main` | **PR open, unmerged** — #188 · head b556bca · CI 7/7 (cycle 6) |
+| P0-FL-19 intake | `intake_flow_screen.dart`, `coach_provider.dart` | #3, #5, #6 (+ `:96`) | photo failure told (non-blocking); resume failure → retry; coach list rethrows | on #180 | **PR open, unmerged** — #185 · head e3d5636 · CI 7/7 (cycle 6) |
+| P0-FL-20 … P0-FL-36 | services and screens off the beta journeys | ~111 P3 sites | `reportError` at minimum; error states where shown as empty; dead providers deleted | various | backlog |
+
+Totals at f4cf7b1: **P1 3, P2 21, P3 ≈111, fine ≈30, Women's Health 1 (noted only).** FL-12 closes 2 of the 3 P1 and
+1 P2; P0-FL-13 … P0-FL-19 cover the remaining 1 P1 and 20 P2.
+
+**Status 2026-11-19 (cycle 6):** every P1 and P2 row above now has an open, unmerged PR with CI 7/7 on its exact head
+(#182, #184–#191). Combined branch `integration/p0-flutter-stack-c6` @ 6f8918f (all of them together): 3192 tests,
+CI 7/7 (run 44463329197). Automated evidence only — no device or live-QA run; nothing is merged. Remaining: ≈111 P3
+(P0-FL-20 … P0-FL-36) and the cycle-6 follow-ups in the ledger (P0-FL-38 unlogged assessment reads first).
+
+**Status 2026-11-19 (cycle 7).** The cycle-6 follow-ups are now in PRs, all CI 7/7 on their exact heads:
+- **#194 (P0-FL-38):** unlogged coach health reads, the Requests-tab crash on a missing profile, and the copilot injury parse.
+- **#192 (P0-FL-39):** false-success writes in notification preferences, Personal Info, the coach notification sheet and availability cancel.
+- **#193 (P0-FL-40):** role gates and Manage subscription showing a failed read as a fact, and the train-hub active session.
+
+Combined branch `integration/p0-flutter-stack-c7` @ df35d5f: 3335 tests, CI 7/7 (run 44497593361). Remaining: the P3 backlog and the cycle-8 list in the ledger.
+
+**Status 2026-11-22 (cycle 8):**
+- **#195 (P0-FL-41):** joined-profile crashes (Leaderboard, active coaches, reviews).
+- **#196 (P0-FL-42):** client booking cancel confirmed.
+- **#197 (P0-FL-43):** copilot generate failure recorded and explained.
+- **#198 (P0-FL-44):** paywall and shell never present a failed or stale role read as a role.
+
+All are CI 7/7 on their exact heads. Combined branch `integration/p0-flutter-stack-c8` @ 185261e: 3456 tests, CI 7/7 (run 45100790460).
+- **Still blocked:** `predictClient`, `evaluateWeek` and `regenerateProgram` swallow failures; this is the SEC-R3 / Wave 3B-4 owner ruling.
+
+**Status 2026-11-23 (cycle 9):**
+- **#199 (P0-FL-45a):** the nine role-only screens take the role only from a read confirmed for the member signed in now; their loaded state is keyed to that member.
+- **#200 (P0-FL-45b):** profile and role reads elsewhere count only for the current member. This fixes a P0 where Personal Info saved member A's details into member B's row after a switch.
+- **#201 (P0-FL-46):** coach cancel checks the status (no false "Session cancelled" or client notice); `_book` failures are recorded and stated honestly (network / 42501 / other).
+- **#202 (P0-FL-47):** `coachReviewsProvider` no longer turns a failed read into "No reviews yet"; the coach leaderboard ticks on the table it reads.
+- **#203 (P0-FL-48):** accessibility only, with no error-path change.
+
+All are CI 7/7 on their exact heads. Combined branch `integration/p0-flutter-stack-c9` @ 1b94044: 4393 tests, CI 7/7 (run 45132607442).
+- **Still open (decision-free):**
+  - `CustomExerciseService` returns null on failure (63, 87, 250, 266);
+  - `ai_coach_service:177` and `custom_exercise_service:662/916` return [] on failure;
+  - booking `_load` / `_selectCoach` show an error state but don't record it;
+  - staff-screen copy "Assign failed.".
+- **Still blocked:** the SEC-R3 / Wave 3B-4 trio above.
+
+**Status 2026-11-23 (cycle 10):**
+- **#208 (P0-FL-50a):** all 14 `CustomExerciseService` swallow sites (63, 87, 250, 266, 584/591, 662, 680, 856, 864, 888, 916, 931, 942). Reads record and rethrow (a real "no row" is still null/[]); best-effort reads keep their default but record; observability failed figures are "—", never 0; deletes and approve/reject treat 0 rows as failure. This fixes a data-loss path: a failed Edit Exercise prefill no longer opens a blank form whose Save overwrote the exercise.
+- **#205 (P0-FL-50b):** `ai_coach_service` 7 reads record and rethrow (177, 216, 124/135/144/153, 100); 3 writes treat 0 rows as failure (112, 167, deleteMemory). Cards no longer generate a brief or review over a failed read, and persona chips can't save the default over the member's real persona.
+- **#207 (P0-FL-49):** identity, not a swallow. The Activity `notif_*` readers and the Messages empty state decide only from a read confirmed for the current member.
+- **#204 (P0-FL-51), #206 (P0-FL-52):** tests and accessibility only, with no error-path change.
+
+All are CI 7/7 on their exact heads. Combined branch `integration/p0-flutter-stack-c10` @ b7ec6ef: 4660 tests, CI 7/7 (run 45240757852).
+- **Still open (decision-free):**
+  - `getCoachOverlay` / `resolveExerciseMedia` set `lastError` and return null, and Coach Focus doesn't check it;
+  - `createCoachingPack` result is ignored; `submitForGlobalLibrary` has no 0-row check; `_enrich` shows raw `res.error`;
+  - a failed challenges read shows "No active challenges";
+  - the intake picker `catch (_) {}` (~4123) is unrecorded;
+  - booking `_load` / `_selectCoach` show an error state but don't record it;
+  - staff-screen copy "Assign failed.".
+- **Needs a ruling:** observability decision, certification and intelligence sub-reads return null for both "RPC absent" and "failed" (PGRST202 reading).
+- **Still blocked:** the SEC-R3 / Wave 3B-4 trio (`predictClient`, `evaluateWeek`, `regenerateProgram`). The Copilot late-response remediation proposal is in `docs/COPILOT_LATE_RESPONSE_REMEDIATION_PROPOSAL.md`.
+
+**Status 2026-11-24 (cycle 11):**
+- **#209 (P0-FL-53a):** `getCoachOverlay` / `resolveExerciseMedia` record and rethrow (a real "no row" is still null), and Coach Focus shows a failure, not "Add your coaching"; `createCoachingPack` and `submitForGlobalLibrary` treat 0 rows as failure; `_enrich` no longer shows raw `res.error`; `upsertCoachOverlay` / `clearCoachVoice` failures are recorded and said.
+- **#213 (P0-FL-53b):** a failed challenges read is a failure, not "No active challenges", and a failed refresh keeps the member's earlier list; `joinChallenge` records; booking `_load` / `_selectCoach` record; Packages, Availability and Video Response writes are recorded and said (0 rows = failure; notification separate from save).
+- **#210 (P0-FL-53c):** the intake picker `catch (_) {}` is gone; each source records under its own origin and the member is told.
+- **#211 (P0-FL-54):** identity, not a swallow. The business profile follows the signed-in coach.
+- **#212 (P0-FL-55):** accessibility only, with no error-path change.
+
+Combined branch `integration/p0-flutter-stack-c11` @ f191d48: 4917 tests, CI 7/7 (run 45342689729).
+- **Still open (decision-free):** unguarded `pickImage` (`progress_screen`, `personal_info`, `chat_screen`, `ai_nutrition`, `ai_scan_view`); `enrichWithAI` stringifies errors; `updateExercise` unrecorded; `storage.remove` result ignored on voice-note clear; `package_service` row checks; `coach_marketplace`, `choose_package_screen` `saveSchedule`, `coach_pricing_sheet`; video record/pick; `PaymentService.cancelSubscription` unrecorded.
+- **Needs a ruling:** observability PGRST202 reading (unchanged).
+- **Still blocked (SEC-R3):** staff-screen "Assign failed." lives in `coach_copilot_screen.dart`; the `predictClient` / `evaluateWeek` / `regenerateProgram` trio.
+
+**Status 2026-11-24 (cycle 12):**
+- **#216 (P0-FL-56a):** the unguarded `pickImage` / `pickVideo` sites are guarded: `progress_screen` (add and baseline), `personal_info_screen`, `chat_screen`, `ai_nutrition_screen`, `ai_scan_view` and `create_exercise_screen`. Each records under its own origin and tells the member; cancel stays silent. Chat `_removeOrphan` no longer trusts an empty `remove()`. The scan `_describe` failure is recorded and said inline.
+- **#215 (P0-FL-56b):**
+  - `package_service`'s `catch (_)` is gone, and 0-row or signed-out writes throw; partial `saveSessionTiers` is reported.
+  - The `coach_packages` read has a retry.
+  - `coach_marketplace`'s `catch (_)` is gone, and its fallback use is recorded.
+  - `choose_package_screen` `saveSchedule`, the schedule read and checkout are all caught, recorded and said.
+  - `coach_pricing_sheet` and `PaymentService.cancelSubscription` record; all four package providers record.
+- **#214 (P0-FL-57a):**
+  - `enrichWithAI` no longer stringifies errors.
+  - `updateExercise`, `createExercise`, `setCoachVoice`, `uploadCoachVoice` and `signedCoachVoiceUrl` record.
+  - `clearCoachVoice` checks the `remove()` result (S-53a-5).
+  - A skipped challenge award is recorded.
+- **#218 (P0-FL-57b):** picker failures are recorded; the uploaded photo's cleanup and the unconfirmed update are recorded.
+- **#217 (P0-FL-58):** video record/pick failures are recorded and said.
+
+Combined branch `integration/p0-flutter-stack-c12` @ `a82f993`: 5557 tests, CI 7/7 (run 45437860682).
+- **Still open (decision-free):**
+  - `create_exercise_screen` double-records `updateExercise` / `createExercise` failures.
+  - `AiNutritionNotifier` records nothing.
+  - `StorageException` hides the connection hint.
+  - Other `PaymentService` catches.
+  - The invite email `catch (_)` in `coach_business_screen`.
+  - `coach_voice.dart` `catch (_)` blocks.
+  - Activity `streakProvider` / `upcomingClassesProvider` / `upcomingEventsProvider` swallow errors to 0 or `[]`.
+  - `progress_screen` signed-URL catches.
+- **Needs a ruling:** observability PGRST202 reading (unchanged).
+- **Still blocked (SEC-R3):** staff-screen "Assign failed." lives in `coach_copilot_screen.dart`; the `predictClient` / `evaluateWeek` / `regenerateProgram` trio.
+
+### Cycle 13 (2026-11-26): P0-FL-60a–c, plus the failure states inside FL-59
+- **#226 (P0-FL-60a):** every `PaymentService` catch records its cause; a failed plan read no longer offers every plan; a failed billing portal is not "No billing account yet"; launch failures are caught. `definitelyRefused` says "Nothing was changed" only for a definite refusal (SQLSTATE, `PGRST…`, 4xx except 408); a gateway 5xx, `PGRST001`, class 08 and `40003` say "Couldn't confirm".
+- **#219 (P0-FL-60b):** streak, upcoming classes and events record and rethrow (no more 0 or `[]`); `AiNutritionNotifier` records (never the token or prompt); the invite email failure is recorded by status; a failed nutrition read shows "—", not "0 kcal".
+- **#220 (P0-FL-60c):** goals, pods, event tickets and notifications record and say their failures; a 0-row update is a failure; the coach link reads rethrow instead of answering "no coach".
+- **FL-59 packages:** four of the five `coach_voice.dart` `catch (_)` blocks now record, and `create_exercise_screen` records each failure once (FL-59d); the progress signed-URL catch records and tells a `StorageException` apart (FL-59e); vendor 0-row writes are failures (FL-59a); refused community, habit and Action Center writes are said (FL-59e).
+- Combined `integration/p0-flutter-stack-c13`: 8902 tests, 0 failures; see the ledger's Cycle 13 section.
+- **Still open (decision-free):** a dropped owned SnackBar is not itself recorded; a failed unread count reads as "no unread"; `resume_workout_banner` hides on a failed lookup; the coach-side action-item read returns `[]` on failure; a proxy 499 counts as a refusal.
+- **Needs a ruling:** observability PGRST202 reading (unchanged).
+- **Still blocked (SEC-R3):** unchanged.
