@@ -302,15 +302,37 @@ class ActiveWorkoutNotifier
   String? _sessionId;
   String? get sessionId => _sessionId;
 
+  /// Sets entered while no session was bound — a slow or failed session start
+  /// — by [WorkoutSet.id]. They are the workout's that binds next ([beginSession]).
+  final Set<String> _held = {};
+
   /// Binds this state to [sessionId], clearing it when the session changes.
   ///
   /// Called on entering the Workout Zone. Re-entering the same session keeps
   /// whatever was already typed; switching to a different session starts empty
   /// rather than inheriting the previous workout's sets.
-  void beginSession(String sessionId) {
+  ///
+  /// A session that binds LATE — after the member confirmed sets while it was
+  /// still being opened — keeps those sets when [heldFor] is the workout they
+  /// were entered against (C14-62d-02): they are this session's, and each was
+  /// already sent to it once. Clearing them showed confirmed sets as
+  /// outstanding. Anything held that is not one of [heldFor]'s sets, and
+  /// everything when [heldFor] is not given, is dropped as before.
+  void beginSession(String sessionId, {Workout? heldFor}) {
     if (_sessionId == sessionId) return;
+    final wasUnbound = _sessionId == null;
     _sessionId = sessionId;
-    state = {};
+    final ids = heldFor == null
+        ? const <String>{}
+        : {for (final e in heldFor.exercises) for (final s in e.sets) s.id};
+    final kept = wasUnbound
+        ? {
+            for (final e in state.entries)
+              if (_held.contains(e.key) && ids.contains(e.key)) e.key: e.value,
+          }
+        : const <String, Map<String, dynamic>>{};
+    _held.clear();
+    state = kept;
   }
 
   /// A completed set is a recorded result, so its numbers are frozen.
@@ -429,6 +451,7 @@ class ActiveWorkoutNotifier
   void _write(WorkoutSet set, Map<String, dynamic> data,
       String? exerciseInstanceId) {
     final existing = state[set.id];
+    if (_sessionId == null) _held.add(set.id);
     state = {
       ...state,
       set.id: {
@@ -466,9 +489,25 @@ class ActiveWorkoutNotifier
 
   void reset() {
     _sessionId = null;
+    _held.clear();
     state = {};
   }
 }
+
+/// The selected workout once it has been FILED (C14-62d-03), or null.
+///
+/// Android back dismisses the "workout complete" dialog without its Skip or
+/// Done, so the filed workout stays selected and the Zone stays on it. Its
+/// view, or a new one after leaving and coming back, must not file, award or
+/// start it again: one workout, one `workout_logs` row, one award. Compared by
+/// identity with [selectedWorkoutProvider]'s value, and dropped whenever the
+/// selection changes (cleared by Skip/Done, or another workout picked) — a
+/// workout picked again is a new workout. The member's alone, as the selection.
+final filedWorkoutProvider = StateProvider<Workout?>((ref) {
+  ref.watch(restoringUserIdProvider);
+  ref.watch(selectedWorkoutProvider);
+  return null;
+});
 
 final activeWorkoutProvider = StateNotifierProvider<ActiveWorkoutNotifier,
     Map<String, Map<String, dynamic>>>((ref) {
