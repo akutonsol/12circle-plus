@@ -129,16 +129,30 @@ Stream<T> reopenWhenDone<T>(
 /// is still in flight the bell shows no count, as it always has — and so it is
 /// while the rows, or the failure, held are another coach's (P0-FL-59f): which
 /// state holds them does not say whose they are.
+///
+/// RM-2 (C15-63c-02) · `null` also while it is still being read: the `0` this
+/// answered then meant "zero unread", a number nobody had read. A number comes
+/// only from rows read for the signed-in coach. Whether the unknown is a
+/// failure (the bell's muted dot) is [unreadNotificationCheckFailedProvider].
 final unreadNotificationCountProvider = Provider<int?>((ref) {
-  final async = heldFor(
-      hasAuthClient
-          ? ref.watch(currentUserProvider.select((u) => u?.id))
-          : null,
-      ref.watch(coachNotificationsProvider));
-  if (async.hasError) return null;
-  if (!async.hasValue) return 0;
+  final async = ref.watch(_unreadNotificationsHeldProvider);
+  if (async.hasError || !async.hasValue) return null;
   return async.requireValue.where((n) => n['read'] == false).length;
 });
+
+/// True when the signed-in coach's own notifications read failed (P0-FL-14):
+/// the bell says "couldn't check". Not while it is merely still being read,
+/// and never for a failure held from another coach (P0-FL-59f).
+final unreadNotificationCheckFailedProvider = Provider<bool>(
+    (ref) => ref.watch(_unreadNotificationsHeldProvider).hasError);
+
+/// The coach's notifications as far as they are the signed-in coach's.
+final _unreadNotificationsHeldProvider =
+    Provider<AsyncValue<List<Map<String, dynamic>>>>((ref) => heldFor(
+        hasAuthClient
+            ? ref.watch(currentUserProvider.select((u) => u?.id))
+            : null,
+        ref.watch(coachNotificationsProvider)));
 
 // F-15/F-16: the error propagates. These four reads ended `catch { return []; }`,
 // so a failure reached `/coach-dashboard` as "no clients", "no check-ins" and
@@ -526,7 +540,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
               NamedIconButton(
                 // P0-FL-14 (UX-1) · the muted dot is visual only; a screen
                 // reader hears that the unread count is unknown.
-                label: ref.watch(unreadNotificationCountProvider) == null
+                label: ref.watch(unreadNotificationCheckFailedProvider)
                     ? "Notifications — couldn't check for new ones"
                     : 'Notifications',
                 onTap: () => _showNotificationsSheet(context),
@@ -542,7 +556,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                     // P0-FL-14 · unknown (the read failed) is not 0: a small,
                     // quiet muted dot, no number and no alarm red. The sheet
                     // says what happened and offers Try again.
-                    if (ref.watch(unreadNotificationCountProvider) == null)
+                    if (ref.watch(unreadNotificationCheckFailedProvider))
                       Positioned(
                         key: const ValueKey('coach-bell-unread-unknown'),
                         top: 0, right: 0,
@@ -552,7 +566,9 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                             color: _muted.withValues(alpha: 0.6),
                             shape: BoxShape.circle,
                             border: Border.all(color: _card, width: 1.5))))
-                    else if (ref.watch(unreadNotificationCountProvider)! > 0)
+                    // RM-2 · a number only once one was read (null: not yet).
+                    else if (ref.watch(unreadNotificationCountProvider)
+                        case final unread? when unread > 0)
                       Positioned(
                         top: -2, right: -2,
                         child: Container(
@@ -563,8 +579,7 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
                             border: Border.all(color: _card, width: 1.5)),
                           alignment: Alignment.center,
                           child: Text(
-                            ref.watch(unreadNotificationCountProvider)! > 9
-                                ? '9+' : '${ref.watch(unreadNotificationCountProvider)}',
+                            unread > 9 ? '9+' : '$unread',
                             style: const TextStyle(color: Colors.white,
                               fontSize: 8, fontWeight: FontWeight.w800)))),
                   ],

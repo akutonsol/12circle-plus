@@ -1266,7 +1266,9 @@ void main() {
       expect(find.text('Mark all read'), findsNothing);
       expect(find.text('Notifications'), findsNothing,
           reason: "A's sheet closes");
-      expect(c.read(unreadNotificationCountProvider), 0);
+      expect(c.read(unreadNotificationCountProvider), isNull,
+          reason: "RM-2: nobody's count was read yet");
+      expect(c.read(unreadNotificationCheckFailedProvider), isFalse);
       expect(server.writes, isEmpty);
       await unmount(tester, realtime: true);
     });
@@ -1394,11 +1396,13 @@ void main() {
       server.fails.add('GET notifications:$memberA');
       await show(tester, realNotifications: true);
       await pumpUntil(
-          tester, () => c.read(unreadNotificationCountProvider) == null,
+          tester, () => c.read(unreadNotificationCheckFailedProvider),
           what: "A's failure");
       server.holds['GET notifications:$memberB'] = Completer<void>();
       await become(tester, memberB);
-      expect(c.read(unreadNotificationCountProvider), 0);
+      expect(c.read(unreadNotificationCountProvider), isNull,
+          reason: "RM-2: nobody's count was read yet");
+      expect(c.read(unreadNotificationCheckFailedProvider), isFalse);
       await unmount(tester, realtime: true);
     });
 
@@ -1415,7 +1419,7 @@ void main() {
         server.fails.add('GET notifications:$memberA');
         await show(tester, realNotifications: true);
         await pumpUntil(
-            tester, () => c.read(unreadNotificationCountProvider) == null,
+            tester, () => c.read(unreadNotificationCheckFailedProvider),
             what: "A's failure");
         await frames(tester, 2);
         await tester.tap(find.byIcon(Icons.notifications_outlined));
@@ -1430,7 +1434,7 @@ void main() {
         for (var i = 0; i < 8; i++) {
           await tester.pump(const Duration(milliseconds: 100));
           if (who == 'the bell') {
-            expect(c.read(unreadNotificationCountProvider), 0,
+            expect(c.read(unreadNotificationCheckFailedProvider), isFalse,
                 reason: "THE defect: A's failure was said to B (frame $i)");
           } else {
             expect(said(), findsNothing,
@@ -1463,7 +1467,7 @@ void main() {
       server.fails.add('GET notifications:$memberA');
       await show(tester, realNotifications: true);
       await pumpUntil(
-          tester, () => c.read(unreadNotificationCountProvider) == null,
+          tester, () => c.read(unreadNotificationCheckFailedProvider),
           what: "A's failure");
       await frames(tester, 2);
       await tester.tap(find.byIcon(Icons.notifications_outlined));
@@ -1479,6 +1483,7 @@ void main() {
       c.invalidate(coachNotificationsProvider);
       await frames(tester, 3);
       expect(c.read(unreadNotificationCountProvider), isNull);
+      expect(c.read(unreadNotificationCheckFailedProvider), isTrue);
       expect(find.text("Couldn't load your notifications"), findsOneWidget);
       server.holds.clear();
       hold.complete();
@@ -1499,7 +1504,7 @@ void main() {
       server.fails.add('GET notifications:$memberB');
       await become(tester, memberB);
       await pumpUntil(
-          tester, () => c.read(unreadNotificationCountProvider) == null,
+          tester, () => c.read(unreadNotificationCheckFailedProvider),
           what: "B's failure");
       await unmount(tester, realtime: true);
     });

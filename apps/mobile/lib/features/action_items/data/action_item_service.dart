@@ -68,7 +68,9 @@ class ActionItemService {
     final coachId = _uid;
     if (coachId == null) return false;
     try {
-      await _db.from('action_items').insert({
+      // RM-2 (C15-63d-03) · the row is asked back: an insert RLS filtered to
+      // nothing answers like a saved one, and the coach was told it was sent.
+      final rows = await _db.from('action_items').insert({
         'client_id': clientId,
         'coach_id': coachId,
         'title': title,
@@ -78,9 +80,16 @@ class ActionItemService {
         'created_by': 'coach',
         'status': 'pending',
         'due_date': dueDate?.toIso8601String().split('T').first,
-      });
+      }).select('id');
+      if (rows.isEmpty) {
+        reportError('ActionItemService.assignActionItem',
+            StateError('action_items insert changed 0 rows'));
+        return false;
+      }
       return true;
-    } catch (_) {
+    } catch (e, st) {
+      // Recorded once here; the sheet says it without the exception text.
+      reportError('ActionItemService.assignActionItem', e, st);
       return false;
     }
   }

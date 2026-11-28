@@ -128,6 +128,26 @@ void main() {
     expect(f.context, isNull, reason: 'no payment or personal detail attached');
   }
 
+  /// RM-2 (C15-63b-05) · [flow] stopped before anything of it was sent:
+  /// recorded once as the plain stop, and NOT as an outcome left unshown (there
+  /// was none). Names the flow only.
+  void stoppedOnce(String origin, String flow) {
+    final stops = reported
+        .where((f) =>
+            f.error is StateError &&
+            (f.error as StateError).message ==
+                '$flow: the signed-in account changed')
+        .toList();
+    expect(stops, hasLength(1),
+        reason: 'the stop is recorded once: '
+            '${reported.map((f) => '${f.origin}: ${f.error}').toList()}');
+    expect(stops.single.origin, origin);
+    expect(stops.single.context, isNull);
+    expect(notShown(), isEmpty,
+        reason: 'THE defect: nothing was sent, yet the record said an outcome '
+            'was not shown');
+  }
+
   Future<void> signIn(WidgetTester t, String uid) async {
     await t.runAsync(() => signInAs(uid));
     await t.pump();
@@ -705,14 +725,16 @@ void main() {
       expect(find.text('Switch to Free?'), findsNothing);
       expect(server.count('cancel-subscription'), 0);
       expect(server.writes, isEmpty);
-      recordedOnce('UpgradeScreen.switchToFree', 'switch to Free');
-      // Round 3: the tap ends when A leaves (the outcome record comes first
+      stoppedOnce('UpgradeScreen.switchToFree', 'switch to Free');
+      // Round 3: the tap ends when A leaves (the stop record comes first
       // now); the read failure that lands later is still recorded.
       expect(reported.map((f) => f.origin).toList(),
           unorderedEquals(
               ['UpgradeScreen.mySubscriptions', 'UpgradeScreen.switchToFree']),
           reason: '${records()}');
-      expect('${notShown().single.error}', isNot(contains('SECRET')));
+      expect(
+          '${reported.singleWhere((f) => f.origin == 'UpgradeScreen.switchToFree').error}',
+          isNot(contains('SECRET')));
     });
 
     testWidgets("control: the same account's failed subscriptions read is said "
@@ -796,7 +818,7 @@ void main() {
         await flowEnds(t);
         server.gates['subscriptions:$_a']!.complete();
         await settle(t);
-        recordedOnce('UpgradeScreen.switchToFree', 'switch to Free');
+        stoppedOnce('UpgradeScreen.switchToFree', 'switch to Free');
         expect(reported, hasLength(1), reason: '${records()}');
         expect(find.text('Switch to Free?'), findsNothing,
             reason: "A's confirmation is not put to B");
@@ -815,9 +837,9 @@ void main() {
         await flowEnds(t);
         server.gates['subscriptions:$_a']!.complete();
         await settle(t);
-        recordedOnce('UpgradeScreen.switchToFree', 'switch to Free');
+        stoppedOnce('UpgradeScreen.switchToFree', 'switch to Free');
         expect(reported, hasLength(1), reason: '${records()}');
-        expect('${notShown().single.error}', isNot(contains('SECRET')));
+        expect('${reported.single.error}', isNot(contains('SECRET')));
         saidNothing();
         expect(find.textContaining('Nothing was cancelled'), findsNothing);
         expect(find.text('Switch to Free?'), findsNothing);

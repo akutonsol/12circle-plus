@@ -195,8 +195,18 @@ void main() {
     expect(find.text(_sending), findsNothing);
     expect(find.byType(SnackBar), findsNothing);
     expect(server.writesAs(memberB), isEmpty);
-    expect(origins(), ['MessagingService.sendMessage', 'ChatScreen._send']);
-    expect('${reported.last.error}', contains('message was not sent'));
+    // RM-2 (C15-63b-04) · and the failure notice A never saw, once, with no
+    // message text in it.
+    expect(origins(), [
+      'MessagingService.sendMessage',
+      'ChatScreen._send',
+      'ChatScreen._send',
+    ]);
+    expect('${reported[1].error}', contains('message was not sent'));
+    expect((reported.last.error as StateError).message,
+        'message send outcome not shown: the signed-in account changed');
+    expect(reported.map((f) => '${f.error}').join(),
+        isNot(contains('private words')));
     await close(t);
   });
 

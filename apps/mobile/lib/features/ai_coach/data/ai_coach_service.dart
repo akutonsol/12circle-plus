@@ -122,16 +122,32 @@ class AICoachService {
     }
     try {
       final res = await _db.functions.invoke('ai-coaching-engine', body: {'type': type});
-      if (res.status != 200) return null;
+      if (res.status != 200) {
+        // RM-2 (C14-62a1-02) · the status only: the body may carry the
+        // member's data.
+        reportError('AICoachService.generate',
+            StateError('ai-coaching-engine $type answered ${res.status}'));
+        return null;
+      }
       final data = res.data as Map<String, dynamic>;
       final result = data['result'] as Map<String, dynamic>?;
+      if (result == null) {
+        reportError('AICoachService.generate',
+            StateError('ai-coaching-engine $type answered no result'));
+        return null;
+      }
       // Fold confidence into the result so cards can show it.
-      if (result != null && data['confidence'] != null) {
+      if (data['confidence'] != null) {
         result['confidence'] = data['confidence'];
         result['confidence_reasons'] = data['confidence_reasons'];
       }
       return result;
-    } catch (_) { return null; }
+    } catch (e, st) {
+      // RM-2 (C14-62a1-02) · recorded once (this caught and dropped it); null
+      // stays the failure the callers say.
+      reportError('AICoachService.generate', e, st);
+      return null;
+    }
   }
 
   // ── Coach personality ─────────────────────────────────────────────────────

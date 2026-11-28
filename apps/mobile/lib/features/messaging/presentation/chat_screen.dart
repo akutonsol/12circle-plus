@@ -361,10 +361,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // to ignore: the bubble stayed as sent, the text was gone, and the score was
     // awarded for a message nobody received.
     reportError('ChatScreen._send', StateError('message was not sent'));
-    if (!mounted) return;
-    if (!_holds(epoch)) {
+    if (!mounted || !_holds(epoch)) {
       // Their text is not handed to the account that arrived, nor the notice.
-      _dropIfLeft();
+      // RM-2 (C15-63b-04) · the notice the sender never saw is recorded once,
+      // as payments records its outcomes (the flow only, never the text). A
+      // screen the same member closed meanwhile is not an account change.
+      if (!_holds(epoch)) {
+        _recordNoticeNotShown('ChatScreen._send', 'message send');
+      }
+      if (mounted) _dropIfLeft();
       return;
     }
     setState(() =>
@@ -380,6 +385,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ? _sendFailedNetworkMessage
         : _sendFailedOtherMessage);
   }
+
+  /// The failure of [flow], meant for the member who sent it, was not said to
+  /// them: another account (or nobody) is signed in now, or their conversation
+  /// was dropped. Names the flow only (RM-2).
+  static void _recordNoticeNotShown(String origin, String flow) => reportError(
+      origin,
+      StateError('$flow outcome not shown: the signed-in account changed'),
+      StackTrace.current);
 
   void _showSendFailure(String message) {
     if (!mounted) return;
@@ -430,6 +443,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       // `_access_denied`) says where to allow access.
       reportError('chat.photo.pick.gallery', e, st);
       if (!_holds(epoch)) {
+        _recordNoticeNotShown('ChatScreen._sendPhoto', 'photo send');
         _dropIfLeft();
         return;
       }
@@ -449,18 +463,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final storage = Supabase.instance.client.storage.from(ChatMediaPath.bucket);
     String? uploadedPath;
     Object? sendError;
+    // This send's own stop for a member who left: nothing more was sent, and
+    // there is no failure of theirs to say (RM-2).
+    Object? stop;
     try {
       final Uint8List bytes;
       try {
         bytes = await picked.readAsBytes();
       } catch (e, st) {
         reportError('chat.photo.read', e, st);
-        if (_holds(epoch)) _showSendFailure(couldntMessage('use that photo', e));
+        if (_holds(epoch)) {
+          _showSendFailure(couldntMessage('use that photo', e));
+        } else {
+          _recordNoticeNotShown('ChatScreen._sendPhoto', 'photo send');
+        }
         return;
       }
       // Their member left meanwhile: not this account's message to send, nor
       // theirs if they are back, because the conversation was dropped.
-      if (!_holds(epoch)) throw StateError('the member changed during a pick');
+      if (!_holds(epoch)) {
+        throw stop = StateError('the member changed during a pick');
+      }
       final ext = picked.path.split('.').last.toLowerCase();
       // messages/<conversation_id>/<uploader_uid>/<epoch>.<ext> — the
       // conversation is the authorization identity, never the uploader.
@@ -476,7 +499,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       uploadedPath = storagePath;
       // Checked again: `sendMessage` writes as whoever is signed in NOW, so a
       // switch during the upload sent this photo as B, in A's conversation.
-      if (!_holds(epoch)) throw StateError('the member changed during an upload');
+      if (!_holds(epoch)) {
+        throw stop = StateError('the member changed during an upload');
+      }
       final ok = await _service.sendMessage(
         conversationId: conversationId,
         content: '[photo]',
@@ -491,6 +516,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         if (_holds(epoch)) {
           _photoFailure = couldntMessage('send your photo', sendError);
           _showPhotoFailure();
+        } else {
+          _recordNoticeNotShown('ChatScreen._sendPhoto', 'photo send');
         }
       }
     } catch (e, st) {
@@ -502,6 +529,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (_holds(epoch)) {
         _photoFailure = couldntMessage('send your photo', e);
         _showPhotoFailure();
+      } else if (!identical(e, stop)) {
+        _recordNoticeNotShown('ChatScreen._sendPhoto', 'photo send');
       }
     } finally {
       // After a drop the composer is no longer this send's.

@@ -471,7 +471,11 @@ void main() {
       server.gate!.complete();
       await recorded(t, cleanup);
       expect(server.storage, ['POST']);
-      expect(origins(), ['MessagingService.sendMessage', cleanup]);
+      // RM-2 · and the failure notice A never saw, once.
+      expect(origins(),
+          ['MessagingService.sendMessage', cleanup, 'ChatScreen._sendPhoto']);
+      expect((reported.last.error as StateError).message,
+          'photo send outcome not shown: the signed-in account changed');
       await close(t);
     });
 
