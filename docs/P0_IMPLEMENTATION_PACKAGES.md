@@ -287,6 +287,32 @@ Runtime (device/simulator/live QA): **not performed**; journey completion unchan
 
 **Runtime evidence:** none (no device, simulator or live QA). Journeys stay at 2 of 14 and beta conditions at 0 of 4.
 
+## Cycle 15 log (2026-11-27/28): P0-FL-63a–e (small honesty fixes and test hygiene)
+
+**How the cycle ran.**
+- **Base:** the verified Cycle 14 head `integration/p0-flutter-stack-c14` @ `7b9ce5c` (push CI 7/7 `46065115113`). Five engineers worked in separate worktrees; every package targets `-c14`.
+- **Reviews:** independent UX, security and QA review for each package, with narrow re-checks after each round.
+- **Mutants:** the lead ran mutants in each package's own worktree. It also ran the lib mutants QA may not apply (63e) and the node guards some engineer sessions could not run (63b, 63d, 63e, 63a).
+- **Scope calls:**
+  - FL-63b covers the payment "dropped bar" (Cycle 13 FL-60a follow-up) plus a chat-send honesty check. Round 3 was a lead-approved, in-scope fix of the Upgrade → Free hang that round 2 found.
+  - FL-63e also fixed the CI flake seen on #232 (C14-FLAKE-01).
+- **Combined branch `integration/p0-flutter-stack-c15`** @ `6d1611d` (tree `2cd5f14`): the five heads were merged `--no-ff` in package order, with no conflicts and no integration commits.
+  - Local result: analyze 281, **9176** tests passed, 7 skipped, 0 failed.
+  - CI: **7/7 success**, run `46100139167`.
+
+| Package | Branch, final head, PR | Tests (full) | Independent review (final head) | Lead mutants | CI (exact head) |
+|---|---|---|---|---|---|
+| P0-FL-63a vendor sheet closes after a switch; agenda gets the portal's owner | `fix/vendor-sheet-closes-after-switch` `f24db60` → **#237** | 9098 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 8/10 (2 traced) | 7/7 `46092105087` |
+| P0-FL-63b dropped outcomes recorded; chat "Sending…"; Free tap cannot hang | `fix/dropped-outcomes-recorded` `83946b6` → **#238** | 9128 | UX PASS · sec APPROVE-WITH-NOTES · QA VERIFIED | 21/22 (1 traced) | 7/7 `46098611670` |
+| P0-FL-63c failed unread count is unknown, never "none" | `fix/unread-count-failure-not-zero` `85e3c04` → **#235** | 9104 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 11/12 (1 traced) | 7/7 `46087521803` |
+| P0-FL-63d Action Center first-load retry; coach action-item read rethrows | `fix/action-center-first-load-retry` `6d5ee71` → **#236** | 9098 | UX PASS-WITH-NOTES · sec APPROVE-WITH-NOTES · QA VERIFIED | 11/11 (+ owner-filter mutant) | 7/7 `46089943980` |
+| P0-FL-63e deterministic Home week test and payment E13 controls (tests only) | `test/deterministic-home-week-and-payment-control` `dd5b100` → **#234** | 9084 | UX PASS · sec APPROVE-WITH-NOTES · QA VERIFIED | 2/2 | 7/7 `46085564934` |
+
+**Runtime evidence:** none (no device, simulator or live QA). Journeys stay 2 of 14, and beta conditions 0 of 4.
+
+### Next after cycle 15
+Do not start Cycle 16. The next pass is blocker remediation, driven by `docs/BLOCKER_REGISTER_C14_C15.md` on the ledger branch (grouped, prioritised, with a sequence).
+
 ## Cycle 14 log (2026-11-27): P0-FL-62a–e (remaining identity-isolation surfaces)
 
 **How the cycle ran.**
