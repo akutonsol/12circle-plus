@@ -10,6 +10,7 @@ import '../../payments/domain/payment_provider.dart';
 import '../../payments/presentation/checkout_launcher.dart'
     show recordOutcomeNotShown;
 import '../../workout/presentation/widgets/section_load_failure.dart';
+import '../data/coach_relationship_service.dart' show AccountChangedError;
 import '../domain/package_provider.dart';
 
 const _card   = Color(0xFF0E0B16);
@@ -184,11 +185,21 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
         days: _days.map((i) => _dayKeys[i]).toList(),
         sessionTime: baseTime,
         dayTimes: dayTimes,
+        // P0-RM-1 (S-2): stamped with the client who tapped, not a fresh read.
+        expectedUid: client,
       );
     } catch (e, st) {
       // P0-FL-56b: a failed save escaped unhandled and the button spun for
       // good. Nothing was confirmed saved, so neither booking nor payment
       // follows; what the client chose stays.
+      // An AccountChangedError was recorded by the service (once) and is not
+      // for whoever is signed in now.
+      if (e is AccountChangedError) {
+        if (mounted && seq == _seedSeq && signedInUid() == client) {
+          setState(() => _saving = false);
+        }
+        return;
+      }
       reportError('ChoosePackageScreen._save', e, st);
       if (!mounted || seq != _seedSeq) return;
       setState(() {

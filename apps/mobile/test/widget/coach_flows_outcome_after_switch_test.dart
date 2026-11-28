@@ -237,4 +237,55 @@ void main() {
       }
     });
   }
+
+  // P0-RM-1 round 2 (lead mutant `profile-returned-not-sent`, QA should-fix
+  // 2) · cancelCoach RETURNED normally — the last step went out and was done
+  // as A — and only then was the account found changed. Profile must count
+  // that as SENT: the outcome nobody was shown is recorded once as such, not
+  // as a plain "the account changed" (which says nothing was done).
+  group('Profile "Cancel Coach": cancelCoach returned, then the account changed',
+      () {
+    final profile = flows[1];
+    for (final (path, gateKey, paidSubs) in [
+      ('paid: during the only cancellation', 'POST cancel-subscription:$_a', ['sub-a-1']),
+      ('unpaid: during the coach notification', 'POST notifications:$_a', <String>[]),
+    ]) {
+      for (final (what, next) in [('B signs in', _b), ('A signs out', null)]) {
+        testWidgets('$path, $what: done as A, nothing said, recorded once as '
+            'an outcome not shown', (t) async {
+          server.paid[_a] = paidSubs;
+          await profile.open(t);
+          await profile.toConfirm(t);
+          server.log.clear();
+          final gate = server.gates[gateKey] = Completer();
+          await t.tap(profile.confirm);
+          await t.pump();
+          await pumpUntil(t,
+              () => server.log.any((r) => '${r.method} ${r.name}:${r.who}' == gateKey),
+              what: 'the last step went out');
+          await t.runAsync(() => next == null ? signOut() : signInAs(next));
+          await t.pump();
+          gate.complete();
+          await settle(t);
+          if (paidSubs.isEmpty) {
+            expect(server.restWrites.map((r) => '${r.method} ${r.name}:${r.who}'),
+                ['PATCH coach_client_relationships:$_a', 'POST notifications:$_a']);
+          } else {
+            expect(invoked(), [(_a, 'sub-a-1')]);
+            expect(server.restWrites, isEmpty);
+          }
+          expect(server.log.where((r) => r.who == _b && r.method != 'GET'), isEmpty);
+          expect(find.byType(SnackBar), findsNothing);
+          expect(find.text(_endsSaid), findsNothing);
+          expect(find.textContaining('account changed'), findsNothing);
+          expect(records(), [
+            (profile.origin,
+                'Bad state: end coaching outcome not shown: the signed-in account changed'),
+          ], reason: 'it returned (it was done): its outcome not shown is the '
+              'one record — not "the account changed" as if nothing was done');
+          await unmount(t);
+        });
+      }
+    }
+  });
 }

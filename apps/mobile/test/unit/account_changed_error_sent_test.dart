@@ -242,13 +242,11 @@ void main() {
     final showsMessage = RegExp(
         r'(\w+)\s+is\s+StateError\s*(\?|\)\s*return)\s*\1\.message');
 
-    // Callers in files outside RM-1's package that still do it; each is a
-    // follow-up (see the RM-1 report). This list may only SHRINK: a file that
-    // is fixed must be taken off it.
-    const knownElsewhere = {
-      'lib/features/coach/presentation/coach_marketplace_screen.dart',
-      'lib/features/coach/presentation/coach_pricing_sheet.dart',
-    };
+    // Callers that still do it. This list may only SHRINK: a file that is
+    // fixed must be taken off it. Empty since RM-1 round 2 (the marketplace's
+    // request and the pricing sheet's save were the last two): the guard now
+    // covers every caller.
+    const knownElsewhere = <String>{};
 
     test('every caller goes through refusalToSay', () {
       final offenders = <String>{};
@@ -277,6 +275,8 @@ void main() {
         'lib/features/profile/presentation/profile_screen.dart',
         'lib/features/payments/presentation/manage_subscription_screen.dart',
         'lib/features/dashboard/presentation/coach_dashboard_screen.dart',
+        'lib/features/coach/presentation/coach_marketplace_screen.dart',
+        'lib/features/coach/presentation/coach_pricing_sheet.dart',
       ]) {
         expect(File(p).readAsStringSync(), contains('refusalToSay('), reason: p);
       }
