@@ -122,16 +122,43 @@ class AICoachService {
     }
     try {
       final res = await _db.functions.invoke('ai-coaching-engine', body: {'type': type});
-      if (res.status != 200) return null;
+      if (res.status != 200) {
+        // RM-2 (C14-62a1-02) · the status only: the body may carry the
+        // member's data.
+        reportError('AICoachService.generate',
+            StateError('ai-coaching-engine $type answered ${res.status}'));
+        return null;
+      }
       final data = res.data as Map<String, dynamic>;
       final result = data['result'] as Map<String, dynamic>?;
+      if (result == null) {
+        reportError('AICoachService.generate',
+            StateError('ai-coaching-engine $type answered no result'));
+        return null;
+      }
       // Fold confidence into the result so cards can show it.
-      if (result != null && data['confidence'] != null) {
+      if (data['confidence'] != null) {
         result['confidence'] = data['confidence'];
         result['confidence_reasons'] = data['confidence_reasons'];
       }
       return result;
-    } catch (_) { return null; }
+    } catch (e, st) {
+      // RM-2 (C14-62a1-02) · recorded once (this caught and dropped it); null
+      // stays the failure the callers say.
+      //
+      // RM-2 r2 (S-1) · never the error itself: a non-2xx answer throws a
+      // FunctionException whose toString carries the function's body (model
+      // text built from the member's health data), and a FormatException
+      // quotes the text it could not parse. Only the function, the type, the
+      // status and the error's class are recorded.
+      reportError(
+          'AICoachService.generate',
+          StateError(e is FunctionException
+              ? 'ai-coaching-engine $type answered ${e.status}'
+              : 'ai-coaching-engine $type failed: ${e.runtimeType}'),
+          st);
+      return null;
+    }
   }
 
   // ── Coach personality ─────────────────────────────────────────────────────

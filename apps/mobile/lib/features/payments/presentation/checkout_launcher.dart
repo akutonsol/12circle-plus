@@ -57,6 +57,22 @@ Future<bool> launchCheckout(
   return false;
 }
 
+/// The one rule for what a stop records (RM-2, C15-63b-05):
+///  * nothing was sent yet — "`<flow>`: the signed-in account changed", as
+///    [ownerGone] records it ([recordStoppedBeforeSent] when that check has
+///    already been passed and the stop is learnt otherwise);
+///  * something was sent, or there is something to say (a failure included) —
+///    "`<flow>` outcome not shown: the signed-in account changed"
+///    ([recordOutcomeNotShown], [outcomeOwnerGone], [showOwnedSnackBar]).
+///
+/// Records that [flow] stopped before anything of it was sent, because the
+/// account that started it is no longer the one signed in. Names the flow
+/// only.
+void recordStoppedBeforeSent(String origin, String flow) => reportError(
+    origin,
+    StateError('$flow: the signed-in account changed'),
+    StackTrace.current);
+
 /// Records that the outcome of [flow], meant for the account that acted, was
 /// not shown to it because another account (or nobody) is signed in now
 /// (P0-FL-63b). Names the flow only — never the message, an amount or a name.

@@ -74,10 +74,15 @@ class _Server extends http.BaseClient {
   int notificationReads = 0;
   final rows = <Map<String, Object?>>[];
 
+  /// Holds the notifications read until completed (RM-2).
+  Completer<void>? hold;
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     if (request.url.path.endsWith('/notifications')) {
       notificationReads++;
+      final h = hold;
+      if (h != null) await h.future;
       if (notificationsFail) return _json({'message': 'offline'}, 500, request);
       return _json(rows, 200, request);
     }
@@ -288,6 +293,55 @@ void main() {
       await settle(tester);
       expect(c.read(unreadNotificationCountProvider), isNull,
           reason: 'THE defect: the bell claimed 0 unread during a failure');
+    } finally {
+      await done(tester, c);
+    }
+  });
+
+  // RM-2 (C15-63c-02) · while the first read is out the count was 0 ("zero
+  // unread"), a number nobody had read. It is unknown (null) now — and not a
+  // failure, so the bell still draws no muted dot and no badge.
+  //
+  // HOW TO SEE IT FAIL: `git checkout 6d1611d -- apps/mobile/lib/features/
+  // dashboard/presentation/coach_dashboard_screen.dart`: the count is 0 (and
+  // unreadNotificationCheckFailedProvider does not exist: it does not compile).
+  testWidgets('while the read is out the count is unknown (null), not 0, and '
+      'not a failure', (tester) async {
+    server
+      ..rows.add(_notification('n-1'))
+      ..hold = Completer<void>();
+    final c = app();
+    c.listen(unreadNotificationCheckFailedProvider, (_, __) {});
+    try {
+      await settle(tester);
+      expect(server.notificationReads, 1, reason: 'premise: the read is out');
+      expect(c.read(coachNotificationsProvider).isLoading, isTrue);
+      expect(c.read(unreadNotificationCountProvider), isNull,
+          reason: 'THE defect: 0 unread was claimed before anything was read');
+      expect(c.read(unreadNotificationCheckFailedProvider), isFalse,
+          reason: 'still reading is not "couldn\'t check"');
+      server.hold!.complete();
+      server.hold = null;
+      await settle(tester);
+      expect(c.read(unreadNotificationCountProvider), 1);
+      expect(c.read(unreadNotificationCheckFailedProvider), isFalse);
+      expect(reported, isEmpty);
+    } finally {
+      server.hold?.complete();
+      server.hold = null;
+      await done(tester, c);
+    }
+  });
+
+  testWidgets('a failure is the failed flag (the muted dot), and no number',
+      (tester) async {
+    server.notificationsFail = true;
+    final c = app();
+    c.listen(unreadNotificationCheckFailedProvider, (_, __) {});
+    try {
+      await settle(tester);
+      expect(c.read(unreadNotificationCountProvider), isNull);
+      expect(c.read(unreadNotificationCheckFailedProvider), isTrue);
     } finally {
       await done(tester, c);
     }

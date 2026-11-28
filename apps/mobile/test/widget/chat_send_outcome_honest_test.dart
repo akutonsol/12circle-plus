@@ -195,9 +195,41 @@ void main() {
     expect(find.text(_sending), findsNothing);
     expect(find.byType(SnackBar), findsNothing);
     expect(server.writesAs(memberB), isEmpty);
-    expect(origins(), ['MessagingService.sendMessage', 'ChatScreen._send']);
-    expect('${reported.last.error}', contains('message was not sent'));
+    // RM-2 (C15-63b-04) · and the failure notice A never saw, once, with no
+    // message text in it.
+    expect(origins(), [
+      'MessagingService.sendMessage',
+      'ChatScreen._send',
+      'ChatScreen._send',
+    ]);
+    expect('${reported[1].error}', contains('message was not sent'));
+    expect((reported.last.error as StateError).message,
+        'message send outcome not shown: the signed-in account changed');
+    expect(reported.map((f) => '${f.error}').join(),
+        isNot(contains('private words')));
     await close(t);
+  });
+
+  // RM-2 r2 · kills mutant `chat-notice-recorded-on-same-member-close`: the
+  // same member closing their chat is not an account change, so the failure
+  // is recorded (once) but no "outcome not shown … account changed" record is
+  // made — that record would claim a switch that never happened.
+  testWidgets('control: refused after the SAME member closed the chat — the '
+      'failure is recorded, no "account changed" record', (t) async {
+    final hold = server.holds['POST messages:$memberA'] = Completer<void>();
+    server.fails.add('POST messages:$memberA');
+    await open(t);
+    await sendFromComposer(t, 'A: closed meanwhile');
+    await t.pumpWidget(const SizedBox()); // A leaves the chat, still signed in
+    hold.complete();
+    await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await t.pump(const Duration(seconds: 7));
+    expect(origins(), ['MessagingService.sendMessage', 'ChatScreen._send'],
+        reason: 'the same member closing the screen is not an account change');
+    expect('${reported.last.error}', contains('message was not sent'));
+    expect(reported.map((f) => '${f.error}').join(),
+        isNot(contains('account changed')));
+    expect(server.sent('POST', 'award_points'), isEmpty);
   });
 
   testWidgets('in flight while B signs in: the "Sending…" bubble goes with A',
