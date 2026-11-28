@@ -438,10 +438,12 @@ void main() {
       await close(t);
     });
 
-    testWidgets('POSITIVE CONTROL: the same account refreshing (and failing '
-        'to) keeps its badge', (t) async {
+    // P0-FL-63c: a failed re-read is unknown, not the last badge (it kept
+    // "3"). A good re-read for the same account still keeps its badge.
+    testWidgets('POSITIVE CONTROL: the same account refreshing keeps its '
+        'badge; a failed refresh shows none, not the old 3', (t) async {
       var n = 0;
-      answers[_a] = () async => n++ == 0
+      answers[_a] = () async => n++ < 2
           ? 3
           : throw const PostgrestException(message: 'SECRET', code: 'XX000');
       await mount(t);
@@ -452,9 +454,14 @@ void main() {
       await switchTo(t, _a);
       container.invalidate(unreadCountProvider);
       await settle(t);
-      expect(reads.length, greaterThan(1), reason: 'premise: re-read');
-      expect(reads.toSet(), {_a});
+      expect(reads.length, 2, reason: 'premise: re-read, answered');
       expect(find.text('3'), findsOneWidget);
+      container.invalidate(unreadCountProvider);
+      await settle(t);
+      expect(reads.length, 3, reason: 'premise: re-read, failed');
+      expect(reads.toSet(), {_a});
+      expect(find.text('3'), findsNothing);
+      expect(find.textContaining('SECRET'), findsNothing);
       await close(t);
     });
 
