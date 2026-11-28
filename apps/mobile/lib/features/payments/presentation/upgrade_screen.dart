@@ -229,7 +229,9 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
         stopWatching();
       }
       if (subs == null) {
-        recordOutcomeNotShown(freeOrigin, 'switch to Free');
+        // RM-2 (C15-63b-05) · the switch won the race: nothing was cancelled
+        // and there is nothing to say, so no outcome went unshown.
+        recordStoppedBeforeSent(freeOrigin, 'switch to Free');
         // A failure of the read that lands after is still recorded, as the
         // catch above records it; nothing of it is said.
         unawaited(read.then<void>((_) {}, onError: (Object e, StackTrace st) =>

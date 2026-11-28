@@ -799,15 +799,30 @@ void main() {
               'bound was not, because the SDK supplied it and the SDK is gone');
     });
 
-    test('[characterizes F-J-16] the coaching-engine client cannot report a failure', () {
+    test('[characterizes F-J-16] the coaching-engine client records its failure, '
+        'but still answers it as null', () {
       // generate() returns null for a 500, a 404, a network error and "the model
-      // had nothing to say" alike. The home briefing renders all four as "no
-      // insight yet", which is also what a brand-new member sees. Contrast
-      // generateAiWorkout, which throws — that is the contract the rest of the
-      // AI surface should adopt.
+      // had nothing to say" alike. Contrast generateAiWorkout, which throws —
+      // that is the contract the rest of the AI surface should adopt.
+      //
+      // RM-2 (C14-62a1-02) inverted HALF of this: the failure is no longer
+      // swallowed — it is recorded once (reportError). The null return stays
+      // (the brief kept that contract), so F-J-16 itself is NOT closed: a caller
+      // still cannot tell a failure from "nothing to say".
       final svc = _lib('features/ai_coach/data/ai_coach_service.dart');
-      expect(svc, contains('} catch (_) { return null; }'),
-          reason: 'F-J-16 is fixed — invert this test');
+      expect(svc, isNot(contains('} catch (_) { return null; }')),
+          reason: 'the swallow came back');
+      // RM-2 r2 (S-1): recorded WITHOUT the error itself — a
+      // FunctionException's toString carries the function body (model text
+      // built from the member's health data). Behaviour is proven in
+      // assign_and_generate_failures_recorded_test (marker never recorded).
+      expect(svc, matches(RegExp(r"reportError\(\s*'AICoachService\.generate',")),
+          reason: 'the failure must still be recorded');
+      expect(svc, isNot(contains("reportError('AICoachService.generate', e, st);")),
+          reason: 'S-1: the raw error (with the function body) is recorded');
+      expect(svc, contains('Future<Map<String, dynamic>?> generate(String type)'),
+          reason: 'still null on failure — when it throws, close F-J-16 and '
+              'rewrite this test');
       expect(_lib('features/workout/domain/workout_provider.dart'),
           contains("throw StateError('Workout generator failed"),
           reason: 'the workout generator already distinguishes unreachable from declined');

@@ -254,6 +254,17 @@ class _OwnedSheet extends ConsumerStatefulWidget {
 class _OwnedSheetState extends ConsumerState<_OwnedSheet> {
   bool _closing = false;
 
+  /// RM-2 (C15-63a-01) · the routes this sheet opened over itself (its date
+  /// and time pickers). They are [owner]'s too, and go with the sheet: on the
+  /// root navigator they outlived it, over the next account's portal.
+  final _opened = <Route<dynamic>>{};
+
+  /// Called from inside a route this sheet's child pushed, so it is closed
+  /// with the sheet. Only routes registered here are ever removed.
+  void _ownRoute(Route<dynamic>? route) {
+    if (route != null && route.isActive) _opened.add(route);
+  }
+
   void _close(Route<dynamic>? route) {
     // Already closing, or already off the stack (dismissed): nothing to do.
     if (_closing || route == null || !route.isActive) return;
@@ -262,6 +273,12 @@ class _OwnedSheetState extends ConsumerState<_OwnedSheet> {
     _closing = true;
     reportError('VendorPortalScreen.eventEditor',
         StateError('event editor closed: the signed-in account changed'));
+    // Its own pickers first (each on whichever navigator holds it), then the
+    // sheet. Nothing else above or below it is touched.
+    for (final picker in _opened.toList().reversed) {
+      if (picker.isActive) picker.navigator?.removeRoute(picker);
+    }
+    _opened.clear();
     navigator.removeRoute(route);
   }
 
@@ -695,17 +712,49 @@ class _EventEditorSheetState extends State<_EventEditorSheet> {
     super.dispose();
   }
 
+  /// The topmost route on [navigator] (the predicate is asked of it first,
+  /// and answering true pops nothing).
+  static Route<dynamic>? _topOf(NavigatorState navigator) {
+    Route<dynamic>? top;
+    navigator.popUntil((r) {
+      top = r;
+      return true;
+    });
+    return top;
+  }
+
+  /// [open] pushes one picker; that route is handed to the sheet holding this
+  /// editor ([_OwnedSheetState._ownRoute]) at once — before it is ever built
+  /// (no frame runs in a hidden tab) — so it is closed with the sheet (RM-2,
+  /// C15-63a-01). Only the route [open] itself pushed: a dialog route that
+  /// was not on top before and is on top right after.
+  Future<T?> _ownPicker<T>(Future<T?> Function() open) {
+    final sheet = context.findAncestorStateOfType<_OwnedSheetState>();
+    // Both pickers go on the root navigator (their default).
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final before = _topOf(navigator);
+    final shown = open();
+    final picker = _topOf(navigator);
+    if (sheet != null &&
+        picker is DialogRoute &&
+        !identical(picker, before)) {
+      sheet._ownRoute(picker);
+      shown.whenComplete(() => sheet._opened.remove(picker));
+    }
+    return shown;
+  }
+
   Future<void> _pickDate() async {
-    final d = await showDatePicker(
-      context: context,
-      initialDate: _date,
-      firstDate: DateTime.now().subtract(const Duration(days: 1)),
-      lastDate: DateTime.now().add(const Duration(days: 730)),
-    );
+    final d = await _ownPicker(() => showDatePicker(
+          context: context,
+          initialDate: _date,
+          firstDate: DateTime.now().subtract(const Duration(days: 1)),
+          lastDate: DateTime.now().add(const Duration(days: 730)),
+        ));
     if (d == null) return;
     if (!mounted) return;
-    final t = await showTimePicker(
-        context: context, initialTime: TimeOfDay.fromDateTime(_date));
+    final t = await _ownPicker(() => showTimePicker(
+        context: context, initialTime: TimeOfDay.fromDateTime(_date)));
     if (!mounted) return;
     setState(() {
       _date = DateTime(d.year, d.month, d.day, t?.hour ?? 9, t?.minute ?? 0);
