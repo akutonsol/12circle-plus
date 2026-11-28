@@ -39,13 +39,17 @@ mixin SignedInUnread<T extends ConsumerStatefulWidget> on ConsumerState<T> {
   int? _count;
   String? _countUid;
 
-  /// Null while nobody has read the signed-in account's count, so it is never
-  /// said as "none". A failed or pending re-read for the same account keeps
-  /// the last one. Call it in `build`.
+  /// Null while the signed-in account's count is not known, so it is never
+  /// said as "none" and never drawn: nobody has read it yet, or its last read
+  /// FAILED (P0-FL-63c). A failed re-count is unknown, not the number before
+  /// it — after a confirmed 0 it was said as "none unread". A re-count still
+  /// running for the same account keeps the last confirmed one (no flicker on
+  /// each live event); one that follows a failure stays unknown until it
+  /// answers. Call it in `build`.
   int? watchUnread() {
     final uid = ref.watch(currentUserProvider.select((u) => u?.id));
     final read = ref.watch(unreadCountProvider);
-    if (uid == null || uid != _countUid) _count = null;
+    if (uid == null || uid != _countUid || read.hasError) _count = null;
     _countUid = uid;
     if (uid != null && !read.isLoading && !read.hasError) _count = read.value;
     return _count;
