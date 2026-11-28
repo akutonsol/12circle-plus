@@ -758,6 +758,94 @@ void main() {
       recordedOnce('ManageSubscriptionScreen.openBilling', 'open billing');
     });
 
+    // Round 3 (the round-2 follow-up): the Free tap's subscriptions read is
+    // held, the account changes, and NOTHING else watches the subscriptions.
+    // The tap awaited `mySubscriptionsProvider.future`, which the switch left
+    // waiting for an answer nobody asks for: the flow never ended, its stop
+    // was never recorded and A's read failure was lost. Each test waits a
+    // bounded 10 s of real time for the flow to end (a record), so on that
+    // code it fails with "Timed out … waiting for the Free tap to end".
+    Future<void> tapFreeWithReadHeld(WidgetTester t, Object answer) async {
+      server.answers['client_plan:$_a'] = (200, 'self_guided');
+      server.answers['client_plan:$_b'] = (200, 'free');
+      server.answers['subscriptions:$_a'] = answer as (int, Object?);
+      await open(t, const UpgradeScreen());
+      await until(t, () => seen(find.text('Current')), "A's plan");
+      expect(server.count('subscriptions'), 0,
+          reason: 'premise: nothing on the screen reads the subscriptions');
+      server.gates['subscriptions:$_a'] = Completer();
+      await t.tap(find.text('Switch to Free'));
+      await until(t, () => server.count('subscriptions', _a) == 1,
+          "A's read is out");
+    }
+
+    Future<void> flowEnds(WidgetTester t) => pumpUntil(
+        t, () => reported.isNotEmpty,
+        what: 'the Free tap to end (a record of its stop)',
+        timeout: const Duration(seconds: 10));
+
+    for (final toB in [true, false]) {
+      final label = toB ? 'B signs in' : 'A signs out';
+
+      testWidgets("Upgrade, Switch to Free: $label while the tap's read is held "
+          '(nothing else watching), then it answers: the flow ends, the stop is '
+          'recorded once, nothing asked, sent or shown', (t) async {
+        await tapFreeWithReadHeld(t, (200, [sub1]));
+        await leaveFor(t, toB);
+        server.gates['subscriptions:$_a']!.complete();
+        await flowEnds(t);
+        await settle(t);
+        expect(records(),
+            ['UpgradeScreen: Bad state: switch to Free: the signed-in account '
+                'changed'],
+            reason: 'one stop record; nothing was sent, so no outcome');
+        expect(find.text('Switch to Free?'), findsNothing,
+            reason: "A's confirmation is not put to B");
+        saidNothing();
+        expect(server.count('cancel-subscription'), 0);
+        expect(server.writes, isEmpty);
+        expect(server.log.where((l) => l.startsWith('subscriptions')),
+            ['subscriptions:$_a'], reason: "A's one read; none made for B");
+      });
+
+      testWidgets("Upgrade, Switch to Free: $label while the tap's read is held "
+          '(nothing else watching), then it fails: A\'s failure is recorded, '
+          'the unseen outcome once, nothing said to B or cancelled', (t) async {
+        await tapFreeWithReadHeld(t, _down);
+        await leaveFor(t, toB);
+        server.gates['subscriptions:$_a']!.complete();
+        await flowEnds(t);
+        await settle(t);
+        expect(reported.map((f) => f.origin).toList(),
+            ['UpgradeScreen.mySubscriptions', 'UpgradeScreen.switchToFree'],
+            reason: '${records()}');
+        recordedOnce('UpgradeScreen.switchToFree', 'switch to Free');
+        expect('${notShown().single.error}', isNot(contains('SECRET')));
+        saidNothing();
+        expect(find.textContaining('Nothing was cancelled'), findsNothing);
+        expect(find.text('Switch to Free?'), findsNothing);
+        expect(server.count('cancel-subscription'), 0);
+        expect(server.writes, isEmpty);
+      });
+    }
+
+    testWidgets("control: the same account (token refresh while the tap's read "
+        'is held, nothing else watching): the confirmation is asked, the '
+        'cancellation sent and said once, nothing recorded', (t) async {
+      await tapFreeWithReadHeld(t, (200, [sub1]));
+      server.answers['cancel-subscription'] = (200, {'ok': true});
+      await t.runAsync(refreshSession);
+      await t.pump();
+      server.gates['subscriptions:$_a']!.complete();
+      await until(t, () => seen(find.text('Switch to Free?')), 'the dialog');
+      await settle(t);
+      await t.tap(find.text('Switch to Free').last);
+      await until(t, () => seen(find.text('Switched to the Free plan.')), 'said');
+      expect(server.log.where((l) => l.startsWith('cancel-subscription')),
+          ['cancel-subscription:$_a']);
+      expect(reported, isEmpty, reason: '${records()}');
+    });
+
     testWidgets("control: AccountScope, the same account's failed billing page "
         'is said, no drop recorded', (t) async {
       await t.binding.setSurfaceSize(const Size(700, 3200));

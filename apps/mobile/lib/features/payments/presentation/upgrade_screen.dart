@@ -200,9 +200,16 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
       // Awaited: nothing on this screen watches the subscriptions, so
       // `valueOrNull` was null until another screen had read them, and the tap
       // found no membership and did nothing.
+      //
+      // [owner]'s own read, asked now (P0-FL-63b): `mySubscriptionsProvider
+      // .future` waits for the provider's NEXT answer, and an account change
+      // discards this one — with nothing else watching the subscriptions no
+      // next answer ever comes, so the tap never ended, its stop was never
+      // recorded, and a failure of [owner]'s read was lost. This request
+      // answers or fails, and the checks below decide what happens then.
       final List<Map<String, dynamic>> subs;
       try {
-        subs = await ref.read(mySubscriptionsProvider.future);
+        subs = await paymentSvc.getMySubscriptions();
       } catch (e, st) {
         // P0-FL-60a: the cause was lost, and nothing said that it was the
         // read that failed and that nothing had been cancelled.
