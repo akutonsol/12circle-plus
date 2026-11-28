@@ -162,7 +162,10 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
     try {
       await CoachRelationshipService().setGlobalPrice(value, expectedUid: owner);
     } catch (e, s) {
-      reportError('CoachPricingSheet._save', e, s); // P0-FL-56b: was unrecorded
+      // An AccountChangedError was recorded by the service: once is enough.
+      if (e is! AccountChangedError) {
+        reportError('CoachPricingSheet._save', e, s); // P0-FL-56b: was unrecorded
+      }
       // A failed or 0-row save said "Pricing updated." or, thrown, left the
       // spinner running with nothing said (P0-FL-3). Keep the sheet open and
       // say why inside it. A generic failure (e.g. a timeout) may still have
@@ -171,13 +174,16 @@ class _CoachPricingSheetState extends State<_CoachPricingSheet> {
       // server; any other failure gets the try-later step — never the
       // server's own text.
       if (!mounted || _uid != owner) return;
+      // P0-RM-1 (S-1): through refusalToSay only — an AccountChangedError
+      // (the coach left and came back, A → B → A) says nothing of it.
+      final said = refusalToSay(
+          e,
+          isNetworkFailure(e)
+              ? "Couldn't save your price — check your connection and try again."
+              : _saveFailedMsg);
       setState(() {
         _saving = false;
-        _error = e is StateError
-            ? e.message
-            : isNetworkFailure(e)
-                ? "Couldn't save your price — check your connection and try again."
-                : _saveFailedMsg;
+        _error = said;
       });
       return;
     }

@@ -18,6 +18,8 @@ import '../../coaching_mode/domain/coaching_mode_provider.dart';
 import '../../coach/domain/coach_provider.dart';
 import '../../coach/data/coach_relationship_service.dart';
 import '../../dashboard/domain/still_reading.dart' show boundTo;
+import '../../payments/presentation/checkout_launcher.dart'
+    show recordOutcomeNotShown;
 import '../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
 import '../../payments/presentation/upgrade_screen.dart'
     show PlanChipState, reportPlanReadFailure;
@@ -846,9 +848,19 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
         if (!mounted || !_stillOwner('end coaching')) return;
         setState(() => _saving = true);
         final svc = CoachRelationshipService();
+        // P0-RM-1 (C15-63b-03): a coach of [_owner]'s was ended (or a step of
+        // ending one went out). If the account then changes, what came of it is
+        // recorded once as not shown, not as a stop before anything was sent.
+        var sent = false;
+        bool stillOwnerAfterSent([String what = 'end coaching']) {
+          if (!sent || _signedIn == _owner) return _stillOwner(what);
+          recordOutcomeNotShown('CoachingModeSheet.apply.cancelCoach', 'end coaching');
+          _closeForOwner();
+          return false;
+        }
         try {
           for (final c in coaches) {
-            if (!_stillOwner('end coaching')) return;
+            if (!stillOwnerAfterSent()) return;
             final coachId = c['coach_id'] as String?;
             if (coachId != null) {
               // A paid coach is cancelled at the end of the paid period and
@@ -858,6 +870,7 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
               final end = await svc.cancelCoach(
                   coachId, 'switched_to_self_serve', null,
                   expectedUid: boundTo(_owner));
+              sent = true;
               if (end.scheduled && _signedIn == _owner && messenger.mounted) {
                 messenger.showSnackBar(SnackBar(content: Text(end.describe())));
               }
@@ -871,8 +884,11 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
           if (!accountChanged) {
             reportError('CoachingModeSheet.apply.cancelCoach', e, st);
           }
+          if (e is AccountChangedError && e.sent) sent = true;
           if (_signedIn != _owner) {
-            if (accountChanged) {
+            if (sent) {
+              stillOwnerAfterSent();
+            } else if (accountChanged) {
               _closeForOwner();
             } else {
               _stillOwner('end coaching');
@@ -891,7 +907,7 @@ class _CoachingModeSheetState extends State<_CoachingModeSheet> {
         }
         // Ended: the coach lists are re-read even if the sheet was swiped away
         // meanwhile (they are the page's, not the sheet's).
-        if (!_stillOwner('coaching mode')) return;
+        if (!stillOwnerAfterSent('coaching mode')) return;
         container.invalidate(myCoachesProvider);
         container.invalidate(assignedCoachProvider);
         container.invalidate(clientRelationshipProvider);

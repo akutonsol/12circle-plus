@@ -12,6 +12,9 @@ import '../../coach/data/coach_relationship_service.dart';
 import '../../dashboard/domain/still_reading.dart' show OpenedByAccount;
 import '../../coach/domain/coach_provider.dart';
 import '../../coaching_mode/domain/coaching_mode_provider.dart';
+import '../../payments/domain/payment_provider.dart' show OwnedRead;
+import '../../payments/presentation/checkout_launcher.dart'
+    show recordOutcomeNotShown;
 import '../../payments/presentation/paywall_gate.dart' show confirmedRoleRead;
 import '../../payments/presentation/upgrade_screen.dart'
     show PlanChipState, reportPlanReadFailure;
@@ -939,6 +942,19 @@ CoachSectionState coachSectionFor(AsyncValue<Map<String, dynamic>?> coach) =>
       _ => CoachSectionState.loading,
     };
 
+/// P0-RM-1 (C14-62b-03) · the same decision for [ownedAssignedCoachProvider],
+/// which holds only the coach read for the member signed in now. A failure of
+/// this member's read is still `unavailable` (the section is hidden, as F-15
+/// decided) — and stays so while it is read again, as an AsyncError being
+/// re-read did. This member's coach stays drawn through a re-read (no
+/// flicker). Nothing else is an answer: another member's coach, or a read not
+/// yet answered for this member, is `loading`, never `none`.
+CoachSectionState coachSectionForOwned(OwnedRead<Map<String, dynamic>?> coach) {
+  if (coach.error != null) return CoachSectionState.unavailable;
+  if (!coach.hasValue) return CoachSectionState.loading;
+  return coach.value == null ? CoachSectionState.none : CoachSectionState.assigned;
+}
+
 /// Public so the F-15 branch can be mounted in a widget test — the decision
 /// function below is testable on its own, but the WIRING (that `unavailable`
 /// actually hides the section) is only assertable against the real tree.
@@ -1071,6 +1087,10 @@ class MyCoachSection extends ConsumerWidget {
       String? message;
       // Recorded by the service when it stops for the account (P0-FL-62b).
       var recorded = false;
+      // P0-RM-1 (C15-63b-03): something of it went out (it returned, or it
+      // stopped after a step had been sent). Its outcome, dropped because the
+      // account changed, is then recorded once as not shown.
+      var sent = false;
       try {
         // P0-FL-62b: every step for [owner], never for whoever is signed in
         // when a step runs.
@@ -1081,23 +1101,25 @@ class MyCoachSection extends ConsumerWidget {
           expectedUid: owner,
         );
         message = end.describe();
-      } on AccountChangedError {
+        sent = true;
+      } on AccountChangedError catch (e) {
         recorded = true;
+        sent = e.sent;
       } catch (e) {
         reportError('MyCoachSection.cancelCoach', e);
         // cancelCoach's StateError says what happened ("No active coaching
         // with this coach", "You are signed out"); say it, as the marketplace
-        // does. Anything else is the generic failure.
-        message = e is StateError
-            ? e.message
-            : 'Could not end coaching. Nothing was changed. Try again.';
-        // It stopped because the account changed: nothing to say to anyone.
-        if (e is StateError && e.message.endsWith('the signed-in account changed')) {
-          message = null;
-        }
+        // does. Anything else is the generic failure. Never an
+        // AccountChangedError's text (P0-RM-1: [refusalToSay] fails closed).
+        message = refusalToSay(
+            e, 'Could not end coaching. Nothing was changed. Try again.');
       }
       if (signedInUid() != owner) {
-        if (!recorded) accountChanged();
+        if (sent) {
+          recordOutcomeNotShown('MyCoachSection.cancelCoach', 'end coaching');
+        } else if (!recorded) {
+          accountChanged();
+        }
       } else {
         if (message != null) {
           messenger?.showSnackBar(SnackBar(content: Text(message)));
@@ -1110,9 +1132,12 @@ class MyCoachSection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final coachAsync = ref.watch(assignedCoachProvider);
-    final coach      = coachAsync.valueOrNull;
-    final section    = coachSectionFor(coachAsync);
+    // P0-RM-1: only the coach read for the member signed in now is drawn — its
+    // name, avatar and Cancel. It read `assignedCoachProvider.valueOrNull`,
+    // which held the last member's coach through the next one's read.
+    final coachRead  = ref.watch(ownedAssignedCoachProvider);
+    final section    = coachSectionForOwned(coachRead);
+    final coach      = section == CoachSectionState.assigned ? coachRead.value : null;
 
     // F-15: a failed read must not become "No coach assigned yet".
     if (section == CoachSectionState.unavailable) return const SizedBox.shrink();

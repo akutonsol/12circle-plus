@@ -288,11 +288,15 @@ class _CoachMarketplaceScreenState extends ConsumerState<CoachMarketplaceScreen>
       // Refused, not failed: the card was drawn before the status read arrived.
       if (e is! StateError) reportError('CoachMarketplaceScreen._requestCoach', e, st);
       if (e is StateError && mounted) ref.invalidate(_myRelationshipStatusProvider);
-      if (mounted && stillTheirs()) {
+      // P0-RM-1 (S-1): through refusalToSay only — an AccountChangedError
+      // (recorded by the service) says nothing: whoever is signed in now did
+      // not ask. `stillTheirs` reads a provider that may not have rebuilt yet.
+      final said = refusalToSay(e, couldntMessage('send your request', e));
+      if (said != null && mounted && stillTheirs()) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Semantics(
             liveRegion: true,
-            child: Text(e is StateError ? e.message : couldntMessage('send your request', e))),
+            child: Text(said)),
           backgroundColor: _err));
       }
     }
