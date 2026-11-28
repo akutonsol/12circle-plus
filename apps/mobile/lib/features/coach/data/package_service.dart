@@ -1,4 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/observability/app_failure.dart';
+import 'coach_relationship_service.dart' show AccountChangedError;
 
 /// A package write that matched no row (P0-FL-56b): RLS filtered it, or the
 /// package is no longer there. PostgREST answers that without an error, so it
@@ -280,14 +282,25 @@ class PackageService {
 
   /// Throws if signed out, refused, or no row came back (P0-FL-56b): the caller
   /// goes on to booking or payment, so "returned" must mean saved.
+  ///
+  /// P0-RM-1 (S-2) · [expectedUid] is the client who tapped (captured before
+  /// the first await). The schedule is stamped with them, never with whoever
+  /// is signed in when the call runs: a switch between the tap and the call
+  /// saved A's chosen schedule as B's. For anyone else nothing is sent and
+  /// [AccountChangedError] (recorded here) is thrown. A switch while the
+  /// upsert was in flight: A's row was written as A; if it matched nothing the
+  /// error is thrown with `sent: false`, otherwise this returns normally and
+  /// the caller's own check records the outcome not shown.
   Future<void> saveSchedule({
     required String coachId,
     String? packageId,
     required List<String> days,
     required String sessionTime,
     Map<String, String>? dayTimes,
+    String? expectedUid,
   }) async {
-    final uid = _requireSignedIn();
+    final uid = expectedUid ?? _requireSignedIn();
+    _requireOwner(uid);
     final rows = await _db.from('client_schedules').upsert({
       'client_id': uid,
       'coach_id': coachId,
@@ -296,7 +309,20 @@ class PackageService {
       'session_time': sessionTime,
       'day_times': dayTimes ?? {},
     }, onConflict: 'client_id').select('id');
-    if ((rows as List).isEmpty) throw const PackageNotChanged('saveSchedule');
+    if ((rows as List).isEmpty) {
+      // Matched nothing: nothing changed, so nothing counts as sent.
+      _requireOwner(uid);
+      throw const PackageNotChanged('saveSchedule');
+    }
+  }
+
+  /// [owner] is still the raw signed-in account (signed out counts as a
+  /// change); otherwise records and throws [AccountChangedError].
+  void _requireOwner(String owner) {
+    if (_uid == owner) return;
+    final e = AccountChangedError('Saving a schedule');
+    reportError('PackageService.saveSchedule', e, StackTrace.current);
+    throw e;
   }
 
   /// Coach: a specific client's schedule.

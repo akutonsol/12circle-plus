@@ -11,7 +11,10 @@ import '../../../core/realtime/realtime.dart';
 import '../../checkins/domain/checkin_provider.dart' hide heldFor, ownedRead;
 import '../../messaging/data/messaging_service.dart';
 import '../../messaging/domain/messaging_provider.dart';
-import '../../coach/data/coach_relationship_service.dart' show AccountChangedError;
+import '../../coach/data/coach_relationship_service.dart'
+    show AccountChangedError, refusalToSay;
+import '../../payments/presentation/checkout_launcher.dart'
+    show recordOutcomeNotShown;
 import '../../coach/domain/coach_ecosystem_provider.dart';
 import '../../coach/presentation/coach_business_screen.dart';
 import '../../coach/presentation/coach_availability_screen.dart';
@@ -1502,22 +1505,31 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
       await ref
           .read(coachRelServiceProvider)
           .approveRequest(relId, clientId, expectedUid: asCoach);
-    } on AccountChangedError {
+    } on AccountChangedError catch (e) {
       // Recorded by the service; nothing of it is for whoever is signed in
-      // now. (Back as the same coach: their list is read again.)
+      // now. (Back as the same coach: their list is read again.) When the
+      // update had already gone out, its outcome is recorded once as not
+      // shown (P0-RM-1, C15-63b-03).
+      if (e.sent) recordOutcomeNotShown(origin, 'accept request');
       if (mounted && isSignedIn(owner)) ref.invalidate(pendingRequestsProvider);
       return;
     } catch (e, s) {
       reportError(origin, e, s);
-      if (mounted && !accountLeft(owner)) {
+      // Never an AccountChangedError's text (P0-RM-1: fails closed).
+      final said = refusalToSay(e,
+          "Couldn't accept the request — check your connection and try again.");
+      if (said != null && mounted && !accountLeft(owner)) {
         ref.invalidate(pendingRequestsProvider);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
-            e is StateError ? e.message
-                : "Couldn't accept the request — check your connection and try again.")));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(said)));
       }
       return;
     }
-    if (stoppedFor(owner, origin, 'report accepted request')) return;
+    // Answered, then the account changed: the outcome, not a stop (P0-RM-1).
+    if (!stillSignedIn(owner)) {
+      recordOutcomeNotShown(origin, 'accept request');
+      return;
+    }
     if (!mounted) return;
     ref.invalidate(pendingRequestsProvider);
     ref.invalidate(coachClientsProvider);
@@ -1535,22 +1547,31 @@ class _CoachDashboardScreenState extends ConsumerState<CoachDashboardScreen>
       await ref
           .read(coachRelServiceProvider)
           .declineRequest(relId, clientId, expectedUid: asCoach);
-    } on AccountChangedError {
+    } on AccountChangedError catch (e) {
       // Recorded by the service; nothing of it is for whoever is signed in
-      // now. (Back as the same coach: their list is read again.)
+      // now. (Back as the same coach: their list is read again.) When the
+      // update had already gone out, its outcome is recorded once as not
+      // shown (P0-RM-1, C15-63b-03).
+      if (e.sent) recordOutcomeNotShown(origin, 'decline request');
       if (mounted && isSignedIn(owner)) ref.invalidate(pendingRequestsProvider);
       return;
     } catch (e, s) {
       reportError(origin, e, s);
-      if (mounted && !accountLeft(owner)) {
+      // Never an AccountChangedError's text (P0-RM-1: fails closed).
+      final said = refusalToSay(e,
+          "Couldn't decline the request — check your connection and try again.");
+      if (said != null && mounted && !accountLeft(owner)) {
         ref.invalidate(pendingRequestsProvider);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
-            e is StateError ? e.message
-                : "Couldn't decline the request — check your connection and try again.")));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(said)));
       }
       return;
     }
-    if (stoppedFor(owner, origin, 'report declined request')) return;
+    // Answered, then the account changed: the outcome, not a stop (P0-RM-1).
+    if (!stillSignedIn(owner)) {
+      recordOutcomeNotShown(origin, 'decline request');
+      return;
+    }
     if (!mounted) return;
     ref.invalidate(pendingRequestsProvider);
     ScaffoldMessenger.of(context).showSnackBar(

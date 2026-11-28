@@ -17,6 +17,8 @@ import '../../coach/domain/coach_provider.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../../core/observability/network_failure.dart';
 import '../../coach/data/coach_relationship_service.dart';
+import '../../payments/presentation/checkout_launcher.dart'
+    show recordOutcomeNotShown;
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const _bg      = Color(0xFF0A0A0B);
@@ -5080,9 +5082,14 @@ class _Step9PageState extends ConsumerState<_Step9Page> {
               await CoachRelationshipService().cancelCoach(
                   o['coach_id'] as String, 'switched_during_intake', null,
                   expectedUid: uid);
-            } on AccountChangedError {
+            } on AccountChangedError catch (e) {
               // Recorded by the service; nothing of it is for whoever is
-              // signed in now.
+              // signed in now. A step already sent (a `cancel-subscription`
+              // answered) is an outcome nobody was shown (P0-RM-1).
+              if (e.sent) {
+                recordOutcomeNotShown(
+                    'IntakeFlow.selectCoach.endPrevious', 'end previous coach');
+              }
               return;
             } catch (e) {
               reportError('IntakeFlow.selectCoach.endPrevious', e);

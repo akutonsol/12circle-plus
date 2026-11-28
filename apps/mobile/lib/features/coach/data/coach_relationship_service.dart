@@ -11,17 +11,50 @@ import '../../../core/observability/app_failure.dart';
 /// acted, so nothing is said to them — `if (e is AccountChangedError) return;`
 /// before any message. The service has recorded it (a caller that records it
 /// again does no harm). It is a [StateError] so that callers which treat a
-/// StateError as a refusal still compile and still stop; most of those show
-/// its [message], so that names no action and nobody. What was refused is in
-/// [toString] only, which is what is recorded.
+/// StateError as a refusal still compile and still stop. Its [message] is
+/// never for a screen either: a fallback turns an error into words through
+/// [refusalToSay] only, which says nothing for this one (P0-RM-1, C14-62b-04 —
+/// a fallback that forgot to catch it first showed "Not done: …", possibly to
+/// the next account). What was refused is in [toString] only, which is what is
+/// recorded.
 class AccountChangedError extends StateError {
-  AccountChangedError(this.what) : super('Not done: the signed-in account changed');
+  AccountChangedError(this.what, {this.sent = false})
+      : super('Not done: the signed-in account changed');
 
   /// The refused step, for the record only.
   final String what;
 
+  /// P0-RM-1 (C15-63b-03) · whether an earlier step of the same action had
+  /// already been SENT and done before the switch was noticed (a
+  /// `cancel-subscription` call that answered `ok`): something changed for the
+  /// account that acted, and its outcome is not shown to anyone. The caller
+  /// records that once (`recordOutcomeNotShown`). False: nothing of the action
+  /// changed anything — none of it went out, or what went out matched no row
+  /// (a 0-row update changes nothing; the service's own record is the one).
+  ///
+  /// A relationship update that DID match rows is followed only by its
+  /// best-effort notification, whose stop is recorded there and not thrown:
+  /// the method returns normally, and the caller's own check after the call
+  /// records the outcome not shown.
+  final bool sent;
+
   @override
   String toString() => '$what: the signed-in account changed';
+}
+
+/// P0-RM-1 (C14-62b-04) · the words a caller's fallback may show for [error]:
+/// a [StateError]'s message is written to be shown ("No active coaching with
+/// this coach — nothing was changed."), anything else is [otherwise] — and an
+/// [AccountChangedError] is null, nothing at all: whoever is signed in now did
+/// not act. So is any other StateError that only says the account changed
+/// (`'<what>: the signed-in account changed'`). Fails closed: a fallback
+/// written without catching it first still says nothing of it.
+String? refusalToSay(Object error, String otherwise) {
+  if (error is AccountChangedError) return null;
+  if (error is! StateError) return otherwise;
+  return error.message.endsWith('the signed-in account changed')
+      ? null
+      : error.message;
 }
 
 class CoachRelationshipService {
@@ -86,15 +119,19 @@ class CoachRelationshipService {
 
   /// P0-FL-59d · [owner] is still the signed-in account. Otherwise throws
   /// [AccountChangedError], and the caller sends nothing.
-  void _require(String what, String owner) {
-    if (_db.auth.currentUser?.id != owner) throw AccountChangedError(what);
+  void _require(String what, String owner, {bool sent = false}) {
+    if (_db.auth.currentUser?.id != owner) {
+      throw AccountChangedError(what, sent: sent);
+    }
   }
 
   /// The same, and the refusal is recorded: for a step whose failure reaches
-  /// the caller (a notification's is recorded by its own catch).
-  void _requireAccount(String method, String what, String owner) {
+  /// the caller (a notification's is recorded by its own catch). [sent]: an
+  /// earlier step of this action already went out ([AccountChangedError.sent]).
+  void _requireAccount(String method, String what, String owner,
+      {bool sent = false}) {
     try {
-      _require(what, owner);
+      _require(what, owner, sent: sent);
     } on AccountChangedError catch (e, st) {
       reportError('CoachRelationshipService.$method', e, st);
       rethrow;
@@ -106,6 +143,7 @@ class CoachRelationshipService {
   /// answered, without an error — and the screen said "Client accepted!".
   void _requireAnswered(List<dynamic> rows, String method, String coachId) {
     if (rows.isEmpty) {
+      // Matched nothing: nothing was changed, so nothing counts as sent.
       _requireAccount(method, 'Answering a request', coachId);
       throw StateError('That request is no longer pending — nothing was changed.');
     }
@@ -266,15 +304,20 @@ class CoachRelationshipService {
         .inFilter('status', const ['active', 'trialing', 'past_due']);
     if ((paid as List).isNotEmpty) {
       DateTime? endsAt;
+      // P0-RM-1: set once a `cancel-subscription` call has answered that it
+      // cancelled — from then on a stop leaves something done (one of
+      // several subscriptions ends at period end) whose outcome nobody sees.
+      var sent = false;
       for (final s in paid) {
-        _requireAccount('cancelCoach', 'Ending coaching', clientId);
+        _requireAccount('cancelCoach', 'Ending coaching', clientId, sent: sent);
         final res = await _db.functions
             .invoke('cancel-subscription', body: {'subscriptionId': s['id']});
         final d = res.data;
         if (d is! Map || d['ok'] != true) {
-          _requireAccount('cancelCoach', 'Ending coaching', clientId);
+          _requireAccount('cancelCoach', 'Ending coaching', clientId, sent: sent);
           throw StateError('Your coaching could not be ended. Try again.');
         }
+        sent = true;
         final at = DateTime.tryParse('${d['endsAt'] ?? s['current_period_end'] ?? ''}');
         if (at != null && (endsAt == null || at.isAfter(endsAt))) endsAt = at;
       }
@@ -292,6 +335,7 @@ class CoachRelationshipService {
     // it was reported as "Coaching ended." and the coach was told so (P0-FL-1).
     // Refuse it before the notification, as approve/decline do (QAX-ERR-02).
     if ((ended as List).isEmpty) {
+      // Matched nothing: nothing was changed, so nothing counts as sent.
       _requireAccount('cancelCoach', 'Ending coaching', clientId);
       throw StateError('No active coaching with this coach — nothing was changed.');
     }

@@ -11,7 +11,7 @@ import '../../dashboard/domain/still_reading.dart' show boundTo, stillSignedIn;
 import '../../../core/observability/app_failure.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
 import 'checkout_launcher.dart'
-    show OwnedDialog, outcomeOwnerGone, showOwnedSnackBar;
+    show OwnedDialog, outcomeOwnerGone, recordOutcomeNotShown, showOwnedSnackBar;
 import 'upgrade_screen.dart'
     show PlanLoadFailedNotice, kPlanFromLastTime, ownedClientPlanProvider,
         reportPlanReadFailure, switchToFreeMessage;
@@ -172,11 +172,13 @@ class _ManageSubscriptionScreenState
           coachId, 'client_cancelled', null,
           expectedUid: boundTo(owner));
       message = end.describe();
-    } on AccountChangedError {
+    } on AccountChangedError catch (e) {
       // Recorded by the service; nothing of it is for whoever is signed in
-      // now. (Back as the same member: what is left is read again.) Not
-      // recorded again here: the stop may have come before anything was
-      // sent, and this error does not say which (P0-FL-63b follow-up).
+      // now. (Back as the same member: what is left is read again.) When a
+      // step had already been sent (a first `cancel-subscription` answered),
+      // something did happen, and its outcome is recorded once as not shown
+      // (P0-RM-1, C15-63b-03); otherwise the service's record is the one.
+      if (e.sent) recordOutcomeNotShown(outcomeOrigin, 'stop coaching');
       if (stillSignedIn(owner) && mounted) {
         ref.invalidate(myCoachesProvider);
         ref.invalidate(mySubscriptionsProvider);
@@ -187,13 +189,16 @@ class _ManageSubscriptionScreenState
       reportError('ManageSubscriptionScreen.stopCoach', e, st);
       // cancelCoach's StateError says what happened ("No active coaching with
       // this coach", "You are signed out"); say it, as the marketplace does.
-      message = e is StateError
-          ? e.message
-          : definitelyRefused(e)
+      // Never an AccountChangedError's text (P0-RM-1: fails closed).
+      final said = refusalToSay(
+          e,
+          definitelyRefused(e)
               ? 'Could not end coaching. Nothing was changed. Try again.'
               // Not known to have failed: the reply may be all that was lost.
               : "Couldn't confirm that coaching ended — check your coaches "
-                  'before trying again.';
+                  'before trying again.');
+      if (said == null) return;
+      message = said;
     }
     if (outcomeOwnerGone(owner, outcomeOrigin, 'stop coaching')) return;
     showOwnedSnackBar(messenger, owner, SnackBar(content: Text(message)),
