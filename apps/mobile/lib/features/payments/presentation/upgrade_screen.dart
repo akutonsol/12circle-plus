@@ -1,7 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../data/payment_service.dart' show CancelOutcome, CancelSubscriptionOutcome, ownerGone, signedInUid;
+import '../data/payment_service.dart' show CancelOutcome, CancelSubscriptionOutcome, ownerGone, signedInUid, whenOwnerGone;
 import '../domain/entitlements.dart';
 import '../domain/payment_provider.dart';
 import '../../coach/domain/coach_provider.dart';
@@ -201,15 +203,18 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
       // `valueOrNull` was null until another screen had read them, and the tap
       // found no membership and did nothing.
       //
-      // [owner]'s own read, asked now (P0-FL-63b): `mySubscriptionsProvider
-      // .future` waits for the provider's NEXT answer, and an account change
-      // discards this one — with nothing else watching the subscriptions no
-      // next answer ever comes, so the tap never ended, its stop was never
-      // recorded, and a failure of [owner]'s read was lost. This request
-      // answers or fails, and the checks below decide what happens then.
-      final List<Map<String, dynamic>> subs;
+      // Bounded by [owner] (P0-FL-63b): an account change discards the read
+      // in flight, and with nothing else watching the subscriptions no next
+      // answer ever comes — the tap never ended and nothing was recorded. It
+      // now ends when [owner] leaves: nothing sent, nothing said, recorded once.
+      final left = Completer<void>();
+      final stopWatching = whenOwnerGone(owner, left.complete);
+      final List<Map<String, dynamic>>? subs;
       try {
-        subs = await paymentSvc.getMySubscriptions();
+        subs = await Future.any([
+          ref.read(mySubscriptionsProvider.future),
+          left.future.then((_) => null),
+        ]);
       } catch (e, st) {
         // P0-FL-60a: the cause was lost, and nothing said that it was the
         // read that failed and that nothing had been cancelled.
@@ -218,6 +223,12 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
             content: Text('${couldntMessage('load your subscriptions', e)} '
                 'Nothing was cancelled.')),
             origin: freeOrigin, flow: 'switch to Free');
+        return;
+      } finally {
+        stopWatching();
+      }
+      if (subs == null) {
+        recordOutcomeNotShown(freeOrigin, 'switch to Free');
         return;
       }
       if (gone('switch to Free')) return;

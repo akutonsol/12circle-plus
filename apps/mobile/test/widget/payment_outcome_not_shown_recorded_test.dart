@@ -706,11 +706,11 @@ void main() {
       expect(server.count('cancel-subscription'), 0);
       expect(server.writes, isEmpty);
       recordedOnce('UpgradeScreen.switchToFree', 'switch to Free');
-      // The read failure itself is the observability record it always was;
-      // the outcome record adds no backend text (its exact message above).
+      // Round 3: the tap ends when A leaves, recorded once. The failure that
+      // lands later is the read rerun for B (Riverpod discarded A's), so it is
+      // not A's tap's to record — the screen beneath watching it reports it.
       expect(reported.map((f) => f.origin).toList(),
-          ['UpgradeScreen.mySubscriptions', 'UpgradeScreen.switchToFree'],
-          reason: '${records()}');
+          ['UpgradeScreen.switchToFree'], reason: '${records()}');
       expect('${notShown().single.error}', isNot(contains('SECRET')));
     });
 
@@ -762,7 +762,7 @@ void main() {
     // held, the account changes, and NOTHING else watches the subscriptions.
     // The tap awaited `mySubscriptionsProvider.future`, which the switch left
     // waiting for an answer nobody asks for: the flow never ended, its stop
-    // was never recorded and A's read failure was lost. Each test waits a
+    // was never recorded. Each test waits a
     // bounded 10 s of real time for the flow to end (a record), so on that
     // code it fails with "Timed out … waiting for the Free tap to end".
     Future<void> tapFreeWithReadHeld(WidgetTester t, Object answer) async {
@@ -788,17 +788,15 @@ void main() {
       final label = toB ? 'B signs in' : 'A signs out';
 
       testWidgets("Upgrade, Switch to Free: $label while the tap's read is held "
-          '(nothing else watching), then it answers: the flow ends, the stop is '
-          'recorded once, nothing asked, sent or shown', (t) async {
+          '(nothing else watching), then it answers: the flow ends, recorded '
+          'once, nothing asked, sent or shown', (t) async {
         await tapFreeWithReadHeld(t, (200, [sub1]));
         await leaveFor(t, toB);
-        server.gates['subscriptions:$_a']!.complete();
         await flowEnds(t);
+        server.gates['subscriptions:$_a']!.complete();
         await settle(t);
-        expect(records(),
-            ['UpgradeScreen: Bad state: switch to Free: the signed-in account '
-                'changed'],
-            reason: 'one stop record; nothing was sent, so no outcome');
+        recordedOnce('UpgradeScreen.switchToFree', 'switch to Free');
+        expect(reported, hasLength(1), reason: '${records()}');
         expect(find.text('Switch to Free?'), findsNothing,
             reason: "A's confirmation is not put to B");
         saidNothing();
@@ -809,17 +807,15 @@ void main() {
       });
 
       testWidgets("Upgrade, Switch to Free: $label while the tap's read is held "
-          '(nothing else watching), then it fails: A\'s failure is recorded, '
-          'the unseen outcome once, nothing said to B or cancelled', (t) async {
+          '(nothing else watching), then it fails: the flow ends, recorded '
+          'once, nothing said to B or cancelled', (t) async {
         await tapFreeWithReadHeld(t, _down);
         await leaveFor(t, toB);
-        server.gates['subscriptions:$_a']!.complete();
         await flowEnds(t);
+        server.gates['subscriptions:$_a']!.complete();
         await settle(t);
-        expect(reported.map((f) => f.origin).toList(),
-            ['UpgradeScreen.mySubscriptions', 'UpgradeScreen.switchToFree'],
-            reason: '${records()}');
         recordedOnce('UpgradeScreen.switchToFree', 'switch to Free');
+        expect(reported, hasLength(1), reason: '${records()}');
         expect('${notShown().single.error}', isNot(contains('SECRET')));
         saidNothing();
         expect(find.textContaining('Nothing was cancelled'), findsNothing);
