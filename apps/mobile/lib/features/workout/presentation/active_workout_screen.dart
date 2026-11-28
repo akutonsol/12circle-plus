@@ -459,8 +459,8 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       _sessionId = session.id;
       // Bind the in-memory set state to this session — switching workouts
       // clears it so the previous workout's sets can't leak into this one.
-      // Sets of THIS workout confirmed while the session was opening stay:
-      // they are this session's, already sent to it (C14-62d-02).
+      // Sets of THIS workout confirmed while the session was opening, whose
+      // save is waiting on it, stay: that save sends each, once (C14-62d-02).
       ref
           .read(activeWorkoutProvider.notifier)
           .beginSession(session.id, heldFor: workout);
@@ -645,11 +645,24 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     // The workout is filed or ended: an edit now is not part of it.
     if (_closed) return;
     if (!_isOwner('saving a set')) return;
+    // No session bound yet: this save waits on the one being opened, and only
+    // a set whose save is waiting is kept when it binds (C14-62d-02). If the
+    // save does not go out, the set is let go and offered again — never shown
+    // as done with no stored row (RM-3 F1). The instance, not a fresh read: by
+    // then the in-memory sets can be the next member's.
+    final sets = _app.read(activeWorkoutProvider.notifier);
+    final held = sets.holdForBind(setId);
+    void notSaved() {
+      if (held && sets.mounted && _isOwner('saving a set')) {
+        sets.releaseUnsaved(setId);
+      }
+    }
     try {
       final sid = await _ensureSession();
       if (!_isOwner('saving a set')) return;
       if (sid == null) {
         // No session could be opened to hold it.
+        notSaved();
         _toastSave(couldntMessage('save that set', null));
         return;
       }
@@ -669,6 +682,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       );
     } catch (e, st) {
       reportError('ActiveWorkoutScreen._persistSet', e, st);
+      notSaved();
       _toastSave(couldntMessage('save that set', e));
     }
   }
@@ -1064,8 +1078,9 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// Through [app], not `ref`: this also runs after the screen is gone.
   void _leaveFinishedWorkout(ProviderContainer app, bool Function() isStillThis) {
     if (!_isOwner('closing a finished workout') || !isStillThis()) return;
-    // What was typed after Finish (a blur as the dialog took focus) is no part
-    // of any session: it must not be kept for the next one (C14-62d-02).
+    // What reached the in-memory sets after Finish's own reset is no part of
+    // any session — a resumed workout's logged sets whose slow read landed
+    // after it was filed, say — and must not show as done in the next one.
     app.read(activeWorkoutProvider.notifier).reset();
     app.read(selectedWorkoutProvider.notifier).state = null;
   }
