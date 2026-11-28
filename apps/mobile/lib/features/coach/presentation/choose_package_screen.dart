@@ -4,8 +4,11 @@ import 'package:go_router/go_router.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../../shared/theme/app_background.dart';
 import '../../auth/domain/auth_provider.dart';
-import '../../payments/data/payment_service.dart' show CheckoutRefused;
+import '../../payments/data/payment_service.dart'
+    show CheckoutRefused, signedInUid;
 import '../../payments/domain/payment_provider.dart';
+import '../../payments/presentation/checkout_launcher.dart'
+    show recordOutcomeNotShown;
 import '../../workout/presentation/widgets/section_load_failure.dart';
 import '../domain/package_provider.dart';
 
@@ -139,6 +142,17 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
     });
   }
 
+  /// True — and recorded once as the package checkout's outcome not shown —
+  /// when the account that saved ([client], in sign-in [seq]) is no longer
+  /// the one on this screen: another account, nobody, or the same client
+  /// signed in again (A → B → A, a new sign-in). Read from the auth client
+  /// itself, not a provider that may not have rebuilt yet (P0-RM-1).
+  bool _outcomeDropped(String? client, int seq) {
+    if (signedInUid() == client && seq == _seedSeq) return false;
+    recordOutcomeNotShown('ChoosePackageScreen._save', 'package checkout');
+    return true;
+  }
+
   Future<void> _save() async {
     if (_selected == null || _days.isEmpty || _saving || !_seedReady) return;
     final client = _seedFor;
@@ -185,9 +199,11 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
     }
     container.invalidate(myScheduleProvider);
     // Left, or another client signed in: no booking or payment for them.
+    // P0-RM-1 (C15-63b-04): the schedule IS saved; when the account changed
+    // that is an outcome nobody was shown, recorded once — nothing of it (no
+    // package, no price) is said to whoever is signed in now.
+    if (_outcomeDropped(client, seq)) return;
     if (!mounted || ref.read(currentUserProvider)?.id != client) return;
-    // Signed out and in again: a save started since may pay for this too.
-    if (seq != _seedSeq) return;
 
     final price = (selected['price'] as num?)?.toDouble() ?? 0;
     // Free package (price 0) — nothing to charge. Hand off to booking.
@@ -213,7 +229,10 @@ class _ChoosePackageScreenState extends ConsumerState<ChoosePackageScreen> {
     } catch (e, st) {
       reportError('ChoosePackageScreen._save.checkout', e, st);
     }
-    if (!mounted || seq != _seedSeq) return;
+    // P0-RM-1 (C15-63b-04): the checkout was asked for; when the account
+    // changed meanwhile, its outcome is recorded once as not shown.
+    if (_outcomeDropped(client, seq)) return;
+    if (!mounted) return;
     setState(() => _saving = false);
     if (ok) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

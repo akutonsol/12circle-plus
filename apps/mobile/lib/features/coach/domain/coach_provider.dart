@@ -2,6 +2,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/observability/app_failure.dart';
 import '../../auth/domain/auth_provider.dart';
+import '../../payments/domain/payment_provider.dart'
+    show ownedReadProvider, paymentAccountProvider;
 import '../data/coach_relationship_service.dart';
 
 final _db = Supabase.instance.client;
@@ -14,30 +16,56 @@ final _relSvc = CoachRelationshipService();
 // failed was told "No coach assigned yet — Complete onboarding to choose your
 // coach." Every reader handles the error (`coachSectionFor`, `coachAddressed`,
 // `checkinSubmitLabel`) or reads `valueOrNull`, which is null as before.
+//
+// P0-RM-1 (C14-62b-03) · read for the member by id only, and only theirs is
+// held. It watched the whole User: a token refresh (a new User, the same
+// member) re-read it, and on a change of account Riverpod held the last
+// member's coach through the next one's read — every `valueOrNull` reader drew
+// A's coach (name, avatar, Cancel) to B until B's answer came. The last
+// member's coach is now forgotten as the next one's read starts (as the two
+// links below do), every step of the read is made as [uid] and kept only while
+// [uid] is signed in, and screens draw it through [ownedAssignedCoachProvider]
+// (whose answer is tagged with the member it was read for).
 final assignedCoachProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
-  final user = ref.watch(currentUserProvider);
-  if (user == null) return null;
+  final uid = ref.watch(currentUserProvider.select((u) => u?.id));
+  // Watched twice on purpose: see payment_provider.dart's note on
+  // [paymentAccountProvider] (a change not yet flushed is then a reload).
+  ref.watch(paymentAccountProvider);
+  ref.read(_coachOwner).become(uid, (v) => ref.state = v);
+  if (uid == null) return null;
   {
+    _mustStillBe(uid, 'reading the coach');
     // A client may have several active coaches now; this returns the primary
     // (most recent) one for single-coach UI. Use myCoachesProvider for the list.
     final rel = await _db
         .from('coach_client_relationships')
         .select('coach_id, status')
-        .eq('client_id', user.id)
+        .eq('client_id', uid)
         .eq('status', 'active')
         .order('activated_at', ascending: false, nullsFirst: false)
         .limit(1)
         .maybeSingle();
+    _mustStillBe(uid, 'reading the coach');
     final coachId = rel?['coach_id'] as String?;
     if (coachId == null) return null;
     // H-06 / 3A-7: repointed at public_profiles, which never carries email.
-    return await _db
+    final coach = await _db
         .from('public_profiles')
         .select('id, first_name, last_name, avatar_url, coach_title, coach_bio, specialties, certifications, pricing_monthly, years_experience, rating_avg')
         .eq('id', coachId)
         .maybeSingle();
+    _mustStillBe(uid, 'reading the coach');
+    return coach;
   }
 });
+
+/// P0-RM-1 · [assignedCoachProvider] as the member signed in now may see it:
+/// another member's coach, or another member's failure, is never in it, and a
+/// failed read is recorded once here (not by [assignedCoachProvider]: the
+/// screens that already watch it through their own [ownedReadProvider] record
+/// under their own names). Refresh by invalidating [assignedCoachProvider].
+final ownedAssignedCoachProvider =
+    ownedReadProvider(assignedCoachProvider, origin: 'assignedCoach');
 
 // P0-FL-60c · the two coach links below are the signed-in member's or nothing:
 // riverpod carries the last value through loading and error, and through the
@@ -60,6 +88,7 @@ class _LinkOwner {
 }
 
 final _pendingOwner = Provider<_LinkOwner>((ref) => _LinkOwner());
+final _coachOwner = Provider<_LinkOwner>((ref) => _LinkOwner());
 final _relationshipOwner = Provider<_LinkOwner>((ref) => _LinkOwner());
 
 /// A link is read, and kept, as [uid] only.
