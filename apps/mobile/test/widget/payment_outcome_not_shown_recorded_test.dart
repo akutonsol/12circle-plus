@@ -706,11 +706,12 @@ void main() {
       expect(server.count('cancel-subscription'), 0);
       expect(server.writes, isEmpty);
       recordedOnce('UpgradeScreen.switchToFree', 'switch to Free');
-      // Round 3: the tap ends when A leaves, recorded once. The failure that
-      // lands later is the read rerun for B (Riverpod discarded A's), so it is
-      // not A's tap's to record — the screen beneath watching it reports it.
+      // Round 3: the tap ends when A leaves (the outcome record comes first
+      // now); the read failure that lands later is still recorded.
       expect(reported.map((f) => f.origin).toList(),
-          ['UpgradeScreen.switchToFree'], reason: '${records()}');
+          unorderedEquals(
+              ['UpgradeScreen.mySubscriptions', 'UpgradeScreen.switchToFree']),
+          reason: '${records()}');
       expect('${notShown().single.error}', isNot(contains('SECRET')));
     });
 

@@ -209,10 +209,11 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
       // now ends when [owner] leaves: nothing sent, nothing said, recorded once.
       final left = Completer<void>();
       final stopWatching = whenOwnerGone(owner, left.complete);
+      final read = ref.read(mySubscriptionsProvider.future);
       final List<Map<String, dynamic>>? subs;
       try {
         subs = await Future.any([
-          ref.read(mySubscriptionsProvider.future),
+          read,
           left.future.then((_) => null),
         ]);
       } catch (e, st) {
@@ -229,6 +230,10 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
       }
       if (subs == null) {
         recordOutcomeNotShown(freeOrigin, 'switch to Free');
+        // A failure of the read that lands after is still recorded, as the
+        // catch above records it; nothing of it is said.
+        unawaited(read.then<void>((_) {}, onError: (Object e, StackTrace st) =>
+            reportError('UpgradeScreen.mySubscriptions', e, st)));
         return;
       }
       if (gone('switch to Free')) return;
