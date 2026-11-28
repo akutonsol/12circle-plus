@@ -124,3 +124,48 @@ This is not drafted, because it needs an architecture decision. Adding `p_expect
 | 4 | The owner-approved QA window for 182→186, then R1-E | QAX-SEC-03 (P1, live on QA), habit logs | Schedule the window; 185 first |
 | 5 | Architecture decision on R1-F | server-side detection of account-switch writes | Defer until after beta; client guards are in place |
 | 6 | Server-side PD8 (option A, matching the shipped client rule) and its B4 interaction | reviewed check-ins overwritten by direct API | Option A, with B4 corrections still allowed on submitted (not reviewed) weeks |
+
+## 5. Static validation of the drafts (2026-11-28, Stage 2–3; nothing executed against any database)
+These are checks against every server and app path that writes these tables, at `integration/p0-flutter-stack-rem1` @ `cfbac7c`.
+
+| Draft | Paths checked | Result |
+|---|---|---|
+| R1-A (participants immutable) | `get_or_create_conversation` (`131:303-345`) is SECURITY DEFINER and only `INSERT … ON CONFLICT DO NOTHING` on the least/greatest unique pair; no migration or Edge Function `UPDATE`s conversations; the app updates only `last_message`, `last_message_at` (`messaging_service.dart:240`) | **No legitimate path changes participants** → safe |
+| R1-B (INSERT requires a participant) | The app sends only into conversations it read through the participant SELECT; `trg_notify_on_message` (`004:69-105`) is AFTER INSERT and only reads | Safe; a refused send is already said and recorded (FL-59c/63b) |
+| R1-C strict (only `is_read` may change) | The app's `markAsRead` writes only `{'is_read': true}` (`messaging_service.dart:289`); there are **no** BEFORE UPDATE triggers on `messages` or `conversations` (so there is no `updated_at` rewrite that would trip the jsonb comparison); the columns are id, conversation_id, sender_id, content, is_read, sent_at, metadata (129); the app has no edit feature | Safe |
+| R1-D (set log ⇒ own session) | All app writes carry the bound `session_id` and run behind `requireWorkoutOwner` (`workout_service.dart:185-215`); server writes to `workout_set_logs` exist only in one-time migration backfills (`051:10`, `120:58`); trigger 129 is AFTER (notifications) | Safe for the app. Rows with a NULL `session_id` could not be updated; the pre-flight count decides whether any exist |
+| R1-E (habit log ⇒ own habit) | The app's `logHabit` lives in `coach_program_service.dart` (SEC-R3, **not modified**); the server policy needs no client change | Re-check after 185, in the window |
+
+Note on the unique pair index (131): the conversation re-point is still possible today, but only towards a user the caller does not already share a conversation with.
+
+### Rollback (each draft is independently reversible)
+```sql
+-- DRAFT rollback — not applied
+DROP TRIGGER IF EXISTS trg_conversation_participants_immutable ON public.conversations;
+DROP FUNCTION IF EXISTS public.enforce_conversation_participants();
+ALTER POLICY "authenticated can send messages" ON public.messages WITH CHECK (sender_id = auth.uid());
+DROP TRIGGER IF EXISTS trg_message_authorship ON public.messages;
+DROP FUNCTION IF EXISTS public.enforce_message_authorship();
+ALTER POLICY "users manage own set logs" ON public.workout_set_logs USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+```
+
+### Pre-flight (read-only, in the authorized environment only)
+```sql
+-- conversations whose participants are not a pair the app could have made (diagnostic only)
+SELECT count(*) FROM public.conversations WHERE participant_1 = participant_2 OR participant_1 IS NULL OR participant_2 IS NULL;
+-- messages from a non-participant (would be refused by R1-B going forward; existing rows untouched)
+SELECT count(*) FROM public.messages m JOIN public.conversations c ON c.id = m.conversation_id
+ WHERE m.sender_id NOT IN (c.participant_1, c.participant_2);
+-- set logs not owned like their session (R1-D)
+SELECT count(*) FROM public.workout_set_logs l LEFT JOIN public.workout_sessions s ON s.id = l.session_id
+ WHERE l.session_id IS NULL OR l.user_id IS DISTINCT FROM s.user_id;
+```
+
+### Execution, once authorized
+1. Author the file(s) as migration **≥ 199**; 196–198 are already used on open branches.
+2. Declare them in `supabase/expected_applied.json` as `pending`.
+3. Local replay on a disposable database: existing harness plus the new probes and positive controls.
+4. Open a PR and get CI green.
+5. Apply to the authorized environment using the documented manual procedure. **Never `supabase db push`**: it would also push 182/183/186/193–195.
+6. Run the live security suite.
+7. Move the frontier and record the exact migration versions.

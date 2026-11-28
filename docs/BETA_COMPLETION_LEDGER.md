@@ -1279,6 +1279,14 @@ exists.
 
 ## Next autonomous action
 
+**Z1–Z5 preparation (2026-11-28, later).** **No approval for Z1–Z5 has been recorded.** This session prepared, applied nothing and made no QA write.
+- **Z1/Z2:** the drafts were validated against every write path, and none breaks a legitimate path; rollback and pre-flight are in `SECURITY_REMEDIATION_PLAN_2026-11-28.md` §5.
+- **Z3:** the runbook already exists. The choice is Option S or Option R, and it needs the QA database credential holder.
+- **Z4:** plan L1–L14 is in `docs/proposals/LIVE_QA_WALKTHROUGH_PLAN_2026-11-28.md`.
+- **Z5:** the sign-in expires 2026-12-06 21:36 UTC; renewing it is your action.
+
+The single request is `docs/proposals/Z1_Z5_APPROVAL_REQUEST_2026-11-28.md`.
+
 **After the remediation pass (2026-11-28): do not start Cycle 16.** Every safely executable blocker in the register has a fix in a CI-green, reviewed PR (#239–#241, combined `integration/p0-flutter-stack-rem1` @ `cfbac7c`, CI 7/7), or is documented as blocked. **Next action: owner review of one batch**, `docs/proposals/OWNER_DECISION_BATCH_2026-11-28.md`:
 - **S1–S5:** decisions that unblock server work.
 - **U1–U13:** wording and UX.
