@@ -1,7 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../data/payment_service.dart' show CancelOutcome, CancelSubscriptionOutcome, ownerGone, signedInUid;
+import '../data/payment_service.dart' show CancelOutcome, CancelSubscriptionOutcome, ownerGone, signedInUid, whenOwnerGone;
 import '../domain/entitlements.dart';
 import '../domain/payment_provider.dart';
 import '../../coach/domain/coach_provider.dart';
@@ -178,6 +180,11 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
     // The owner is who the card was drawn for, not who is signed in at the tap.
     final owner = widget.account;
     bool gone(String what) => ownerGone(owner, 'UpgradeScreen', what);
+    // After something was sent: [owner] never sees its outcome (P0-FL-63b).
+    bool outcomeGone(String origin, String flow) =>
+        outcomeOwnerGone(owner, origin, flow);
+    const freeOrigin = 'UpgradeScreen.switchToFree';
+    const changeOrigin = 'UpgradeScreen.planChange';
     if (gone('plan card')) return;
     // Capture ancestors up front so we never touch a defunct context after an
     // await (embedded checkout can navigate this screen away mid-flow).
@@ -195,16 +202,38 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
       // Awaited: nothing on this screen watches the subscriptions, so
       // `valueOrNull` was null until another screen had read them, and the tap
       // found no membership and did nothing.
-      final List<Map<String, dynamic>> subs;
+      //
+      // Bounded by [owner] (P0-FL-63b): an account change discards the read
+      // in flight, and with nothing else watching the subscriptions no next
+      // answer ever comes — the tap never ended and nothing was recorded. It
+      // now ends when [owner] leaves: nothing sent, nothing said, recorded once.
+      final left = Completer<void>();
+      final stopWatching = whenOwnerGone(owner, left.complete);
+      final read = ref.read(mySubscriptionsProvider.future);
+      final List<Map<String, dynamic>>? subs;
       try {
-        subs = await ref.read(mySubscriptionsProvider.future);
+        subs = await Future.any([
+          read,
+          left.future.then((_) => null),
+        ]);
       } catch (e, st) {
         // P0-FL-60a: the cause was lost, and nothing said that it was the
         // read that failed and that nothing had been cancelled.
         reportError('UpgradeScreen.mySubscriptions', e, st);
         showOwnedSnackBar(messenger, owner, SnackBar(
             content: Text('${couldntMessage('load your subscriptions', e)} '
-                'Nothing was cancelled.')));
+                'Nothing was cancelled.')),
+            origin: freeOrigin, flow: 'switch to Free');
+        return;
+      } finally {
+        stopWatching();
+      }
+      if (subs == null) {
+        recordOutcomeNotShown(freeOrigin, 'switch to Free');
+        // A failure of the read that lands after is still recorded, as the
+        // catch above records it; nothing of it is said.
+        unawaited(read.then<void>((_) {}, onError: (Object e, StackTrace st) =>
+            reportError('UpgradeScreen.mySubscriptions', e, st)));
         return;
       }
       if (gone('switch to Free')) return;
@@ -221,14 +250,19 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
       // failed cancellation left the client billed and was announced as Free.
       final outcomes = <CancelOutcome>{};
       for (final m in memberships) {
-        if (gone('switch to Free')) return;
+        if (outcomes.isEmpty
+            ? gone('switch to Free')
+            : outcomeGone(freeOrigin, 'switch to Free')) {
+          return;
+        }
         outcomes.add(
             await paymentSvc.cancelSubscriptionOutcome(m['id'] as String));
       }
-      if (gone('switch to Free')) return;
+      if (outcomeGone(freeOrigin, 'switch to Free')) return;
       _refresh();
       showOwnedSnackBar(messenger, owner,
-          SnackBar(content: Text(switchToFreeMessage(outcomes))));
+          SnackBar(content: Text(switchToFreeMessage(outcomes))),
+          origin: freeOrigin, flow: 'switch to Free');
       return;
     }
 
@@ -238,11 +272,18 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
     // and skipping this sent them to buy a SECOND membership.
     if (mounted) setState(() => _loading = true);
     final result = await paymentSvc.changeMembership(p.kind!);
-    if (gone('plan change')) return;
+    // needs_checkout changed nothing and says nothing: only the checkout that
+    // would follow is stopped. Any other answer is an outcome to say.
+    if (result == 'needs_checkout'
+        ? gone('plan change')
+        : outcomeGone(changeOrigin, 'plan change')) {
+      return;
+    }
     if (result == 'changed') {
       _refresh();
       showOwnedSnackBar(messenger, owner,
-          SnackBar(content: Text('Your plan is now ${p.name}.')));
+          SnackBar(content: Text('Your plan is now ${p.name}.')),
+          origin: changeOrigin, flow: 'plan change');
       return;
     }
     // Only an explicit "there is no membership to change" may lead to a new
@@ -258,7 +299,7 @@ class _PlanCardState extends ConsumerState<_PlanCard> {
         'unconfirmed' => "Couldn't confirm your plan change — check your plan "
             'before trying again.',
         _ => "Couldn't change your plan. Try again.",
-      })));
+      })), origin: changeOrigin, flow: 'plan change');
       _refresh();
       return;
     }

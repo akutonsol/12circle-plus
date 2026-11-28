@@ -10,7 +10,8 @@ import '../../coach/data/coach_relationship_service.dart';
 import '../../dashboard/domain/still_reading.dart' show boundTo, stillSignedIn;
 import '../../../core/observability/app_failure.dart';
 import '../../workout/presentation/widgets/section_load_failure.dart';
-import 'checkout_launcher.dart' show OwnedDialog, showOwnedSnackBar;
+import 'checkout_launcher.dart'
+    show OwnedDialog, outcomeOwnerGone, showOwnedSnackBar;
 import 'upgrade_screen.dart'
     show PlanLoadFailedNotice, kPlanFromLastTime, ownedClientPlanProvider,
         reportPlanReadFailure, switchToFreeMessage;
@@ -98,13 +99,18 @@ class _ManageSubscriptionScreenState
     if (gone() || ok != true || !mounted) return;
     final svc = ref.read(paymentServiceProvider);
     final outcomes = <CancelOutcome>{};
+    // After the first cancellation was sent, a stop leaves its outcome
+    // unseen by [owner] — recorded as such (P0-FL-63b).
+    bool outcomeGone() => outcomeOwnerGone(
+        owner, 'ManageSubscriptionScreen.switchToFree', 'switch to Free');
     for (final m in memberships) {
-      if (gone()) return;
+      if (outcomes.isEmpty ? gone() : outcomeGone()) return;
       outcomes.add(await svc.cancelSubscriptionOutcome(m['id'] as String));
     }
-    if (gone()) return;
+    if (outcomeGone()) return;
     showOwnedSnackBar(messenger, owner,
-        SnackBar(content: Text(switchToFreeMessage(outcomes))));
+        SnackBar(content: Text(switchToFreeMessage(outcomes))),
+        origin: 'ManageSubscriptionScreen.switchToFree', flow: 'switch to Free');
     if (!mounted) return;
     ref.invalidate(clientPlanProvider);
     ref.invalidate(membershipTierProvider);
@@ -157,6 +163,7 @@ class _ManageSubscriptionScreenState
     // 'coach' only and so left package subscriptions billing -- is cancelled at
     // the end of the paid period and coaching lasts until then; without one the
     // relationship ends now. The message follows what actually happened.
+    const outcomeOrigin = 'ManageSubscriptionScreen.stopCoach';
     String message;
     try {
       // P0-FL-62b: every step for [owner] (an owner nobody knows is nobody),
@@ -167,7 +174,9 @@ class _ManageSubscriptionScreenState
       message = end.describe();
     } on AccountChangedError {
       // Recorded by the service; nothing of it is for whoever is signed in
-      // now. (Back as the same member: what is left is read again.)
+      // now. (Back as the same member: what is left is read again.) Not
+      // recorded again here: the stop may have come before anything was
+      // sent, and this error does not say which (P0-FL-63b follow-up).
       if (stillSignedIn(owner) && mounted) {
         ref.invalidate(myCoachesProvider);
         ref.invalidate(mySubscriptionsProvider);
@@ -186,8 +195,9 @@ class _ManageSubscriptionScreenState
               : "Couldn't confirm that coaching ended — check your coaches "
                   'before trying again.';
     }
-    if (gone()) return;
-    showOwnedSnackBar(messenger, owner, SnackBar(content: Text(message)));
+    if (outcomeOwnerGone(owner, outcomeOrigin, 'stop coaching')) return;
+    showOwnedSnackBar(messenger, owner, SnackBar(content: Text(message)),
+        origin: outcomeOrigin, flow: 'stop coaching');
     if (!mounted) return;
     ref.invalidate(myCoachesProvider);
     ref.invalidate(mySubscriptionsProvider);
@@ -207,12 +217,20 @@ class _ManageSubscriptionScreenState
       // Recorded by the service. P0-FL-60a: a failure is not "no account".
       problem = couldntMessage('open billing', e);
     }
-    if (!mounted) return;
+    if (!mounted) {
+      // The screen went with the account (an account scope) (P0-FL-63b).
+      if (problem != null) {
+        outcomeOwnerGone(owner, 'ManageSubscriptionScreen.openBilling',
+            'open billing');
+      }
+      return;
+    }
     // Another account's own request is still running: not ours to end.
     if (_portal?.uid == owner) setState(() => _portal = null);
     if (problem != null) {
       showOwnedSnackBar(ScaffoldMessenger.of(context), owner,
-          SnackBar(content: Text(problem)));
+          SnackBar(content: Text(problem)),
+          origin: 'ManageSubscriptionScreen.openBilling', flow: 'open billing');
     }
   }
 
