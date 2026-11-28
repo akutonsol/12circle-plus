@@ -311,6 +311,19 @@ Runtime (device/simulator/live QA): **not performed**; journey completion unchan
 
 **Runtime evidence:** none. Journeys stay at 2 of 14, and beta conditions at 0 of 4.
 
+### Z1–Z5 preparation (2026-11-28, later)
+No new Flutter package. **No approval for Z1–Z5 is recorded.**
+
+Prepared on the ledger branch:
+- validated security drafts, with rollback and pre-flight queries;
+- the live-QA plan L1–L14;
+- `docs/proposals/Z1_Z5_APPROVAL_REQUEST_2026-11-28.md`.
+
+Status:
+- **Z3** needs the QA database credential holder.
+- **Z5** (the agent sign-in) expires 2026-12-06 21:36 UTC.
+- **PRs:** #239–#241 are unchanged on their green heads.
+
 ### Next after the remediation pass
 Do not start Cycle 16. Next is the owner's review of the decision and authorization batch.
 
