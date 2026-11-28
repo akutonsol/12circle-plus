@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:circle_fitness/core/observability/app_failure.dart';
 import 'package:circle_fitness/features/vendor/presentation/vendor_portal_screen.dart';
 import 'package:flutter/material.dart';
@@ -34,7 +36,8 @@ GoTrueClient get _auth => Supabase.instance.client.auth;
 
 Iterable<AppFailure> get _closedRecords => _failures.where((f) =>
     f.origin == 'VendorPortalScreen.eventEditor' &&
-    '${f.error}'.contains('event editor closed: the signed-in account changed'));
+    '${f.error}'
+        .contains('event editor closed: the signed-in account changed'));
 
 Iterable<Sent> get _writes => _server.sent.where((s) =>
     s.method != 'GET' &&
@@ -256,7 +259,105 @@ void main() {
     await end(t);
   });
 
+  // ── Round 2: only its own route, closed once (mutants M4, M7, M8) ────────
+
+  /// A route that is not the sheet's, pushed above it on the same navigator.
+  void pushAbove(WidgetTester t) {
+    final nav = Navigator.of(t.element(find.byType(VendorPortalScreen)));
+    unawaited(nav.push(DialogRoute<void>(
+        context: nav.context,
+        builder: (_) => const AlertDialog(content: Text('ROUTE ABOVE')))));
+  }
+
+  testWidgets(
+      'a route above the open sheet when A leaves: only the sheet\'s own '
+      'route is removed, the route above stays, nothing else is popped',
+      (t) async {
+    await mount(t);
+    await t.tap(find.text('New Event'));
+    await settleApp(t, 10);
+    expect(find.byType(BottomSheet), findsOneWidget, reason: 'premise');
+    pushAbove(t);
+    await settleApp(t, 4);
+    expect(find.text('ROUTE ABOVE'), findsOneWidget, reason: 'premise');
+    await t.runAsync(() => signInAs(acctB));
+    await settleApp(t);
+    expect(find.byType(BottomSheet), findsNothing,
+        reason: "the sheet's own route is the one removed");
+    expect(find.text('ROUTE ABOVE'), findsOneWidget,
+        reason: 'the route above is not the sheet\'s: it is not popped');
+    expect(_closedRecords, hasLength(1));
+    expect(_writes, isEmpty);
+    // Under the route above sits the portal, nothing else.
+    Navigator.of(t.element(find.text('ROUTE ABOVE'))).pop();
+    await settleApp(t, 4);
+    expect(portalOnTop(t), isTrue);
+    expect(find.byType(BottomSheet), findsNothing);
+    await end(t);
+  });
+
+  testWidgets(
+      'a route above a sheet first built after the switch: only the sheet\'s '
+      'own route is removed, the route above stays', (t) async {
+    await mount(t);
+    await t.tap(find.text('New Event')); // pushed; not built yet
+    pushAbove(t); // and another route above it, still no frame
+    await switchBeforeFirstBuild(t, () => signInAs(acctB));
+    await neverDrawn(t, [find.text('Create event')]);
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.text('ROUTE ABOVE'), findsOneWidget,
+        reason: 'the route above is not the sheet\'s: it is not popped');
+    expect(_closedRecords, hasLength(1));
+    expect(_writes, isEmpty);
+    Navigator.of(t.element(find.text('ROUTE ABOVE'))).pop();
+    await settleApp(t, 4);
+    expect(portalOnTop(t), isTrue);
+    await end(t);
+  });
+
+  testWidgets(
+      'first-build close, then a second change before the next frame (the '
+      'listener): one route removed, recorded once, nothing throws', (t) async {
+    await mount(t);
+    await t.tap(find.text('New Event')); // pushed; not built yet
+    await switchBeforeFirstBuild(t, () => signInAs(acctB));
+    await t.pump(); // the first build: it closes itself after this frame
+    await t.runAsync(() async {
+      await signOut(); // its listener hears this before the next frame
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    });
+    await settleApp(t);
+    expect(t.takeException(), isNull);
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(portalOnTop(t), isTrue);
+    expect(_closedRecords, hasLength(1), reason: 'closed and recorded once');
+    expect(_failures, hasLength(1), reason: 'nothing else went wrong');
+    expect(_writes, isEmpty);
+    await end(t);
+  });
+
   // ── Controls: the same vendor ────────────────────────────────────────────
+
+  testWidgets(
+      'control: same-account rebuilds of the open sheet (a route above it '
+      'and back, a token refresh) never close it', (t) async {
+    await mount(t);
+    await t.tap(find.text('New Event'));
+    await settleApp(t, 10);
+    await t.enterText(find.byType(TextField).first, 'Alba Draft');
+    await t.pump();
+    pushAbove(t); // the sheet's route status changes: it rebuilds
+    await settleApp(t, 4);
+    Navigator.of(t.element(find.text('ROUTE ABOVE'))).pop();
+    await settleApp(t, 4);
+    await t.runAsync(renewToken);
+    await settleApp(t, 4);
+    expect(find.byType(BottomSheet), findsOneWidget);
+    expect(find.text('Alba Draft'), findsOneWidget, reason: 'draft kept');
+    expect(_failures, isEmpty);
+    expect(_writes, isEmpty);
+    await end(t);
+  });
 
   testWidgets('control: the same vendor opens New Event, types, saves once',
       (t) async {
@@ -336,8 +437,8 @@ void main() {
     await settleApp(t, 10);
     expect(find.text('Add Session'), findsOneWidget);
     expect(find.text('Alba Bootcamp keynote'), findsOneWidget);
-    expect(_server.of('event_sessions', method: 'GET').map((s) => s.who),
-        [acctA]);
+    expect(
+        _server.of('event_sessions', method: 'GET').map((s) => s.who), [acctA]);
     expect(_failures, isEmpty);
     await end(t);
   });
