@@ -1141,6 +1141,69 @@ All five packages start from `a446926` and **target `integration/p0-flutter-stac
 - `assignActionItem` swallows failures (C15-63d-03).
 - The sheet's own date picker stays over B (C15-63a-01).
 
+### Blocker remediation pass (Items 1–6, 2026-11-28; not a new cycle)
+
+**Base.** `integration/p0-flutter-stack-c15` @ `6d1611d` (CI 7/7 `46100139167`), verified before starting.
+- Main is `8f2c8a0`.
+- #229–#238 are open on their recorded heads, and the last merge is #159.
+- No remediation or Cycle 16 branch existed.
+
+The three Flutter packages target `-c15`. The durable log is `docs/REMEDIATION_LOG_2026-11-28.md`.
+
+**Combined evidence branch.** `integration/p0-flutter-stack-rem1` = `6d1611d` plus RM-1, RM-2 and RM-3, merged `--no-ff` in that order.
+- No conflicts and no integration commits. Only `coach_dashboard_screen.dart` auto-merged: RM-1's request methods and RM-2's unread provider.
+- @ `cfbac7c` (tree `1212a88`), local: analyze **281**; **9330** tests pass, 7 skipped, 0 failed.
+- No protected path touched.
+- CI (push): **7/7 success**, run `46122834293` on `cfbac7c`.
+
+| PR | Package | Final head | Independent verdicts | Lead mutants | Tests (full) | CI (exact head) |
+|---|---|---|---|---|---|---|
+| #240 | **RM-1**: coach flows after an account change. `assignedCoachProvider` is keyed by uid and owner-tagged. `AccountChangedError.sent` added; callers never show its text and record a dropped outcome when something was sent. Marketplace and pricing-sheet raw text fixed. `saveSchedule` stamps the tapping owner (a P1 wrong-account write found by security). Package checkout outcome recorded | `36f4509` | security APPROVE-WITH-NOTES ×2 · UX PASS-WITH-NOTES ×2 · QA **VERIFIED** ×2 | **19/19** | 9264 | 7/7 `46119481276` |
+| #241 | **RM-2**: `assignActionItem` 0-row is a failure; AI `generate` records without the body (a P2 privacy issue found by security); three AI coach cards say their failure; coach unread is unknown while loading; payments and chat record wording; vendor sheet's own pickers close with it; client-side messaging write guard (the server hole remains) | `3aab67e` | security APPROVE-WITH-NOTES → **APPROVE** · UX PASS-WITH-NOTES ×2 · QA **VERIFIED** ×2 | 17 caught, 1 documented (R-RM2-04) | 9216 | 7/7 `46121089995` |
+| #239 | **RM-3**: confirmed sets survive a late session bind; a never-saved set is never shown as done; a filed workout cannot be filed or awarded again after back (the double award was confirmed real) | `928eaf7` | security APPROVE-WITH-NOTES → **APPROVE** · UX PASS-WITH-NOTES ×2 · QA NOT VERIFIED → **VERIFIED** | 15 caught + M-07 traced | 9202 | 7/7 `46118042732` |
+
+**Item 1, security and authorization.** The trust boundary was verified as **server-side**.
+- **conversations UPDATE** is `USING`-only with no column restriction (`003:73-76`), so a participant can re-point a conversation and expose its history and media.
+- **messages INSERT** (`003:91-94`) and **UPDATE** (`003:96-104`) have no participant or authorship rule.
+- **Set logs** (`001:370`) and **habit logs** (`003:226-229`) are not tied to their session or habit owner.
+- **No RPC** takes an expected uid.
+
+The app writes only `last_message*` on conversations. RM-2's static guard keeps it that way; it does **not** close the server hole. Draft SQL (unapplied), a verification plan and the authorization request are in `docs/proposals/SECURITY_REMEDIATION_PLAN_2026-11-28.md`. **C14-MIG-01/02/03/05 remain open, pending authorization Z1–Z3.**
+
+**Item 2, owner decisions; PD8 reconciled.**
+- The owner prompt of 2026-11-09 recorded "PD8: A reviewed weekly check-in counts as done; the client cannot resubmit that reviewed week", and #45 (`20adcc4`) shipped it.
+- It is **not** recorded under `docs/MASTER_PRODUCT_DECISIONS.md` §2, so ledger decision #6 is stale.
+- Still open: recording PD8 under §2, and whether to enforce it server-side (and how that interacts with B4).
+
+Every decision is in `docs/proposals/OWNER_DECISION_BATCH_2026-11-28.md` (S1–S5); none was made.
+
+**Item 3, data integrity.** Fixed in RM-1 and RM-3:
+- the already-sent signal;
+- held sets surviving a late session bind;
+- the double award, confirmed and fixed;
+- the `saveSchedule` wrong-account write.
+
+Swallowed failures were fixed in RM-2. Still open: the remaining follow-ups (R-RM1-04, R-RM2-02, R-RM3-02/03).
+
+**Item 4, Flutter packages that need no decision.** RM-1 (identity follow-ups) and RM-2 (honesty follow-ups), plus RM-3 (workout integrity).
+
+**Item 5, wording and UX.** One consolidated batch, U1–U13, in the owner decision batch. Only already-approved or unambiguous changes were implemented. The new sentences are listed as decisions: "Could not generate meal ideas/progress insight/risk assessment." (R-RM2-03), and the record-only strings.
+
+**Item 6, device, simulator and live QA.** None was performed.
+- **What is available:** no iOS simulator (only the Command Line Tools; Xcode is not installed), no Android AVD, and no docker or local Supabase stack. The only targets are macOS desktop and Chrome.
+- **Why live QA is blocked:** every journey signs in and writes to QA (workouts, chat, check-ins), which this pass may not do.
+- **What it needs:** authorization **Z4**, a live-QA walkthrough window with named test accounts.
+
+**Journeys stay 2/14 and beta-ready conditions 0/4.**
+
+**Safety:**
+- No merge, no auto-merge, no deploy.
+- No migration applied or authored as a file.
+- No QA or production write; CI's existing live-QA job ran as usual.
+- No configuration or secret change.
+- No protected path touched; PR #14 untouched.
+- Cycle 16 not started.
+
 ## Decision briefs (alternatives · consequences · recommendation)
 
 These are Julia's calls; the recommendation is engineering's view, not a decision.
@@ -1161,7 +1224,7 @@ These are Julia's calls; the recommendation is engineering's view, not a decisio
 3. Relationships activated before 193: keep access (flagged default) or not.
 4. Can a coach reactivate a relationship the client cancelled?
 5. Which bookings consume a session credit (package clients? subscription clients?) — unblocks K-05/K-25.
-6. Check-in resubmission after review (PD8 / E-CHK-09; option A recommended).
+6. Check-in resubmission after review (PD8 / E-CHK-09; option A recommended). *(2026-11-28 reconciliation: the product rule was approved by the owner on 2026-11-09 and shipped in #45; recording it under `MASTER_PRODUCT_DECISIONS.md` §2 and server enforcement remain open — see S1 in `docs/proposals/OWNER_DECISION_BATCH_2026-11-28.md`.)*
 7. Chat times/order; coach-facing load units.
 8. Coach-to-coach program sharing (196 leaves it open).
 9. Scores/challenge progress are client-written — accept for beta, or move scoring server-side.
@@ -1215,6 +1278,17 @@ exists.
 - Nutrition sync verified (2026-11-16): every meal-logging path calls `refreshAfterMealLogged`; no defect.
 
 ## Next autonomous action
+
+**After the remediation pass (2026-11-28): do not start Cycle 16.** Every safely executable blocker in the register has a fix in a CI-green, reviewed PR (#239–#241, combined `integration/p0-flutter-stack-rem1` @ `cfbac7c`, CI 7/7), or is documented as blocked. **Next action: owner review of one batch**, `docs/proposals/OWNER_DECISION_BATCH_2026-11-28.md`:
+- **S1–S5:** decisions that unblock server work.
+- **U1–U13:** wording and UX.
+- **Z1–Z5:** authorizations:
+  - Z1: the conversation and messages migration, R1-A first.
+  - Z2: set-log ownership.
+  - Z3: the 182→186 QA window.
+  - Z4: the live-QA walkthrough with test accounts. It is the only way to move journeys (2/14) and conditions (0/4).
+  - Z5: renew the agent sign-in before 2026-12-03.
+- **Merge order:** for the open stacks, when you choose to merge.
 
 **After Cycles 14–15 (2026-11-28): do not start Cycle 16.** Both cycles are closed.
 - **Combined branches:** `integration/p0-flutter-stack-c14` @ `7b9ce5c` and `integration/p0-flutter-stack-c15` @ `6d1611d`, both with CI 7/7.

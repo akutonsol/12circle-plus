@@ -1,0 +1,16 @@
+# Blocker remediation pass (Items 1–6) — durable log
+
+Started 2026-11-28. Base: `integration/p0-flutter-stack-c15` @ `6d1611d` (CI 7/7 `46100139167`). Main `8f2c8a0`. PRs #229–#238 open on their recorded heads; last merge #159. No remediation/Cycle 16 branch existed.
+
+## Reconciliations
+- **PD8.** Owner prompt 2026-11-09 18:00 ("Julia's decisions: PRODUCT DECISIONS APPROVED — PD8: A reviewed weekly check-in counts as done; the client cannot resubmit that reviewed week.") → client rule shipped in #45 (`20adcc4`, merged `4e9bc0b`). Not recorded in `docs/MASTER_PRODUCT_DECISIONS.md` §2 (no PD8 entry on main). Ledger "Decisions required" #6 is stale. Open: server-side enforcement (migration) and its interaction with B4 (151) corrections; and recording PD8 under §2.
+
+## Log
+- 2026-11-28 Item 1: trust boundary verified server-side (conversations UPDATE USING-only `003:73-76` → re-point; messages INSERT `003:91-94`; messages UPDATE `003:96-104`; set logs `001:370`; habit logs `003:226-229`; no expected-uid RPCs). App writes only `last_message*` on conversations (`messaging_service.dart:240`). Plan + drafts (unapplied): SECURITY_REMEDIATION_PLAN.md → docs/proposals on the ledger branch. Authorization requests Z1–Z3.
+- 2026-11-28 Items 2/5: OWNER_DECISION_BATCH.md (S1–S5, U1–U13, Z1–Z5). PD8 reconciled (product rule decided 2026-11-09; §2 record + server enforcement open).
+- 2026-11-28 Item 6: environments — no iOS simulator (CLT only, no Xcode), no Android AVD, no docker/local Supabase; macOS desktop + Chrome targets only; QA credentials present but every journey writes QA (sign-in, workout, chat) → Z4 authorization required. No QA write performed.
+- 2026-11-28 Items 3/4: RM-1 (coach account-change truth: C14-62b-03, C14-62b-04, C15-63b-03, C15-63b-04 checkout), RM-2 (swallowed failures + record wording + vendor pickers + chat notice + messaging static guard: C15-63d-03, C14-62a1-02, C15-63c-02, C15-63b-05, C15-63a-01, C15-63b-04 chat), RM-3 (workout integrity: C14-62d-02, C14-62d-03 double award) launched from 6d1611d, target -c15.
+- 2026-11-28 Item 6: no boot-only web smoke run — the sign-in screen alone is not journey evidence and CI builds the QA web bundle (dart_defines/qa.json) on every head; every journey needs QA sign-in/writes (Z4).
+- 2026-11-28 PRs: RM-3 #239 `928eaf7` CI 7/7 `46118042732`; RM-1 #240 `36f4509` CI 7/7 `46119481276`; RM-2 #241 `3aab67e` CI 7/7 `46121089995` (all target `-c15`, unmerged, auto-merge off). Reviews: RM-1 sec AWN ×2, UX PWN ×2, QA VERIFIED ×2, mutants 19/19; RM-2 sec AWN→APPROVE, UX PWN ×2, QA VERIFIED ×2, mutants 17 + 1 documented; RM-3 sec AWN→APPROVE, UX PWN ×2, QA NOT VERIFIED→VERIFIED, mutants 15 + 1 traced. Guards and negative controls 0/0 at each head.
+- 2026-11-28 Combined `integration/p0-flutter-stack-rem1` @ `cfbac7c` (tree `1212a88`): local analyze 281, 9330 pass / 7 skipped / 0 failed; CI 7/7 `46122834293`.
+- 2026-11-28 New defects found and fixed during the pass: double award after back on the finish dialog (RM-3, confirmed real); never-saved set shown as done after a failed start (RM-3 r2, security F1); `saveSchedule` wrong-account write (RM-1 r2, security S-2, P1 pre-existing); `generate` failure record carried the Edge Function body (RM-2 r2, security S-1, P2 privacy — introduced and fixed within the pass, never pushed to a PR head).

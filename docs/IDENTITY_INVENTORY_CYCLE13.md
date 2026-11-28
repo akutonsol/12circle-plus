@@ -152,3 +152,13 @@ No inventory row changed status in Cycle 15 (FL-63 was honesty and test hygiene)
 - A vendor editor sheet first built after a switch closes itself and records the stop once (FL-59a follow-up, FL-63a #237).
 
 Counts in section 4 are unchanged from the Cycle 14 update.
+
+## 7. Remediation pass update (2026-11-28)
+
+No inventory row changed status; the counts in section 4 stand (75 of 93 CLOSED). The pass closed identity-adjacent follow-ups in unmerged PRs:
+- `assignedCoachProvider` keyed by uid and owner-tagged (C14-62b-03, #240).
+- `AccountChangedError` never shown as raw text (C14-62b-04, #240).
+- `saveSchedule` no longer saves A's schedule as B's (#240).
+- The client never writes conversation participants (static guard, #241).
+
+The server-side items (C14-MIG-01/02/03/05) remain open pending authorization. This inventory measures identity-isolation closure only; it is **not** a measure of core completion or beta readiness.
