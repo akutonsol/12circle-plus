@@ -7,7 +7,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
+import 'package:circle_fitness/core/identity/account_scope.dart';
 import 'package:circle_fitness/core/observability/app_failure.dart';
+import 'package:circle_fitness/features/payments/domain/payment_provider.dart'
+    show mySubscriptionsProvider;
 import 'package:circle_fitness/features/payments/presentation/coach_payments_screen.dart';
 import 'package:circle_fitness/features/payments/presentation/coach_plan_screen.dart';
 import 'package:circle_fitness/features/payments/presentation/manage_subscription_screen.dart';
@@ -547,5 +550,230 @@ void main() {
         expect(reported, isEmpty);
       });
     }
+  });
+
+  // ── Round 2 (P0-FL-63b): the branches round 1 never reached ───────────────
+  // Each kills one code mutant that survived round 1 (M7, M9, M14, M18).
+  group('round 2', () {
+    const sub1 = {'id': 'sub-1', 'kind': 'self_guided', 'status': 'active'};
+
+    List<String> records() =>
+        reported.map((f) => '${f.origin}: ${f.error}').toList();
+
+    Future<void> openUpgradeOneSub(WidgetTester t) async {
+      server.answers['client_plan:$_a'] = (200, 'self_guided');
+      server.answers['client_plan:$_b'] = (200, 'free');
+      server.answers['subscriptions:$_a'] = (200, [sub1]);
+      await open(t, const UpgradeScreen());
+      await until(t, () => seen(find.text('Current')), "A's plan");
+    }
+
+    Future<void> openManageOneSub(WidgetTester t) async {
+      server.answers['client_plan:$_a'] = (200, 'self_guided');
+      server.answers['client_plan:$_b'] = (200, 'free');
+      server.answers['subscriptions:$_a'] = (200, [sub1]);
+      await open(t, const ManageSubscriptionScreen());
+      await until(t, () => seen(find.text('Self-Guided')), "A's plan");
+      await settle(t);
+    }
+
+    Future<void> leaveFor(WidgetTester t, bool toB) async {
+      if (toB) {
+        await signIn(t, _b);
+      } else {
+        await t.runAsync(signOut);
+        await t.pump();
+      }
+    }
+
+    for (final toB in [true, false]) {
+      final label = toB ? 'B signs in' : 'A signs out';
+
+      // M7: the check after the LAST (here: the only) cancellation.
+      testWidgets('Upgrade, Switch to Free: $label while the last cancellation '
+          'is in flight: its outcome is recorded once as not shown', (t) async {
+        await openUpgradeOneSub(t);
+        server.answers['cancel-subscription'] = (200, {'ok': true});
+        final gate = server.gates['cancel-subscription:$_a'] = Completer();
+        await t.tap(find.text('Switch to Free'));
+        await until(t, () => seen(find.text('Switch to Free?')), 'the dialog');
+        await settle(t);
+        await t.tap(find.text('Switch to Free').last);
+        await until(t, () => server.count('cancel-subscription') == 1, 'sent');
+        await leaveFor(t, toB);
+        gate.complete();
+        await settle(t);
+        expect(server.log.where((l) => l.startsWith('cancel-subscription')),
+            ['cancel-subscription:$_a'], reason: "one cancel, A's, none for B");
+        saidNothing();
+        expect(find.text('Switched to the Free plan.'), findsNothing);
+        recordedOnce('UpgradeScreen.switchToFree', 'switch to Free');
+        expect(reported, hasLength(1), reason: '${records()}');
+        expect('${reported.single.error}', isNot(contains('sub-1')));
+      });
+
+      // M9: the same check on /manage-subscription.
+      testWidgets('Manage, Cancel plan: $label while the last cancellation is '
+          'in flight: its outcome is recorded once as not shown', (t) async {
+        await openManageOneSub(t);
+        server.answers['cancel-subscription'] = (200, {'ok': true});
+        final gate = server.gates['cancel-subscription:$_a'] = Completer();
+        await t.tap(find.textContaining('Cancel').first);
+        await until(t, () => seen(find.text('Switch to Free?')), 'the dialog');
+        await settle(t);
+        await t.tap(find.text('Switch to Free'));
+        await until(t, () => server.count('cancel-subscription') == 1, 'sent');
+        await leaveFor(t, toB);
+        gate.complete();
+        await settle(t);
+        expect(server.log.where((l) => l.startsWith('cancel-subscription')),
+            ['cancel-subscription:$_a'], reason: "one cancel, A's, none for B");
+        saidNothing();
+        recordedOnce('ManageSubscriptionScreen.switchToFree', 'switch to Free');
+        expect(reported, hasLength(1), reason: '${records()}');
+        expect('${reported.single.error}', isNot(contains('sub-1')));
+      });
+    }
+
+    testWidgets('control: Upgrade Switch to Free with one membership, same '
+        'account (token refresh mid-cancel): said once, nothing recorded',
+        (t) async {
+      await openUpgradeOneSub(t);
+      server.answers['cancel-subscription'] = (200, {'ok': true});
+      final gate = server.gates['cancel-subscription:$_a'] = Completer();
+      await t.tap(find.text('Switch to Free'));
+      await until(t, () => seen(find.text('Switch to Free?')), 'the dialog');
+      await settle(t);
+      await t.tap(find.text('Switch to Free').last);
+      await until(t, () => server.count('cancel-subscription') == 1, 'sent');
+      await t.runAsync(refreshSession);
+      await t.pump();
+      gate.complete();
+      await until(t, () => seen(find.text('Switched to the Free plan.')), 'said');
+      expect(server.count('cancel-subscription', _a), 1);
+      expect(reported, isEmpty);
+    });
+
+    testWidgets('control: Manage Cancel plan with one membership, same account '
+        '(token refresh mid-cancel): said once, nothing recorded', (t) async {
+      await openManageOneSub(t);
+      server.answers['cancel-subscription'] = (200, {'ok': true});
+      final gate = server.gates['cancel-subscription:$_a'] = Completer();
+      await t.tap(find.textContaining('Cancel').first);
+      await until(t, () => seen(find.text('Switch to Free?')), 'the dialog');
+      await settle(t);
+      await t.tap(find.text('Switch to Free'));
+      await until(t, () => server.count('cancel-subscription') == 1, 'sent');
+      await t.runAsync(refreshSession);
+      await t.pump();
+      gate.complete();
+      await until(t, () => seen(find.text('Switched to the Free plan.')), 'said');
+      expect(server.count('cancel-subscription', _a), 1);
+      expect(reported, isEmpty);
+    });
+
+    // M18: the Free tap's subscriptions read is still pending when B signs
+    // in, and it fails. The subscriptions are watched lower in the stack (as
+    // /manage-subscription does, which pushes /upgrade), so the read is rerun
+    // for B and the tap's await ends in that failure while B is signed in.
+    // (With nothing watching it, the await never ends and nothing is said
+    // or recorded — see the report.)
+    testWidgets("Upgrade, Switch to Free: the tap's subscriptions read fails "
+        'after B signed in: not said to B, recorded under the Switch to Free '
+        'origin, nothing cancelled', (t) async {
+      server.answers['client_plan:$_a'] = (200, 'self_guided');
+      server.answers['client_plan:$_b'] = (200, 'free');
+      server.answers['subscriptions:$_a'] = _down;
+      server.answers['subscriptions:$_b'] = _down;
+      final gateA = server.gates['subscriptions:$_a'] = Completer();
+      final gateB = server.gates['subscriptions:$_b'] = Completer();
+      await open(t, Consumer(builder: (context, ref, _) {
+        ref.watch(mySubscriptionsProvider); // the screen beneath
+        return const UpgradeScreen();
+      }));
+      await until(t, () => seen(find.text('Current')), "A's plan");
+      expect(server.count('subscriptions', _a), 1, reason: 'premise: pending');
+      await t.tap(find.text('Switch to Free'));
+      await t.pump();
+      await signIn(t, _b);
+      await until(t, () => server.count('subscriptions', _b) == 1, 'B read');
+      gateA.complete();
+      gateB.complete();
+      await settle(t);
+      saidNothing();
+      expect(find.textContaining('Nothing was cancelled'), findsNothing);
+      expect(find.text('Switch to Free?'), findsNothing);
+      expect(server.count('cancel-subscription'), 0);
+      expect(server.writes, isEmpty);
+      recordedOnce('UpgradeScreen.switchToFree', 'switch to Free');
+      // The read failure itself is the observability record it always was;
+      // the outcome record adds no backend text (its exact message above).
+      expect(reported.map((f) => f.origin).toList(),
+          ['UpgradeScreen.mySubscriptions', 'UpgradeScreen.switchToFree'],
+          reason: '${records()}');
+      expect('${notShown().single.error}', isNot(contains('SECRET')));
+    });
+
+    testWidgets("control: the same account's failed subscriptions read is said "
+        '("Nothing was cancelled."), no drop recorded', (t) async {
+      server.answers['client_plan:$_a'] = (200, 'self_guided');
+      await open(t, const UpgradeScreen());
+      await until(t, () => seen(find.text('Current')), "A's plan");
+      server.answers['subscriptions:$_a'] = _down;
+      await t.tap(find.text('Switch to Free'));
+      await until(t, () => seen(find.textContaining('Nothing was cancelled.')),
+          'said');
+      expect(notShown(), isEmpty);
+      expect(server.count('cancel-subscription'), 0);
+    });
+
+    // M14: the screen went with the account (the real AccountScope disposes
+    // A's tree on the switch) while A's billing page was being opened.
+    testWidgets("Manage billing: AccountScope takes A's screen away while A's "
+        'billing page fails: recorded once as not shown, nothing for B',
+        (t) async {
+      await t.binding.setSurfaceSize(const Size(700, 3200));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      server.answers['client_plan:$_a'] = (200, 'self_guided');
+      server.answers['client_plan:$_b'] = (200, 'free');
+      server.answers['subscriptions:$_a'] = (200, [sub1]);
+      await t.runAsync(() => signInAs(_a));
+      await t.pumpWidget(const AccountScope(
+          child: MaterialApp(home: ManageSubscriptionScreen())));
+      await until(t, () => seen(find.text('Self-Guided')), "A's plan");
+      await settle(t);
+      server.answers['create-portal-session:$_a'] = _down;
+      final gate = server.gates['create-portal-session:$_a'] = Completer();
+      await t.tap(find.text('Manage billing & payment method'));
+      await until(t, () => seen(find.text('Opening…')), 'A asked');
+      await signIn(t, _b);
+      await settle(t);
+      expect(find.text('Opening…'), findsNothing,
+          reason: "premise: A's screen went with A");
+      gate.complete();
+      await settle(t);
+      saidNothing();
+      expect(launched, isEmpty);
+      expect(server.count('create-portal-session', _b), 0);
+      recordedOnce('ManageSubscriptionScreen.openBilling', 'open billing');
+    });
+
+    testWidgets("control: AccountScope, the same account's failed billing page "
+        'is said, no drop recorded', (t) async {
+      await t.binding.setSurfaceSize(const Size(700, 3200));
+      addTearDown(() => t.binding.setSurfaceSize(null));
+      server.answers['client_plan:$_a'] = (200, 'self_guided');
+      server.answers['subscriptions:$_a'] = (200, [sub1]);
+      await t.runAsync(() => signInAs(_a));
+      await t.pumpWidget(const AccountScope(
+          child: MaterialApp(home: ManageSubscriptionScreen())));
+      await until(t, () => seen(find.text('Self-Guided')), "A's plan");
+      await settle(t);
+      server.answers['create-portal-session:$_a'] = _down;
+      await t.tap(find.text('Manage billing & payment method'));
+      await t.runAsync(refreshSession);
+      await until(t, () => seen(find.byType(SnackBar)), 'said');
+      expect(notShown(), isEmpty);
+    });
   });
 }
