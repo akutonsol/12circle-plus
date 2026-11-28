@@ -236,23 +236,48 @@ Future<void> _openEventEditor(BuildContext context, WidgetRef ref,
 
 /// [child], drawn only while [owner] is signed in, and closed when another
 /// account (or none) is: what [owner] typed is not the next account's.
-class _OwnedSheet extends ConsumerWidget {
+///
+/// P0-FL-63a · the sheet is pushed for [owner] and built a frame later. When
+/// the account changed in between, its listener (registered in that first
+/// build, after the change) never fires: it closes its own route after that
+/// frame instead, so the next account is not left an empty sheet. Either way
+/// it is closed, and recorded, once — and only its own route is removed.
+class _OwnedSheet extends ConsumerStatefulWidget {
   const _OwnedSheet({required this.owner, required this.child});
   final String owner;
   final Widget child;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_OwnedSheet> createState() => _OwnedSheetState();
+}
+
+class _OwnedSheetState extends ConsumerState<_OwnedSheet> {
+  bool _closing = false;
+
+  void _close(Route<dynamic>? route) {
+    // Already closing, or already off the stack (dismissed): nothing to do.
+    if (_closing || route == null || !route.isActive) return;
+    final navigator = route.navigator;
+    if (navigator == null) return;
+    _closing = true;
+    reportError('VendorPortalScreen.eventEditor',
+        StateError('event editor closed: the signed-in account changed'));
+    navigator.removeRoute(route);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final route = ModalRoute.of(context);
     ref.listen(currentUserProvider.select((u) => u?.id), (_, __) {
-      if (signedInUid() != owner && route != null && route.isActive) {
-        reportError('VendorPortalScreen.eventEditor',
-            StateError('event editor closed: the signed-in account changed'));
-        Navigator.of(context).removeRoute(route);
-      }
+      if (signedInUid() != widget.owner) _close(route);
     });
-    if (signedInUid() != owner) return const SizedBox.shrink();
-    return child;
+    if (signedInUid() == widget.owner) return widget.child;
+    if (!_closing) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _close(route);
+      });
+    }
+    return const SizedBox.shrink();
   }
 }
 
@@ -343,8 +368,12 @@ class _EventCard extends ConsumerWidget {
                       Navigator.push(
                           context,
                           MaterialPageRoute(
+                              // The portal's account, not whoever is signed
+                              // in when the page is first built (P0-FL-63a).
                               builder: (_) => EventAgendaScreen(
-                                  event: event, canManage: true)));
+                                  event: event,
+                                  canManage: true,
+                                  owner: owner)));
                     } else if (v == 'delete') {
                       await _deleteEvent(context, ref, owner, event);
                     }
