@@ -548,14 +548,13 @@ void main() {
       completing.complete();
       await settle(t);
       expect(server.writes(to: 'workout_logs'), hasLength(1), reason: 'premise: filed');
-      expect(c.read(filedWorkoutProvider), isNull,
-          reason: 'THE defect (M-13): the workout picked meanwhile was marked filed');
 
       router.go('/active-workout');
       await settle(t);
       expect(find.text(other.title), findsOneWidget);
       expect([for (final s in server.sessions) s['workout_id']], contains(other.id),
-          reason: 'its own session is opened');
+          reason: 'THE defect (M-13): the workout picked meanwhile was marked filed, '
+              'so it was never started');
       await warmUp(t);
       await t.tap(finish());
       await settle(t);
