@@ -261,6 +261,11 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     _workoutId = ref.read(selectedWorkoutProvider)?.id;
     _sessions = ref.read(workoutSessionManagerProvider);
     _app = ProviderScope.containerOf(context, listen: false);
+    // A workout already filed and still selected — its complete dialog was
+    // dismissed with back, and the Zone left and re-entered (C14-62d-03) — is
+    // closed from the start: no new session, no second filing or award.
+    final selected = ref.read(selectedWorkoutProvider);
+    _closed = selected != null && identical(ref.read(filedWorkoutProvider), selected);
     // Not a frame: a siren already sounding in a hidden tab stops when its
     // member leaves. Stream errors are the auth provider's to report.
     _authEvents = _db.auth.onAuthStateChange.listen((_) {
@@ -394,7 +399,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// sets to.
   Future<void> _startSession() async {
     final workout = ref.read(selectedWorkoutProvider);
-    if (workout == null) return;
+    if (workout == null || _closed) return;
     final uid = _owner;
     if (uid == null || !_isOwner('starting a workout')) return;
     try {
@@ -454,7 +459,11 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       _sessionId = session.id;
       // Bind the in-memory set state to this session — switching workouts
       // clears it so the previous workout's sets can't leak into this one.
-      ref.read(activeWorkoutProvider.notifier).beginSession(session.id);
+      // Sets of THIS workout confirmed while the session was opening, whose
+      // save is waiting on it, stay: that save sends each, once (C14-62d-02).
+      ref
+          .read(activeWorkoutProvider.notifier)
+          .beginSession(session.id, heldFor: workout);
       return session;
     }).whenComplete(() => _activation = null);
   }
@@ -636,11 +645,24 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     // The workout is filed or ended: an edit now is not part of it.
     if (_closed) return;
     if (!_isOwner('saving a set')) return;
+    // No session bound yet: this save waits on the one being opened, and only
+    // a set whose save is waiting is kept when it binds (C14-62d-02). If the
+    // save does not go out, the set is let go and offered again — never shown
+    // as done with no stored row (RM-3 F1). The instance, not a fresh read: by
+    // then the in-memory sets can be the next member's.
+    final sets = _app.read(activeWorkoutProvider.notifier);
+    final held = sets.holdForBind(setId);
+    void notSaved() {
+      if (held && sets.mounted && _isOwner('saving a set')) {
+        sets.releaseUnsaved(setId);
+      }
+    }
     try {
       final sid = await _ensureSession();
       if (!_isOwner('saving a set')) return;
       if (sid == null) {
         // No session could be opened to hold it.
+        notSaved();
         _toastSave(couldntMessage('save that set', null));
         return;
       }
@@ -660,6 +682,7 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
       );
     } catch (e, st) {
       reportError('ActiveWorkoutScreen._persistSet', e, st);
+      notSaved();
       _toastSave(couldntMessage('save that set', e));
     }
   }
@@ -807,6 +830,14 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
 
   Future<void> _completeWorkout() async {
     if (!_isOwner('finishing a workout')) return;
+    // Filed already (C14-62d-03): Finish pressed again on the Zone that back
+    // left open. One workout is one `workout_logs` row and one award — nothing
+    // is sent, and it is not celebrated twice.
+    if (_closed) {
+      reportError('ActiveWorkoutScreen._completeWorkout',
+          StateError('finishing a workout: it was already filed'));
+      return;
+    }
     setState(() => _saving = true);
     // Everything after the awaits below goes through the app's container, not
     // `ref`: the screen can be left while the save is in flight, and `ref`
@@ -938,6 +969,12 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
     final finishedSessionId = _sessionId;
     _sessionId = null;
     _closed = true;
+    // Filed for as long as it stays selected (C14-62d-03): a view of it opened
+    // after back dismissed the dialog starts, files and awards nothing.
+    if (still) {
+      app.read(filedWorkoutProvider.notifier).state =
+          app.read(selectedWorkoutProvider);
+    }
     // The session is archived — stop offering it as resumable, and drop the
     // restored copy so a later cold start doesn't rebuild a finished workout.
     app.invalidate(activeSessionProvider);
@@ -1041,6 +1078,10 @@ class _ActiveWorkoutViewState extends ConsumerState<_ActiveWorkoutView> {
   /// Through [app], not `ref`: this also runs after the screen is gone.
   void _leaveFinishedWorkout(ProviderContainer app, bool Function() isStillThis) {
     if (!_isOwner('closing a finished workout') || !isStillThis()) return;
+    // What reached the in-memory sets after Finish's own reset is no part of
+    // any session — a resumed workout's logged sets whose slow read landed
+    // after it was filed, say — and must not show as done in the next one.
+    app.read(activeWorkoutProvider.notifier).reset();
     app.read(selectedWorkoutProvider.notifier).state = null;
   }
 
